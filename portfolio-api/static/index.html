@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PORTFOLIO TERMINAL</title>
+<style>
+  :root{
+    --bg:#0a0b0d; --panel:#121417; --panel2:#0f1115; --bd:#23262b; --bd2:#2e333a;
+    --amber:#f0a823; --txt:#cdd2d8; --mut:#7d848c; --dim:#565c64;
+    --grn:#2ec27e; --red:#ff5d5d; --blu:#4a9eff;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+    font-size:13px;line-height:1.45;}
+  a{color:var(--blu);text-decoration:none;}
+  .wrap{max-width:1500px;margin:0 auto;padding:10px 14px 40px;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;
+    border-bottom:1px solid var(--bd2);padding-bottom:8px;margin-bottom:12px;flex-wrap:wrap;}
+  .brand{color:var(--amber);letter-spacing:2px;font-size:15px;font-weight:700;}
+  .brand small{color:var(--dim);letter-spacing:1px;font-weight:400;font-size:11px;margin-left:8px;}
+  .topstats{display:flex;gap:22px;flex-wrap:wrap;align-items:baseline;}
+  .ts{display:flex;flex-direction:column;}
+  .ts .l{color:var(--mut);font-size:10px;letter-spacing:1px;}
+  .ts .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .controls{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:11px;}
+  button{background:transparent;color:var(--amber);border:1px solid var(--bd2);
+    font-family:inherit;font-size:11px;letter-spacing:1px;padding:5px 10px;border-radius:3px;cursor:pointer;}
+  button:hover{background:var(--panel);border-color:var(--amber);}
+  input{background:var(--panel2);color:var(--txt);border:1px solid var(--bd2);border-radius:3px;
+    padding:3px 5px;font-family:inherit;font-size:12px;}
+  input:focus{outline:none;border-color:var(--amber);}
+  .grid{display:grid;gap:10px;}
+  .cols{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:4px;padding:10px 12px;}
+  .ph{color:var(--amber);font-size:10px;letter-spacing:2px;margin-bottom:8px;border-bottom:1px solid var(--bd);padding-bottom:5px;}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-variant-numeric:tabular-nums;}
+  .row .nm{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .row .sub{color:var(--mut);font-size:11px;}
+  .pos{color:var(--grn);} .neg{color:var(--red);} .muted{color:var(--mut);}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;}
+  th{color:var(--mut);font-size:10px;letter-spacing:1px;text-align:right;padding:4px 6px;
+    border-bottom:1px solid var(--bd2);cursor:pointer;user-select:none;white-space:nowrap;}
+  th.l,td.l{text-align:left;}
+  th:hover{color:var(--amber);}
+  td{padding:3px 6px;text-align:right;border-bottom:1px solid #191c20;white-space:nowrap;}
+  td.sym{color:var(--amber);text-align:left;}
+  td.name{color:var(--mut);text-align:left;max-width:230px;overflow:hidden;text-overflow:ellipsis;}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:11px;color:var(--mut);}
+  .legend span{display:flex;align-items:center;gap:5px;}
+  .sw{width:9px;height:9px;border-radius:2px;display:inline-block;}
+  .err{color:var(--red);padding:20px;text-align:center;}
+  .chartbox{position:relative;height:160px;}
+  /* ---- Fiduciary / Strategist chat (Phase 4) ---- */
+  .chat-wrap{display:flex;gap:12px;height:68vh;min-height:420px;}
+  .chat-side{flex:0 0 210px;display:flex;flex-direction:column;border-right:1px solid var(--bd);padding-right:10px;overflow:hidden;}
+  .chat-persona{display:flex;gap:6px;margin-bottom:10px;}
+  .chat-ptab{flex:1;text-align:center;cursor:pointer;font-size:10px;letter-spacing:1px;padding:5px 0;border:1px solid var(--bd2);border-radius:3px;color:var(--mut);}
+  .chat-ptab.on{color:var(--amber);border-color:var(--amber);}
+  .chat-list{flex:1;overflow:auto;}
+  .chat-sess{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 6px;border-radius:3px;cursor:pointer;font-size:11px;color:var(--txt);}
+  .chat-sess:hover{background:var(--panel2);}
+  .chat-sess.on{background:var(--panel2);border-left:2px solid var(--amber);}
+  .chat-sess-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .chat-sess-x{color:var(--dim);flex:0 0 auto;padding:0 2px;}
+  .chat-sess-x:hover{color:var(--red);}
+  .chat-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .chat-scroll{flex:1;overflow:auto;padding:4px 8px 8px;}
+  .msg{margin:10px 0;display:flex;flex-direction:column;}
+  .msg.user{align-items:flex-end;}
+  .msg .msg-body{max-width:88%;padding:8px 11px;border-radius:8px;line-height:1.5;font-size:13px;overflow-wrap:anywhere;}
+  .msg.user .msg-body{background:var(--panel);border:1px solid var(--bd2);color:var(--txt);}
+  .msg.asst .msg-body{background:var(--panel2);border:1px solid var(--bd);color:var(--txt);}
+  .msg.asst .msg-body p:first-child{margin-top:0;} .msg.asst .msg-body p:last-child{margin-bottom:0;}
+  .msg.asst .msg-body pre{background:#0b0d10;border:1px solid var(--bd2);border-radius:4px;padding:8px;overflow:auto;font-size:12px;}
+  .msg.asst .msg-body code{background:#0b0d10;padding:1px 4px;border-radius:3px;font-size:12px;}
+  .msg.asst .msg-body pre code{background:none;padding:0;}
+  .msg.asst .msg-body table{margin:6px 0;border-collapse:collapse;} .msg.asst .msg-body th,.msg.asst .msg-body td{text-align:left;border:1px solid var(--bd2);padding:3px 6px;}
+  .msg-tools{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:5px;}
+  .tool-chip{font-size:10px;letter-spacing:.5px;color:var(--mut);border:1px solid var(--bd2);border-radius:10px;padding:1px 8px;}
+  .chat-bar{display:flex;gap:8px;align-items:flex-end;border-top:1px solid var(--bd);padding-top:8px;margin-top:4px;}
+  .chat-input{flex:1;resize:none;min-height:38px;max-height:140px;background:var(--panel2);color:var(--txt);border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;font-family:inherit;font-size:13px;line-height:1.4;}
+  .chat-input:focus{outline:none;border-color:var(--amber);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">PORTFOLIO TERMINAL<small id="meta">loading…</small></div>
+    <div class="topstats" id="stats"></div>
+    <div class="controls">
+      <span id="updated"></span>
+      <button id="refresh">↻ REFRESH</button>
+    </div>
+  </div>
+  <div id="body"><div class="muted" style="padding:30px;text-align:center;">Loading portfolio…</div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+<script>
+const PIE = ['#f0a823','#2ec27e','#4a9eff','#a07bff','#ff7ab8','#5fd0c4','#888780','#e0623a'];
+const usd = n => (n==null?'—':'$'+Math.round(n).toLocaleString());
+const sgn = n => n==null?'—':(n<0?'-':'+')+'$'+Math.abs(Math.round(n)).toLocaleString();
+const pct = n => n==null?'—':(n>0?'+':'')+n.toFixed(2)+'%';
+const cls = n => n==null?'muted':(n>=0?'pos':'neg');
+const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
+const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, TAB='positions', FOCUS_TICKER=null;
+let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false;
+function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; render(); }
+
+// analyst (Finnhub consensus) rating helpers, shared by the positions table + research panel
+const ratingColor = r => r==='Buy'?'var(--grn)':(r==='Sell'?'var(--red)':'var(--amber)');
+const ratingBadge = r => r ? `<span style="color:${ratingColor(r)}">${r}</span>` : '<span class="muted">—</span>';
+const analystRating = t => (ANALYSIS&&ANALYSIS.briefs&&ANALYSIS.briefs[t]&&ANALYSIS.briefs[t].grounded)
+  ? ANALYSIS.briefs[t].grounded.rating : null;
+
+async function load(refresh){
+  if(CHAT_STREAMING) return;   // never wipe the page (and the live chat) mid-stream
+  document.getElementById('refresh').textContent='…';
+  try{
+    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), 90000);
+    let r;
+    try{ r = await fetch('/api/portfolio'+(refresh?'?refresh=1':''), {signal:ctl.signal}); }
+    finally{ clearTimeout(to); }
+    const d = await r.json();
+    if(d.error){ document.getElementById('body').innerHTML='<div class="err">'+d.error+'</div>'; return; }
+    DATA=d;
+    render();   // show core dashboard immediately — never block the page on a slow secondary panel
+    const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
+      try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc]=await Promise.all([
+      gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc;
+    if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
+      if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
+    render();   // re-render with research / insights / plan / ideas / strategist panels
+  }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
+  document.getElementById('refresh').textContent='↻ REFRESH';
+}
+
+function render(){
+  const d=DATA;
+  document.getElementById('meta').textContent =
+    ` · ${d.investment_account_count} brokerage accts · ${d.position_count} positions`;
+  const age = d.cached_age_s||0;
+  document.getElementById('updated').textContent =
+    'as of '+new Date(d.generated_at*1000).toLocaleString()+(age>60?` (${Math.round(age/60)}m old)`:'');
+  // top stats
+  const stats=[
+    ['NET WORTH', usd(d.net_worth), ''],
+    ['INVESTED', usd(d.invested_value), ''],
+    ['UNREAL P/L', sgn(d.total_unrealized_gain), cls(d.total_unrealized_gain)],
+    ['P/L %', pct(d.total_gain_pct), cls(d.total_gain_pct)],
+  ];
+  document.getElementById('stats').innerHTML = stats.map(s=>
+    `<div class="ts"><span class="l">${s[0]}</span><span class="v ${s[2]}">${s[1]}</span></div>`).join('');
+
+  const body=document.getElementById('body'); body.innerHTML='';
+  charts.forEach(c=>c.destroy()); charts=[];
+
+  if(TAB!=='chat'){   // the CHAT tab uses the full panel; skip the dashboard strips above it
+  body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip
+
+  // row 1: allocations + accounts
+  const r1=el('div','grid cols'); body.appendChild(r1);
+  r1.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.invested_value));
+  r1.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
+  r1.appendChild(accountsPanel(d));
+
+  // row 2: gainers / losers / movers
+  const r2=el('div','grid cols'); r2.style.marginTop='10px'; body.appendChild(r2);
+  r2.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
+  r2.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
+  r2.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
+  }
+
+  // tabbed panel: POSITIONS | RESEARCH (one at a time, to keep the page short)
+  const on='color:var(--amber)', off='color:var(--mut)';
+  const haveAnalysis = ANALYSIS && ANALYSIS.briefs && Object.keys(ANALYSIS.briefs).length;
+  const haveInsights = INSIGHTS && !INSIGHTS.error;
+  const havePlan = RETIRE && !RETIRE.error;
+  const haveIdeas = IDEAS && !IDEAS.error;
+  const haveStrat = STRAT && !STRAT.error;
+  const haveTaxAudit = TAXAUDIT && !TAXAUDIT.error && (TAXAUDIT.tax_loss_harvest || TAXAUDIT.asset_location);
+  const haveTaxBracket = TAX && !TAX.error && (TAX.marginal_ordinary_rate_pct!=null || TAX.effective);
+  const haveTax = haveTaxAudit || haveTaxBracket;
+  const haveFL = FL && !FL.error && FL.liquidity;
+  const haveResearch = haveAnalysis || haveIdeas;   // RESEARCH tab = briefs + ideas/scan
+  const haveAudits = haveTax || haveFL;             // AUDITS tab = tax + fees/liquidity
+  if(TAB==='ideas') TAB='research';                 // migrate legacy tab keys -> grouped tabs
+  if(TAB==='tax' || TAB==='fl') TAB='audits';
+  if(TAB==='research' && !haveResearch) TAB='positions';
+  if(TAB==='insights' && !haveInsights) TAB='positions';
+  if(TAB==='plan' && !havePlan) TAB='positions';
+  if(TAB==='audits' && !haveAudits) TAB='positions';
+  if(TAB==='strategist' && !haveStrat) TAB='positions';
+  const p=el('div','panel'); p.style.marginTop='10px';
+  const tabBar=el('div'); tabBar.style.cssText='display:flex;align-items:center;gap:13px;border-bottom:1px solid var(--bd);padding-bottom:7px;margin-bottom:10px;flex-wrap:wrap;';
+  const mkTab=(key,label)=>{
+    const active=TAB===key;
+    const t=el('span',null,label);
+    t.style.cssText=`cursor:pointer;letter-spacing:2px;font-size:11px;padding-bottom:7px;margin-bottom:-8px;`+
+      `border-bottom:2px solid ${active?'var(--amber)':'transparent'};color:${active?'var(--amber)':'var(--mut)'};`;
+    t.onclick=()=>{ TAB=key; render(); };
+    return t;
+  };
+  const tabSpecs=[['positions',`OVERVIEW · ${d.unique_securities}`]];
+  if(haveResearch) tabSpecs.push(['research','RESEARCH · IDEAS']);
+  if(haveInsights) tabSpecs.push(['insights','RISK · EXPOSURE']);
+  if(havePlan) tabSpecs.push(['plan','PLAN · FI']);
+  if(haveAudits) tabSpecs.push(['audits','AUDITS · TAX·FEES']);
+  if(haveStrat) tabSpecs.push(['strategist','STRATEGIST']);
+  tabSpecs.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
+  tabSpecs.forEach((ts,i)=>{
+    if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--bd2);opacity:0.7;font-size:12px;user-select:none;'; tabBar.appendChild(sep); }
+    tabBar.appendChild(mkTab(ts[0],ts[1]));
+  });
+  if(TAB==='positions'){   // right-aligned consolidated/by-account sub-toggle
+    const tg=el('span'); tg.style.cssText='cursor:pointer;letter-spacing:1px;margin-left:auto;font-size:11px;';
+    tg.innerHTML=`<span style="${VIEW==='consolidated'?on:off}">CONSOLIDATED</span> <span class="muted">·</span> <span style="${VIEW==='detail'?on:off}">BY ACCOUNT</span>`;
+    tg.onclick=()=>{ VIEW=VIEW==='consolidated'?'detail':'consolidated'; render(); };
+    tabBar.appendChild(tg);
+  }
+  p.appendChild(tabBar);
+  const tc=el('div');
+  const hrule=()=>{ const s=el('div'); s.style.cssText='border-top:1px solid var(--bd);margin:18px 0 4px;'; return s; };
+  if(TAB==='research'){
+    if(haveAnalysis) tc.appendChild(analysisContent(ANALYSIS));
+    if(haveIdeas){ if(haveAnalysis) tc.appendChild(hrule()); tc.appendChild(ideasContent(IDEAS)); }
+  } else if(TAB==='audits'){
+    if(haveTax) tc.appendChild(taxContent(TAX, TAXAUDIT));
+    if(haveFL){ if(haveTax) tc.appendChild(hrule()); tc.appendChild(flContent(FL)); }
+  } else if(TAB==='insights' && haveInsights){ tc.appendChild(insightsContent(INSIGHTS)); }
+  else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
+  else if(TAB==='strategist' && haveStrat){ tc.appendChild(stratContent(STRAT)); }
+  else if(TAB==='chat'){ tc.appendChild(chatContent()); }
+  else { tc.appendChild(VIEW==='consolidated'?consolidatedTable(d.consolidated):positionsTable(d.positions)); }
+  p.appendChild(tc);
+  body.appendChild(p);
+
+  drawCharts(d);
+  drawStrat();
+  if(FOCUS_TICKER && TAB==='research'){        // drill-down: scroll to & highlight the opened brief
+    const bt=FOCUS_TICKER; FOCUS_TICKER=null;
+    const node=document.getElementById('brief-'+bt);
+    if(node){ node.scrollIntoView({behavior:'smooth',block:'center'});
+      node.style.background='rgba(230,180,80,0.12)';
+      setTimeout(()=>{ node.style.background=''; }, 2600); }
+  }
+}
+
+function cockpitPanel(){
+  const p=el('div','panel'); p.style.cssText='margin-bottom:10px;padding:9px 12px;';
+  const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:7px;';
+  head.innerHTML='<span class="ph" style="border:none;padding:0;margin:0;">⚑ COCKPIT · WHAT NEEDS ATTENTION</span>';
+  p.appendChild(head);
+  const anyLoaded = EXP||INSIGHTS||TAX||TAXAUDIT||FL||RETIRE||DISCO;
+  if(!anyLoaded){ const m=el('div','muted'); m.style.cssText='font-size:11px;'; m.textContent='Scanning your book (drift · concentration · tax · fees · liquidity · outlook)…'; p.appendChild(m); return p; }
+  const A=[];  // {sev: warn|opp|info|ok, cat, msg, tab}
+  if(EXP && !EXP.error){
+    ((EXP.concentration||{}).flags||[]).forEach(f=>A.push({sev:'warn',cat:'CONCENTRATION',msg:f,tab:'insights'}));
+    if(EXP.portfolio_beta!=null && EXP.portfolio_beta>1.3) A.push({sev:'warn',cat:'BETA',msg:'portfolio beta '+EXP.portfolio_beta,tab:'insights'});
+  }
+  if(INSIGHTS && !INSIGHTS.error){
+    const nOver=(INSIGHTS.concentration||[]).length;
+    if(nOver) A.push({sev:'warn',cat:'OVER CAP',msg:nOver+' position(s) over your cap',tab:'insights'});
+    const nDrift=(INSIGHTS.allocation||[]).filter(a=>a.flag).length;
+    if(nDrift) A.push({sev:'warn',cat:'DRIFT',msg:nDrift+' sleeve(s) out of band',tab:'insights'});
+  }
+  if(TAXAUDIT && !TAXAUDIT.error){
+    const tlh=TAXAUDIT.tax_loss_harvest||{};
+    if(tlh.total_harvestable_loss && Math.abs(tlh.total_harvestable_loss)>0)
+      A.push({sev:'opp',cat:'TAX-LOSS',msg:usd(Math.abs(tlh.total_harvestable_loss))+' harvestable ('+(tlh.count||0)+')',tab:'audits'});
+    const nLoc=((TAXAUDIT.asset_location||{}).misplaced||[]).length;
+    if(nLoc) A.push({sev:'opp',cat:'ASSET LOC',msg:nLoc+' holding(s) misplaced',tab:'audits'});
+  }
+  if(FL && !FL.error){
+    const nHigh=(((FL.fees||{}).funds)||[]).filter(x=>x.high).length;
+    if(nHigh) A.push({sev:'warn',cat:'FEES',msg:nHigh+' high-cost fund(s)',tab:'audits'});
+    const nLiq=(((FL.liquidity||{}).flagged)||[]).length;
+    if(nLiq) A.push({sev:'warn',cat:'LIQUIDITY',msg:nLiq+' hard-to-exit',tab:'audits'});
+  }
+  if(DISCO && !DISCO.error){
+    const nA=((DISCO.alerts)||[]).length;
+    if(nA) A.push({sev:'info',cat:'NEWS',msg:nA+' holding alert(s)',tab:'research'});
+  }
+  if(RETIRE && !RETIRE.error && RETIRE.monte_carlo && RETIRE.monte_carlo.success_pct!=null){
+    const sp=RETIRE.monte_carlo.success_pct;
+    A.push({sev: sp>=80?'ok':(sp>=60?'info':'warn'), cat:'FIRE', msg:sp+'% success', tab:'plan'});
+  }
+  if(RETIRE && !RETIRE.error && RETIRE.bridge && RETIRE.bridge.aca){
+    const ac=RETIRE.bridge.aca, fl=ac.flags||{}, sub=ac.subsidy||{}, fp=sub.fpl_pct;
+    if(fl.over_cliff) A.push({sev:'warn',cat:'ACA CLIFF',msg:'bridge MAGI '+(fp||'?')+'% FPL — over 400%, $0 subsidy',tab:'plan'});
+    else if(fl.below_floor_gap) A.push({sev:'warn',cat:'ACA GAP',msg:'MAGI <100% FPL — TX coverage gap',tab:'plan'});
+    else if(fl.on_cliff_edge) A.push({sev:'info',cat:'ACA',msg:(fp||'?')+'% FPL — near 400% cliff',tab:'plan'});
+  }
+  if(LT && !LT.error && LT.hidden_exposure){
+    LT.hidden_exposure.filter(h=>h.ticker && (h.weight_pct||0)>20).slice(0,3).forEach(h=>{
+      A.push({sev:'warn',cat:'HIDDEN EXPOSURE',msg:h.ticker+' truly '+h.weight_pct+'% incl. funds',tab:'insights'});
+    });
+  }
+  if(!A.length){ const ok=el('div'); ok.style.cssText='font-size:12px;color:var(--grn);'; ok.textContent='✓ All clear — nothing over your thresholds right now.'; p.appendChild(ok); return p; }
+  const colOf={warn:'var(--amber)',opp:'var(--grn)',ok:'var(--grn)',info:'var(--mut)'};
+  const strip=el('div'); strip.style.cssText='display:flex;flex-wrap:wrap;gap:7px;';
+  A.forEach(a=>{
+    const c=colOf[a.sev]||'var(--mut)';
+    const chip=el('span');
+    chip.style.cssText=`cursor:pointer;border:1px solid ${c};border-left:3px solid ${c};border-radius:3px;`+
+      `padding:3px 9px;font-size:11px;color:var(--txt);white-space:nowrap;`;
+    chip.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
+    chip.title='Go to '+a.tab.toUpperCase()+' tab';
+    chip.onclick=()=>{ TAB=a.tab; render(); };
+    strip.appendChild(chip);
+  });
+  p.appendChild(strip);
+  return p;
+}
+
+function allocPanel(title,cid,items,total){
+  const p=el('div','panel');
+  p.appendChild(el('div','ph',title));
+  p.appendChild(el('div','chartbox','<canvas id="'+cid+'"></canvas>'));
+  const lg=el('div','legend');
+  items.slice(0,8).forEach((it,i)=>{
+    const pc=total?(it.value/total*100).toFixed(1):0;
+    lg.appendChild(el('span',null,`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>${shortInst(it.label)} ${pc}%`));
+  });
+  p.appendChild(lg);
+  return p;
+}
+
+function accountsPanel(d){
+  const p=el('div','panel');
+  p.appendChild(el('div','ph','ACCOUNTS'));
+  d.by_account.forEach(a=>{
+    const row=el('div','row');
+    row.innerHTML=`<span class="nm">${a.account}<br><span class="sub">${shortInst(a.institution)}</span></span>`+
+      `<span style="text-align:right">${usd(a.value)}</span>`;
+    p.appendChild(row);
+  });
+  return p;
+}
+
+function moversPanel(title,items,field){
+  const p=el('div','panel');
+  p.appendChild(el('div','ph',title));
+  if(!items||!items.length){ p.appendChild(el('div','muted','—')); return p; }
+  items.forEach(it=>{
+    const v = field==='day_pct'? pct(it.day_pct) : sgn(it.gain);
+    const row=el('div','row');
+    row.innerHTML=`<span class="nm"><span style="color:var(--amber)">${it.ticker}</span> <span class="sub">${usd(it.value)}</span></span>`+
+      `<span class="${cls(field==='day_pct'?it.day_pct:it.gain)}">${v}</span>`;
+    p.appendChild(row);
+  });
+  return p;
+}
+
+function positionsTable(positions){
+  positions.forEach(p=>p._analyst=analystRating(p.ticker));
+  const cols=[
+    ['ticker','SYM','l'],['name','NAME','l'],['account','ACCT','l'],['_analyst','ANALYST','l'],
+    ['quantity','QTY'],['price','PX'],['value','VALUE'],
+    ['cost_total','COST'],['gain','UNREAL'],['gain_pct','P/L%'],['day_pct','DAY%']
+  ];
+  const tbl=el('table');
+  const thead=el('tr');
+  cols.forEach(c=>{
+    const th=el('th',c[2]==='l'?'l':'', c[1]+(SORT.key===c[0]?(SORT.dir<0?' ▾':' ▴'):''));
+    th.onclick=()=>{ if(SORT.key===c[0])SORT.dir*=-1; else {SORT.key=c[0];SORT.dir=-1;} render(); };
+    thead.appendChild(th);
+  });
+  tbl.appendChild(thead);
+  const sorted=[...positions].sort((a,b)=>{
+    let x=a[SORT.key], y=b[SORT.key];
+    if(typeof x==='string'||typeof y==='string'){ x=(x||'').toString(); y=(y||'').toString(); return SORT.dir*x.localeCompare(y); }
+    return SORT.dir*(((x??-1e15))-((y??-1e15)));
+  });
+  sorted.forEach(p=>{
+    const tr=el('tr');
+    tr.innerHTML =
+      `<td class="sym">${p.ticker}</td>`+
+      `<td class="name" title="${(p.name||'').replace(/"/g,'')}">${p.name||''}</td>`+
+      `<td class="l muted">${shortInst(p.institution)}</td>`+
+      `<td class="l">${ratingBadge(p._analyst)}</td>`+
+      `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
+      `<td>${p.price!=null?'$'+(+p.price).toFixed(2):'—'}</td>`+
+      `<td>${usd(p.value)}</td>`+
+      `<td class="muted">${usd(p.cost_total)}</td>`+
+      `<td class="${cls(p.gain)}">${sgn(p.gain)}</td>`+
+      `<td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`+
+      `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`;
+    tbl.appendChild(tr);
+  });
+  return tbl;
+}
+
+function consolidatedTable(items){
+  items.forEach(p=>p._analyst=analystRating(p.ticker));
+  const cols=[['ticker','SYM','l'],['name','NAME','l'],['type','TYPE','l'],['_analyst','ANALYST','l'],
+    ['quantity','QTY'],['value','VALUE'],['cost_total','COST'],['gain','UNREAL'],['gain_pct','P/L%'],
+    ['weight_pct','WT%'],['day_pct','DAY%'],['account_count','ACCTS']];
+  const tbl=el('table'); const thead=el('tr');
+  cols.forEach(c=>{
+    const th=el('th',c[2]==='l'?'l':'', c[1]+(SORT.key===c[0]?(SORT.dir<0?' ▾':' ▴'):''));
+    th.onclick=()=>{ if(SORT.key===c[0])SORT.dir*=-1; else {SORT.key=c[0];SORT.dir=-1;} render(); };
+    thead.appendChild(th);
+  });
+  tbl.appendChild(thead);
+  [...items].sort((a,b)=>{
+    let x=a[SORT.key], y=b[SORT.key];
+    if(typeof x==='string'||typeof y==='string'){ x=(x||'').toString(); y=(y||'').toString(); return SORT.dir*x.localeCompare(y); }
+    return SORT.dir*(((x??-1e15))-((y??-1e15)));
+  }).forEach(p=>{
+    const tr=el('tr');
+    tr.innerHTML=
+      `<td class="sym">${p.ticker||''}</td>`+
+      `<td class="name" title="${(p.name||'').replace(/"/g,'')}">${p.name||''}</td>`+
+      `<td class="l muted">${p.type||''}</td>`+
+      `<td class="l">${ratingBadge(p._analyst)}</td>`+
+      `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
+      `<td>${usd(p.value)}</td>`+
+      `<td class="muted">${usd(p.cost_total)}</td>`+
+      `<td class="${cls(p.gain)}">${sgn(p.gain)}</td>`+
+      `<td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`+
+      `<td>${p.weight_pct!=null?p.weight_pct.toFixed(1)+'%':'—'}</td>`+
+      `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`+
+      `<td title="${(p.accounts||[]).join(', ').replace(/"/g,'')}">${p.account_count}</td>`;
+    if(p.ticker){ const sc=tr.querySelector('.sym'); if(sc){ sc.style.cursor='pointer'; sc.style.textDecoration='underline dotted'; sc.title='Open research for '+p.ticker; sc.onclick=()=>openBrief(p.ticker); } }
+    tbl.appendChild(tr);
+  });
+  return tbl;
+}
+
+function analysisContent(a){
+  const wrap=el('div');
+  const age=a.updated_at?`updated ${new Date(a.updated_at*1000).toLocaleString()} · analyst vs model · informational, not advice`
+                        :'analyst vs model · informational, not advice';
+  const sub=el('div','muted',age); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:8px;'; wrap.appendChild(sub);
+  // AI track record (how the model's own past calls performed)
+  if(SCORE && SCORE.status==='ready'){
+    const s=SCORE, br=s.by_rating||{}, rr=x=>x&&x.avg_fwd_return_pct!=null?`${x.avg_fwd_return_pct>0?'+':''}${x.avg_fwd_return_pct}% (n${x.n})`:'—';
+    const sc=el('div'); sc.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:7px 10px;margin-bottom:10px;font-size:11px;';
+    sc.innerHTML=`<span class="ph" style="border:none;padding:0;margin:0;font-size:11px;">AI TRACK RECORD</span> `+
+      `<span class="muted">(${s.scored_calls} scored calls, ≥${s.min_age_days}d fwd):</span> `+
+      `Buy <span class="${(br.Buy&&br.Buy.avg_fwd_return_pct>=0)?'pos':'neg'}">${rr(br.Buy)}</span> · `+
+      `Hold ${rr(br.Hold)} · Sell <span class="${(br.Sell&&br.Sell.avg_fwd_return_pct<=0)?'pos':'neg'}">${rr(br.Sell)}</span> · `+
+      `Buy−Hold <span class="${(s.buy_minus_hold_pct||0)>=0?'pos':'neg'}">${s.buy_minus_hold_pct==null?'—':(s.buy_minus_hold_pct>0?'+':'')+s.buy_minus_hold_pct+'pt'}</span> · `+
+      `hit-rate ${s.directional_hit_rate_pct==null?'—':s.directional_hit_rate_pct+'%'}`;
+    wrap.appendChild(sc);
+  }
+  const head=el('div'); head.style.cssText='display:grid;grid-template-columns:70px 150px 1fr;gap:8px;font-size:10px;color:var(--mut);letter-spacing:1px;border-bottom:1px solid var(--bd2);padding:3px 0;';
+  head.innerHTML='<span>SYM</span><span>ANALYST · MODEL</span><span>THESIS</span>';
+  wrap.appendChild(head);
+  const badge=r=>{ if(!r) return '<span class="muted">—</span>'; const c=r==='Buy'?'var(--grn)':(r==='Sell'?'var(--red)':'var(--amber)'); return `<span style="color:${c}">${r}</span>`; };
+  const fundLine=b=>{
+    const f=b.fundamentals, v=b.valuation, out=[];
+    if(f && f.available){
+      const m=f.metrics||{}, r=f.ratios||{}, bits=[];
+      if(m.fiscal_year_end) bits.push('FY'+String(m.fiscal_year_end).slice(0,4));
+      if(m.revenue_growth_pct!=null) bits.push('rev '+(m.revenue_growth_pct>0?'+':'')+m.revenue_growth_pct+'%');
+      if(r.net_margin_pct!=null) bits.push('nm '+r.net_margin_pct+'%');
+      if(r.return_on_equity_pct!=null) bits.push('ROE '+r.return_on_equity_pct+'%');
+      if(r.fcf_margin_pct!=null) bits.push('FCFm '+r.fcf_margin_pct+'%');
+      if(r.debt_to_equity!=null) bits.push('Liab/Eq '+r.debt_to_equity);
+      if(r.quality_of_earnings!=null) bits.push('QoE '+r.quality_of_earnings);
+      out.push(`<span style="display:block;color:var(--blu);font-size:10px;margin-top:3px">▸ GAAP: ${bits.join(' · ')}</span>`);
+      const sco=f.scores||{}, pf=sco.piotroski_f, az=sco.altman_z, sb=[];
+      if(pf) sb.push(`<span class="${pf.rating==='strong'?'pos':(pf.rating==='weak'?'neg':'')}">Piotroski F ${pf.score}/${pf.of}</span>`);
+      if(az) sb.push(`<span class="${az.zone==='safe'?'pos':(az.zone==='distress'?'neg':'')}">Altman Z′ ${az.z_score} (${az.zone})</span>`);
+      if(sb.length) out.push(`<span style="display:block;color:var(--blu);font-size:10px;margin-top:2px">▸ SCORES: ${sb.join(' · ')}</span>`);
+    } else if(f){
+      out.push(`<span style="display:block;color:var(--dim);font-size:10px;margin-top:3px">▸ GAAP: not SEC-filed</span>`);
+    }
+    if(v && (v.pe_ttm!=null||v.pb!=null||v.dividend_yield_pct!=null)){
+      const vb=[];
+      if(v.pe_ttm!=null) vb.push('P/E '+(+v.pe_ttm).toFixed(1));
+      if(v.pe_forward!=null) vb.push('fwd '+(+v.pe_forward).toFixed(1));
+      if(v.pb!=null) vb.push('P/B '+(+v.pb).toFixed(1));
+      if(v.ps_ttm!=null) vb.push('P/S '+(+v.ps_ttm).toFixed(1));
+      if(v.dividend_yield_pct!=null) vb.push('yld '+(+v.dividend_yield_pct).toFixed(2)+'%');
+      out.push(`<span style="display:block;color:var(--amber);font-size:10px;margin-top:2px">▸ VAL: ${vb.join(' · ')}</span>`);
+    }
+    return out.join('');
+  };
+  const briefs=a.briefs;
+  Object.keys(briefs).forEach(t=>{
+    const b=briefs[t]||{}, g=b.grounded||{}, m=b.llm||{};
+    const esc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
+    const thesis=esc(m.thesis||m.summary||(m.error?'model error: '+m.error:''));
+    const extra=[];
+    if(m.bull_case) extra.push(`<span class="pos" style="display:block;font-size:11px;margin-top:4px">▲ BULL: ${esc(m.bull_case)}</span>`);
+    if(m.bear_case) extra.push(`<span class="neg" style="display:block;font-size:11px;margin-top:2px">▼ BEAR: ${esc(m.bear_case)}</span>`);
+    if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; extra.push(`<span class="muted" style="display:block;font-size:11px;margin-top:2px">⚠ RISKS: ${esc(kr)}</span>`); }
+    const tgt=g.target_mean?` <span class="muted" style="font-size:11px">$${Math.round(g.target_mean)}</span>`:'';
+    const conf=m.confidence?` <span class="muted" style="font-size:10px">(${m.confidence})</span>`:'';
+    const row=el('div'); row.id='brief-'+t; row.style.cssText='display:grid;grid-template-columns:70px 150px 1fr;gap:8px;padding:7px 0;border-bottom:1px solid #191c20;font-size:12px;align-items:start;transition:background 0.4s;';
+    row.innerHTML=`<span style="color:var(--amber)">${t}</span>`+
+      `<span>${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}</span>`+
+      `<span style="line-height:1.45"><span class="muted">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
+    wrap.appendChild(row);
+  });
+  return wrap;
+}
+
+function saveScanner(){
+  const wl=(document.getElementById('scan-wl').value||'').split(/[,\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
+  const crit={};
+  ['min_rev_growth_pct','min_fcf_margin_pct','max_pe_forward','min_analyst_buy_pct','max_share_price','min_share_price'].forEach(k=>{
+    const x=document.getElementById('scan-'+k).value; if(x!=='') crit[k]=parseFloat(x);
+  });
+  const body={ watchlist:wl, criteria:crit,
+    include_holding_peers: document.getElementById('scan-peers').checked,
+    strategy_description: document.getElementById('scan-strat').value };
+  fetch('/api/scanner-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+function ideasContent(r){
+  const wrap=el('div');
+  if(!r || r.error){ wrap.appendChild(el('div','muted','Scanner unavailable.')); return wrap; }
+  const c=r.criteria||{};
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:10px;';
+  sub.textContent=`opportunity screen · research ideas, not advice · updated ${new Date(r.generated_at*1000).toLocaleString()}`;
+  wrap.appendChild(sub);
+  // editor
+  const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;margin-bottom:14px;';
+  ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">SCANNER · EDIT</div>`+
+    `<div style="margin-bottom:7px;">Watchlist <input id="scan-wl" type="text" value="${(r.watchlist||[]).join(', ')}" placeholder="NVDA, AMD, ASTS" style="width:340px;"/></div>`+
+    `<div style="margin-bottom:7px;">Min rev growth <input id="scan-min_rev_growth_pct" type="number" value="${c.min_rev_growth_pct}" style="width:50px;"/>%`+
+    ` · Min FCF margin <input id="scan-min_fcf_margin_pct" type="number" value="${c.min_fcf_margin_pct}" style="width:50px;"/>%`+
+    ` · Max fwd P/E <input id="scan-max_pe_forward" type="number" value="${c.max_pe_forward}" style="width:50px;"/>`+
+    ` · Min analyst buy <input id="scan-min_analyst_buy_pct" type="number" value="${c.min_analyst_buy_pct}" style="width:50px;"/>%</div>`+
+    `<div style="margin-bottom:7px;">Max $/share <input id="scan-max_share_price" type="number" value="${c.max_share_price!=null?c.max_share_price:''}" placeholder="any" style="width:64px;"/> · Min $/share <input id="scan-min_share_price" type="number" value="${c.min_share_price!=null?c.min_share_price:''}" placeholder="any" style="width:64px;"/></div>`+
+    `<div style="margin-bottom:7px;"><label style="cursor:pointer;"><input id="scan-peers" type="checkbox" ${r.include_holding_peers?'checked':''}/> include peers of my holdings</label></div>`+
+    `<div style="margin-bottom:9px;">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
+    `<button onclick="saveScanner()">↳ SAVE & RESCAN</button>`;
+  wrap.appendChild(ed);
+  const discoSections=()=>{
+    if(typeof DISCO==='undefined' || !DISCO) return;
+    if(DISCO.discovered && DISCO.discovered.length){
+      const dh=el('div','ph','DISCOVERED FROM NEWSFEED · research'); dh.style.marginTop='16px'; wrap.appendChild(dh);
+      const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
+      DISCO.discovered.forEach(i=>{
+        const m=i.llm||{}, g=i.grounded||{};
+        const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
+        const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
+        const px=i.price!=null?'$'+(+i.price).toFixed(2):'—';
+        const row=el('div'); row.style.cssText='padding:8px 0;border-bottom:1px solid #191c20;font-size:12px;line-height:1.45;';
+        let html=`<span style="color:var(--amber)">${i.ticker}</span> <span class="muted">${px} · FIT </span><span class="${fitc}">${fit}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:10px">(${m.confidence})</span>`:''):'');
+        const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));
+        if(th) html+=`<div class="muted" style="margin-top:3px">${th}</div>`;
+        if(m.bull_case) html+=`<div class="pos" style="font-size:11px;margin-top:3px">▲ BULL: ${dsc(m.bull_case)}</div>`;
+        if(m.bear_case) html+=`<div class="neg" style="font-size:11px;margin-top:2px">▼ BEAR: ${dsc(m.bear_case)}</div>`;
+        if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; html+=`<div class="muted" style="font-size:11px;margin-top:2px">⚠ RISKS: ${dsc(kr)}</div>`; }
+        const fund=i.fundamentals||{}, fu=(fund.available?(fund.metrics||{}):{}), ra=(fund.available?(fund.ratios||{}):{}), va=i.valuation||{};
+        const gb=[]; if(fu.revenue_growth_pct!=null) gb.push('rev '+(fu.revenue_growth_pct>0?'+':'')+fu.revenue_growth_pct+'%'); if(ra.net_margin_pct!=null) gb.push('nm '+ra.net_margin_pct+'%'); if(ra.fcf_margin_pct!=null) gb.push('FCFm '+ra.fcf_margin_pct+'%'); if(ra.debt_to_equity!=null) gb.push('D/E '+ra.debt_to_equity);
+        const vb=[]; if(va.pe_forward!=null) vb.push('fwd P/E '+(+va.pe_forward).toFixed(1)); if(va.ps_ttm!=null) vb.push('P/S '+(+va.ps_ttm).toFixed(1)); if(va.dividend_yield_pct!=null) vb.push('yld '+(+va.dividend_yield_pct).toFixed(2)+'%');
+        if(gb.length) html+=`<div style="color:var(--blu);font-size:10px;margin-top:3px">▸ GAAP: ${gb.join(' · ')}</div>`;
+        if(vb.length) html+=`<div style="color:var(--amber);font-size:10px;margin-top:1px">▸ VAL: ${vb.join(' · ')}</div>`;
+        if(i.discovery_reason) html+=`<div class="muted" style="font-size:10px;margin-top:3px">↳ ${dsc(i.discovery_reason)}</div>`;
+        row.innerHTML=html; wrap.appendChild(row);
+      });
+    }
+    if(DISCO.alerts && DISCO.alerts.length){
+      const ah=el('div','ph','NEWS ALERTS · your holdings'); ah.style.marginTop='16px'; wrap.appendChild(ah);
+      DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid #191c20;'; let html=`<span style="color:var(--amber)">${a.ticker}</span> <span class="muted" style="font-size:10px">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:11px;padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:9px">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:11px;padding:2px 0 2px 12px;color:var(--blu)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
+    }
+  };
+  if(!r.ideas || !r.ideas.length){ wrap.appendChild(el('div','muted','No watchlist ideas — add tickers above & Save, or run discovery for newsfeed ideas.')); discoSections(); return wrap; }
+  const t=el('table'); const h=el('tr');
+  h.innerHTML='<th class="l">SYM</th><th>PX</th><th>FIT</th><th>REV g</th><th>FCF m</th><th>NET m</th><th>FWD P/E</th><th class="l">ANALYST</th><th class="l"></th>';
+  t.appendChild(h);
+  r.ideas.forEach(i=>{
+    const tr=el('tr');
+    const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
+    const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
+    const ana=i.analyst_rating?`${i.analyst_rating}${i.analyst_buy_pct!=null?' '+i.analyst_buy_pct+'%':''}`:'—';
+    tr.innerHTML=`<td class="sym">${i.ticker}${i.already_held?' <span class="muted" style="font-size:9px">held</span>':''}</td>`+
+      `<td>${i.price!=null?'$'+(+i.price).toFixed(2):'—'}</td>`+
+      `<td class="${fitc}">${fit}</td>`+
+      `<td>${i.rev_growth_pct!=null?(i.rev_growth_pct>0?'+':'')+i.rev_growth_pct+'%':'—'}</td>`+
+      `<td>${i.fcf_margin_pct!=null?i.fcf_margin_pct+'%':'—'}</td>`+
+      `<td>${i.net_margin_pct!=null?i.net_margin_pct+'%':'—'}</td>`+
+      `<td>${i.pe_forward!=null?(+i.pe_forward).toFixed(1):'—'}</td>`+
+      `<td class="l">${ana}</td>`+
+      `<td class="l muted" style="font-size:10px">${i.error?'err':(i.available?'':'no SEC data')}</td>`;
+    t.appendChild(tr);
+  });
+  wrap.appendChild(t);
+  discoSections();
+  if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:10px;font-size:10px;line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
+  return wrap;
+}
+
+function saveRetire(){
+  const num=id=>{const x=document.getElementById(id).value; return x===''?null:parseFloat(x);};
+  const val=id=>{const e=document.getElementById(id); return e?e.value:'';};
+  const body={
+    withdrawal_rate_pct: num('ret-wr')||4,
+    expected_real_return_pct: num('ret-rr')||5,
+    current_age: num('ret-age'),
+    target_age: num('ret-tage')||60,
+    annual_expenses_override: num('ret-exp'),
+    annual_savings_override: num('ret-sav'),
+    income_target_yield_pct: num('ret-yield')||3.5,
+    optimistic_real_return_pct: num('ret-opt')||8,
+    volatility_pct: num('ret-vol'),
+  };
+  // Tax / ACA / SS — only send keys the user actually filled, so a blank never
+  // clobbers a stored value. filing_status is a select (always present).
+  const fs=val('ret-fs'); if(fs) body.filing_status=fs;
+  const opt=(id,key,xf)=>{const v=num(id); if(v!=null) body[key]=xf?xf(v):v;};
+  opt('ret-fill','convert_fill_to_rate',v=>v/100);   // UI shows % ; config stores a decimal rate
+  opt('ret-hh','household_size');
+  opt('ret-slcsp','aca_slcsp_annual');
+  opt('ret-by','birth_year');
+  opt('ret-ca','ss_claim_age');
+  opt('ret-ssb','ss_estimated_fra_benefit');
+  opt('ret-sby','spouse_birth_year');
+  opt('ret-sca','spouse_ss_claim_age');
+  opt('ret-sssb','spouse_ss_estimated_fra_benefit');
+  fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+function planContent(r){
+  const wrap=el('div');
+  if(!r || r.error){ wrap.appendChild(el('div','muted','Retirement projection unavailable.')); return wrap; }
+  const u0=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+  const a=r.assumptions||{}, pv=x=>x==null?'':x;
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:10px;';
+  sub.textContent=`financial independence · today's dollars · informational, not advice · updated ${new Date(r.generated_at*1000).toLocaleString()}`;
+  wrap.appendChild(sub);
+  // assumptions editor
+  const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;margin-bottom:14px;';
+  ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">ASSUMPTIONS · EDIT</div>`+
+    `<div style="margin-bottom:7px;">Withdrawal rate <input id="ret-wr" type="number" step="0.1" value="${pv(a.withdrawal_rate_pct)}" style="width:54px;"/>% &nbsp; Real return <input id="ret-rr" type="number" step="0.1" value="${pv(a.expected_real_return_pct)}" style="width:54px;"/>% &nbsp; Optimistic <input id="ret-opt" type="number" step="0.1" value="${pv(a.optimistic_real_return_pct)}" placeholder="8" style="width:54px;"/>% &nbsp; Volatility <input id="ret-vol" type="number" step="0.5" value="${pv(a.volatility_pct)}" placeholder="16" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(Monte Carlo)</span></div>`+
+    `<div style="margin-bottom:7px;">Current age <input id="ret-age" type="number" value="${pv(a.current_age)}" placeholder="—" style="width:54px;"/> &nbsp; Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/></div>`+
+    `<div style="margin-bottom:9px;">Annual expenses <input id="ret-exp" type="number" value="${a.expenses_source==='override'?Math.round(a.annual_expenses):''}" placeholder="${a.expenses_source==='monarch_cashflow'?'Monarch '+Math.round(a.annual_expenses):'set target $'}" style="width:120px;"/> &nbsp; Annual savings <input id="ret-sav" type="number" value="" placeholder="${a.annual_savings!=null?Math.round(a.annual_savings):'set $'}" style="width:120px;"/></div>`+
+    `<div style="margin-bottom:9px;">Income target yield <input id="ret-yield" type="number" step="0.1" value="${pv(a.income_target_yield_pct)}" placeholder="3.5" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(for the dividend-income view)</span></div>`+
+    `<div class="ph" style="border:none;margin:10px 0 6px;padding:0;">TAX · ACA · SOCIAL SECURITY</div>`+
+    `<div style="margin-bottom:7px;">Filing status <select id="ret-fs" style="width:150px;">`+
+      ['mfj','single','hoh'].map(o=>`<option value="${o}"${(a.filing_status||'mfj')===o?' selected':''}>${({mfj:'Married filing jointly',single:'Single',hoh:'Head of household'})[o]}</option>`).join('')+
+      `</select> &nbsp; Roth-conversion fill-to bracket <input id="ret-fill" type="number" step="1" value="${a.convert_fill_to_rate!=null?Math.round(a.convert_fill_to_rate*100):''}" placeholder="12" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(fill low-income years to this bracket)</span></div>`+
+    `<div style="margin-bottom:7px;">Household size <input id="ret-hh" type="number" step="1" value="${pv(a.household_size)}" placeholder="2" style="width:54px;"/> <span class="muted" style="font-size:10px;">(people on the return — drives ACA FPL)</span> &nbsp; Benchmark Silver premium <input id="ret-slcsp" type="number" step="1" value="${pv(a.aca_slcsp_annual)}" placeholder="SLCSP $/yr" style="width:110px;"/> <span class="muted" style="font-size:10px;">($/yr, for a $ PTC estimate)</span></div>`+
+    `<div style="margin-bottom:7px;">You — Birth year <input id="ret-by" type="number" step="1" value="${pv(a.birth_year)}" placeholder="1975" style="width:64px;"/> &nbsp; SS claim age <input id="ret-ca" type="number" step="1" value="${pv(a.ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-ssb" type="number" step="1" value="${pv(a.ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
+    `<div style="margin-bottom:9px;">Spouse — Birth year <input id="ret-sby" type="number" step="1" value="${pv(a.spouse_birth_year)}" placeholder="1977" style="width:64px;"/> &nbsp; SS claim age <input id="ret-sca" type="number" step="1" value="${pv(a.spouse_ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-sssb" type="number" step="1" value="${pv(a.spouse_ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
+    `<button onclick="saveRetire()">↳ SAVE ASSUMPTIONS</button>`;
+  wrap.appendChild(ed);
+  const notes=()=>{ if(r.notes){ const nh=el('div','ph','PLANNING NOTES'); nh.style.marginTop='12px'; wrap.appendChild(nh);
+    r.notes.forEach(n=>{ const x=el('div','muted'); x.style.cssText='font-size:11px;padding:2px 0;line-height:1.4;'; x.textContent='• '+n; wrap.appendChild(x); }); } };
+  if(r.fi_number==null){ const w=el('div','muted'); w.style.cssText='font-size:12px;margin-bottom:8px;'; w.textContent=r.note||'Enter your annual expenses to compute the FI number.'; wrap.appendChild(w); notes(); return wrap; }
+  // headline stats
+  const stats=el('div'); stats.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin-bottom:12px;';
+  const st=(l,val,cls)=>`<div class="ts"><span class="l">${l}</span><span class="v ${cls||''}">${val}</span></div>`;
+  stats.innerHTML=st('FI NUMBER',u0(r.fi_number))+st('INVESTABLE',u0(r.investable_assets))+
+    st('PROGRESS',(r.progress_pct!=null?r.progress_pct+'%':'—'),'pos')+
+    st('YEARS TO FI',(r.years_to_fi!=null?r.years_to_fi:'>80'))+
+    st('FI AT',(r.fi_year?(r.fi_year+(r.fi_age?` · age ${r.fi_age}`:'')):'—'));
+  wrap.appendChild(stats);
+  // progress bar
+  const bar=el('div'); bar.style.cssText='height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-bottom:14px;';
+  const fill=el('div'); fill.style.cssText=`height:100%;width:${Math.min(100,r.progress_pct||0)}%;background:var(--grn);`; bar.appendChild(fill); wrap.appendChild(bar);
+  // Monte Carlo success probability
+  if(r.monte_carlo){
+    const mc=r.monte_carlo, eb=mc.ending_balance_real||{};
+    const sc=mc.success_pct>=80?'pos':(mc.success_pct>=60?'':'neg');
+    const mh=el('div','ph','MONTE CARLO · SUCCESS PROBABILITY'); mh.style.marginTop='4px'; wrap.appendChild(mh);
+    const ms=el('div'); ms.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    ms.innerHTML=st('SUCCESS',(mc.success_pct!=null?mc.success_pct+'%':'—'),sc)+
+      st('END BAL p10',u0(eb.p10))+st('MEDIAN p50',u0(eb.p50))+st('p90',u0(eb.p90))+
+      st('PATHS',mc.runs);
+    wrap.appendChild(ms);
+    const mn=el('div','muted'); mn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;'; mn.textContent=mc.note||''; wrap.appendChild(mn);
+    if(mc.fat_tail && mc.fat_tail.success_pct!=null){
+      const ft=mc.fat_tail, drop=(mc.success_pct!=null?Math.round((mc.success_pct-ft.success_pct)*10)/10:null);
+      const fl=el('div'); fl.style.cssText='font-size:11px;margin-bottom:12px;';
+      fl.innerHTML=`<span class="muted">FAT-TAIL (Student-t) success:</span> <span class="${ft.success_pct>=80?'pos':(ft.success_pct>=60?'':'neg')}">${ft.success_pct}%</span>`+
+        (drop!=null?` <span class="muted">(${drop>0?'−'+drop:'+'+(-drop)}pt vs Normal — the tail risk the headline hides)</span>`:'');
+      wrap.appendChild(fl);
+    }
+    if(mc.guardrails){
+      const gk=mc.guardrails, gsc=gk.success_pct>=80?'pos':(gk.success_pct>=60?'':'neg');
+      const gh=el('div','ph','GUYTON-KLINGER GUARDRAILS · FLEXIBLE SPENDING'); gh.style.marginTop='4px'; wrap.appendChild(gh);
+      const gs=el('div'); gs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+      const delta=Math.round((gk.success_pct-mc.success_pct)*10)/10;
+      gs.innerHTML=st('SUCCESS',(gk.success_pct!=null?gk.success_pct+'%':'—'),gsc)+
+        st('vs STATIC',(delta>=0?'+':'')+delta+'pt',delta>0?'pos':(delta<0?'neg':''))+
+        st('WORST-CASE SPEND',(gk.median_worst_spend_pct_of_initial!=null?gk.median_worst_spend_pct_of_initial+'%':'—'))+
+        st('TYPICAL END SPEND',(gk.median_final_spend_pct_of_initial!=null?gk.median_final_spend_pct_of_initial+'%':'—'))+
+        st('PATHS THAT CUT',(gk.paths_that_cut_spending_pct!=null?gk.paths_that_cut_spending_pct+'%':'—'));
+      wrap.appendChild(gs);
+      const gn=el('div','muted'); gn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;';
+      gn.textContent='Instead of a fixed real withdrawal, spending flexes ±'+gk.adjust_pct+'% whenever your withdrawal rate crosses ±'+gk.band_pct+'% of the starting rate (Guyton-Klinger). Flexibility lifts success to '+gk.success_pct+'%, but in a bad market sequence your real spending could dip to ~'+gk.median_worst_spend_pct_of_initial+'% of plan at its low point (median across paths). Guardrails buy safety with variable income — informational, not advice.';
+      wrap.appendChild(gn);
+    }
+  }
+  // Social Security income floor (G2)
+  if(r.social_security && r.social_security.household_annual_benefit){
+    const sy=r.social_security, ppl=(sy.people||[]).filter(p=>p&&p.available);
+    const sh=el('div','ph','SOCIAL SECURITY · INCOME FLOOR'); sh.style.marginTop='4px'; wrap.appendChild(sh);
+    const ss2=el('div'); ss2.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    ss2.innerHTML=st('HOUSEHOLD /YR',u0(sy.household_annual_benefit),'pos')+
+      st('/MO',u0(sy.household_monthly_benefit))+
+      st('TAXABLE PORTION',u0(sy.household_taxable_portion))+
+      st('COLA (2026)',(sy.cola_pct!=null?sy.cola_pct+'%':'—'));
+    wrap.appendChild(ss2);
+    ppl.forEach(p=>{
+      const pl=el('div'); pl.style.cssText='font-size:11px;margin:2px 0;';
+      pl.innerHTML=`<span class="muted">${p.label}:</span> claim ${p.claim_age} `+
+        `<span class="muted">(${p.claim_vs_pia_pct}% of $${Math.round(p.pia_monthly).toLocaleString()}/mo PIA, FRA ${p.fra.years}y${p.fra.months?p.fra.months+'m':''})</span> → `+
+        `<span class="pos">${u0(p.monthly_benefit)}/mo</span> <span class="muted">(${u0(p.annual_benefit)}/yr, ${p.taxable_pct_of_benefit}% taxable · ${p.pia_confidence} confidence)</span>`;
+      wrap.appendChild(pl);
+    });
+    const sn=el('div','muted'); sn.style.cssText='font-size:10px;line-height:1.45;margin:6px 0 14px;';
+    sn.textContent=sy.note||''; wrap.appendChild(sn);
+  }
+  // early-retirement bridge (Roth ladder + 72(t))
+  if(r.bridge && r.bridge.status==='bridge_needed'){
+    const br=r.bridge, rl=br.roth_ladder||{}, sp=br.sepp_72t||{};
+    const bh=el('div','ph','EARLY-RETIREMENT BRIDGE · TO AGE 59.5'); bh.style.marginTop='4px'; wrap.appendChild(bh);
+    const bs=el('div'); bs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    bs.innerHTML=st('BRIDGE',br.bridge_years+' yrs')+
+      st('TOTAL NEED',u0(br.total_bridge_need))+
+      st('SEED (first '+rl.seasoning_years+'yr)',u0(rl.seed_need_taxable_roth),rl.seed_covered?'':'neg')+
+      st('ACCESSIBLE',u0(rl.accessible_taxable_plus_roth),rl.seed_covered?'pos':'neg')+
+      st('72(t)/YR',u0(sp.annual_estimate)+(sp.covers_expenses_pct!=null?' ('+sp.covers_expenses_pct+'%)':''));
+    wrap.appendChild(bs);
+    if(!rl.seed_covered){ const w=el('div'); w.style.cssText='font-size:11px;color:var(--amber);margin-bottom:4px;';
+      w.textContent='⚠ Seed shortfall '+u0(rl.seed_gap)+' — not enough taxable/Roth to cover the first '+rl.seasoning_years+' yr(s) before conversions season.'; wrap.appendChild(w); }
+    else { const ok=el('div'); ok.style.cssText='font-size:11px;color:var(--grn);margin-bottom:4px;';
+      ok.textContent='✓ Taxable/Roth covers the '+rl.seasoning_years+'-yr seasoning window; Traditional balance '+(rl.conversions_covered?'covers':'may NOT cover')+' the '+u0(rl.conversions_needed_total)+' of conversions.'; wrap.appendChild(ok); }
+    if(br.aca){
+      const ac=br.aca, sub=ac.subsidy||{}, cl=ac.cliff||{}, over=(ac.flags||{}).over_cliff, gap=(ac.flags||{}).below_floor_gap;
+      const ah=el('div','ph','ACA HEALTHCARE · PRE-MEDICARE MAGI'); ah.style.marginTop='2px'; wrap.appendChild(ah);
+      const as=el('div'); as.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+      as.innerHTML=st('BRIDGE MAGI',u0(ac.magi))+
+        st('% FPL',(sub.fpl_pct!=null?sub.fpl_pct+'%':'—'),over?'neg':(gap?'neg':'pos'))+
+        st('CLIFF HEADROOM',u0(cl.headroom_to_cliff),over?'neg':'pos')+
+        (sub.estimated_annual_ptc!=null?st('EST PTC/YR',u0(sub.estimated_annual_ptc),'pos'):st('CONTRIB/YR',sub.expected_annual_contribution!=null?u0(sub.expected_annual_contribution):'set SLCSP'));
+      wrap.appendChild(as);
+      const ac2=el('div'); ac2.style.cssText='font-size:11px;margin-bottom:4px;color:'+(over||gap?'var(--amber)':'var(--grn)')+';';
+      ac2.textContent=(over?'⚠ Bridge-year conversions push MAGI OVER the 400% FPL cliff — $0 subsidy. ':(gap?'⚠ MAGI below 100% FPL — TX coverage gap. ':'✓ Under the 400% FPL cliff — subsidy preserved. '))+'Cliff at '+u0(cl.cliff_magi)+' MAGI.';
+      wrap.appendChild(ac2);
+      const an=el('div','muted'); an.style.cssText='font-size:10px;line-height:1.45;margin-bottom:6px;'; an.textContent=ac.interpretation||''; wrap.appendChild(an);
+    }
+    const bn=el('div','muted'); bn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;'; bn.textContent=(br.assessment||'')+' '+(rl.note||''); wrap.appendChild(bn);
+  } else if(r.bridge && r.bridge.status==='no_bridge_needed'){
+    const bn=el('div','muted'); bn.style.cssText='font-size:11px;margin:6px 0 12px;'; bn.textContent='Bridge: '+r.bridge.note; wrap.appendChild(bn);
+  }
+  // income-transition glide path
+  if(INCOME && INCOME.status==='ready'){
+    const g=INCOME;
+    const gh=el('div','ph','INCOME GLIDE PATH · TO $'+Math.round(g.income_target).toLocaleString()+'/YR'); gh.style.marginTop='4px'; wrap.appendChild(gh);
+    const gs=el('div'); gs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    gs.innerHTML=st('CAPITAL NEEDED',u0(g.capital_needed))+
+      st('CURRENT INCOME',u0(g.current_income))+
+      st('COVERAGE NOW',(g.current_coverage_pct!=null?g.current_coverage_pct+'%':'—'),(g.current_coverage_pct||0)<50?'neg':'')+
+      st('FULL COVERAGE',g.year_full_coverage?('~'+g.year_full_coverage+' ('+g.years_to_full_coverage+'y)'):'not w/ current capital')+
+      st('SLEEVE YIELD',g.target_yield_pct+'%');
+    wrap.appendChild(gs);
+    const gn=el('div','muted'); gn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;'; gn.textContent=g.note||''; wrap.appendChild(gn);
+  }
+  // assumptions summary
+  const al=el('div','muted'); al.style.cssText='font-size:11px;margin-bottom:12px;';
+  al.textContent=`${a.withdrawal_rate_pct}% withdrawal · ${a.expected_real_return_pct}% real return · expenses ${u0(a.annual_expenses)}/yr (${a.expenses_source||'unset'}) · savings ${u0(a.annual_savings)}/yr`;
+  wrap.appendChild(al);
+  // coast FI
+  if(r.coast_fi){ const c=el('div'); c.style.cssText='padding:5px 0;font-size:12px;color:'+(r.coast_fi.reached?'var(--grn)':'var(--txt)')+';'; c.textContent=(r.coast_fi.reached?'✓ ':'• ')+r.coast_fi.note; wrap.appendChild(c); }
+  // return scenarios (conservative vs portfolio/analyst-implied)
+  if(r.scenarios && r.scenarios.length>1){
+    const sh=el('div','ph','RETURN SCENARIOS · years to FI'); sh.style.marginTop='12px'; wrap.appendChild(sh);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SCENARIO</th><th>REAL RETURN</th><th>YEARS TO FI</th><th class="l">BASIS</th>'; t.appendChild(hr);
+    r.scenarios.forEach(s=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${s.name}</td><td>${s.real_return_pct!=null?s.real_return_pct+'%':'—'}</td><td>${s.years_to_fi!=null?s.years_to_fi:'>80'}</td><td class="l muted" style="font-size:10px">${s.basis||''}</td>`; t.appendChild(tr); });
+    wrap.appendChild(t);
+    const impl=r.scenarios.find(s=>s.name==='analyst-implied');
+    if(impl && impl.caveat){ const cv=el('div','muted'); cv.style.cssText='font-size:10px;margin-top:4px;line-height:1.4;color:var(--amber)'; cv.textContent='⚠ '+impl.caveat; wrap.appendChild(cv); }
+  }
+  // income mode (dividends)
+  if(r.income){
+    const i=r.income; const ih=el('div','ph','INCOME MODE · live on dividends'); ih.style.marginTop='12px'; wrap.appendChild(ih);
+    const line=el('div'); line.style.cssText='font-size:12px;padding:3px 0;';
+    line.innerHTML=`Current weighted yield <span style="color:var(--amber)">${i.current_weighted_yield_pct!=null?i.current_weighted_yield_pct+'%':'—'}</span> → ${u0(i.current_annual_income)}/yr`+
+      ` &nbsp;·&nbsp; at ${i.target_yield_pct}% target → <span style="color:var(--grn)">${u0(i.income_at_target_yield)}/yr</span>`+
+      ` (covers ${i.covers_expenses_pct!=null?i.covers_expenses_pct+'%':'—'} of expenses)`;
+    wrap.appendChild(line);
+    const dfi=el('div','muted'); dfi.style.cssText='font-size:11px;padding:2px 0;'; dfi.textContent=`Live-on-dividends FI number @ ${i.target_yield_pct}%: ${u0(i.dividend_fi_number)}`; wrap.appendChild(dfi);
+    if(i.note){ const n=el('div','muted'); n.style.cssText='font-size:10px;margin-top:4px;line-height:1.4;'; n.textContent=i.note; wrap.appendChild(n); }
+  }
+  // sensitivity
+  if(r.sensitivity && r.sensitivity.length){
+    const sh=el('div','ph','SAVINGS SENSITIVITY'); sh.style.marginTop='12px'; wrap.appendChild(sh);
+    const t=el('table'); const h=el('tr'); h.innerHTML='<th class="l">SAVINGS RATE</th><th>ANNUAL SAVINGS</th><th>YEARS TO FI</th>'; t.appendChild(h);
+    r.sensitivity.forEach(s=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${s.savings_rate}</td><td>${u0(s.annual_savings)}</td><td>${s.years_to_fi!=null?s.years_to_fi:'>80'}</td>`; t.appendChild(tr); });
+    wrap.appendChild(t);
+  }
+  notes();
+  return wrap;
+}
+
+function savePolicy(){
+  const targets={};
+  document.querySelectorAll('.pol-type').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) targets[i.dataset.type]=v; });
+  const caps={};
+  (document.getElementById('pol-caps').value||'').split(',').forEach(p=>{
+    const m=p.split(':'); const t=(m[0]||'').trim().toUpperCase(); const v=parseFloat((m[1]||'').trim());
+    if(t && !isNaN(v)) caps[t]=v;
+  });
+  const body={ targets_by_type:targets,
+    max_position_pct: parseFloat(document.getElementById('pol-maxcap').value)||10,
+    drift_threshold_pct: parseFloat(document.getElementById('pol-drift').value)||5,
+    position_caps: caps };
+  fetch('/api/policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+function insightsContent(r){
+  const wrap=el('div');
+  if(!r || r.error){ wrap.appendChild(el('div','muted','No insights yet — run the rebalance check.')); return wrap; }
+  const u0=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:10px;';
+  sub.textContent=`rebalancing & concentration · suggestions only, not advice · updated ${new Date(r.generated_at*1000).toLocaleString()}`;
+  wrap.appendChild(sub);
+  // editable policy
+  const pol=r.policy||{};
+  const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;margin-bottom:14px;';
+  let typeInputs='';
+  (r.allocation||[]).forEach(a=>{
+    typeInputs+=`<span style="margin-right:14px;white-space:nowrap;">${a.type} <input class="pol-type" data-type="${a.type}" type="number" value="${a.target_pct==null?'':a.target_pct}" style="width:46px;"/>%</span>`;
+  });
+  const capsStr=Object.entries(pol.position_caps||{}).map(([k,v])=>k+':'+v).join(', ');
+  ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">POLICY · EDIT (saved locally; suggestions only)</div>`+
+    `<div style="margin-bottom:7px;">Targets by type: ${typeInputs||'<span class="muted">—</span>'}</div>`+
+    `<div style="margin-bottom:7px;">Max single-name cap <input id="pol-maxcap" type="number" value="${pol.max_position_pct||10}" style="width:46px;"/>%`+
+    ` &nbsp; Drift band <input id="pol-drift" type="number" value="${pol.drift_threshold_pct||5}" style="width:46px;"/>%</div>`+
+    `<div style="margin-bottom:9px;">Per-ticker caps (conviction holdings) <input id="pol-caps" type="text" value="${capsStr}" placeholder="PLTR:40, RKLB:40" style="width:260px;"/></div>`+
+    `<button onclick="savePolicy()">↳ SAVE POLICY</button>`;
+  wrap.appendChild(ed);
+  // allocation vs target
+  if(r.allocation && r.allocation.length){
+    wrap.appendChild(el('div','ph','ALLOCATION vs TARGET'));
+    const t=el('table'); const head=el('tr');
+    head.innerHTML='<th class="l">ASSET TYPE</th><th>TARGET</th><th>ACTUAL</th><th>DRIFT</th><th>±$</th>';
+    t.appendChild(head);
+    r.allocation.forEach(a=>{
+      const tr=el('tr');
+      const dc=a.drift_pct==null?'muted':(a.flag?(a.drift_pct>0?'neg':'pos'):'muted');
+      tr.innerHTML=`<td class="l sym">${a.type}</td>`+
+        `<td>${a.target_pct==null?'—':a.target_pct+'%'}</td>`+
+        `<td>${a.actual_pct}%</td>`+
+        `<td class="${dc}">${a.drift_pct==null?'—':((a.drift_pct>0?'+':'')+a.drift_pct+'%')}${a.flag?' ⚠':''}</td>`+
+        `<td class="${dc}">${a.drift_usd==null?'—':((a.drift_usd>0?'+':'')+u0(Math.abs(a.drift_usd)).replace('$',a.drift_usd<0?'-$':'$'))}</td>`;
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+  }
+  if(r.ips_allocation && r.ips_allocation.length){
+    const h=el('div','ph','IPS SLEEVE DRIFT · US / INTL / BOND / CASH'); h.style.marginTop='14px'; wrap.appendChild(h);
+    const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin-bottom:6px;'; sub.textContent='asset-CLASS drift vs your Investment Policy Statement (heuristic classification; funds not yet looked-through by class)'; wrap.appendChild(sub);
+    const t=el('table'); const head=el('tr');
+    head.innerHTML='<th class="l">SLEEVE</th><th>TARGET</th><th>ACTUAL</th><th>DRIFT</th><th>±$</th>';
+    t.appendChild(head);
+    r.ips_allocation.forEach(a=>{
+      const tr=el('tr');
+      const dc=a.drift_pct==null?'muted':(a.flag?(a.drift_pct>0?'neg':'pos'):'muted');
+      tr.innerHTML=`<td class="l sym">${a.sleeve}</td>`+
+        `<td>${a.target_pct==null?'—':a.target_pct+'%'}</td>`+
+        `<td>${a.actual_pct}%</td>`+
+        `<td class="${dc}">${a.drift_pct==null?'—':((a.drift_pct>0?'+':'')+a.drift_pct+'%')}${a.flag?' ⚠':''}</td>`+
+        `<td class="${dc}">${a.drift_usd==null?'—':((a.drift_usd>0?'+':'')+u0(Math.abs(a.drift_usd)).replace('$',a.drift_usd<0?'-$':'$'))}</td>`;
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+  }
+  // concentration
+  const ch=el('div','ph','CONCENTRATION (over your caps)'); ch.style.marginTop='14px'; wrap.appendChild(ch);
+  if(r.concentration && r.concentration.length){
+    r.concentration.forEach(c=>{
+      const ret=c.total_return_pct;
+      const rs=ret==null?'':` · <span class="${ret>=0?'pos':'neg'}">${ret>0?'+':''}${ret}% since cost</span>`;
+      const row=el('div','row');
+      row.innerHTML=`<span class="nm"><span style="color:var(--amber)">${c.ticker}</span> <span class="sub">${c.weight_pct}% (cap ${c.cap_pct}%) · ${u0(c.value)}${rs}</span></span>`+
+        `<span class="neg">trim ~${u0(c.trim_usd)}</span>`;
+      wrap.appendChild(row);
+    });
+  } else { wrap.appendChild(el('div','muted','None — every position is within your cap.')); }
+  // suggestions
+  if(r.suggestions && r.suggestions.length){
+    const sh=el('div','ph','SUGGESTED ACTIONS'); sh.style.marginTop='14px'; wrap.appendChild(sh);
+    r.suggestions.forEach(s=>{ const x=el('div'); x.style.cssText='padding:3px 0;font-size:12px;color:var(--txt);'; x.textContent='• '+s; wrap.appendChild(x); });
+  }
+  // ---- TRUE EXPOSURE: sector allocation + portfolio beta + concentration ----
+  const ex=EXP;
+  if(ex && !ex.error){
+    const eh=el('div','ph','TRUE EXPOSURE · SECTOR / BETA / CONCENTRATION'); eh.style.marginTop='18px'; wrap.appendChild(eh);
+    const c=ex.concentration||{};
+    // headline metrics row
+    const betaAgg = ex.portfolio_beta!=null && ex.portfolio_beta>1.3;
+    const mr=el('div'); mr.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:8px 0 12px;';
+    const metric=(lab,val,warn)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${lab}</div>`+
+      `<div style="font-size:16px;color:${warn?'var(--amber)':'var(--txt)'}">${val}</div></div>`;
+    mr.innerHTML=
+      metric('PORTFOLIO BETA', ex.portfolio_beta==null?'—':ex.portfolio_beta, betaAgg)+
+      metric('TOP POSITION', c.top_position_pct==null?'—':c.top_position_pct+'%', (c.top_position_pct||0)>20)+
+      metric('TOP-5 WEIGHT', c.top5_pct==null?'—':c.top5_pct+'%', (c.top5_pct||0)>60)+
+      metric('EFFECTIVE HOLDINGS', c.effective_holdings==null?'—':c.effective_holdings+' of '+(ex.positions?ex.positions.length:'?'), (c.effective_holdings||99)<5);
+    wrap.appendChild(mr);
+    if(betaAgg){ const b=el('div','muted'); b.style.cssText='font-size:10px;margin:-6px 0 8px;'; b.textContent='Portfolio beta > 1.3 — this book is meaningfully more volatile than the market.'; wrap.appendChild(b); }
+    // concentration flags
+    if(c.flags && c.flags.length){
+      c.flags.forEach(fl=>{ const x=el('div'); x.style.cssText='padding:2px 0;font-size:12px;color:var(--amber);'; x.textContent='⚠ '+fl; wrap.appendChild(x); });
+    }
+    // sector bars
+    if(ex.by_sector && ex.by_sector.length){
+      const sh=el('div','ph','SECTOR ALLOCATION'); sh.style.marginTop='12px'; wrap.appendChild(sh);
+      const maxw=Math.max(...ex.by_sector.map(s=>s.weight_pct||0),1);
+      ex.by_sector.forEach(s=>{
+        const w=s.weight_pct||0; const isFund=/no look-through/.test(s.sector);
+        const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:8px;padding:2px 0;font-size:11px;';
+        row.innerHTML=`<span style="width:150px;color:${isFund?'var(--mut)':'var(--txt)'}">${s.sector}</span>`+
+          `<span style="flex:0 0 ${Math.round(w/maxw*160)}px;height:11px;background:${w>35?'var(--amber)':'var(--accent,#5b8db8)'};border-radius:2px;"></span>`+
+          `<span class="muted">${w}% · ${u0(s.value)}</span>`;
+        wrap.appendChild(row);
+      });
+    }
+    if(ex.stress_test && ex.stress_test.length){
+      const sh=el('div','ph','STRESS TEST · IF THE MARKET REPEATS'); sh.style.marginTop='12px'; wrap.appendChild(sh);
+      const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SCENARIO</th><th>MARKET</th><th>YOUR EST</th><th>EST $ IMPACT</th>'; t.appendChild(hr);
+      ex.stress_test.forEach(s=>{ const tr=el('tr');
+        tr.innerHTML=`<td class="l" title="${s.detail||''}">${s.name}</td>`+
+          `<td class="neg">${s.market_pct}%</td>`+
+          `<td class="neg">${s.est_portfolio_pct==null?'—':s.est_portfolio_pct+'%'}</td>`+
+          `<td class="neg">${s.est_dollar_impact==null?'—':u0(s.est_dollar_impact)}</td>`;
+        t.appendChild(tr); });
+      wrap.appendChild(t);
+    }
+    if(ex.note){ const n=el('div','muted'); n.style.cssText='margin-top:8px;font-size:10px;line-height:1.4;'; n.textContent=ex.note; wrap.appendChild(n); }
+  } else if(ex && ex.computing){
+    const eh=el('div','muted'); eh.style.cssText='margin-top:16px;font-size:11px;'; eh.textContent='True-exposure scan is running (classifying each holding by sector) — hit REFRESH in a moment.'; wrap.appendChild(eh);
+  }
+  // ---- REALIZED RISK (from the accruing daily value history) ----
+  const rk=RISK;
+  if(rk && !rk.error){
+    const rh=el('div','ph','REALIZED RISK · FROM YOUR VALUE HISTORY'); rh.style.marginTop='18px'; wrap.appendChild(rh);
+    if(rk.status==='ready'){
+      const rr=el('div'); rr.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:8px 0 6px;';
+      const m=(l,v,warn)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div>`+
+        `<div style="font-size:16px;color:${warn?'var(--amber)':'var(--txt)'}">${v}</div></div>`;
+      rr.innerHTML=
+        m('ANN. VOLATILITY',(rk.annualized_volatility_pct!=null?rk.annualized_volatility_pct+'%':'—'),(rk.annualized_volatility_pct||0)>25)+
+        m('MAX DRAWDOWN',(rk.max_drawdown_pct!=null?rk.max_drawdown_pct+'%':'—'),(rk.max_drawdown_pct||0)<-20)+
+        m('SHARPE',(rk.sharpe!=null?rk.sharpe:'—'))+
+        m('SORTINO',(rk.sortino!=null?rk.sortino:'—'))+
+        m('WORST DAY',(rk.worst_day_pct!=null?rk.worst_day_pct+'%':'—'));
+      wrap.appendChild(rr);
+      if(rk.benchmark){
+        const bm=rk.benchmark, ex=bm.excess_return_pct;
+        const bl=el('div'); bl.style.cssText='font-size:12px;margin:2px 0 6px;';
+        bl.innerHTML=`<span class="muted">vs ${bm.benchmark} (${bm.days}d):</span> you <span class="${bm.portfolio_return_pct>=0?'pos':'neg'}">${bm.portfolio_return_pct>0?'+':''}${bm.portfolio_return_pct}%</span> `+
+          `vs ${bm.benchmark} <span class="${bm.benchmark_return_pct>=0?'pos':'neg'}">${bm.benchmark_return_pct>0?'+':''}${bm.benchmark_return_pct}%</span> `+
+          `= <span class="${ex>=0?'pos':'neg'}">${ex>0?'+':''}${ex}pt</span> `+
+          `<span class="muted">· α ${bm.alpha_annualized_pct==null?'—':(bm.alpha_annualized_pct+'%/yr')} · β ${bm.beta_vs_benchmark==null?'—':bm.beta_vs_benchmark} · IR ${bm.information_ratio==null?'—':bm.information_ratio}</span>`;
+        wrap.appendChild(bl);
+      }
+      const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;';
+      rn.textContent=rk.days_recorded+' days recorded since '+(rk.since||'—')+' · '+(rk.note||''); wrap.appendChild(rn);
+    } else {
+      const rb=el('div','muted'); rb.style.cssText='font-size:11px;';
+      rb.textContent=rk.note||('Building risk history ('+(rk.days_recorded||0)+'/'+(rk.days_needed||20)+' days).'); wrap.appendChild(rb);
+    }
+  }
+  // ---- FUND LOOK-THROUGH: true single-name exposure (direct + inside funds) ----
+  const lt=LT;
+  if(lt && !lt.error && lt.true_exposure){
+    const lh=el('div','ph','TRUE SINGLE-NAME EXPOSURE · DIRECT + INSIDE FUNDS'); lh.style.marginTop='18px'; wrap.appendChild(lh);
+    const stat=el('div','muted'); stat.style.cssText='font-size:10px;margin-bottom:8px;';
+    stat.textContent=`${lt.funds_resolved||0}/${lt.funds_total||0} fund(s) looked through via SEC NPORT-P`+
+      ((lt.funds||[]).some(f=>f.resolved&&f.as_of)?` · as of ${(lt.funds.find(f=>f.resolved&&f.as_of)||{}).as_of}`:'');
+    wrap.appendChild(stat);
+    // hidden exposure callout
+    if(lt.hidden_exposure && lt.hidden_exposure.length){
+      lt.hidden_exposure.forEach(h=>{
+        const x=el('div'); x.style.cssText='padding:2px 0;font-size:12px;color:var(--amber);';
+        x.innerHTML=`◆ <span style="color:var(--amber)">${h.ticker||h.name}</span> is truly ${h.weight_pct}% of your book `+
+          `(${u0(h.total_value)}${h.fund_value?`, incl. ${u0(h.fund_value)} inside ${(h.held_via||[]).join(', ')||'funds'}`:''})`;
+        wrap.appendChild(x);
+      });
+    }
+    // top true-exposure table
+    const rows=(lt.true_exposure||[]).filter(r2=>r2.total_value>0).slice(0,12);
+    if(rows.length){
+      const t=el('table'); const hr=el('tr');
+      hr.innerHTML='<th class="l">NAME</th><th>DIRECT</th><th>IN FUNDS</th><th>TRUE TOTAL</th><th>WEIGHT</th>'; t.appendChild(hr);
+      rows.forEach(r2=>{
+        const tr=el('tr'); const both=r2.fund_value>0 && r2.direct_value>0;
+        tr.innerHTML=`<td class="l sym">${r2.ticker||r2.name||'—'}${both?' <span class="muted" style="font-size:9px">both</span>':''}</td>`+
+          `<td>${r2.direct_value?u0(r2.direct_value):'—'}</td>`+
+          `<td>${r2.fund_value?u0(r2.fund_value):'—'}</td>`+
+          `<td>${u0(r2.total_value)}</td>`+
+          `<td class="${(r2.weight_pct||0)>20?'neg':''}">${r2.weight_pct==null?'—':r2.weight_pct+'%'}</td>`;
+        t.appendChild(tr);
+      });
+      wrap.appendChild(t);
+    }
+    if(lt.note){ const n=el('div','muted'); n.style.cssText='margin-top:8px;font-size:10px;line-height:1.4;'; n.textContent=lt.note; wrap.appendChild(n); }
+  } else if(lt && lt.computing){
+    const lh=el('div','muted'); lh.style.cssText='margin-top:16px;font-size:11px;'; lh.textContent='Fund look-through is running (fetching NPORT-P filings from SEC) — hit REFRESH in a moment.'; wrap.appendChild(lh);
+  }
+  if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:12px;font-size:10px;line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
+  return wrap;
+}
+
+function stratPost(path,body,label){
+  return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})})
+    .then(r=>r.json()).then(d=>{ if(d&&d.error){ alert(label+' failed: '+d.error); } load(false); return d; })
+    .catch(e=>alert(label+' failed: '+e));
+}
+function stratRun(){
+  const s=document.getElementById('strat-runstatus');
+  if(s) s.textContent='⏳ Strategist review started — the model runs for several minutes. Hit REFRESH to see new trades & the weekly report.';
+  fetch('/api/paper/run',{method:'POST'}).then(r=>r.json())
+    .then(d=>{ if(s&&d&&d.status==='already running') s.textContent='⏳ A review is already running…'; })
+    .catch(e=>{ if(s) s.textContent='Run failed: '+e; });
+}
+function stratReset(){
+  const c=parseFloat(document.getElementById('strat-reset').value)||2000;
+  if(!confirm('Reset the paper portfolio to $'+c.toLocaleString()+'? This wipes positions, history, and any recurring contribution.')) return;
+  stratPost('/api/paper/reset',{starting_cash:c},'Reset');
+}
+function stratContribute(){
+  const a=parseFloat(document.getElementById('strat-add').value);
+  if(!a||a<=0){ alert('Enter a positive amount to add.'); return; }
+  stratPost('/api/paper/contribute',{amount:a},'Contribute');
+}
+function stratRecurring(){
+  const a=parseFloat(document.getElementById('strat-rec').value);
+  const cad=document.getElementById('strat-cad').value;
+  if(!a||a<=0){ alert('Enter a positive recurring amount.'); return; }
+  stratPost('/api/paper/recurring',{amount:a,cadence:cad},'Set recurring');
+}
+function stratStopRecurring(){ stratPost('/api/paper/recurring',{amount:0},'Stop recurring'); }
+function stratSeedToggle(){ const p=document.getElementById('strat-seedpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none'); }
+function stratSeedAll(v){ document.querySelectorAll('.seedck').forEach(x=>{ x.checked=v; }); }
+function stratSeed(){
+  const tickers=[...document.querySelectorAll('.seedck')].filter(x=>x.checked).map(x=>x.getAttribute('data-ticker'));
+  if(!tickers.length){ alert('Select at least one holding to seed.'); return; }
+  const basis=document.getElementById('seed-basis').value;
+  const cash=parseFloat(document.getElementById('seed-cash').value)||0;
+  if(!confirm('Reset the paper book and seed it with '+tickers.length+' of your holdings ('+basis+' basis)? This wipes the current paper portfolio.')) return;
+  stratPost('/api/paper/seed',{tickers:tickers,cash:cash,basis:basis},'Seed');
+}
+
+function flContent(f){
+  const wrap=el('div');
+  const liq=f.liquidity||{}, fees=f.fees||{};
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:12px;';
+  sub.textContent='liquidity & fee audit · informational, not advice'+(f.refreshing?' · refreshing…':'');
+  wrap.appendChild(sub);
+  wrap.appendChild(el('div','ph','LIQUIDITY · HARD-TO-EXIT HOLDINGS'));
+  if(liq.flagged && liq.flagged.length){
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SYM</th><th class="l">NAME</th><th>VALUE</th><th>$VOL/DAY</th><th>MKT CAP</th><th>EXIT</th><th class="l">FLAGS</th>'; t.appendChild(hr);
+    liq.flagged.forEach(c=>{ const tr=el('tr');
+      const ddv=c.avg_daily_dollar_volume!=null?usd(c.avg_daily_dollar_volume):'—';
+      const mc=c.market_cap_musd!=null?'$'+Math.round(c.market_cap_musd).toLocaleString()+'M':'—';
+      const ex=c.days_to_exit!=null?c.days_to_exit+'d':'—';
+      tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.name||''}</td><td>${usd(c.value)}</td><td>${ddv}</td><td>${mc}</td><td>${ex}</td><td class="neg" style="font-size:11px">${(c.flags||[]).join(', ')}</td>`;
+      t.appendChild(tr); });
+    wrap.appendChild(t);
+  } else { wrap.appendChild(el('div','muted','No liquidity flags — all tradable holdings are liquid enough.')); }
+  const n1=el('div','muted'); n1.style.cssText='font-size:10px;line-height:1.45;margin:8px 0 16px;'; n1.textContent=liq.note||''; wrap.appendChild(n1);
+  wrap.appendChild(el('div','ph','FEES · FUND EXPENSE RATIOS'));
+  if(fees.available && fees.funds && fees.funds.length){
+    const tot=el('div'); tot.style.cssText='font-size:11px;margin-bottom:6px;';
+    tot.innerHTML=`Est. annual fund fees: <span class="neg">${usd(fees.total_annual_fee)}</span><span class="muted">/yr across ${fees.count} fund(s)</span>`;
+    wrap.appendChild(tot);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SYM</th><th class="l">NAME</th><th>VALUE</th><th>EXP RATIO</th><th>FEE/YR</th>'; t.appendChild(hr);
+    fees.funds.forEach(f=>{ const tr=el('tr');
+      const er=f.expense_ratio_pct!=null?(+f.expense_ratio_pct).toFixed(2)+'%':'—';
+      tr.innerHTML=`<td class="sym">${f.ticker}</td><td class="name">${f.name||''}</td><td>${usd(f.value)}</td><td class="${f.high?'neg':''}">${er}</td><td>${f.annual_fee!=null?usd(f.annual_fee):'—'}</td>`;
+      t.appendChild(tr); });
+    wrap.appendChild(t);
+    if(fees.unknown && fees.unknown.length){ const u=el('div','muted'); u.style.cssText='font-size:10px;margin-top:4px;'; u.textContent='Expense ratio unknown for: '+fees.unknown.join(', ')+' — add them to edgar.py FUND_EXPENSE_RATIOS.'; wrap.appendChild(u); }
+  }
+  const fn=el('div','muted'); fn.style.cssText='font-size:10px;line-height:1.45;margin-top:6px;'; fn.textContent=fees.note||'Pending.'; wrap.appendChild(fn);
+  return wrap;
+}
+
+async function applyTaxInputs(){
+  const g=id=>{const x=document.getElementById(id); if(!x)return 0; const v=parseFloat(x.value); return isNaN(v)?0:v;};
+  TAX_INCOME=g('tax-inc'); TAX_LTCG=g('tax-ltcg');
+  try{ const r=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG}`); TAX=await r.json(); }
+  catch(e){ alert('Tax fetch failed: '+e); }
+  render();
+}
+
+function taxContent(bracket, audit){
+  const wrap=el('div');
+  const b=(bracket && !bracket.error)?bracket:{}, a=(audit && !audit.error)?audit:{};
+  const tlh=a.tax_loss_harvest||{}, loc=a.asset_location||{};
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:12px;';
+  sub.textContent='tax picture + audits · educational, not tax advice · confirm tax lots with your brokerage/CPA';
+  wrap.appendChild(sub);
+  // 2026 federal bracket picture — the engine at /api/tax
+  if(b.marginal_ordinary_rate_pct!=null || b.effective){
+    wrap.appendChild(el('div','ph','FEDERAL BRACKET PICTURE · 2026'));
+    const ctrl=el('div'); ctrl.style.cssText='margin:4px 0 12px;font-size:11px;';
+    ctrl.innerHTML=`Assumed ordinary income <input id="tax-inc" type="number" value="${(TAX_INCOME!=null&&TAX_INCOME!==0)?TAX_INCOME:''}" placeholder="$/yr" style="width:120px;"/> `+
+      `&nbsp; LTCG realized <input id="tax-ltcg" type="number" value="${(TAX_LTCG!=null&&TAX_LTCG!==0)?TAX_LTCG:''}" placeholder="0" style="width:110px;"/> `+
+      `&nbsp; <button onclick="applyTaxInputs()">↳ APPLY</button> `+
+      `<span class="muted" style="font-size:10px;">drives brackets, effective rate and 0% LTCG budget</span>`;
+    wrap.appendChild(ctrl);
+    const ef=(b.effective && typeof b.effective==='object')?b.effective:{};
+    const effRate=(ef.effective_rate_pct!=null?ef.effective_rate_pct:(ef.rate_pct!=null?ef.rate_pct:ef.effective_pct));
+    const gh=b.gain_harvest||{};
+    const rows=[
+      (effRate!=null)?['EFFECTIVE RATE',(+effRate).toFixed(1)+'%']:null,
+      (b.marginal_ordinary_rate_pct!=null)?['MARGINAL (ORD)',(+b.marginal_ordinary_rate_pct).toFixed(1)+'%']:null,
+      (b.taxable_ordinary!=null)?['TAXABLE ORD',usd(b.taxable_ordinary)]:null,
+      (b.standard_deduction!=null)?['STD DEDUCTION',usd(b.standard_deduction)]:null,
+      (gh.gains_at_0pct_budget!=null)?['0% LTCG BUDGET',usd(gh.gains_at_0pct_budget)]:null,
+      (b.flags&&b.flags.low_bracket_year!=null)?['LOW-BRACKET YR',b.flags.low_bracket_year?'YES':'no']:null,
+    ].filter(Boolean);
+    const g=el('div'); g.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 16px;margin:6px 0 14px;';
+    rows.forEach(r=>{ const s=el('div'); s.style.cssText='font-size:11px;'; s.innerHTML=`<span class="muted" style="font-size:10px;letter-spacing:1px;">${r[0]}</span><br><span style="color:var(--txt)">${r[1]}</span>`; g.appendChild(s); });
+    wrap.appendChild(g);
+    if(b.note){ const bn=el('div','muted'); bn.style.cssText='font-size:10px;line-height:1.45;margin:-4px 0 18px;'; bn.textContent=b.note; wrap.appendChild(bn); }
+  }
+  // Tax-loss harvesting + asset location — the audit at /api/tax-audit
+  if(a.tax_loss_harvest || a.asset_location){
+    wrap.appendChild(el('div','ph','TAX-LOSS HARVESTING · TAXABLE ACCOUNTS'));
+    if(tlh.candidates && tlh.candidates.length){
+      const tot=el('div'); tot.style.cssText='font-size:11px;margin-bottom:6px;';
+      tot.innerHTML=`Harvestable losses: <span class="neg">${sgn(tlh.total_harvestable_loss)}</span> <span class="muted">across ${tlh.count} position(s)</span>`;
+      wrap.appendChild(tot);
+      const tb=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>COST</th><th>LOSS</th><th>LOSS%</th>'; tb.appendChild(hr);
+      tlh.candidates.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td>${c.cost!=null?usd(c.cost):'—'}</td><td class="neg">${sgn(c.loss)}</td><td class="neg">${pct(c.loss_pct)}</td>`; tb.appendChild(tr); });
+      wrap.appendChild(tb);
+    } else { wrap.appendChild(el('div','muted','No harvestable losses in taxable accounts.')); }
+    const n1=el('div','muted'); n1.style.cssText='font-size:10px;line-height:1.45;margin:8px 0 18px;'; n1.textContent=tlh.note||''; wrap.appendChild(n1);
+    wrap.appendChild(el('div','ph','ASSET LOCATION · INCOME ASSETS IN TAXABLE'));
+    if(loc.misplaced && loc.misplaced.length){
+      const tot2=el('div'); tot2.style.cssText='font-size:11px;margin-bottom:6px;';
+      tot2.innerHTML=`<span class="muted">~</span>${usd(loc.est_annual_income_in_taxable)}<span class="muted">/yr of taxable distributions across ${loc.count} holding(s)</span>`;
+      wrap.appendChild(tot2);
+      const tb2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>YIELD</th><th>EST INCOME/YR</th>'; tb2.appendChild(hr2);
+      loc.misplaced.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td style="color:var(--amber)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td>`; tb2.appendChild(tr); });
+      wrap.appendChild(tb2);
+    } else { wrap.appendChild(el('div','muted','No high-yield holdings flagged in taxable accounts (or the research cache lacks yields for them).')); }
+    const n2=el('div','muted'); n2.style.cssText='font-size:10px;line-height:1.45;margin-top:8px;'; n2.textContent=loc.note||''; wrap.appendChild(n2);
+  } else {
+    wrap.appendChild(el('div','muted','Tax-loss / asset-location audit not computed yet.'));
+  }
+  return wrap;
+}
+
+function stratContent(r){
+  const wrap=el('div');
+  if(!r || r.error){ wrap.appendChild(el('div','muted','Paper portfolio unavailable.')); return wrap; }
+  const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;letter-spacing:1px;margin-bottom:10px;';
+  sub.textContent=`HYPOTHETICAL paper portfolio · no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
+  wrap.appendChild(sub);
+  // ---- controls: run / reset / contribute / recurring ----
+  const rec=r.recurring;
+  const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:9px 11px;margin-bottom:6px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;';
+  ctrl.innerHTML=
+    `<button onclick="stratRun()">▶ RUN REVIEW</button>`+
+    `<span class="muted">|</span>`+
+    `<span>Reset $<input id="strat-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="stratReset()">↺ RESET</button> <button onclick="stratSeedToggle()">⊕ SEED</button></span>`+
+    `<span class="muted">|</span>`+
+    `<span>Add $<input id="strat-add" type="number" placeholder="500" style="width:74px;"/> <button onclick="stratContribute()">+ CASH</button></span>`+
+    `<span class="muted">|</span>`+
+    `<span>Recurring $<input id="strat-rec" type="number" placeholder="${rec?rec.amount:'100'}" style="width:64px;"/> `+
+      `<select id="strat-cad" style="background:var(--panel2);color:var(--txt);border:1px solid var(--bd2);border-radius:3px;">`+
+      `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
+      `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
+      `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
+      `<button onclick="stratRecurring()">SET</button>${rec?' <button onclick="stratStopRecurring()">STOP</button>':''}</span>`;
+  wrap.appendChild(ctrl);
+  // seed-from-holdings picker (hidden until ⊕ SEED)
+  const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
+  let boxes='';
+  seedable.forEach(c=>{ boxes+=`<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 12px 2px 0;font-size:11px;white-space:nowrap;"><input type="checkbox" class="seedck" data-ticker="${c.ticker}" checked/> <span style="color:var(--amber)">${c.ticker}</span> <span class="muted">${usd(c.value)}</span></label>`; });
+  const seedPanel=el('div'); seedPanel.id='strat-seedpanel'; seedPanel.style.cssText='display:none;border:1px solid var(--bd2);border-radius:4px;padding:10px 12px;margin-bottom:12px;';
+  seedPanel.innerHTML=
+    `<div class="ph" style="border:none;margin-bottom:8px;padding:0;">SEED FROM MY HOLDINGS</div>`+
+    `<div style="margin-bottom:8px;font-size:12px;">Cost basis <select id="seed-basis" style="background:var(--panel2);color:var(--txt);border:1px solid var(--bd2);border-radius:3px;"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="seed-cash" type="number" value="0" style="width:80px;"/></div>`+
+    `<div style="margin-bottom:8px;max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
+    `<div class="muted" style="font-size:10px;margin-bottom:8px;">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS the paper book.</div>`+
+    `<div><button onclick="stratSeed()">✓ SEED &amp; RESET</button> <button onclick="stratSeedAll(true)">all</button> <button onclick="stratSeedAll(false)">none</button> <button onclick="stratSeedToggle()">cancel</button></div>`;
+  wrap.appendChild(seedPanel);
+  const runStatus=el('div','muted'); runStatus.id='strat-runstatus'; runStatus.style.cssText='font-size:10px;min-height:13px;margin-bottom:10px;'; wrap.appendChild(runStatus);
+  if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:10px;margin-bottom:10px;'; ri.innerHTML=`<span style="color:var(--amber)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
+  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:10px;margin-bottom:10px;'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':''); wrap.appendChild(ci); }
+  const stats=el('div'); stats.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin-bottom:12px;';
+  const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
+  stats.innerHTML=st('TOTAL VALUE',u2(r.total_value))+
+    st('RETURN',(r.return_pct!=null?(r.return_pct>0?'+':'')+r.return_pct+'%':'—'),cls(r.return_pct))+
+    st('P/L',sgn(r.total_return),cls(r.total_return))+st('CASH',u2(r.cash))+st('START',u2(r.starting_cash));
+  wrap.appendChild(stats);
+  STRAT_SERIES=(r.reports&&r.reports.length>=2)?r.reports.map(x=>({t:x.ts,v:x.total_value})):null;
+  if(STRAT_SERIES){ const cb=el('div','chartbox'); cb.style.height='150px'; cb.innerHTML='<canvas id="c-strat"></canvas>'; wrap.appendChild(cb); }
+  wrap.appendChild(el('div','ph','PAPER POSITIONS'));
+  if(r.positions && r.positions.length){
+    const t=el('table'); const h=el('tr'); h.innerHTML='<th class="l">SYM</th><th>SHARES</th><th>AVG</th><th>PX</th><th>VALUE</th><th>P/L</th><th>P/L%</th>'; t.appendChild(h);
+    r.positions.forEach(p=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${p.ticker}</td><td>${(+p.shares).toFixed(3)}</td><td>${p.avg_cost!=null?'$'+(+p.avg_cost).toFixed(2):'—'}</td><td>${p.price!=null?'$'+(+p.price).toFixed(2):'—'}</td><td>${usd(p.value)}</td><td class="${cls(p.gain)}">${sgn(p.gain)}</td><td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`; t.appendChild(tr); });
+    wrap.appendChild(t);
+  } else { wrap.appendChild(el('div','muted','All cash — no positions yet.')); }
+  if(r.reports && r.reports.length){
+    const rh=el('div','ph','LATEST WEEKLY REPORT'); rh.style.marginTop='12px'; wrap.appendChild(rh);
+    const last=r.reports[r.reports.length-1];
+    const rb=el('div','muted'); rb.style.cssText='font-size:11px;white-space:pre-wrap;line-height:1.45;';
+    rb.textContent=`${new Date(last.ts*1000).toLocaleString()} · value ${u2(last.total_value)} (${last.return_pct>0?'+':''}${last.return_pct}%)\n\n${last.summary||'(no summary)'}`;
+    wrap.appendChild(rb);
+  }
+  if(r.transactions && r.transactions.length){
+    const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
+    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:11px;padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--amber)">${x.ticker}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
+  }
+  return wrap;
+}
+
+function drawStrat(){
+  const c=document.getElementById('c-strat'); if(!c || !STRAT_SERIES || STRAT_SERIES.length<2) return;
+  charts.push(new Chart(c,{type:'line',
+    data:{labels:STRAT_SERIES.map(x=>new Date(x.t*1000).toLocaleDateString()),
+      datasets:[{data:STRAT_SERIES.map(x=>x.v),borderColor:'#2ec27e',backgroundColor:'rgba(46,194,126,0.12)',fill:true,tension:0.2,pointRadius:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{y:{ticks:{color:'#7d848c'},grid:{color:'#191c20'}},x:{ticks:{color:'#7d848c'},grid:{display:false}}}}}));
+}
+
+function drawCharts(d){
+  const mk=(id,items)=>{
+    const c=document.getElementById(id); if(!c)return;
+    charts.push(new Chart(c,{type:'doughnut',
+      data:{labels:items.map(i=>i.label),datasets:[{data:items.map(i=>i.value),
+        backgroundColor:items.map((_,i)=>PIE[i%PIE.length]),borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}}));
+  };
+  mk('c-inst', d.by_institution.slice(0,8));
+  mk('c-type', d.by_type.slice(0,8));
+}
+
+// ============================================================================
+//  Fiduciary / Strategist chat (Phase 4) — streams from POST /api/chat.
+//  Read-only: the backend hard-blocks paper-ledger writers for these personas.
+//  EventSource is GET-only, so we stream with fetch()+ReadableStream and parse
+//  the SSE frames (events: session, token, tool, tool_done, done, error).
+// ============================================================================
+function mdToHtml(t){
+  try{ if(window.marked) return marked.parse(t||'', {breaks:true}); }catch(_){}
+  return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+}
+function chatScroll(){ const s=document.getElementById('chat-scroll'); if(s) s.scrollTop=s.scrollHeight; }
+function chatLoadSessions(){
+  if(CHAT_SESS_LOADING) return;
+  CHAT_SESS_LOADING=true;
+  fetch('/api/chat/sessions').then(r=>r.json())
+    .then(d=>{ CHAT_SESSIONS=(d&&d.sessions)||[]; })
+    .catch(()=>{ CHAT_SESSIONS=CHAT_SESSIONS||[]; })
+    .finally(()=>{ CHAT_SESS_LOADING=false; if(TAB==='chat' && !CHAT_STREAMING) render(); });
+}
+function chatNew(){ if(CHAT_STREAMING) return; CHAT_SID=null; CHAT_MSGS=[]; render(); }
+function chatSetPersona(p){ if(CHAT_STREAMING) return; if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; CHAT_SID=null; CHAT_MSGS=[]; render(); } }
+function chatOpen(sid,persona){
+  if(CHAT_STREAMING) return;
+  fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{
+    CHAT_SID=sid; if(persona) CHAT_PERSONA=persona;
+    CHAT_MSGS=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
+      .map(m=>({role:m.role,content:m.content||'',tools:[]}));
+    render(); chatScroll();
+  }).catch(e=>alert('Could not open chat: '+e));
+}
+function chatDelete(sid,ev){
+  if(ev) ev.stopPropagation();
+  if(CHAT_STREAMING) return;
+  if(!confirm('Delete this conversation?')) return;
+  fetch('/api/chat/session/'+sid,{method:'DELETE'}).then(r=>r.json()).then(()=>{
+    if(CHAT_SID===sid){ CHAT_SID=null; CHAT_MSGS=[]; }
+    chatLoadSessions();
+  }).catch(e=>alert('Delete failed: '+e));
+}
+function chatKey(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); chatSend(); } }
+function chatTools(asst){
+  const t=document.getElementById('chat-live-tools'); if(!t) return;
+  t.innerHTML=asst.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
+}
+function chatFrame(frame,asst){
+  let ev='message', data='';
+  frame.split('\n').forEach(line=>{
+    if(line.indexOf('event:')===0) ev=line.slice(6).trim();
+    else if(line.indexOf('data:')===0) data+=line.slice(5).trim();
+  });
+  let o={}; if(data){ try{ o=JSON.parse(data); }catch(_){} }
+  if(ev==='session'){ CHAT_SID=o.session_id||CHAT_SID; }
+  else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
+  else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
+  else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
+  else if(ev==='done'){ CHAT_SID=o.session_id||CHAT_SID; }
+  else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
+}
+async function chatSend(){
+  if(CHAT_STREAMING) return;
+  const ta=document.getElementById('chat-input'); if(!ta) return;
+  const msg=(ta.value||'').trim(); if(!msg) return;
+  ta.value='';
+  CHAT_MSGS.push({role:'user',content:msg});
+  CHAT_MSGS.push({role:'assistant',content:'',tools:[],streaming:true});
+  CHAT_STREAMING=true;
+  render();                    // shows the user turn + an empty streaming bubble (ids: chat-live-*)
+  chatScroll();
+  const asst=CHAT_MSGS[CHAT_MSGS.length-1];
+  const ctl=new AbortController(); CHAT_ABORT=ctl;
+  try{
+    const resp=await fetch('/api/chat',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({persona:CHAT_PERSONA, message:msg, session_id:CHAT_SID}),
+      signal:ctl.signal});
+    if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
+    const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {done,value}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let i;
+      while((i=buf.indexOf('\n\n'))>=0){ const frame=buf.slice(0,i); buf=buf.slice(i+2); chatFrame(frame,asst); }
+    }
+  }catch(e){
+    if(e.name!=='AbortError') asst.content+=(asst.content?'\n\n':'')+'⚠ '+e.message;
+  }finally{
+    CHAT_STREAMING=false; CHAT_ABORT=null; asst.streaming=false;
+    render();                  // final pass: render markdown + refresh the session list
+    chatScroll();
+    chatLoadSessions();
+  }
+}
+function chatContent(){
+  if(CHAT_SESSIONS===null) chatLoadSessions();
+  const wrap=el('div','chat-wrap');
+  // ---- sidebar: new + persona toggle + session history ----
+  const side=el('div','chat-side');
+  const nb=el('button',null,'＋ NEW CHAT'); nb.style.cssText='width:100%;margin-bottom:8px;'; nb.onclick=chatNew; side.appendChild(nb);
+  const ptg=el('div','chat-persona');
+  const mkP=(k,lab)=>{ const s=el('span',null,lab); s.className='chat-ptab'+(CHAT_PERSONA===k?' on':''); s.onclick=()=>chatSetPersona(k); return s; };
+  ptg.appendChild(mkP('fiduciary','FIDUCIARY')); ptg.appendChild(mkP('strategist','STRATEGIST'));
+  side.appendChild(ptg);
+  const list=el('div','chat-list');
+  if(CHAT_SESSIONS===null){ const m=el('div','muted'); m.style.cssText='font-size:11px;padding:6px 2px;'; m.textContent='Loading…'; list.appendChild(m); }
+  else {
+    const sess=CHAT_SESSIONS.filter(s=>s.persona===CHAT_PERSONA);
+    if(!sess.length){ const m=el('div','muted'); m.style.cssText='font-size:11px;padding:6px 2px;'; m.textContent='No conversations yet.'; list.appendChild(m); }
+    else sess.forEach(s=>{
+      const it=el('div','chat-sess'+(s.id===CHAT_SID?' on':''));
+      const tt=el('span','chat-sess-t'); tt.textContent=s.title||'(untitled)'; tt.title=s.title||'';
+      const x=el('span','chat-sess-x'); x.textContent='✕'; x.title='Delete'; x.onclick=(e)=>chatDelete(s.id,e);
+      it.appendChild(tt); it.appendChild(x);
+      it.onclick=()=>chatOpen(s.id,s.persona);
+      list.appendChild(it);
+    });
+  }
+  side.appendChild(list);
+  wrap.appendChild(side);
+  // ---- main: transcript + input ----
+  const main=el('div','chat-main');
+  const scroll=el('div','chat-scroll'); scroll.id='chat-scroll';
+  if(!CHAT_MSGS.length){
+    const hint=el('div','muted'); hint.style.cssText='padding:24px 12px;text-align:center;font-size:12px;line-height:1.7;';
+    hint.innerHTML=(CHAT_PERSONA==='fiduciary'
+      ? 'Ask the <span style="color:var(--amber)">Fiduciary</span> about your holdings, concentration, drift, tax, the ACA bridge, or your FIRE plan.'
+      : 'Ask the <span style="color:var(--amber)">Strategist</span> about the paper book and market ideas.')
+      +'<br><span style="font-size:10px">read-only · no orders · informational, not advice</span>';
+    scroll.appendChild(hint);
+  }
+  CHAT_MSGS.forEach(m=>{
+    const row=el('div','msg '+(m.role==='user'?'user':'asst'));
+    if(m.role==='assistant'){
+      const tools=el('div','msg-tools'); if(m.streaming) tools.id='chat-live-tools';
+      if(m.tools && m.tools.length) tools.innerHTML=m.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
+      row.appendChild(tools);
+      const c=el('div','msg-body');
+      if(m.streaming){ c.id='chat-live-content'; c.textContent=m.content; }
+      else c.innerHTML=mdToHtml(m.content);
+      row.appendChild(c);
+    } else {
+      const c=el('div','msg-body'); c.textContent=m.content; row.appendChild(c);
+    }
+    scroll.appendChild(row);
+  });
+  main.appendChild(scroll);
+  const bar=el('div','chat-bar');
+  const ta=el('textarea'); ta.id='chat-input'; ta.className='chat-input'; ta.rows=1;
+  ta.placeholder='Message the '+(CHAT_PERSONA==='fiduciary'?'Fiduciary':'Strategist')+'…  (Enter to send · Shift+Enter = newline)';
+  ta.onkeydown=chatKey; if(CHAT_STREAMING) ta.disabled=true;
+  bar.appendChild(ta);
+  if(CHAT_STREAMING){ const stop=el('button',null,'■ STOP'); stop.onclick=()=>{ if(CHAT_ABORT) CHAT_ABORT.abort(); }; bar.appendChild(stop); }
+  else { const send=el('button',null,'SEND ▸'); send.onclick=chatSend; bar.appendChild(send); }
+  main.appendChild(bar);
+  wrap.appendChild(main);
+  setTimeout(chatScroll,0);
+  return wrap;
+}
+
+// Don't let the 5-min background poll rebuild the page (and wipe the chat box)
+// while the user is composing or a chat is streaming. Manual REFRESH still works.
+function chatComposing(){
+  if(CHAT_STREAMING) return true;
+  const ta=document.getElementById('chat-input');
+  return !!(TAB==='chat' && ta && (document.activeElement===ta || ta.value.trim()!==''));
+}
+document.getElementById('refresh').onclick=()=>load(true);
+load(false);
+setInterval(()=>{ if(chatComposing()) return; load(false); }, 300000);  // re-poll every 5 min (server caches)
+</script>
+</body>
+</html>

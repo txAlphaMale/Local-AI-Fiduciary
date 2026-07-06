@@ -1,0 +1,52 @@
+#!/bin/sh
+# Pre-commit integrity gate for the Local AI project.
+#
+# Blocks a commit if any *staged* .py or .json file will not parse -- the class of
+# damage the Cowork/FUSE bridge has caused (truncated writes, unterminated strings,
+# unclosed brackets). Also prints a non-blocking WARNING when a staged file shrinks
+# sharply vs HEAD, in case a truncation slipped through as "parses but wrong".
+#
+# Install once per clone:   git config core.hooksPath .githooks
+# Bypass in a pinch:        git commit --no-verify   (only when you are certain)
+#
+# Companion on-demand scanner: scripts/verify_tree.py
+
+tmp=$(mktemp)
+err="$tmp.err"
+git diff --cached --name-only --diff-filter=ACM > "$tmp"
+fail=0
+
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    *.py)
+      if ! git show ":$f" | python3 -c 'import ast,sys; ast.parse(sys.stdin.read(), filename=sys.argv[1])' "$f" 2>"$err"; then
+        echo "  [BLOCK] $f will not parse: $(tail -1 "$err")"
+        fail=1
+      fi
+      ;;
+    *.json)
+      if ! git show ":$f" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>"$err"; then
+        echo "  [BLOCK] $f is not valid JSON: $(tail -1 "$err")"
+        fail=1
+      fi
+      ;;
+  esac
+  # non-blocking truncation warning vs HEAD
+  new=$(git cat-file -s ":$f" 2>/dev/null)
+  old=$(git cat-file -s "HEAD:$f" 2>/dev/null)
+  if [ -n "$new" ] && [ -n "$old" ] && [ "$old" -gt 0 ]; then
+    if [ "$new" -lt $((old * 3 / 4)) ]; then
+      pct=$((100 - (new * 100 / old)))
+      echo "  [warn ] $f is ${pct}% smaller than HEAD (${new}b vs ${old}b) -- confirm this is intentional"
+    fi
+  fi
+done < "$tmp"
+
+rm -f "$tmp" "$err"
+
+if [ "$fail" -ne 0 ]; then
+  echo "commit blocked: corrupt file(s) above. Fix them, or 'git commit --no-verify' if you are certain."
+  exit 1
+fi
+exit 0

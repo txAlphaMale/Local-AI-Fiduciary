@@ -1,0 +1,116 @@
+# ============================================================================
+#  Fiduciary — self-contained stack
+#  A local-first financial analysis assistant. Runs independently of any other
+#  Local AI services. Three containers: mcpo (MCP bridge), portfolio-api (the
+#  app + dashboard), n8n (scheduler). Ollama is a HOST prerequisite reached via
+#  host.docker.internal — it is intentionally NOT a service here (avoids
+#  duplicating a multi-GB model + host-specific GPU pinning).
+#
+#  Quick start:
+#     cp .env.example .env                         # then fill in your values
+#     cp mcpo/config.json.example mcpo/config.json # required before first run
+#     docker compose up -d --build
+#     dashboard -> http://localhost:8097   (n8n -> http://localhost:5678)
+#
+#  Container names are prefixed "fiduciary-" and mcpo is not published, so this
+#  stack can run alongside another Compose project (e.g. a home-automation stack)
+#  on the same host without name/port collisions. Override the published ports
+#  with DASH_PORT / N8N_PORT in .env if 8097 / 5678 are already taken.
+# ============================================================================
+
+name: fiduciary
+
+services:
+  # ---- MCP bridge: exposes MCP servers (Monarch, Tavily, time) over HTTP ------
+  # Only stdio (uvx) servers here, so there are NO streamable-http sidecars and
+  # therefore no startup-order race — no depends_on needed. Not published to the
+  # host: only portfolio-api (same network) talks to it.
+  mcpo:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: fiduciary-mcpo
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
+    environment:
+      # mcpo merges its own env into every server it spawns, so these reach the
+      # Monarch / Tavily MCP servers without living in config.json.
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - MONARCH_EMAIL=${MONARCH_EMAIL}
+      - MONARCH_PASSWORD=${MONARCH_PASSWORD}
+      - MONARCH_MFA_SECRET=${MONARCH_MFA_SECRET}
+    volumes:
+      - ./mcpo/config.json:/app/config.json:ro   # MUST exist (cp from the .example) or mcpo crash-loops
+      - ./mcpo/data:/root/.mcpo                   # OAuth/session persistence (Monarch login)
+    command: ["--host", "0.0.0.0", "--port", "8000", "--api-key", "${MCPO_API_KEY}", "--config", "/app/config.json", "--hot-reload"]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ---- The app: normalizes holdings, computes everything, serves the dashboard
+  portfolio-api:
+    build:
+      context: ./portfolio-api
+      dockerfile: Dockerfile
+    image: fiduciary-portfolio-api:local
+    container_name: fiduciary-portfolio-api
+    restart: unless-stopped
+    depends_on:
+      - mcpo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
+    environment:
+      - MCPO_BASE_URL=http://mcpo:8000
+      - MONARCH_ROUTE=monarch
+      - MCPO_API_KEY=${MCPO_API_KEY}
+      - CACHE_TTL=600
+      - ANALYSIS_FILE=/data/analysis.json
+      - ANALYSIS_TOKEN=${ANALYSIS_TOKEN}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      # Ollama runs on the HOST (prerequisite), reached over the host gateway.
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - ANALYSIS_MODEL=${ANALYSIS_MODEL:-qwen3.6:27b}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-1200}
+      - LLM_KEEP_ALIVE=${LLM_KEEP_ALIVE:-30m}
+      - SEC_USER_AGENT=${SEC_USER_AGENT}
+      - EDGAR_TTL=86400
+      - PORTFOLIO_PROVIDER=${PORTFOLIO_PROVIDER:-csv}
+    volumes:
+      - portfolio-data:/data
+    ports:
+      - "${DASH_PORT:-8097}:8097"
+
+  # ---- Scheduler: cron-driven recurring agent runs (daily research, weekly
+  #      Strategist, etc.). Imports the workflows in ./n8n. Calls portfolio-api
+  #      over the compose network and Ollama on the host.
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: fiduciary-n8n
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    env_file: .env
+    environment:
+      - GENERIC_TIMEZONE=${TZ:-America/Chicago}
+      - TZ=${TZ:-America/Chicago}
+      - N8N_SECURE_COOKIE=false          # allow plain-http access on your LAN
+      - N8N_RUNNERS_ENABLED=true
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      - MCPO_API_KEY=${MCPO_API_KEY}
+      - ANALYSIS_TOKEN=${ANALYSIS_TOKEN}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+volumes:
+  portfolio-data:
+  n8n-data:

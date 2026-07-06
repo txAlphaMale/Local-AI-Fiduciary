@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+requests
+snaptrade-python-sdk   # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)

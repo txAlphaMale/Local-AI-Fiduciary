@@ -1,0 +1,5 @@
+ticker,quantity,cost_basis,account,institution,type
+AAPL,25,4200,Taxable Brokerage,Fidelity,Stock
+VOO,10,4100,Roth IRA,Fidelity,ETF
+SCHD,50,3800,Traditional IRA,Schwab,ETF
+MSFT,15,5200,401k Plan,Fidelity,Stock

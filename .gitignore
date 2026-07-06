@@ -1,0 +1,65 @@
+# ============================================================================
+#  Fiduciary — .gitignore
+#  Goal: NEVER commit secrets or real personal/financial data. Review the
+#  SHARING-CHECKLIST.md before your first push.
+# ============================================================================
+
+# ---- Secrets & credentials (NEVER commit) ----
+.env
+.env.*
+!.env.example
+secrets.env
+*.secret
+*.key
+*.pem
+
+# ---- mcpo / MCP server config (holds URLs, tokens) ----
+mcpo/config.json
+mcpo/data/
+**/config.json
+!**/config.json.example
+!mcpo/config.json.example
+
+# ---- REAL personal / financial data (Monarch dumps, diagnostics) ----
+monarch-*-sample.json
+*-sample.json
+diag/
+holdings.csv
+
+# ---- Logs & diagnostic dumps (can contain PII / tokens — never commit) ----
+audit/
+*.log
+*.tmp
+
+# ---- portfolio-api runtime state (regenerated at runtime; user-specific) ----
+data/
+**/data/
+analysis.json
+paper.json
+discovery.json
+opportunities.json
+fees_liquidity.json
+scanner.json
+retirement.json
+chat.db
+
+# ---- Local backups / scratch ----
+*.known-good
+*.known-good/
+*.bak
+*~
+_synctest*
+**/_synctest*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
