@@ -840,6 +840,26 @@ def get_valuation(ticker: str):
     return _valuation(ticker) or {"ticker": ticker, "available": False, "reason": "no valuation data"}
 
 
+@app.get("/api/research")
+def get_research(ticker: str):
+    """On-demand B/S/H research brief for ANY ticker (not just holdings): analyst consensus +
+    SEC/GAAP fundamentals + valuation + recent news -> LLM rating/thesis/bull/bear/risks. SLOW
+    (one model call, minutes on Pascal). Read-only, educational — NOT advice."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return JSONResponse({"error": "ticker required"}, status_code=400)
+    try:
+        g = _grounded(t)
+        val = _valuation(t) or {}
+        fund = edgar.fundamentals(t)
+        news = _news(t, t)
+        llm = _llm(t, t, None, None, g, news, fund, val)
+        return {"ticker": t, "generated_at": int(time.time()), "grounded": g,
+                "valuation": val, "fundamentals": fund, "llm": llm}
+    except Exception as e:
+        return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
+
+
 def _read_analysis():
     try:
         with open(ANALYSIS_FILE, encoding="utf-8") as f:

@@ -262,10 +262,10 @@ function render(){
     const hasDisc=(typeof DISCO!=='undefined' && DISCO && DISCO.discovered && DISCO.discovered.length);
     const hasAlerts=(typeof DISCO!=='undefined' && DISCO && DISCO.alerts && DISCO.alerts.length);
     tc.appendChild(panelSubtabs('research',[
-      haveAnalysis && {key:'briefs',label:'B/S/H BRIEFS',build:()=>analysisContent(ANALYSIS)},
-      haveIdeas && {key:'scanner',label:'SCANNER · IDEAS',build:()=>scannerContent()},
-      hasDisc && {key:'discovered',label:'DISCOVERED',build:()=>discoveredContent()},
       hasAlerts && {key:'alerts',label:'NEWS ALERTS',build:()=>alertsContent()},
+      haveAnalysis && {key:'briefs',label:'B/S/H BRIEFS',build:()=>analysisContent(ANALYSIS)},
+      hasDisc && {key:'discovered',label:'DISCOVERED',build:()=>discoveredContent()},
+      haveIdeas && {key:'scanner',label:'SCANNER · IDEAS',build:()=>scannerContent()},
     ]));
   } else if(TAB==='audits'){
     tc.appendChild(panelSubtabs('audits',[
@@ -612,12 +612,52 @@ function scannerContent(){
       `<td>${i.net_margin_pct!=null?i.net_margin_pct+'%':'—'}</td>`+
       `<td>${i.pe_forward!=null?(+i.pe_forward).toFixed(1):'—'}</td>`+
       `<td class="l">${ana}</td>`+
-      `<td class="l muted" style="font-size:10px">${i.error?'err':(i.available?'':'no SEC data')}</td>`;
+      `<td class="l"><button onclick="researchIdea('${i.ticker}')" style="font-size:10px;padding:2px 7px;">▸ analyze</button>${(i.error||!i.available)?` <span class="muted" style="font-size:9px">${i.error?'err':'no SEC data'}</span>`:''}</td>`;
     t.appendChild(tr);
   });
   wrap.appendChild(t);
+  const abox=el('div'); abox.id='scan-analysis'; abox.style.marginTop='14px'; wrap.appendChild(abox);
   if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:10px;font-size:10px;line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
   return wrap;
+}
+
+function researchBrief(d){
+  const wrap=el('div'); wrap.style.cssText='padding:6px 0;font-size:12px;line-height:1.5;';
+  const m=d.llm||{}, g=d.grounded||{}, va=d.valuation||{};
+  const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
+  let html=`<span style="color:var(--amber)">${d.ticker}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:10px">(${m.confidence})</span>`:''):'');
+  if(g.target_mean) html+=` <span class="muted">· analyst target $${(+g.target_mean).toFixed(2)}</span>`;
+  const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));
+  if(th) html+=`<div class="muted" style="margin-top:4px">${th}</div>`;
+  if(m.bull_case) html+=`<div class="pos" style="font-size:11px;margin-top:3px">▲ BULL: ${dsc(m.bull_case)}</div>`;
+  if(m.bear_case) html+=`<div class="neg" style="font-size:11px;margin-top:2px">▼ BEAR: ${dsc(m.bear_case)}</div>`;
+  if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; html+=`<div class="muted" style="font-size:11px;margin-top:2px">⚠ RISKS: ${dsc(kr)}</div>`; }
+  const fund=d.fundamentals||{}, fu=(fund.available?(fund.metrics||{}):{}), ra=(fund.available?(fund.ratios||{}):{});
+  const gb=[]; if(fu.revenue_growth_pct!=null) gb.push('rev '+(fu.revenue_growth_pct>0?'+':'')+fu.revenue_growth_pct+'%'); if(ra.net_margin_pct!=null) gb.push('nm '+ra.net_margin_pct+'%'); if(ra.fcf_margin_pct!=null) gb.push('FCFm '+ra.fcf_margin_pct+'%'); if(ra.debt_to_equity!=null) gb.push('D/E '+ra.debt_to_equity);
+  const vb=[]; if(va.pe_forward!=null) vb.push('fwd P/E '+(+va.pe_forward).toFixed(1)); if(va.ps_ttm!=null) vb.push('P/S '+(+va.ps_ttm).toFixed(1)); if(va.dividend_yield_pct!=null) vb.push('yld '+(+va.dividend_yield_pct).toFixed(2)+'%');
+  if(gb.length) html+=`<div style="color:var(--blu);font-size:10px;margin-top:4px">▸ GAAP: ${gb.join(' · ')}</div>`;
+  if(vb.length) html+=`<div style="color:var(--amber);font-size:10px;margin-top:1px">▸ VAL: ${vb.join(' · ')}</div>`;
+  html+=`<div class="muted" style="font-size:10px;margin-top:6px">Educational, not advice.</div>`;
+  wrap.innerHTML=html; return wrap;
+}
+function researchIdea(t){
+  const box=document.getElementById('scan-analysis'); if(!box) return;
+  box.innerHTML='';
+  box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
+  const wait=el('div','muted'); wait.style.cssText='font-size:11px;padding:6px 0;';
+  wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM). Leaving this sub-tab cancels the view but not the run.';
+  box.appendChild(wait);
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+  const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), 300000);
+  fetch('/api/research?ticker='+encodeURIComponent(t),{signal:ctl.signal}).then(r=>r.json()).then(d=>{
+    clearTimeout(to);
+    const b=document.getElementById('scan-analysis'); if(!b) return;
+    b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
+    if(!d || d.error){ b.appendChild(el('div','muted',(d&&d.error)||'analysis failed')); return; }
+    b.appendChild(researchBrief(d));
+  }).catch(e=>{ clearTimeout(to); const b=document.getElementById('scan-analysis'); if(!b) return;
+    b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
+    b.appendChild(el('div','muted', e.name==='AbortError'?'timed out (model too slow) — try again':('error: '+e))); });
 }
 
 function discoveredContent(){
