@@ -1592,6 +1592,7 @@ function chatFrame(frame,asst){
   else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
+  else if(ev==='status'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); chatScroll(); }
   else if(ev==='done'){ CHAT_SID=o.session_id||CHAT_SID; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }

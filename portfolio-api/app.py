@@ -3994,6 +3994,7 @@ from fastapi.responses import StreamingResponse
 CHAT_DB = os.environ.get("CHAT_DB", "/data/chat.db")
 CHAT_MAX_HISTORY = int(os.environ.get("CHAT_MAX_HISTORY", "24"))   # user/assistant turns fed back to the model
 CHAT_MAX_ITER = int(os.environ.get("CHAT_MAX_ITER", "12"))         # tool-loop steps per user message
+CHAT_QUEUE_TIMEOUT = int(os.environ.get("CHAT_QUEUE_TIMEOUT", "900"))  # max seconds a chat waits for the GPU lock before giving up
 
 
 def _chat_conn():
@@ -4242,8 +4243,15 @@ def _chat_stream(persona_key, session_id, user_msg):
         yield _sse("error", {"error": f"unknown persona '{persona_key}'"})
         return
     if not _strat_lock.acquire(blocking=False):
-        yield _sse("error", {"error": "assistant busy — a strategist/advisory run is in progress; retry shortly"})
-        return
+        # Queue behind the running strategist/advisory job instead of forcing a retry.
+        # Single-flight on the GPU by design — DON'T parallelize (two big generations would
+        # contend on the Pascal cards). Tell the client we're waiting, then block until free.
+        yield _sse("status", {"state": "waiting",
+                              "message": "A strategist/advisory run is using the model — your message is "
+                                         "queued and will start automatically when it finishes."})
+        if not _strat_lock.acquire(timeout=CHAT_QUEUE_TIMEOUT):
+            yield _sse("error", {"error": "still busy after waiting a while — please try again shortly"})
+            return
     try:
         if not session_id:
             title = (user_msg or "New chat").strip().replace("\n", " ")[:60] or "New chat"
