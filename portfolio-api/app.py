@@ -37,16 +37,31 @@ import ss      # Social Security benefit + taxation engine (G2) — real-terms M
 # OWN secrets are managed here; cross-container secrets (Monarch/Tavily used by the mcpo
 # container) can't be injected from here and stay in .env.
 SECRETS_FILE = os.environ.get("SECRETS_FILE", "/data/secrets.json")
+_SETTINGS_FILE_BOOT = os.environ.get("SETTINGS_FILE", "/data/settings.json")
+# Non-secret config (read as module constants below) that the SETTINGS tab can manage;
+# applied on RESTART via this boot-merge. Numeric analysis knobs are handled separately (live).
+_CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE")
 # Keys present in the REAL environment at boot (from .env / compose). Used so the UI can
 # honestly mark those "env-locked" — env wins and the UI must not pretend to override it.
 _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
-try:
-    with open(SECRETS_FILE, encoding="utf-8") as _sf:
-        for _k, _v in (json.load(_sf) or {}).items():
-            if _v not in (None, "") and not os.environ.get(_k):
-                os.environ[_k] = str(_v)
-except Exception:
-    pass
+
+
+def _boot_merge(_path, _only=None):
+    """Fill env GAPS from a JSON store BEFORE the config constants read os.environ. Real env
+    always wins (we never overwrite a set var). _only restricts to a key allow-list."""
+    try:
+        with open(_path, encoding="utf-8") as _bf:
+            for _k, _v in (json.load(_bf) or {}).items():
+                if _only is not None and _k not in _only:
+                    continue
+                if _v not in (None, "") and not os.environ.get(_k):
+                    os.environ[_k] = str(_v)
+    except Exception:
+        pass
+
+
+_boot_merge(SECRETS_FILE)                          # secrets (all keys)
+_boot_merge(_SETTINGS_FILE_BOOT, _CONFIG_ENV_KEYS)  # restart-class non-secret config only
 
 MCPO = os.environ.get("MCPO_BASE_URL", "http://mcpo:8000").rstrip("/")
 ROUTE = os.environ.get("MONARCH_ROUTE", "monarch")
@@ -109,6 +124,13 @@ SETTING_SPECS = {
     "tlh_min_loss":  {"env": "TLH_MIN_LOSS",  "default": 50,      "cast": float, "label": "Ignore TLH losses below ($)", "group": "Tax audit"},
     "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
 }
+# Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
+# applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
+CONFIG_SPECS = [
+    {"key": "ANALYSIS_MODEL", "label": "Analysis / Strategist model (Ollama tag)", "group": "Model", "default": "qwen3.6:27b"},
+    {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
+    {"key": "LLM_KEEP_ALIVE", "label": "Keep model resident (e.g. 30m)",           "group": "Model", "default": "30m"},
+]
 
 
 def _read_settings():
@@ -2197,9 +2219,22 @@ def get_settings():
         out.append({"key": key, "label": spec["label"], "group": spec["group"],
                     "value": _knob(key), "default": spec["default"],
                     "source": source, "env_locked": env_set, "env": spec["env"]})
-    return {"settings": out,
-            "note": "Advanced analysis knobs, applied at request time (no restart). ENV vars still "
-                    "win over these. API keys / provider credentials are managed in .env, not here."}
+    cfg_out = []
+    for spec in CONFIG_SPECS:
+        k = spec["key"]
+        env_locked = k in _ENV_SECRETS_AT_BOOT
+        if env_locked:
+            val, source = os.environ.get(k), "env"
+        elif stored.get(k) not in (None, ""):
+            val, source = stored.get(k), "settings"
+        else:
+            val, source = spec["default"], "default"
+        cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": val,
+                        "default": spec["default"], "source": source, "env_locked": env_locked,
+                        "editable": not env_locked, "applies": "restart"})
+    return {"settings": out, "config": cfg_out,
+            "note": "Analysis knobs apply at request time (no restart). Model config applies on the next "
+                    "RESTART. ENV vars always win. API keys / provider credentials live in the SECRETS tab / .env."}
 
 
 @app.post("/api/settings")
@@ -2224,10 +2259,26 @@ async def post_settings(req: Request):
                 applied.append(key)
             except (TypeError, ValueError):
                 continue
+    # Non-secret model/infra config (stored under ENV name; applies on RESTART).
+    cfg_keys = {s["key"] for s in CONFIG_SPECS}
+    restart_needed = []
+    for key, val in (body or {}).items():
+        if key not in cfg_keys:
+            continue
+        if key in _ENV_SECRETS_AT_BOOT:
+            ignored.append(key)   # real .env wins
+            continue
+        if val in (None, ""):
+            stored.pop(key, None)
+        else:
+            stored[key] = str(val)
+        applied.append(key)
+        restart_needed.append(key)
     os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(stored, f, indent=2)
-    return {"ok": True, "applied": applied, "ignored_env_locked": ignored, "settings": stored}
+    return {"ok": True, "applied": applied, "ignored_env_locked": ignored,
+            "restart_required": restart_needed, "settings": stored}
 
 
 # ---- Secrets editor (N6 Phase 2): write-only, masked. Values are NEVER returned. ----

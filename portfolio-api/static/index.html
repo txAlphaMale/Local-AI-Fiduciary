@@ -1032,8 +1032,10 @@ function accountsEditor(){
 function saveSettings(){
   const body={};
   document.querySelectorAll('.set-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
+  document.querySelectorAll('.cfg-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+    .then(r=>r.json()).then(d=>{ if(d && d.restart_required && d.restart_required.length){ alert('Saved. Model config applies on the next portfolio-api restart.'); } load(false); })
+    .catch(e=>alert('Save failed: '+e));
 }
 function settingsContent(){
   const wrap=el('div'); const s=SETTINGS_CFG;
@@ -1055,6 +1057,18 @@ function settingsContent(){
       row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
     });
   });
+  if(s.config && s.config.length){
+    const ch=el('div','ph','MODEL'); ch.style.marginTop='12px'; wrap.appendChild(ch);
+    s.config.forEach(it=>{
+      const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:10px;padding:4px 0;font-size:12px;flex-wrap:wrap;';
+      const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
+      const inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
+      inp.value=(it.value!=null?it.value:''); inp.style.cssText='width:180px;'; if(it.env_locked) inp.disabled=true;
+      const meta=el('span','muted'); meta.style.cssText='font-size:10px;';
+      meta.textContent=it.env_locked?('· set by env '+it.key+' (edit .env)'):('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
+      row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
+    });
+  }
   const btn=el('button',null,'↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:10px;margin-top:14px;line-height:1.45;';
   foot.textContent='API keys, portfolio provider, and model/host settings are still configured in .env (a masked-secret editor is planned). Values marked "set by env" are overridden by an environment variable and shown read-only.';

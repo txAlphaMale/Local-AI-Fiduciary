@@ -117,6 +117,22 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
 
 ---
 
+## Configuration — the ⚙ Settings gear (in the dashboard)
+
+Most tuning lives in the dashboard now, not in files. Click the **⚙ gear** (top-right) for:
+
+- **Advanced knobs** — Monte-Carlo paths, fees/liquidity thresholds, tax-audit cutoffs (apply
+  immediately), and model config (analysis model tag, LLM timeout / keep-alive — apply on restart).
+- **Secrets & keys** — a write-only, masked editor for the app's own keys (Finnhub, SEC user-agent,
+  SnapTrade, analysis token). Values are never shown back and are saved to a gitignored, `0600`
+  `secrets.json`; they apply on the next restart.
+
+Precedence is always **environment variable > saved setting > default** — anything you set in `.env`
+wins and is shown read-only in the UI. Note: the **Monarch / Tavily / mcpo** keys are used by the
+*mcpo container*, so they can't be applied from here — set those in `.env` and restart. Per-account
+DRIP/fractional flags live under **AUDITS → ACCOUNTS**, and the plan/policy/scanner assumptions in
+their own panels.
+
 ## Scheduling (n8n) — optional, bring-your-own
 
 The recurring agents (daily research, weekly Strategist, drift, discovery, etc.) are

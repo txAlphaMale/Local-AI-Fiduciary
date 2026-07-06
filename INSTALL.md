@@ -64,3 +64,8 @@ curl -s http://localhost:8097/health          # -> {"ok":true,...}
 - Dashboard at http://localhost:8097 shows your positions (from your chosen provider).
 - Open the **CHAT** tab and ask the Fiduciary "what's my net worth?" — it should call a
   tool and answer.
+
+> After the first run you can manage most config from the **⚙ Settings gear** (top-right):
+> advanced knobs, model config, and a masked write-only editor for the app's own keys
+> (Finnhub / SEC user-agent / SnapTrade). Anything already set in `.env` wins and shows
+> read-only. Monarch / Tavily keys stay in `.env` (they're used by the mcpo container).
