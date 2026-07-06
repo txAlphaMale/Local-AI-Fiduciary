@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -163,8 +163,9 @@ const ratingBadge = r => r ? `<span style="color:${ratingColor(r)}">${r}</span>`
 const analystRating = t => (ANALYSIS&&ANALYSIS.briefs&&ANALYSIS.briefs[t]&&ANALYSIS.briefs[t].grounded)
   ? ANALYSIS.briefs[t].grounded.rating : null;
 
-async function load(refresh){
+async function load(refresh, bg){
   if(CHAT_STREAMING) return;   // never wipe the page (and the live chat) mid-stream
+  const _bgScrollY = bg ? window.scrollY : null;   // preserve the user's place across a background poll
   document.getElementById('refresh').textContent='…';
   try{
     const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), 90000);
@@ -184,6 +185,7 @@ async function load(refresh){
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
+    if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
   }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
   document.getElementById('refresh').textContent='↻ REFRESH';
 }
@@ -640,6 +642,7 @@ function scannerContent(){
   });
   wrap.appendChild(t);
   const abox=el('div'); abox.id='scan-analysis'; abox.style.marginTop='14px'; wrap.appendChild(abox);
+  if(LAST_SCAN_ANALYSIS && LAST_SCAN_ANALYSIS.data){ abox.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+LAST_SCAN_ANALYSIS.ticker)); abox.appendChild(researchBrief(LAST_SCAN_ANALYSIS.data)); }
   if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:10px;font-size:10px;line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
   return wrap;
 }
@@ -677,6 +680,7 @@ function researchIdea(t){
     const b=document.getElementById('scan-analysis'); if(!b) return;
     b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
     if(!d || d.error){ b.appendChild(el('div','muted',(d&&d.error)||'analysis failed')); return; }
+    LAST_SCAN_ANALYSIS={ticker:t, data:d};   // cache so a refresh / tab-switch doesn't wipe it
     b.appendChild(researchBrief(d));
   }).catch(e=>{ clearTimeout(to); const b=document.getElementById('scan-analysis'); if(!b) return;
     b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
@@ -1732,7 +1736,7 @@ function userBusy(){
 document.getElementById('refresh').onclick=()=>load(true);
 document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
 load(false);
-setInterval(()=>{ if(userBusy()) return; load(false); }, 300000);  // re-poll every 5 min (server caches)
+setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-poll every 5 min (server caches); bg=true preserves scroll
 </script>
 </body>
 </html>
