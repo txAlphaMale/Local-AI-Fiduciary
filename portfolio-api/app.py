@@ -4373,6 +4373,8 @@ def _chat_stream(persona_key, session_id, user_msg):
                         except Exception:
                             continue
                         m = chunk.get("message") or {}
+                        if m.get("thinking"):     # qwen3 reasoning phase — stream as an activity indicator
+                            yield _sse("thinking", {"t": m["thinking"]})
                         if m.get("content"):
                             content_buf += m["content"]
                             yield _sse("token", {"t": m["content"]})

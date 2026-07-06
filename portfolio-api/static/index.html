@@ -1656,6 +1656,7 @@ function chatFrame(frame,asst){
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
   else if(ev==='status'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); chatScroll(); }
+  else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
   else if(ev==='done'){ CHAT_SID=o.session_id||CHAT_SID; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }
@@ -1741,7 +1742,7 @@ function chatContent(){
       if(m.tools && m.tools.length) tools.innerHTML=m.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
       row.appendChild(tools);
       const c=el('div','msg-body');
-      if(m.streaming){ c.id='chat-live-content'; c.textContent=m.content; }
+      if(m.streaming){ c.id='chat-live-content'; c.textContent = m.content || (m.think ? '💭 thinking… '+m.think.slice(-400) : '▍ working…'); }
       else c.innerHTML=mdToHtml(m.content);
       row.appendChild(c);
     } else {
