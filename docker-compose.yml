@@ -83,19 +83,32 @@ services:
     ports:
       - "${DASH_PORT:-8097}:8097"
 
-  # ---- Scheduler: cron-driven recurring agent runs (daily research, weekly
-  #      Strategist, etc.). Imports the workflows in ./n8n. Calls portfolio-api
-  #      over the compose network and Ollama on the host.
+  # ---- OPTIONAL scheduler: cron-driven recurring agent runs (daily research,
+  #      weekly Strategist, etc.). n8n is treated like Ollama — an EXTERNAL
+  #      dependency you may already run. This bundled instance is OFF by default
+  #      (guarded by the "bundled-n8n" profile) so it doesn't collide with an
+  #      n8n you already have. The workflows in ./n8n call the dashboard at
+  #      host.docker.internal:8097, so they run from ANY n8n (this one or yours).
+  #
+  #      Already run n8n?           ->  docker compose up -d           (n8n NOT started;
+  #                                     import ./n8n/*.json into your existing n8n)
+  #      Want the bundled one?      ->  docker compose --profile bundled-n8n up -d
   n8n:
     image: n8nio/n8n:latest
     container_name: fiduciary-n8n
+    profiles: ["bundled-n8n"]
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      # HOST:CONTAINER. Change the HOST side (FID_N8N_PORT) to avoid clashing with
+      # another n8n on the host. The container ALWAYS serves on 5678 internally.
+      - "${FID_N8N_PORT:-5678}:5678"
     env_file: .env
     environment:
+      # Pin n8n's own port to the default so a stray N8N_PORT in .env can't push the
+      # main server onto 5679 and collide with the task-runner broker (also 5679).
+      - N8N_PORT=5678
       - GENERIC_TIMEZONE=${TZ:-America/Chicago}
       - TZ=${TZ:-America/Chicago}
       - N8N_SECURE_COOKIE=false          # allow plain-http access on your LAN

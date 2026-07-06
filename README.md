@@ -23,8 +23,11 @@ Three containers via Docker Compose, plus Ollama on the host:
 |-------------------|------|
 | **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, and the built-in chat. |
 | **mcpo**          | Bridges MCP servers (Monarch, Tavily, time) to the app over HTTP. |
-| **n8n**           | Schedules the recurring agent runs (daily research, weekly Strategist, etc.). |
+| **n8n** *(optional)* | Schedules the recurring agent runs. Treated as an **external dependency** — bring your own n8n, or enable the bundled one with `--profile bundled-n8n`. See *Scheduling* below. |
 | **Ollama** *(host)* | Runs the local LLM that does the analysis & Strategist reasoning. Not a container here — see prerequisites. |
+
+So a plain `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`);
+Ollama and n8n are dependencies you provide (n8n only if you want scheduling).
 
 The **dashboard** (`http://localhost:8097`) has tabs for Positions, Research (B/S/H
 briefs), Insights (drift), Plan (FIRE + Monte Carlo + Tax/ACA/Social-Security editor),
@@ -85,8 +88,9 @@ docker compose up -d --build
 
 > Running this **alongside another Compose stack on the same host?** The containers are
 > named `fiduciary-*` and mcpo isn't published, so nothing collides — except the two
-> published host ports. If `8097` or `5678` are taken, set `DASH_PORT` / `N8N_PORT` in
-> `.env` (e.g. `N8N_PORT=5679`).
+> published host ports. If `8097` or `5678` are taken, set `DASH_PORT` / `FID_N8N_PORT`
+> in `.env` (e.g. `FID_N8N_PORT=5679`). Note: use `FID_N8N_PORT`, not `N8N_PORT` — the
+> latter is read by n8n as its internal port and collides with its task-runner broker on 5679.
 
 Then run **`python setup.py`** to import the n8n workflows and print any remaining steps.
 
@@ -113,11 +117,34 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
 
 ---
 
+## Scheduling (n8n) — optional, bring-your-own
+
+The recurring agents (daily research, weekly Strategist, drift, discovery, etc.) are
+driven by n8n workflows in `n8n/`. n8n is treated like Ollama: **an external dependency
+you may already run.** Pick one:
+
+- **You already run n8n** *(recommended if so)* — leave the bundled one off
+  (`docker compose up -d` doesn't start it) and **import `n8n/*.n8n.json` into your
+  existing n8n**. The workflows call the dashboard at `http://host.docker.internal:8097`,
+  so any n8n on the same host can drive this stack.
+- **You don't run n8n** — start the bundled one:
+  ```bash
+  docker compose --profile bundled-n8n up -d
+  ```
+  It publishes on `FID_N8N_PORT` (default 5678).
+- **You don't want scheduling at all** — skip n8n entirely; every agent can still be
+  run on demand from the dashboard / REST API.
+
+Two things the workflows need regardless of which n8n runs them: the dashboard must be
+reachable at the URL in the HTTP nodes (default `http://host.docker.internal:8097` —
+edit the nodes if you changed `DASH_PORT` or run n8n off-host), and the `X-Analysis-Token`
+header must match this stack's `ANALYSIS_TOKEN`.
+
 ## Automated setup
 
 `setup.py` will validate your `.env` and templates, import the `n8n/portfolio-*.n8n.json`
-workflows into n8n via its REST API, and pull the required Ollama model. See
-`INSTALL.md` for the full walkthrough.
+workflows via n8n's REST API, and pull the required Ollama model. See `INSTALL.md` for
+the full walkthrough.
 
 ---
 
