@@ -92,6 +92,7 @@
     <div class="controls">
       <span id="updated"></span>
       <button id="refresh">↻ REFRESH</button>
+      <button id="gear" title="Settings" aria-label="Settings" style="font-size:15px;line-height:1;">⚙</button>
     </div>
   </div>
   <div id="body"><div class="muted" style="padding:30px;text-align:center;">Loading portfolio…</div></div>
@@ -112,14 +113,25 @@ let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYS
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
+let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
+function reorderSubtab(panel, orderedKeys, fromKey, toKey){
+  if(fromKey===toKey) return;
+  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return;
+  ks.splice(fi,1); const ti=ks.indexOf(toKey); ks.splice(ti<0?ks.length:ti,0,fromKey);
+  SUBORDER[panel]=ks; try{ localStorage.setItem('fidSubOrder',JSON.stringify(SUBORDER)); }catch(_){}
+  render();
+}
 // Render a 2nd-row sub-tab bar for `panel` and ONLY the active section's node.
 // sections: [{key,label,build:()=>Node}] (falsy entries are ignored). Lazy build =
 // unselected sections aren't constructed (cheaper + the hook for per-section refresh).
 function panelSubtabs(panel, sections){
   const wrap=el('div');
-  const avail=(sections||[]).filter(Boolean);
+  let avail=(sections||[]).filter(Boolean);
   if(!avail.length) return wrap;
+  const ord=SUBORDER[panel];   // user-dragged order (persisted); unknown keys fall to the end
+  if(ord){ const ix=k=>{ const i=ord.indexOf(k); return i<0?999:i; }; avail=avail.slice().sort((a,b)=>ix(a.key)-ix(b.key)); }
+  const orderedKeys=avail.map(s=>s.key);
   let active=SUBTAB[panel];
   if(!avail.some(s=>s.key===active)) active=avail[0].key;
   const bar=el('div'); bar.style.cssText='display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 13px;';
@@ -127,9 +139,14 @@ function panelSubtabs(panel, sections){
     if(i){ const sep=el('span',null,'·'); sep.style.cssText='color:var(--bd2);opacity:0.6;font-size:11px;user-select:none;'; bar.appendChild(sep); }
     const on=s.key===active;
     const t=el('span',null,s.label);
+    t.title='drag to reorder';
     t.style.cssText='cursor:pointer;letter-spacing:1px;font-size:10px;padding:3px 9px;border-radius:3px;'+
       (on?'background:rgba(230,180,80,0.13);color:var(--amber);':'color:var(--mut);');
     t.onclick=()=>setSubtab(panel,s.key);
+    t.draggable=true;
+    t.ondragstart=e=>{ try{ e.dataTransfer.setData('text/plain', s.key); e.dataTransfer.effectAllowed='move'; }catch(_){} };
+    t.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} };
+    t.ondrop=e=>{ e.preventDefault(); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){} if(from) reorderSubtab(panel, orderedKeys, from, s.key); };
     bar.appendChild(t);
   });
   wrap.appendChild(bar);
@@ -227,6 +244,7 @@ function render(){
   if(TAB==='plan' && !havePlan) TAB='positions';
   if(TAB==='audits' && !haveAudits) TAB='positions';
   if(TAB==='strategist' && !haveStrat) TAB='positions';
+  const _gear=document.getElementById('gear'); if(_gear) _gear.style.color=(TAB==='settings')?'var(--amber)':'';
   const p=el('div','panel'); p.style.marginTop='10px';
   const tabBar=el('div'); tabBar.style.cssText='display:flex;align-items:center;gap:13px;border-bottom:1px solid var(--bd);padding-bottom:7px;margin-bottom:10px;flex-wrap:wrap;';
   const mkTab=(key,label)=>{
@@ -244,7 +262,7 @@ function render(){
   if(haveAudits) tabSpecs.push(['audits','AUDITS · TAX·FEES']);
   if(haveStrat) tabSpecs.push(['strategist','STRATEGIST']);
   tabSpecs.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
-  tabSpecs.push(['settings','⚙ SETTINGS']);   // advanced knobs (N6)
+  // SETTINGS is NOT a top tab — it opens from the ⚙ gear in the top-right (N11).
   tabSpecs.forEach((ts,i)=>{
     if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--bd2);opacity:0.7;font-size:12px;user-select:none;'; tabBar.appendChild(sep); }
     tabBar.appendChild(mkTab(ts[0],ts[1]));
@@ -1712,6 +1730,7 @@ function userBusy(){
   return !!(TAB==='chat' && ta && ta.value.trim()!=='');
 }
 document.getElementById('refresh').onclick=()=>load(true);
+document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
 load(false);
 setInterval(()=>{ if(userBusy()) return; load(false); }, 300000);  // re-poll every 5 min (server caches)
 </script>
