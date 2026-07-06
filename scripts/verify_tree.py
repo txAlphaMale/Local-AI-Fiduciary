@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verify_tree.py -- repo integrity scanner for the Local AI project.
+verify_tree.py -- repo integrity scanner for the Fiduciary repo.
 
 Why this exists: the Cowork/FUSE bridge that edits the Windows working copy has
 truncated files mid-write (app.py once lost ~290 lines, ending in an unterminated

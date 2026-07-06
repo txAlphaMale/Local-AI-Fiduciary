@@ -92,6 +92,11 @@ DEFAULT_SCANNER = {"watchlist": [], "include_holding_peers": False,
                                          "notable analyst upgrades and stock movers this week",
                                          "emerging AI, space, and defense technology stocks"],
                    "alert_holdings_limit": 15}
+# Per-account (per-brokerage) settings the analysis factors in. Keyed by account NAME
+# (the stable id used across the portfolio payload). DRIP = dividends auto-reinvested
+# into the SAME security; fractional_ok = broker supports fractional-share buys.
+ACCOUNTS_FILE = os.environ.get("ACCOUNTS_FILE", "/data/accounts.json")
+DEFAULT_ACCOUNT_FLAGS = {"drip": False, "fractional_ok": True}
 ANALYSIS_TOKEN = os.environ.get("ANALYSIS_TOKEN", "")
 FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
 OLLAMA = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434").rstrip("/")
@@ -1219,13 +1224,44 @@ def _rebalance():
         suggestions.insert(0, "No target allocation set — define targets_by_type via POST /api/policy "
                               "to enable drift analysis (concentration checks run without it).")
 
+    # ---- DRIP drift pressure: reinvested dividends buy MORE of the same name, growing its
+    # weight over time, and are NOT available as cash to fund rebalancing. Estimate the annual
+    # same-name inflow from DRIP-on accounts (per-account setting under ACCOUNTS).
+    accts_cfg = _read_accounts_cfg()
+    dp_briefs = (_read_analysis().get("briefs") or {})
+    drip_by_ticker = {}
+    for acct in (d.get("by_account") or []):
+        if not _account_flags(acct.get("account"), accts_cfg)["drip"]:
+            continue
+        for h in acct.get("holdings", []):
+            tkr, val = h.get("ticker"), h.get("value") or 0
+            yld = ((dp_briefs.get(tkr) or {}).get("valuation") or {}).get("dividend_yield_pct")
+            if tkr and yld and val > 0:
+                drip_by_ticker[tkr] = drip_by_ticker.get(tkr, 0.0) + val * yld / 100.0
+    dp_wt = {c.get("ticker"): c.get("weight_pct") for c in (d.get("consolidated") or [])}
+    drip_pressure = [{"ticker": t, "est_annual_reinvestment": round(r, 2),
+                      "current_weight_pct": dp_wt.get(t),
+                      "annual_weight_add_pct": round(r / invested * 100, 3) if invested else None}
+                     for t, r in drip_by_ticker.items() if r > 0]
+    drip_pressure.sort(key=lambda x: -(x["est_annual_reinvestment"] or 0))
+    drip_reinvest_total = round(sum(x["est_annual_reinvestment"] for x in drip_pressure), 2)
+    if drip_pressure:
+        top = drip_pressure[0]
+        suggestions.append(
+            f"DRIP note: ~${drip_reinvest_total:,.0f}/yr of dividends auto-reinvest into the SAME holdings "
+            f"(biggest: {top['ticker']} ~${top['est_annual_reinvestment']:,.0f}/yr, +{top['annual_weight_add_pct']}% "
+            f"weight/yr) — this raises concentration and that cash is NOT available to rebalance. Turn DRIP off "
+            f"on a name to let its dividends pool for rebalancing instead.")
+
     out = {"generated_at": int(time.time()), "invested_value": invested, "policy": policy,
            "allocation": alloc, "ips_allocation": ips_alloc, "concentration": conc, "suggestions": suggestions,
+           "drip_pressure": drip_pressure[:12], "drip_reinvest_annual_total": drip_reinvest_total,
            "note": "Informational rebalancing analysis — SUGGESTIONS ONLY, no orders are placed. "
                    "'ips_allocation' measures drift against your IPS asset-CLASS sleeves (US/Intl/Bond/Cash), "
                    "which is what the IPS actually specifies; 'allocation' is the older by-Monarch-type view. "
-                   "Consider tax impact (esp. in taxable accounts) and transaction costs before acting; "
-                   "consult a licensed professional for decisions."}
+                   "'drip_pressure' estimates how fast DRIP-on holdings grow their own weight (reinvested "
+                   "dividends aren't available to rebalance). Consider tax impact (esp. in taxable accounts) "
+                   "and transaction costs before acting; consult a licensed professional for decisions."}
     try:
         os.makedirs(os.path.dirname(INSIGHTS_FILE) or ".", exist_ok=True)
         with open(INSIGHTS_FILE, "w", encoding="utf-8") as f:
@@ -1757,14 +1793,25 @@ def _retirement():
     cur_income = (signals or {}).get("annual_dividend_income")             # actual $ from payers
     realloc_income = round(investable * target_yield / 100, 2)
     div_fi_number = round(annual_expenses / (target_yield / 100), 2)
+    dsplit = _dividend_drip_split()
     income = {"current_weighted_yield_pct": cur_yield, "current_annual_income": cur_income,
               "target_yield_pct": target_yield, "income_at_target_yield": realloc_income,
               "covers_expenses_pct": round(realloc_income / annual_expenses * 100, 1) if annual_expenses else None,
               "dividend_fi_number": div_fi_number,
+              # DRIP split: reinvested dividends compound but are NOT spendable now; only
+              # cash (DRIP-off) dividends are income you can actually live on today.
+              "dividend_reinvested_annual": dsplit["reinvested"],
+              "dividend_cash_annual": dsplit["cash"],
+              "spendable_covers_expenses_pct": round(dsplit["cash"] / annual_expenses * 100, 1) if annual_expenses else None,
+              "any_drip": dsplit["any_drip"],
               "note": f"Your equity is growth-tilted, so today's portfolio yields only ~${(cur_income or 0):,.0f}/yr "
-                      f"in dividends. Reallocating investable assets to a {target_yield}% yield would generate "
+                      f"in dividends" + (f", of which ~${dsplit['cash']:,.0f} is CASH you could spend and "
+                      f"~${dsplit['reinvested']:,.0f} is auto-reinvested (DRIP — compounding, not spendable now). "
+                      if dsplit["any_drip"] else ". ") +
+                      f"Reallocating investable assets to a {target_yield}% yield would generate "
                       f"~${realloc_income:,.0f}/yr vs ${annual_expenses:,.0f} of expenses; you'd need "
-                      f"~${div_fi_number:,.0f} invested to live on dividends alone at that yield."}
+                      f"~${div_fi_number:,.0f} invested to live on dividends alone at that yield. To live on "
+                      f"dividends you'd also turn DRIP OFF so they arrive as cash."}
 
     # ---- Monte Carlo success probability (real terms; sequence-of-returns risk) ----
     monte_carlo = None
@@ -1991,6 +2038,117 @@ async def post_scanner_config(req: Request):
     return {"ok": True, "config": cfg}
 
 
+def _read_accounts_cfg():
+    """Per-account settings: {"defaults": {drip, fractional_ok}, "accounts": {name: {...}}}."""
+    try:
+        with open(ACCOUNTS_FILE, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        cfg = {}
+    return {"defaults": {**DEFAULT_ACCOUNT_FLAGS, **(cfg.get("defaults") or {})},
+            "accounts": cfg.get("accounts") or {}}
+
+
+def _account_flags(name, cfg=None):
+    """Resolved DRIP / fractional flags for one account (stored override else default)."""
+    cfg = cfg or _read_accounts_cfg()
+    a = (cfg.get("accounts") or {}).get(name) or {}
+    dfl = cfg.get("defaults") or DEFAULT_ACCOUNT_FLAGS
+    return {"drip": bool(a.get("drip", dfl.get("drip", False))),
+            "fractional_ok": bool(a.get("fractional_ok", dfl.get("fractional_ok", True)))}
+
+
+@app.get("/api/accounts-config")
+def get_accounts_config():
+    """Every known account with its resolved DRIP / fractional flags, for the UI toggles."""
+    d = _data()
+    cfg = _read_accounts_cfg()
+    rows = []
+    for a in d.get("accounts", []):
+        name = a.get("name")
+        st = _account_tax_status(name, a.get("type"))
+        fl = _account_flags(name, cfg)
+        rows.append({"name": name, "type": a.get("type"), "institution": a.get("institution"),
+                     "tax_status": st, "balance": a.get("balance"),
+                     "drip": fl["drip"], "fractional_ok": fl["fractional_ok"],
+                     "locatable": st != "na"})
+    rows.sort(key=lambda x: -(x.get("balance") or 0))
+    return {"defaults": cfg["defaults"], "accounts": rows}
+
+
+@app.post("/api/accounts-config")
+async def post_accounts_config(req: Request):
+    """Set per-account DRIP / fractional flags (local config; not a money action).
+    Body: {"account": name, "drip": bool, "fractional_ok": bool} for one account,
+    and/or {"accounts": {name: {...}}} bulk, and/or {"defaults": {...}}."""
+    body = await req.json()
+    cfg = _read_accounts_cfg()
+    if isinstance(body.get("defaults"), dict):
+        cfg["defaults"] = {**cfg["defaults"],
+                           **{k: bool(v) for k, v in body["defaults"].items() if k in DEFAULT_ACCOUNT_FLAGS}}
+    if body.get("account"):
+        cur = dict(cfg["accounts"].get(body["account"]) or {})
+        for k in DEFAULT_ACCOUNT_FLAGS:
+            if k in body:
+                cur[k] = bool(body[k])
+        cfg["accounts"][body["account"]] = cur
+    if isinstance(body.get("accounts"), dict):
+        for nm, v in body["accounts"].items():
+            if not isinstance(v, dict):
+                continue
+            cur = dict(cfg["accounts"].get(nm) or {})
+            for k in DEFAULT_ACCOUNT_FLAGS:
+                if k in v:
+                    cur[k] = bool(v[k])
+            cfg["accounts"][nm] = cur
+    os.makedirs(os.path.dirname(ACCOUNTS_FILE) or ".", exist_ok=True)
+    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    return {"ok": True, "config": cfg}
+
+
+def _dividend_drip_split():
+    """Per-account annual dividend income (value x research yield) split into reinvested
+    (DRIP-on accounts, compounding, not spendable now) vs cash (DRIP-off, spendable), and
+    the TAXABLE reinvested slice (phantom income taxed yearly). All estimates, read-only."""
+    d = _data()
+    briefs = (_read_analysis().get("briefs") or {})
+    accts_cfg = _read_accounts_cfg()
+    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+                   for a in d.get("accounts", [])}
+    out = {"total": 0.0, "reinvested": 0.0, "cash": 0.0,
+           "taxable_reinvested": 0.0, "advantaged_reinvested": 0.0,
+           "by_account": [], "any_drip": False, "coverage_note":
+           "Dividend estimates use the daily research cache; holdings without a brief score 0."}
+    for acct in d.get("by_account", []):
+        name = acct.get("account")
+        fl = _account_flags(name, accts_cfg)
+        status = acct_status.get(name) or _account_tax_status(name, "Investments")
+        inc = 0.0
+        for h in acct.get("holdings", []):
+            yld = ((briefs.get(h.get("ticker")) or {}).get("valuation") or {}).get("dividend_yield_pct")
+            if yld and (h.get("value") or 0) > 0:
+                inc += h["value"] * yld / 100.0
+        if inc <= 0:
+            continue
+        out["total"] += inc
+        if fl["drip"]:
+            out["any_drip"] = True
+            out["reinvested"] += inc
+            if status == "taxable":
+                out["taxable_reinvested"] += inc
+            else:
+                out["advantaged_reinvested"] += inc
+        else:
+            out["cash"] += inc
+        out["by_account"].append({"account": name, "tax_status": status, "drip": fl["drip"],
+                                  "est_annual_dividend": round(inc, 2)})
+    for k in ("total", "reinvested", "cash", "taxable_reinvested", "advantaged_reinvested"):
+        out[k] = round(out[k], 2)
+    out["by_account"].sort(key=lambda x: -x["est_annual_dividend"])
+    return out
+
+
 def _screen_one(sym, crit):
     """Score one ticker against the strategy criteria using fundamentals + valuation + analyst consensus."""
     fund = edgar.fundamentals(sym)
@@ -2059,6 +2217,7 @@ def _opportunities():
              and (i.get("fit_score") or 0) >= OPP_MIN_FIT][:OPP_MAX_IDEAS]
     return {"generated_at": int(time.time()), "criteria": crit, "strategy": cfg.get("strategy_description"),
             "watchlist": cfg.get("watchlist") or [], "include_holding_peers": bool(cfg.get("include_holding_peers")),
+            "discovery_queries": cfg.get("discovery_queries") or [], "alert_holdings_limit": cfg.get("alert_holdings_limit"),
             "screened": screened, "count": len(ideas), "min_fit": OPP_MIN_FIT, "ideas": ideas,
             "note": f"Top {len(ideas)} of {screened} screened — only names scoring >= {OPP_MIN_FIT}/4 within your "
                     "price cap. Research ideas, NOT advice; ask the Fiduciary to deep-dive any name."}
@@ -2144,12 +2303,14 @@ def _tax_audit():
     briefs = (_read_analysis().get("briefs") or {})
     acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
                    for a in d.get("accounts", [])}
+    accts_cfg = _read_accounts_cfg()
     harvest, location = [], []
     for acct in d.get("by_account", []):
         name = acct.get("account")
         status = acct_status.get(name) or _account_tax_status(name, "Investments")
         if status != "taxable":
             continue
+        drip_on = _account_flags(name, accts_cfg)["drip"]
         for h in acct.get("holdings", []):
             tkr, val, gain = h.get("ticker"), h.get("value") or 0, h.get("gain")
             if gain is not None and gain <= -TLH_MIN_LOSS:
@@ -2158,9 +2319,11 @@ def _tax_audit():
                                 "loss_pct": h.get("gain_pct")})
             yld = ((briefs.get(tkr) or {}).get("valuation") or {}).get("dividend_yield_pct")
             if yld is not None and yld >= LOC_MIN_YIELD and val > 0:
+                est = round(val * yld / 100, 2)
                 location.append({"ticker": tkr, "account": name, "value": round(val, 2),
-                                 "dividend_yield_pct": round(yld, 2),
-                                 "est_annual_income": round(val * yld / 100, 2)})
+                                 "dividend_yield_pct": round(yld, 2), "est_annual_income": est,
+                                 "drip": drip_on,
+                                 "est_annual_taxable_reinvestment": est if drip_on else 0.0})
     harvest.sort(key=lambda x: x["loss"])                       # most negative first
     location.sort(key=lambda x: -(x.get("est_annual_income") or 0))
     return {
@@ -2177,10 +2340,16 @@ def _tax_audit():
         "asset_location": {
             "misplaced": location, "count": len(location),
             "est_annual_income_in_taxable": round(sum(x.get("est_annual_income") or 0 for x in location), 2),
+            "est_taxable_drip_reinvestment": round(sum(x.get("est_annual_taxable_reinvestment") or 0 for x in location), 2),
+            "drip_split": _dividend_drip_split(),
             "note": "High-yield / income holdings sitting in TAXABLE accounts — their distributions are "
                     "taxed every year. Holding them in tax-DEFERRED (IRA/401k) space instead shelters that "
-                    "income; keep low-yield growth in taxable. Yields come from the daily research cache, so "
-                    "holdings without a brief aren't scored. Educational, not tax advice."},
+                    "income; keep low-yield growth in taxable. DRIP makes taxable dividends WORSE: each "
+                    "reinvestment is 'phantom income' (taxed even though you receive no cash) and creates a "
+                    "new tax lot with its own basis & date — track lots and use SPECIFIC-LOT identification "
+                    "when selling so you don't pay tax on the same dollars twice. DRIP inside tax-advantaged "
+                    "accounts has no such drag. Set per-account DRIP under ACCOUNTS. Yields come from the "
+                    "daily research cache, so holdings without a brief aren't scored. Educational, not tax advice."},
     }
 
 
@@ -3251,6 +3420,11 @@ STRATEGIST_PROMPT = (
     "improve risk-adjusted return: stay within available cash, size positions sensibly, favor conviction "
     "over churn. (4) log_report: the trades you made and WHY, current value and return vs. start, your "
     "market read, and what you're watching. For every buy, state a one-line thesis and the key risk. "
+    "SIZING: return scales with DOLLARS invested x % return, NOT with share count or share price — a "
+    "$360 stock is not worse 'bang for the buck' than a $12 one, so never prefer a name just because its "
+    "shares are cheaper. What DOES matter: (a) make each position MATERIAL — big enough that a good move "
+    "moves the book (avoid dust positions too small to matter); (b) deploy the capital — don't leave a "
+    "meaningful slug of cash idle; you buy fractional shares here, so a dollar amount always fully invests. "
     "Acknowledge uncertainty honestly. This is hypothetical and educational — NOT financial advice."
 )
 
@@ -3675,9 +3849,14 @@ FIDUCIARY_PROMPT = (
     "get_opportunities and get_discovery (ideas), get_fundamentals / get_valuation / get_research for a "
     "specific ticker, and web_search for current news or context.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
-    "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. Be honest about "
-    "uncertainty and about what the data does and does not show. Educational analysis — NOT financial, "
-    "tax, or legal advice."
+    "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
+    "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
+    "reinvested slice (phantom income + new tax lots — flag specific-lot tracking), get_rebalance shows "
+    "DRIP drift-pressure (reinvested dividends raise a name's weight and aren't available to rebalance), "
+    "and get_income_plan splits spendable-cash vs reinvested dividends. When sizing or comparing ideas, "
+    "remember return scales with dollars x % — never favor a name for a lower share price; do flag positions "
+    "too small to matter or material idle cash. Be honest about uncertainty and about what the data does and "
+    "does not show. Educational analysis — NOT financial, tax, or legal advice."
 )
 
 FIDUCIARY_TOOLS = [

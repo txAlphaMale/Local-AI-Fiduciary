@@ -1,7 +1,6 @@
 # Dependencies
 
-Everything the **Fiduciary stack** needs. (The image-gen / Home-Assistant / other
-personas in this repo have their own extra dependencies and are out of scope here.)
+Everything the **Fiduciary stack** needs.
 
 ## Runtime
 
@@ -15,15 +14,15 @@ personas in this repo have their own extra dependencies and are out of scope her
 ## Local LLM (Ollama)
 
 ```bash
-ollama pull qwen3.5:27b     # analysis + Strategist reasoning
+ollama pull qwen3.6:27b     # analysis + Strategist reasoning
 ollama pull bge-m3          # embeddings for the Fiduciary knowledge RAG
 ```
 
-- `qwen3.5:27b` is the main model — it powers the daily research job, the Strategist
-  (server-side weekly loop + OWUI chat persona), and the Fiduciary OWUI persona. It must
-  support **tool/function calling** (qwen3.5 does).
-- `bge-m3` is a small embedding model for the Fiduciary's knowledge RAG (Open WebUI's
-  `RAG_EMBEDDING_MODEL`) — required if you attach the knowledge collection.
+- `qwen3.6:27b` is the main model — it powers the daily research job, the Strategist
+  (server-side weekly loop + the in-app chat persona), and the Fiduciary chat persona. It
+  must support **tool/function calling** (qwen3.6 does).
+- `bge-m3` is a small embedding model for the Fiduciary's knowledge RAG — required if you
+  use the knowledge collection.
 - A lighter alternative (faster, less capable) can be set via `ANALYSIS_MODEL` in
   `.env`, e.g. `qwen3:14b` — pull it too if you use it.
 - No uncensored/abliterated models are needed for the Fiduciary.
@@ -43,7 +42,7 @@ ollama pull bge-m3          # embeddings for the Fiduciary knowledge RAG
 
 ## Internal auth tokens (you generate these — not from any service)
 
-`MCPO_API_KEY`, `ANALYSIS_TOKEN`, `WEBUI_SECRET_KEY` — set to any long random string,
+`MCPO_API_KEY`, `ANALYSIS_TOKEN` — set to any long random string,
 e.g. `openssl rand -hex 24`. `ANALYSIS_TOKEN` is **optional**: leave it blank and the
 `/api/run-*` endpoints run unguarded (fine for a single-user local box).
 

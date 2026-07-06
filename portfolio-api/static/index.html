@@ -108,8 +108,8 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, TAB='positions', FOCUS_TICKER=null;
-let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, TAB='positions', FOCUS_TICKER=null;
+let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; render(); }
 
 // analyst (Finnhub consensus) rating helpers, shared by the positions table + research panel
@@ -132,10 +132,10 @@ async function load(refresh){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -233,7 +233,8 @@ function render(){
     if(haveAnalysis) tc.appendChild(analysisContent(ANALYSIS));
     if(haveIdeas){ if(haveAnalysis) tc.appendChild(hrule()); tc.appendChild(ideasContent(IDEAS)); }
   } else if(TAB==='audits'){
-    if(haveTax) tc.appendChild(taxContent(TAX, TAXAUDIT));
+    tc.appendChild(accountsEditor());
+    if(haveTax){ tc.appendChild(hrule()); tc.appendChild(taxContent(TAX, TAXAUDIT)); }
     if(haveFL){ if(haveTax) tc.appendChild(hrule()); tc.appendChild(flContent(FL)); }
   } else if(TAB==='insights' && haveInsights){ tc.appendChild(insightsContent(INSIGHTS)); }
   else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
@@ -513,9 +514,12 @@ function saveScanner(){
   ['min_rev_growth_pct','min_fcf_margin_pct','max_pe_forward','min_analyst_buy_pct','max_share_price','min_share_price'].forEach(k=>{
     const x=document.getElementById('scan-'+k).value; if(x!=='') crit[k]=parseFloat(x);
   });
+  const disco=(document.getElementById('scan-disco').value||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
   const body={ watchlist:wl, criteria:crit,
     include_holding_peers: document.getElementById('scan-peers').checked,
-    strategy_description: document.getElementById('scan-strat').value };
+    strategy_description: document.getElementById('scan-strat').value,
+    discovery_queries: disco };
+  const al=document.getElementById('scan-alertlim').value; if(al!=='') body.alert_holdings_limit=parseInt(al,10);
   fetch('/api/scanner-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
 }
@@ -537,7 +541,9 @@ function ideasContent(r){
     ` · Min analyst buy <input id="scan-min_analyst_buy_pct" type="number" value="${c.min_analyst_buy_pct}" style="width:50px;"/>%</div>`+
     `<div style="margin-bottom:7px;">Max $/share <input id="scan-max_share_price" type="number" value="${c.max_share_price!=null?c.max_share_price:''}" placeholder="any" style="width:64px;"/> · Min $/share <input id="scan-min_share_price" type="number" value="${c.min_share_price!=null?c.min_share_price:''}" placeholder="any" style="width:64px;"/></div>`+
     `<div style="margin-bottom:7px;"><label style="cursor:pointer;"><input id="scan-peers" type="checkbox" ${r.include_holding_peers?'checked':''}/> include peers of my holdings</label></div>`+
-    `<div style="margin-bottom:9px;">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
+    `<div style="margin-bottom:7px;">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
+    `<div style="margin-bottom:7px;vertical-align:top;">Discovery queries <span class="muted" style="font-size:10px;">(one per line; newsfeed idea sources)</span><br/><textarea id="scan-disco" rows="3" style="width:430px;vertical-align:top;">${(r.discovery_queries||[]).join('\n').replace(/</g,'&lt;')}</textarea></div>`+
+    `<div style="margin-bottom:9px;">Alert on holdings — top <input id="scan-alertlim" type="number" value="${r.alert_holdings_limit!=null?r.alert_holdings_limit:15}" style="width:52px;"/> by weight <span class="muted" style="font-size:10px;">(news/8-K alerts on your largest positions)</span></div>`+
     `<button onclick="saveScanner()">↳ SAVE & RESCAN</button>`;
   wrap.appendChild(ed);
   const discoSections=()=>{
@@ -626,6 +632,34 @@ function saveRetire(){
   opt('ret-sssb','spouse_ss_estimated_fra_benefit');
   fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+function ssWhatif(){
+  const a=document.getElementById('ssw-age').value, i=document.getElementById('ssw-inc').value;
+  const q=[]; if(a!=='') q.push('claim_age='+encodeURIComponent(a)); if(i!=='') q.push('other_income='+encodeURIComponent(i));
+  const out=document.getElementById('ssw-out'); if(out) out.textContent=' …';
+  fetch('/api/ss'+(q.length?'?'+q.join('&'):'')).then(r=>r.json()).then(d=>{
+    if(!out) return;
+    if(!d || d.available===false || d.error){ out.textContent=' '+((d&&(d.note||d.error))||'set SS inputs in ASSUMPTIONS first'); return; }
+    const mo=d.household_monthly_benefit, yr=d.household_annual_benefit, tx=d.household_taxable_portion;
+    out.innerHTML=' → <span class="pos">$'+Math.round(mo).toLocaleString()+'/mo</span> <span class="muted">($'+Math.round(yr).toLocaleString()+'/yr · $'+Math.round(tx||0).toLocaleString()+' taxable)</span>';
+  }).catch(()=>{ if(out) out.textContent=' error'; });
+}
+
+function acaWhatif(){
+  const m=document.getElementById('acaw-magi').value, h=document.getElementById('acaw-hh').value, s=document.getElementById('acaw-slcsp').value;
+  const q=[]; if(m!=='') q.push('magi='+encodeURIComponent(m)); if(h!=='') q.push('household_size='+encodeURIComponent(h)); if(s!=='') q.push('slcsp_annual='+encodeURIComponent(s));
+  const out=document.getElementById('acaw-out'); if(out) out.textContent=' …';
+  fetch('/api/aca'+(q.length?'?'+q.join('&'):'')).then(r=>r.json()).then(d=>{
+    if(!out) return;
+    if(!d || d.error){ out.textContent=' '+((d&&d.error)||'error'); return; }
+    const sub=d.subsidy||{}, cl=d.cliff||{}, fl=d.flags||{};
+    const fpl=sub.fpl_pct!=null?sub.fpl_pct+'% FPL':'—';
+    const money=sub.estimated_annual_ptc!=null?('PTC $'+Math.round(sub.estimated_annual_ptc).toLocaleString()+'/yr'):(sub.expected_annual_contribution!=null?('contrib $'+Math.round(sub.expected_annual_contribution).toLocaleString()+'/yr'):'set SLCSP');
+    const cls=fl.over_cliff?'neg':(fl.below_floor_gap?'neg':'pos');
+    const tag=fl.over_cliff?' ⚠ over cliff':(fl.below_floor_gap?' ⚠ under 100% FPL':'');
+    out.innerHTML=' → <span class="'+cls+'">'+fpl+'</span> <span class="muted">('+money+(cl.headroom_to_cliff!=null?' · headroom $'+Math.round(cl.headroom_to_cliff).toLocaleString():'')+')</span>'+(tag?'<span class="neg">'+tag+'</span>':'');
+  }).catch(()=>{ if(out) out.textContent=' error'; });
 }
 
 function planContent(r){
@@ -717,8 +751,11 @@ function planContent(r){
         `<span class="pos">${u0(p.monthly_benefit)}/mo</span> <span class="muted">(${u0(p.annual_benefit)}/yr, ${p.taxable_pct_of_benefit}% taxable · ${p.pia_confidence} confidence)</span>`;
       wrap.appendChild(pl);
     });
-    const sn=el('div','muted'); sn.style.cssText='font-size:10px;line-height:1.45;margin:6px 0 14px;';
+    const sn=el('div','muted'); sn.style.cssText='font-size:10px;line-height:1.45;margin:6px 0 6px;';
     sn.textContent=sy.note||''; wrap.appendChild(sn);
+    const swf=el('div'); swf.style.cssText='font-size:11px;margin:0 0 14px;';
+    swf.innerHTML=`<span class="muted">What-if (not saved):</span> claim age <input id="ssw-age" type="number" placeholder="${(ppl[0]&&ppl[0].claim_age)||67}" style="width:48px;"/> · other taxable income <input id="ssw-inc" type="number" placeholder="$/yr" style="width:82px;"/> <button onclick="ssWhatif()">↻ recompute</button> <span id="ssw-out"></span>`;
+    wrap.appendChild(swf);
   }
   // early-retirement bridge (Roth ladder + 72(t))
   if(r.bridge && r.bridge.status==='bridge_needed'){
@@ -748,6 +785,9 @@ function planContent(r){
       ac2.textContent=(over?'⚠ Bridge-year conversions push MAGI OVER the 400% FPL cliff — $0 subsidy. ':(gap?'⚠ MAGI below 100% FPL — TX coverage gap. ':'✓ Under the 400% FPL cliff — subsidy preserved. '))+'Cliff at '+u0(cl.cliff_magi)+' MAGI.';
       wrap.appendChild(ac2);
       const an=el('div','muted'); an.style.cssText='font-size:10px;line-height:1.45;margin-bottom:6px;'; an.textContent=ac.interpretation||''; wrap.appendChild(an);
+      const awf=el('div'); awf.style.cssText='font-size:11px;margin:0 0 8px;';
+      awf.innerHTML=`<span class="muted">What-if (not saved):</span> MAGI <input id="acaw-magi" type="number" placeholder="${ac.magi!=null?Math.round(ac.magi):'$'}" style="width:84px;"/> · household <input id="acaw-hh" type="number" placeholder="2" style="width:44px;"/> · SLCSP <input id="acaw-slcsp" type="number" placeholder="$/yr" style="width:78px;"/> <button onclick="acaWhatif()">↻ recompute</button> <span id="acaw-out"></span>`;
+      wrap.appendChild(awf);
     }
     const bn=el('div','muted'); bn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;'; bn.textContent=(br.assessment||'')+' '+(rl.note||''); wrap.appendChild(bn);
   } else if(r.bridge && r.bridge.status==='no_bridge_needed'){
@@ -806,12 +846,14 @@ function planContent(r){
 function savePolicy(){
   const targets={};
   document.querySelectorAll('.pol-type').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) targets[i.dataset.type]=v; });
+  const sleeves={};
+  document.querySelectorAll('.pol-sleeve').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) sleeves[i.dataset.sleeve]=v; });
   const caps={};
   (document.getElementById('pol-caps').value||'').split(',').forEach(p=>{
     const m=p.split(':'); const t=(m[0]||'').trim().toUpperCase(); const v=parseFloat((m[1]||'').trim());
     if(t && !isNaN(v)) caps[t]=v;
   });
-  const body={ targets_by_type:targets,
+  const body={ targets_by_type:targets, targets_by_sleeve:sleeves,
     max_position_pct: parseFloat(document.getElementById('pol-maxcap').value)||10,
     drift_threshold_pct: parseFloat(document.getElementById('pol-drift').value)||5,
     position_caps: caps };
@@ -819,6 +861,37 @@ function savePolicy(){
     .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
 }
 
+function saveAcct(name, field, val){
+  const body={account:name}; body[field]=val;
+  fetch('/api/accounts-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+function accountsEditor(){
+  const wrap=el('div');
+  if(!ACCTCFG || !ACCTCFG.accounts || !ACCTCFG.accounts.length) return wrap;
+  wrap.appendChild(el('div','ph','ACCOUNTS · DRIP / FRACTIONAL SHARES'));
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin-bottom:8px;line-height:1.45;';
+  sub.textContent='Per-brokerage settings the analysis factors in. DRIP = dividends auto-reinvested into the SAME holding (raises concentration; in TAXABLE accounts each reinvestment is phantom income taxed yearly + a new tax lot). Fractional = broker allows fractional-share buys (no cash drag on position sizing).';
+  wrap.appendChild(sub);
+  const t=el('table'); const hr=el('tr');
+  hr.innerHTML='<th class="l">ACCOUNT</th><th class="l">TAX</th><th>BALANCE</th><th>DRIP</th><th>FRACTIONAL</th>';
+  t.appendChild(hr);
+  ACCTCFG.accounts.filter(a=>a.locatable).forEach(a=>{
+    const tr=el('tr');
+    const td=(html,cls)=>{ const x=el('td',cls); x.innerHTML=html; return x; };
+    tr.appendChild(td((a.name||'').replace(/</g,'&lt;'),'l sym'));
+    tr.appendChild(td(a.tax_status||'','l muted'));
+    tr.appendChild(td(a.balance!=null?'$'+Math.round(a.balance).toLocaleString():'—'));
+    const mkChk=(field,on)=>{ const c=el('td'); c.style.textAlign='center';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!on;
+      cb.onchange=()=>saveAcct(a.name, field, cb.checked); c.appendChild(cb); return c; };
+    tr.appendChild(mkChk('drip', a.drip));
+    tr.appendChild(mkChk('fractional_ok', a.fractional_ok));
+    t.appendChild(tr);
+  });
+  wrap.appendChild(t);
+  return wrap;
+}
 function insightsContent(r){
   const wrap=el('div');
   if(!r || r.error){ wrap.appendChild(el('div','muted','No insights yet — run the rebalance check.')); return wrap; }
@@ -834,8 +907,13 @@ function insightsContent(r){
     typeInputs+=`<span style="margin-right:14px;white-space:nowrap;">${a.type} <input class="pol-type" data-type="${a.type}" type="number" value="${a.target_pct==null?'':a.target_pct}" style="width:46px;"/>%</span>`;
   });
   const capsStr=Object.entries(pol.position_caps||{}).map(([k,v])=>k+':'+v).join(', ');
+  const sleeves=pol.targets_by_sleeve||{};
+  const sleeveKeys=Object.keys(sleeves).length?Object.keys(sleeves):['US Equity','Intl Equity','Bond','Cash'];
+  let sleeveInputs='';
+  sleeveKeys.forEach(k=>{ sleeveInputs+=`<span style="margin-right:14px;white-space:nowrap;">${k} <input class="pol-sleeve" data-sleeve="${k}" type="number" value="${sleeves[k]==null?'':sleeves[k]}" style="width:46px;"/>%</span>`; });
   ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">POLICY · EDIT (saved locally; suggestions only)</div>`+
-    `<div style="margin-bottom:7px;">Targets by type: ${typeInputs||'<span class="muted">—</span>'}</div>`+
+    `<div style="margin-bottom:7px;">IPS sleeves <span class="muted" style="font-size:10px;">(asset-CLASS targets the drift monitor measures)</span>: ${sleeveInputs}</div>`+
+    `<div style="margin-bottom:7px;">Targets by type <span class="muted" style="font-size:10px;">(Monarch asset type)</span>: ${typeInputs||'<span class="muted">—</span>'}</div>`+
     `<div style="margin-bottom:7px;">Max single-name cap <input id="pol-maxcap" type="number" value="${pol.max_position_pct||10}" style="width:46px;"/>%`+
     ` &nbsp; Drift band <input id="pol-drift" type="number" value="${pol.drift_threshold_pct||5}" style="width:46px;"/>%</div>`+
     `<div style="margin-bottom:9px;">Per-ticker caps (conviction holdings) <input id="pol-caps" type="text" value="${capsStr}" placeholder="PLTR:40, RKLB:40" style="width:260px;"/></div>`+
@@ -1265,10 +1343,21 @@ function chatLoadSessions(){
     .catch(()=>{ CHAT_SESSIONS=CHAT_SESSIONS||[]; })
     .finally(()=>{ CHAT_SESS_LOADING=false; if(TAB==='chat' && !CHAT_STREAMING) render(); });
 }
-function chatNew(){ if(CHAT_STREAMING) return; CHAT_SID=null; CHAT_MSGS=[]; render(); }
-function chatSetPersona(p){ if(CHAT_STREAMING) return; if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; CHAT_SID=null; CHAT_MSGS=[]; render(); } }
+// Stop the in-flight stream (if any) and supersede its finally handler so a new
+// action (new chat, switch persona/session, new message) can start immediately.
+function chatInterrupt(){
+  if(!CHAT_STREAMING) return;
+  CHAT_STREAM_ID++;                       // supersede the running send's generation
+  if(CHAT_ABORT){ try{ CHAT_ABORT.abort(); }catch(_){} }
+  CHAT_ABORT=null; CHAT_STREAMING=false;
+  const last=CHAT_MSGS[CHAT_MSGS.length-1];
+  if(last && last.streaming) last.streaming=false;   // freeze the partial answer in place
+}
+function chatStop(){ chatInterrupt(); render(); }
+function chatNew(){ chatInterrupt(); CHAT_SID=null; CHAT_MSGS=[]; render(); }
+function chatSetPersona(p){ chatInterrupt(); if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; CHAT_SID=null; CHAT_MSGS=[]; render(); } }
 function chatOpen(sid,persona){
-  if(CHAT_STREAMING) return;
+  chatInterrupt();
   fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{
     CHAT_SID=sid; if(persona) CHAT_PERSONA=persona;
     CHAT_MSGS=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
@@ -1278,7 +1367,7 @@ function chatOpen(sid,persona){
 }
 function chatDelete(sid,ev){
   if(ev) ev.stopPropagation();
-  if(CHAT_STREAMING) return;
+  if(!confirm('Delete this conversation?')) return;
   if(!confirm('Delete this conversation?')) return;
   fetch('/api/chat/session/'+sid,{method:'DELETE'}).then(r=>r.json()).then(()=>{
     if(CHAT_SID===sid){ CHAT_SID=null; CHAT_MSGS=[]; }
@@ -1305,13 +1394,14 @@ function chatFrame(frame,asst){
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }
 async function chatSend(){
-  if(CHAT_STREAMING) return;
   const ta=document.getElementById('chat-input'); if(!ta) return;
   const msg=(ta.value||'').trim(); if(!msg) return;
+  chatInterrupt();             // if a previous answer is still streaming, stop it and start fresh
   ta.value='';
   CHAT_MSGS.push({role:'user',content:msg});
   CHAT_MSGS.push({role:'assistant',content:'',tools:[],streaming:true});
   CHAT_STREAMING=true;
+  const myId=++CHAT_STREAM_ID;  // this send's generation; a newer send/nav supersedes it
   render();                    // shows the user turn + an empty streaming bubble (ids: chat-live-*)
   chatScroll();
   const asst=CHAT_MSGS[CHAT_MSGS.length-1];
@@ -1325,17 +1415,20 @@ async function chatSend(){
     const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
     for(;;){
       const {done,value}=await reader.read(); if(done) break;
+      if(myId!==CHAT_STREAM_ID) return;   // superseded mid-stream — stop consuming, leave state to the newer action
       buf+=dec.decode(value,{stream:true});
       let i;
       while((i=buf.indexOf('\n\n'))>=0){ const frame=buf.slice(0,i); buf=buf.slice(i+2); chatFrame(frame,asst); }
     }
   }catch(e){
-    if(e.name!=='AbortError') asst.content+=(asst.content?'\n\n':'')+'⚠ '+e.message;
+    if(myId===CHAT_STREAM_ID && e.name!=='AbortError') asst.content+=(asst.content?'\n\n':'')+'⚠ '+e.message;
   }finally{
-    CHAT_STREAMING=false; CHAT_ABORT=null; asst.streaming=false;
-    render();                  // final pass: render markdown + refresh the session list
-    chatScroll();
-    chatLoadSessions();
+    if(myId===CHAT_STREAM_ID){   // only the current generation resets shared state / re-renders
+      CHAT_STREAMING=false; CHAT_ABORT=null; asst.streaming=false;
+      render();                  // final pass: render markdown + refresh the session list
+      chatScroll();
+      chatLoadSessions();
+    }
   }
 }
 function chatContent(){
@@ -1394,9 +1487,9 @@ function chatContent(){
   const bar=el('div','chat-bar');
   const ta=el('textarea'); ta.id='chat-input'; ta.className='chat-input'; ta.rows=1;
   ta.placeholder='Message the '+(CHAT_PERSONA==='fiduciary'?'Fiduciary':'Strategist')+'…  (Enter to send · Shift+Enter = newline)';
-  ta.onkeydown=chatKey; if(CHAT_STREAMING) ta.disabled=true;
+  ta.onkeydown=chatKey;   // typing stays enabled while a previous answer streams (Enter sends a new one, interrupting)
   bar.appendChild(ta);
-  if(CHAT_STREAMING){ const stop=el('button',null,'■ STOP'); stop.onclick=()=>{ if(CHAT_ABORT) CHAT_ABORT.abort(); }; bar.appendChild(stop); }
+  if(CHAT_STREAMING){ const stop=el('button',null,'■ STOP'); stop.onclick=chatStop; bar.appendChild(stop); }
   else { const send=el('button',null,'SEND ▸'); send.onclick=chatSend; bar.appendChild(send); }
   main.appendChild(bar);
   wrap.appendChild(main);
@@ -1404,16 +1497,20 @@ function chatContent(){
   return wrap;
 }
 
-// Don't let the 5-min background poll rebuild the page (and wipe the chat box)
-// while the user is composing or a chat is streaming. Manual REFRESH still works.
-function chatComposing(){
-  if(CHAT_STREAMING) return true;
-  const ta=document.getElementById('chat-input');
-  return !!(TAB==='chat' && ta && (document.activeElement===ta || ta.value.trim()!==''));
+// The 5-min background poll calls load()->render(), which rebuilds the whole page.
+// Suppress it while the user is actively interacting so it never wipes an in-progress
+// edit (chat draft, PLAN/policy/scanner fields, what-if inputs) or a live chat stream.
+// Manual REFRESH always works. (A true per-panel self-refresh is the larger N2b refactor.)
+function userBusy(){
+  if(CHAT_STREAMING) return true;                          // a chat is streaming
+  const ae=document.activeElement;                         // focused in any editable control
+  if(ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA' || ae.tagName==='SELECT')) return true;
+  const ta=document.getElementById('chat-input');          // an unsent chat draft on the CHAT tab
+  return !!(TAB==='chat' && ta && ta.value.trim()!=='');
 }
 document.getElementById('refresh').onclick=()=>load(true);
 load(false);
-setInterval(()=>{ if(chatComposing()) return; load(false); }, 300000);  // re-poll every 5 min (server caches)
+setInterval(()=>{ if(userBusy()) return; load(false); }, 300000);  // re-poll every 5 min (server caches)
 </script>
 </body>
 </html>

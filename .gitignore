@@ -41,6 +41,7 @@ opportunities.json
 fees_liquidity.json
 scanner.json
 retirement.json
+accounts.json
 chat.db
 
 # ---- Local backups / scratch ----
