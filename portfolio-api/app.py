@@ -79,6 +79,46 @@ LIQ_MIN_DDV = float(os.environ.get("LIQ_MIN_DDV", "2000000"))   # avg daily $ vo
 MICROCAP_MUSD = float(os.environ.get("MICROCAP_MUSD", "300"))   # market cap (millions) below this = micro-cap
 LIQ_PARTICIPATION = float(os.environ.get("LIQ_PARTICIPATION", "0.10"))  # assume you trade <=10% of daily volume
 FEE_HIGH_PCT = float(os.environ.get("FEE_HIGH_PCT", "0.40"))    # expense ratio (%) at/above this = "high fee"
+# ---- Runtime settings store (N6): advanced knobs editable from the SETTINGS tab.
+# Precedence: ENV var (if set) > settings.json > default; read at REQUEST time so changes
+# apply WITHOUT a restart. Secrets/provider creds are NOT here — they stay in .env (Phase 2).
+SETTINGS_FILE = os.environ.get("SETTINGS_FILE", "/data/settings.json")
+SETTING_SPECS = {
+    "mc_runs":       {"env": "MC_RUNS",       "default": 3000,    "cast": int,   "label": "Monte Carlo paths", "group": "Monte Carlo"},
+    "liq_min_ddv":   {"env": "LIQ_MIN_DDV",   "default": 2000000, "cast": float, "label": "Thin: daily $ volume below ($)", "group": "Fees / Liquidity"},
+    "microcap_musd": {"env": "MICROCAP_MUSD", "default": 300,     "cast": float, "label": "Micro-cap: market cap below ($M)", "group": "Fees / Liquidity"},
+    "fee_high_pct":  {"env": "FEE_HIGH_PCT",  "default": 0.40,    "cast": float, "label": "High expense ratio at/above (%)", "group": "Fees / Liquidity"},
+    "tlh_min_loss":  {"env": "TLH_MIN_LOSS",  "default": 50,      "cast": float, "label": "Ignore TLH losses below ($)", "group": "Tax audit"},
+    "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
+}
+
+
+def _read_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _knob(key):
+    """Resolve an advanced knob: ENV override > settings.json > default."""
+    spec = SETTING_SPECS[key]
+    ev = os.environ.get(spec["env"])
+    if ev not in (None, ""):
+        try:
+            return spec["cast"](ev)
+        except (TypeError, ValueError):
+            pass
+    v = _read_settings().get(key)
+    if v is not None:
+        try:
+            return spec["cast"](v)
+        except (TypeError, ValueError):
+            pass
+    return spec["default"]
+
+
 DISCOVERY_FILE = os.environ.get("DISCOVERY_FILE", "/data/discovery.json")
 PAPER_FILE = os.environ.get("PAPER_FILE", "/data/paper.json")
 DEFAULT_PAPER_CASH = float(os.environ.get("PAPER_STARTING_CASH", "2000"))
@@ -1558,7 +1598,7 @@ def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_yea
     static funds the reduced draw directly; guardrails still flex the full lifestyle
     but the portfolio draw is offset by the (fixed) SS floor. Omitting SS understates
     success, which is exactly what this corrects."""
-    runs = int(runs or MC_RUNS)
+    runs = int(runs or _knob("mc_runs"))
     acc_years = max(0, int(acc_years or 0))
     ret_years = max(1, int(ret_years or 0))
     sav = annual_savings or 0
@@ -2107,6 +2147,51 @@ async def post_accounts_config(req: Request):
     return {"ok": True, "config": cfg}
 
 
+@app.get("/api/settings")
+def get_settings():
+    """Advanced knobs with resolved value + source (env/settings/default) for the SETTINGS tab.
+    Secrets / provider credentials are NOT exposed here — they stay in .env (Phase 2)."""
+    stored = _read_settings()
+    out = []
+    for key, spec in SETTING_SPECS.items():
+        env_set = os.environ.get(spec["env"]) not in (None, "")
+        source = "env" if env_set else ("settings" if stored.get(key) is not None else "default")
+        out.append({"key": key, "label": spec["label"], "group": spec["group"],
+                    "value": _knob(key), "default": spec["default"],
+                    "source": source, "env_locked": env_set, "env": spec["env"]})
+    return {"settings": out,
+            "note": "Advanced analysis knobs, applied at request time (no restart). ENV vars still "
+                    "win over these. API keys / provider credentials are managed in .env, not here."}
+
+
+@app.post("/api/settings")
+async def post_settings(req: Request):
+    """Set advanced knobs (local settings.json). ENV-set knobs are ignored (env wins) and
+    reported as env_locked. Blank clears back to default. Config only — no money action."""
+    body = await req.json()
+    stored = _read_settings()
+    applied, ignored = [], []
+    for key, val in (body or {}).items():
+        if key not in SETTING_SPECS:
+            continue
+        if os.environ.get(SETTING_SPECS[key]["env"]) not in (None, ""):
+            ignored.append(key)   # env override wins — don't shadow it
+            continue
+        if val in (None, ""):
+            stored.pop(key, None)
+            applied.append(key)
+        else:
+            try:
+                stored[key] = SETTING_SPECS[key]["cast"](val)
+                applied.append(key)
+            except (TypeError, ValueError):
+                continue
+    os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stored, f, indent=2)
+    return {"ok": True, "applied": applied, "ignored_env_locked": ignored, "settings": stored}
+
+
 def _dividend_drip_split():
     """Per-account annual dividend income (value x research yield) split into reinvested
     (DRIP-on accounts, compounding, not spendable now) vs cash (DRIP-off, spendable), and
@@ -2173,10 +2258,26 @@ def _screen_one(sym, crit):
     chk("fcf_margin", fcf_m is not None and fcf_m >= crit.get("min_fcf_margin_pct", 0), fcf_m)
     chk("valuation", pe_fwd is not None and pe_fwd <= crit.get("max_pe_forward", 1e12), pe_fwd)
     chk("analyst", buy_pct is not None and buy_pct >= crit.get("min_analyst_buy_pct", 0), buy_pct)
+    # Forward expected return = analyst-target-implied 12mo upside (same sane bound as the
+    # portfolio signals). NOT a promise — analyst targets are noisy and mean-reverting.
+    tgt = g.get("target_mean")
+    exp_ret = None
+    if tgt and price and price > 0:
+        ir = (tgt - price) / price * 100.0
+        if -90 < ir < 300:
+            exp_ret = round(ir, 1)
+    fit_score = sum(1 for c in checks if c["pass"])
+    max_score = len(checks)
+    fit_frac = (fit_score / max_score) if max_score else 0.0
+    # Composite ranking signal: forward upside WEIGHTED by quality fit, so a high-upside
+    # low-quality name doesn't outrank a high-quality one. Heuristic, per-dollar (a % return),
+    # explicitly NOT influenced by share price. Educational only.
+    opp_score = round((exp_ret or 0.0) * fit_frac, 1)
     return {"ticker": sym, "available": bool(fund.get("available")), "price": price,
             "rev_growth_pct": rev_g, "fcf_margin_pct": fcf_m, "net_margin_pct": r.get("net_margin_pct"),
             "pe_forward": pe_fwd, "analyst_rating": g.get("rating"), "analyst_buy_pct": buy_pct,
-            "fit_score": sum(1 for c in checks if c["pass"]), "max_score": len(checks), "checks": checks}
+            "target_mean": tgt, "expected_return_pct": exp_ret, "opportunity_score": opp_score,
+            "fit_score": fit_score, "max_score": max_score, "checks": checks}
 
 
 def _opportunities():
@@ -2200,7 +2301,12 @@ def _opportunities():
             ideas.append({**_screen_one(t, crit), "already_held": t in held})
         except Exception as e:
             ideas.append({"ticker": t, "available": False, "error": str(e)})
-    ideas.sort(key=lambda x: (-(x.get("fit_score") or 0), -((x.get("rev_growth_pct") or -1e9))))
+    # Rank by the quality-weighted forward return (opportunity_score), then raw fit, then
+    # expected return — replaces the old "fit then revenue-growth" order so the best
+    # expected return PER DOLLAR (never per share) floats up. Fit gate still applies below.
+    ideas.sort(key=lambda x: (-(x.get("opportunity_score") if x.get("opportunity_score") is not None else -1e9),
+                              -(x.get("fit_score") or 0),
+                              -(x.get("expected_return_pct") if x.get("expected_return_pct") is not None else -1e9)))
     # Curate: enforce the price cap as a HARD filter, keep only good fits, cap the count.
     maxp, minp = crit.get("max_share_price"), crit.get("min_share_price")
 
@@ -2220,7 +2326,10 @@ def _opportunities():
             "discovery_queries": cfg.get("discovery_queries") or [], "alert_holdings_limit": cfg.get("alert_holdings_limit"),
             "screened": screened, "count": len(ideas), "min_fit": OPP_MIN_FIT, "ideas": ideas,
             "note": f"Top {len(ideas)} of {screened} screened — only names scoring >= {OPP_MIN_FIT}/4 within your "
-                    "price cap. Research ideas, NOT advice; ask the Fiduciary to deep-dive any name."}
+                    "price cap. Ranked by 'opportunity_score' = analyst-target-implied forward return WEIGHTED "
+                    "by quality fit (a per-DOLLAR % return, never per share; a wild target on a low-quality name "
+                    "won't top a solid one). Analyst targets are noisy and mean-reverting — research ideas, NOT "
+                    "advice; ask the Fiduciary to deep-dive any name."}
 
 
 _opp_lock = threading.Lock()
@@ -2313,12 +2422,12 @@ def _tax_audit():
         drip_on = _account_flags(name, accts_cfg)["drip"]
         for h in acct.get("holdings", []):
             tkr, val, gain = h.get("ticker"), h.get("value") or 0, h.get("gain")
-            if gain is not None and gain <= -TLH_MIN_LOSS:
+            if gain is not None and gain <= -_knob("tlh_min_loss"):
                 harvest.append({"ticker": tkr, "account": name, "value": round(val, 2),
                                 "cost": h.get("cost_total"), "loss": round(gain, 2),
                                 "loss_pct": h.get("gain_pct")})
             yld = ((briefs.get(tkr) or {}).get("valuation") or {}).get("dividend_yield_pct")
-            if yld is not None and yld >= LOC_MIN_YIELD and val > 0:
+            if yld is not None and yld >= _knob("loc_min_yield") and val > 0:
                 est = round(val * yld / 100, 2)
                 location.append({"ticker": tkr, "account": name, "value": round(val, 2),
                                  "dividend_yield_pct": round(yld, 2), "est_annual_income": est,
@@ -2514,9 +2623,9 @@ def _fee_liquidity():
         ddv = round(avgvol_m * 1e6 * price) if (avgvol_m and price) else None    # avg daily $ volume
         days = round(val / (ddv * LIQ_PARTICIPATION), 1) if ddv else None        # days to exit
         flags = []
-        if ddv is not None and ddv < LIQ_MIN_DDV:
+        if ddv is not None and ddv < _knob("liq_min_ddv"):
             flags.append("thin volume")
-        if mcap is not None and mcap < MICROCAP_MUSD:
+        if mcap is not None and mcap < _knob("microcap_musd"):
             flags.append("micro-cap")
         if avgvol_m is None or price is None:
             flags.append("no market data (foreign/OTC?)")
@@ -2541,7 +2650,7 @@ def _fee_liquidity():
         fee_rows.append({"ticker": t2, "name": c.get("name"), "type": c.get("type"),
                          "value": round(v2, 2), "expense_ratio_pct": er,
                          "annual_fee": round(v2 * er / 100, 2) if er is not None else None,
-                         "high": bool(er is not None and er >= FEE_HIGH_PCT)})
+                         "high": bool(er is not None and er >= _knob("fee_high_pct"))})
     fee_rows.sort(key=lambda x: -((x.get("annual_fee") or 0)))
     fees_block = {
         "available": bool(fee_rows),
@@ -2556,8 +2665,8 @@ def _fee_liquidity():
 
     return {"generated_at": int(time.time()),
             "liquidity": {"flagged": rows, "count": len(rows),
-                          "thresholds": {"min_daily_dollar_volume": LIQ_MIN_DDV,
-                                         "microcap_market_cap_musd": MICROCAP_MUSD,
+                          "thresholds": {"min_daily_dollar_volume": _knob("liq_min_ddv"),
+                                         "microcap_market_cap_musd": _knob("microcap_musd"),
                                          "participation_rate": LIQ_PARTICIPATION},
                           "note": "Thinly-traded / micro-cap / slow-to-exit holdings. 'days to exit' assumes "
                                   "trading at most %d%% of average daily volume. Volume & market cap are from "

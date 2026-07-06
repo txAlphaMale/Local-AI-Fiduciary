@@ -42,6 +42,7 @@ fees_liquidity.json
 scanner.json
 retirement.json
 accounts.json
+settings.json
 chat.db
 
 # ---- Local backups / scratch ----
