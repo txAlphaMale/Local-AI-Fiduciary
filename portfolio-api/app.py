@@ -30,6 +30,24 @@ import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat t
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
 
+# ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
+# Merge the gitignored secrets.json into the process env BEFORE the config constants
+# below read os.environ, so UI-managed secrets take effect on (re)start. REAL env vars
+# (from .env / compose) always WIN — we only fill gaps, never override. Only portfolio-api's
+# OWN secrets are managed here; cross-container secrets (Monarch/Tavily used by the mcpo
+# container) can't be injected from here and stay in .env.
+SECRETS_FILE = os.environ.get("SECRETS_FILE", "/data/secrets.json")
+# Keys present in the REAL environment at boot (from .env / compose). Used so the UI can
+# honestly mark those "env-locked" — env wins and the UI must not pretend to override it.
+_ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
+try:
+    with open(SECRETS_FILE, encoding="utf-8") as _sf:
+        for _k, _v in (json.load(_sf) or {}).items():
+            if _v not in (None, "") and not os.environ.get(_k):
+                os.environ[_k] = str(_v)
+except Exception:
+    pass
+
 MCPO = os.environ.get("MCPO_BASE_URL", "http://mcpo:8000").rstrip("/")
 ROUTE = os.environ.get("MONARCH_ROUTE", "monarch")
 KEY = os.environ.get("MCPO_API_KEY", "")
@@ -2210,6 +2228,82 @@ async def post_settings(req: Request):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(stored, f, indent=2)
     return {"ok": True, "applied": applied, "ignored_env_locked": ignored, "settings": stored}
+
+
+# ---- Secrets editor (N6 Phase 2): write-only, masked. Values are NEVER returned. ----
+# scope "app"  = portfolio-api reads it directly -> editable here, applies on RESTART.
+# scope "mcpo" = used by the mcpo container -> NOT editable here (set in .env + restart mcpo).
+SECRET_SPECS = [
+    {"key": "FINNHUB_API_KEY",       "label": "Finnhub API key",                 "group": "Market data",            "scope": "app"},
+    {"key": "SEC_USER_AGENT",        "label": "SEC EDGAR User-Agent (your email)", "group": "Market data",          "scope": "app"},
+    {"key": "ANALYSIS_TOKEN",        "label": "Analysis token (guards /api/run-*)", "group": "Internal",            "scope": "app"},
+    {"key": "SNAPTRADE_CLIENT_ID",   "label": "SnapTrade client ID",             "group": "Portfolio (SnapTrade)",  "scope": "app"},
+    {"key": "SNAPTRADE_CONSUMER_KEY","label": "SnapTrade consumer key",          "group": "Portfolio (SnapTrade)",  "scope": "app"},
+    {"key": "SNAPTRADE_USER_ID",     "label": "SnapTrade user ID",               "group": "Portfolio (SnapTrade)",  "scope": "app"},
+    {"key": "SNAPTRADE_USER_SECRET", "label": "SnapTrade user secret",           "group": "Portfolio (SnapTrade)",  "scope": "app"},
+    {"key": "MONARCH_EMAIL",         "label": "Monarch email",                   "group": "Portfolio (Monarch)",    "scope": "mcpo"},
+    {"key": "MONARCH_PASSWORD",      "label": "Monarch password",                "group": "Portfolio (Monarch)",    "scope": "mcpo"},
+    {"key": "MONARCH_MFA_SECRET",    "label": "Monarch MFA / TOTP secret",       "group": "Portfolio (Monarch)",    "scope": "mcpo"},
+    {"key": "TAVILY_API_KEY",        "label": "Tavily API key (news)",           "group": "Market data",            "scope": "mcpo"},
+    {"key": "MCPO_API_KEY",          "label": "mcpo API key",                    "group": "Internal",               "scope": "mcpo"},
+]
+
+
+def _read_secrets():
+    try:
+        with open(SECRETS_FILE, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+@app.get("/api/secrets")
+def get_secrets():
+    """Status ONLY — never returns secret VALUES. Per secret: whether it's set and from where
+    (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable here."""
+    stored = _read_secrets()
+    out = []
+    for spec in SECRET_SPECS:
+        k = spec["key"]
+        env_locked = k in _ENV_SECRETS_AT_BOOT
+        in_file = bool(stored.get(k))
+        source = "env" if env_locked else ("saved" if in_file else "unset")
+        out.append({"key": k, "label": spec["label"], "group": spec["group"], "scope": spec["scope"],
+                    "set": bool(env_locked or in_file), "source": source, "env_locked": env_locked,
+                    "editable": (spec["scope"] == "app") and not env_locked})
+    return {"secrets": out,
+            "note": "Write-only — values are never shown. 'app' secrets you set here save to a gitignored "
+                    "secrets.json and apply on the NEXT RESTART (real .env vars always win). 'mcpo' secrets "
+                    "(Monarch / Tavily / mcpo key) are used by the mcpo container and can't be applied from "
+                    "here — set those in .env and restart."}
+
+
+@app.post("/api/secrets")
+async def post_secrets(req: Request):
+    """Set portfolio-api 'app' secrets (write-only -> gitignored secrets.json, 0600). Ignores
+    env-locked and 'mcpo'-scope keys. Blank clears. Applies on next restart. Values never echoed."""
+    body = await req.json()
+    stored = _read_secrets()
+    by_key = {s["key"]: s for s in SECRET_SPECS}
+    saved, ignored = [], []
+    for k, v in (body or {}).items():
+        spec = by_key.get(k)
+        if not spec or spec["scope"] != "app" or k in _ENV_SECRETS_AT_BOOT:
+            ignored.append(k)
+            continue
+        if v in (None, ""):
+            stored.pop(k, None)
+        else:
+            stored[k] = str(v)
+        saved.append(k)
+    os.makedirs(os.path.dirname(SECRETS_FILE) or ".", exist_ok=True)
+    with open(SECRETS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stored, f, indent=2)
+    try:
+        os.chmod(SECRETS_FILE, 0o600)
+    except Exception:
+        pass
+    return {"ok": True, "saved": saved, "ignored": ignored, "restart_required": bool(saved)}
 
 
 def _dividend_drip_split():

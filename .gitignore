@@ -43,6 +43,7 @@ scanner.json
 retirement.json
 accounts.json
 settings.json
+secrets.json
 chat.db
 
 # ---- Local backups / scratch ----
