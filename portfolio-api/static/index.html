@@ -110,7 +110,35 @@ const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=
 
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
-function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; render(); }
+// Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
+let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
+function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
+// Render a 2nd-row sub-tab bar for `panel` and ONLY the active section's node.
+// sections: [{key,label,build:()=>Node}] (falsy entries are ignored). Lazy build =
+// unselected sections aren't constructed (cheaper + the hook for per-section refresh).
+function panelSubtabs(panel, sections){
+  const wrap=el('div');
+  const avail=(sections||[]).filter(Boolean);
+  if(!avail.length) return wrap;
+  let active=SUBTAB[panel];
+  if(!avail.some(s=>s.key===active)) active=avail[0].key;
+  const bar=el('div'); bar.style.cssText='display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 13px;';
+  avail.forEach((s,i)=>{
+    if(i){ const sep=el('span',null,'·'); sep.style.cssText='color:var(--bd2);opacity:0.6;font-size:11px;user-select:none;'; bar.appendChild(sep); }
+    const on=s.key===active;
+    const t=el('span',null,s.label);
+    t.style.cssText='cursor:pointer;letter-spacing:1px;font-size:10px;padding:3px 9px;border-radius:3px;'+
+      (on?'background:rgba(230,180,80,0.13);color:var(--amber);':'color:var(--mut);');
+    t.onclick=()=>setSubtab(panel,s.key);
+    bar.appendChild(t);
+  });
+  wrap.appendChild(bar);
+  const sec=avail.find(s=>s.key===active)||avail[0];
+  try{ wrap.appendChild(sec.build()); }
+  catch(e){ const er=el('div','err'); er.textContent='section error: '+e; wrap.appendChild(er); }
+  return wrap;
+}
+function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; SUBTAB['research']='briefs'; render(); }
 
 // analyst (Finnhub consensus) rating helpers, shared by the positions table + research panel
 const ratingColor = r => r==='Buy'?'var(--grn)':(r==='Sell'?'var(--red)':'var(--amber)');
@@ -230,12 +258,16 @@ function render(){
   const tc=el('div');
   const hrule=()=>{ const s=el('div'); s.style.cssText='border-top:1px solid var(--bd);margin:18px 0 4px;'; return s; };
   if(TAB==='research'){
-    if(haveAnalysis) tc.appendChild(analysisContent(ANALYSIS));
-    if(haveIdeas){ if(haveAnalysis) tc.appendChild(hrule()); tc.appendChild(ideasContent(IDEAS)); }
+    tc.appendChild(panelSubtabs('research',[
+      haveAnalysis && {key:'briefs',label:'B/S/H BRIEFS',build:()=>analysisContent(ANALYSIS)},
+      haveIdeas && {key:'ideas',label:'IDEAS · SCAN',build:()=>ideasContent(IDEAS)},
+    ]));
   } else if(TAB==='audits'){
-    tc.appendChild(accountsEditor());
-    if(haveTax){ tc.appendChild(hrule()); tc.appendChild(taxContent(TAX, TAXAUDIT)); }
-    if(haveFL){ if(haveTax) tc.appendChild(hrule()); tc.appendChild(flContent(FL)); }
+    tc.appendChild(panelSubtabs('audits',[
+      {key:'accounts',label:'ACCOUNTS',build:()=>accountsEditor()},
+      haveTax && {key:'tax',label:'TAX · TLH',build:()=>taxContent(TAX, TAXAUDIT)},
+      haveFL && {key:'fees',label:'FEES · LIQUIDITY',build:()=>flContent(FL)},
+    ]));
   } else if(TAB==='insights' && haveInsights){ tc.appendChild(insightsContent(INSIGHTS)); }
   else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
   else if(TAB==='strategist' && haveStrat){ tc.appendChild(stratContent(STRAT)); }
