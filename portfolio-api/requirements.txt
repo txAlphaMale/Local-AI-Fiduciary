@@ -1,4 +1,5 @@
 fastapi
 uvicorn[standard]
 requests
+pypdf                  # extract text from PDF knowledge docs for the RAG index (N12)
 snaptrade-python-sdk   # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)

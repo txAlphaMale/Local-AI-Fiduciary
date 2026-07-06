@@ -44,6 +44,11 @@ retirement.json
 accounts.json
 settings.json
 secrets.json
+knowledge_index.json
+
+# ---- Knowledge RAG folder — your own reference docs (may be personal, e.g. your IPS) ----
+knowledge/*
+!knowledge/README.md
 chat.db
 
 # ---- Local backups / scratch ----

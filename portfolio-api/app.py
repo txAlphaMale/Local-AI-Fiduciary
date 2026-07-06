@@ -29,6 +29,7 @@ import edgar   # SEC EDGAR / GAAP fundamentals
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
+import knowledge  # local user-populated RAG over a knowledge folder (N12) — search_knowledge tool
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -898,6 +899,26 @@ def get_research(ticker: str):
                 "valuation": val, "fundamentals": fund, "llm": llm}
     except Exception as e:
         return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
+
+
+@app.get("/api/knowledge")
+def get_knowledge():
+    """Status of the user-populated Knowledge folder + its RAG index (no vectors/text)."""
+    try:
+        return knowledge.status()
+    except Exception as e:
+        return JSONResponse({"error": f"knowledge status failed: {e}"}, status_code=500)
+
+
+@app.post("/api/knowledge/reindex")
+def post_knowledge_reindex():
+    """Force a rebuild of the knowledge vector index (embeds new/changed docs via Ollama bge-m3).
+    Slow if you just added large PDFs. Read-only w.r.t. your data."""
+    try:
+        knowledge.ensure_index(force=True)
+        return knowledge.status()
+    except Exception as e:
+        return JSONResponse({"error": f"reindex failed: {e}"}, status_code=500)
 
 
 def _read_analysis():
@@ -4122,7 +4143,8 @@ FIDUCIARY_PROMPT = (
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
     "get_social_security, get_fees_liquidity, get_lookthrough (fund holdings), get_scorecard, "
     "get_opportunities and get_discovery (ideas), get_fundamentals / get_valuation / get_research for a "
-    "specific ticker, and web_search for current news or context.\n"
+    "specific ticker, search_knowledge for tax rules / IRA-Roth mechanics / investing-policy guidance from "
+    "Jason's local reference library (cite the source doc), and web_search for current news or context.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
     "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
     "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
@@ -4194,6 +4216,16 @@ FIDUCIARY_TOOLS = [
         "description": "The latest daily Buy/Sell/Hold research brief for a ticker, if one exists.",
         "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}},
                        "required": ["ticker"]}}},
+    {"type": "function", "function": {"name": "search_knowledge",
+        "description": "Search the user's local Knowledge library (their Investment Policy Statement + curated "
+                       "IRS/SEC/Vanguard tax & investing reference docs) for relevant passages. Use this for "
+                       "tax rules, IRA/Roth mechanics, and investing-principle / policy guidance. Returns the "
+                       "top passages with their source document — cite the source and verify against current "
+                       "official guidance.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "k": {"type": "number", "description": "How many passages to return (default 4)."}},
+            "required": ["query"]}}},
     {"type": "function", "function": {"name": "web_search",
         "description": "Search recent web/news via Tavily for current context on a company, sector or topic.",
         "parameters": {"type": "object", "properties": {
@@ -4240,6 +4272,8 @@ def _fiduciary_dispatch(name, args):
         if name == "get_research":
             t = str(args.get("ticker") or "").upper()
             return (_read_analysis().get("briefs") or {}).get(t) or {"note": f"no brief for {t}"}
+        if name == "search_knowledge":
+            return knowledge.search(str(args.get("query") or ""), k=int(args.get("k") or 4))
         if name == "web_search":
             return {"results": _tavily_results(str(args.get("query") or ""),
                                                days=int(args.get("days") or 14),

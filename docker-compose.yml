@@ -78,8 +78,12 @@ services:
       - SEC_USER_AGENT=${SEC_USER_AGENT}
       - EDGAR_TTL=86400
       - PORTFOLIO_PROVIDER=${PORTFOLIO_PROVIDER:-csv}
+      # Knowledge RAG (N12): drop .md/.txt/.pdf into ./knowledge on the host → indexed via bge-m3.
+      - KNOWLEDGE_DIR=/knowledge
+      - EMBED_MODEL=${EMBED_MODEL:-bge-m3}
     volumes:
       - portfolio-data:/data
+      - ./knowledge:/knowledge:ro   # user-populated Knowledge folder (host-editable; container reads)
     ports:
       - "${DASH_PORT:-8097}:8097"
 
