@@ -124,6 +124,7 @@ SETTING_SPECS = {
     "fee_high_pct":  {"env": "FEE_HIGH_PCT",  "default": 0.40,    "cast": float, "label": "High expense ratio at/above (%)", "group": "Fees / Liquidity"},
     "tlh_min_loss":  {"env": "TLH_MIN_LOSS",  "default": 50,      "cast": float, "label": "Ignore TLH losses below ($)", "group": "Tax audit"},
     "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
+    "strategist_search_budget": {"env": "STRATEGIST_SEARCH_BUDGET", "default": 20, "cast": int, "label": "Strategist web-search calls per autonomous run", "group": "Strategist"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -3783,7 +3784,10 @@ STRATEGIST_PROMPT = (
     "log_report(summary — call this LAST, exactly once).\n"
     "RESEARCH TOOLS: get_opportunities and get_discovery (idea sources); get_fundamentals(ticker) and "
     "get_valuation(ticker); get_research(ticker) (a Buy/Sell/Hold brief); get_holdings (The user's REAL "
-    "portfolio, for context only — never trade it).\n"
+    "portfolio, for context only — never trade it); web_search(query) (LIVE web/news via Tavily — use it "
+    "to surface NEW opportunities beyond get_discovery and to check what's moving a name now). web_search "
+    "is BUDGET-LIMITED per run: spend it on high-value discovery, not on every name, and once it reports "
+    "the budget is spent, decide from what you already have and finish.\n"
     "When you read fundamentals, prefer the `ttm` (trailing-twelve-month) margins over a single annual "
     "figure — a trough or peak fiscal year misleads; check TTM and the multi-year trend before judging.\n"
     "ROUTINE each run: (1) get_paper_portfolio. (2) Research a FEW promising ideas — do NOT deep-dive "
@@ -3844,6 +3848,15 @@ STRATEGIST_TOOLS = [
     {"type": "function", "function": {"name": "get_holdings",
         "description": "The user's REAL portfolio (net worth + consolidated holdings) — context only.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "web_search",
+        "description": "Live web/news search via Tavily — use it to UNCOVER fresh opportunities (themes, "
+                       "sector catalysts, analyst moves, names not already in get_discovery) and to check "
+                       "what's driving a stock right now. Returns recent article titles/snippets with links.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "days": {"type": "number", "description": "Look-back window in days (default 14)."},
+            "max_results": {"type": "number", "description": "Max articles (default 5)."}},
+            "required": ["query"]}}},
 ]
 
 STRAT_NUM_CTX = int(os.environ.get("STRAT_NUM_CTX", "32768"))         # full context — don't truncate the agent's working memory
@@ -3889,6 +3902,10 @@ def _strategist_dispatch(name, args):
                     "holdings": [{"ticker": c.get("ticker"), "name": c.get("name"),
                                   "weight_pct": c.get("weight_pct"), "gain_pct": c.get("gain_pct")}
                                  for c in top[:25] if c.get("ticker")]}
+        if name == "web_search":
+            return {"results": _tavily_results(str(args.get("query") or ""),
+                                               days=int(args.get("days") or 14),
+                                               max_results=int(args.get("max_results") or 5))}
         return {"error": f"unknown tool {name}"}
     except Exception as e:
         return {"error": f"{name} failed: {e}"}
@@ -3906,6 +3923,12 @@ def _do_strategist(max_iter=20):
              "your summary. Be efficient — don't deep-dive every name."},
         ]
         reported = False
+        # Per-run web-search budget (settings knob, default 20). Caps ONLY this unattended weekly
+        # run so an agentic loop can't spray Tavily calls / crowd the free-tier pool it shares with
+        # the daily pipelines. The interactive chat + on-demand advisory runs are deliberately NOT
+        # capped here (they're user-paced).
+        search_budget = _knob("strategist_search_budget")
+        search_calls = 0
         for i in range(max_iter):
             _strat_state["iterations"] = i + 1
             # Force convergence before we run out of steps: tell it to stop researching and finish.
@@ -3944,7 +3967,16 @@ def _do_strategist(max_iter=20):
                         a = json.loads(a)
                     except Exception:
                         a = {}
-                result = _strategist_dispatch(nm, a)
+                if nm == "web_search":
+                    if search_calls >= search_budget:
+                        result = {"error": f"web-search budget for this run is spent "
+                                           f"({search_budget} calls). Stop searching — decide from the "
+                                           "research you've already gathered and finish your review."}
+                    else:
+                        search_calls += 1
+                        result = _strategist_dispatch(nm, a)
+                else:
+                    result = _strategist_dispatch(nm, a)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
                     reported = True
                 # Trim large tool results by SHRINKING FIELDS, never by chopping the serialized JSON
@@ -4364,10 +4396,14 @@ STRATEGIST_CHAT_PROMPT = (
     "You are the Strategist in conversational ADVISORY mode. You discuss ideas, opportunities and "
     "portfolio moves, but you place NO trades and record nothing — no buy/sell/report tools exist here. "
     "Use get_holdings for The user's REAL positions (context), get_paper_portfolio for the hypothetical "
-    "book, get_opportunities and get_discovery for ideas, and get_fundamentals / get_valuation / "
-    "get_research to dig into a name. Prefer trailing-twelve-month figures; weigh fees and liquidity on "
-    "small orders. Give specific, reasoned takes and acknowledge uncertainty. Hypothetical and "
-    "educational — NOT financial advice."
+    "book, get_opportunities and get_discovery for ideas, get_fundamentals / get_valuation / "
+    "get_research to dig into a name, and web_search(query) for LIVE web/news via Tavily — use it to "
+    "uncover fresh opportunities and to answer 'what's driving this stock right now / why is it up or "
+    "down today' questions. Prefer trailing-twelve-month figures; weigh fees and liquidity on "
+    "small orders. Give specific, reasoned takes and acknowledge uncertainty.\n"
+    "TOOL HONESTY: your capabilities are exactly the tools listed above. If asked to do something no "
+    "tool supports, say so plainly in ONE turn and offer the closest thing you CAN do — do NOT loop or "
+    "deliberate at length about a capability you lack. Hypothetical and educational — NOT financial advice."
 )
 
 PERSONAS = {
