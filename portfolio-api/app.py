@@ -2600,19 +2600,40 @@ def _tax_audit():
                    for a in d.get("accounts", [])}
     accts_cfg = _read_accounts_cfg()
     harvest, location = [], []
+    # Dividend INCOME accrues in EVERY account (a dividend paid inside an IRA/401k is still
+    # income — it compounds — it just isn't taxed *now*), so the income estimate must span ALL
+    # tax statuses. The TLH + asset-location audits below stay TAXABLE-only, because that's the
+    # only place the distributions are actually taxed / worth relocating. Previously this loop
+    # `continue`d on every non-taxable account, so the "income" number silently dropped every
+    # dividend held in tax-deferred/Roth space and read far too low.
+    income_by_status = {"taxable": 0.0, "deferred": 0.0, "roth": 0.0, "hsa": 0.0}
+    income_by_ticker = {}
     for acct in d.get("by_account", []):
         name = acct.get("account")
         status = acct_status.get(name) or _account_tax_status(name, "Investments")
-        if status != "taxable":
-            continue
         drip_on = _account_flags(name, accts_cfg)["drip"]
+        is_taxable = (status == "taxable")
         for h in acct.get("holdings", []):
             tkr, val, gain = h.get("ticker"), h.get("value") or 0, h.get("gain")
+            yld = ((briefs.get(tkr) or {}).get("valuation") or {}).get("dividend_yield_pct")
+            # --- all-accounts dividend income (the un-skewed estimate) ---
+            if yld is not None and yld > 0 and val > 0:
+                est_all = val * yld / 100.0
+                if status in income_by_status:
+                    income_by_status[status] += est_all
+                row = income_by_ticker.setdefault(
+                    tkr, {"ticker": tkr, "value": 0.0, "est_annual_income": 0.0,
+                          "dividend_yield_pct": round(yld, 2), "accounts": set()})
+                row["value"] += val
+                row["est_annual_income"] += est_all
+                row["accounts"].add(name)
+            # --- TLH + asset-location remain TAXABLE-only (tax-exposure lens) ---
+            if not is_taxable:
+                continue
             if gain is not None and gain <= -_knob("tlh_min_loss"):
                 harvest.append({"ticker": tkr, "account": name, "value": round(val, 2),
                                 "cost": h.get("cost_total"), "loss": round(gain, 2),
                                 "loss_pct": h.get("gain_pct")})
-            yld = ((briefs.get(tkr) or {}).get("valuation") or {}).get("dividend_yield_pct")
             if yld is not None and yld >= _knob("loc_min_yield") and val > 0:
                 est = round(val * yld / 100, 2)
                 location.append({"ticker": tkr, "account": name, "value": round(val, 2),
@@ -2621,6 +2642,18 @@ def _tax_audit():
                                  "est_annual_taxable_reinvestment": est if drip_on else 0.0})
     harvest.sort(key=lambda x: x["loss"])                       # most negative first
     location.sort(key=lambda x: -(x.get("est_annual_income") or 0))
+    # consolidate the all-accounts dividend-income view: one row per ticker, summed across
+    # every account it's held in (this is the "combine holdings across accounts" the audit lacked)
+    income_rows = []
+    for r in income_by_ticker.values():
+        income_rows.append({"ticker": r["ticker"], "value": round(r["value"], 2),
+                            "dividend_yield_pct": r["dividend_yield_pct"],
+                            "est_annual_income": round(r["est_annual_income"], 2),
+                            "accounts": sorted(a for a in r["accounts"] if a),
+                            "account_count": len(r["accounts"])})
+    income_rows.sort(key=lambda x: -(x["est_annual_income"] or 0))
+    income_by_status = {k: round(v, 2) for k, v in income_by_status.items()}
+    income_total = round(sum(income_by_status.values()), 2)
     return {
         "generated_at": int(time.time()),
         "accounts": {n: s for n, s in acct_status.items() if s != "na"},
@@ -2632,6 +2665,22 @@ def _tax_audit():
                     "substantially identical security within 30 days before/after the sale or the loss is "
                     "disallowed — use a similar-but-not-identical replacement. Educational, not tax advice; "
                     "confirm tax lots & holding periods with your brokerage/CPA."},
+        "dividend_income": {
+            "est_annual_income_all_accounts": income_total,
+            "by_tax_status": income_by_status,
+            "taxable": income_by_status["taxable"],
+            "tax_advantaged": round(income_by_status["deferred"] + income_by_status["roth"]
+                                    + income_by_status["hsa"], 2),
+            "by_ticker": income_rows, "count": len(income_rows),
+            "note": "Estimated ANNUAL dividend income across ALL accounts (taxable + IRA/401k + Roth + "
+                    "HSA), consolidated to one row per ticker. A dividend paid inside a tax-advantaged "
+                    "account is still income — it compounds — it simply isn't taxed now, so it belongs "
+                    "in your income estimate even though it's correctly excluded from the taxable-"
+                    "distribution / asset-location audit below. Only payers with a daily research brief "
+                    "carrying a yield are scored; names without one (or where the data feed returns no "
+                    "yield — common for some mREITs/BDCs/foreign listings) read $0 and are not counted. "
+                    "Educational, not advice.",
+        },
         "asset_location": {
             "misplaced": location, "count": len(location),
             "est_annual_income_in_taxable": round(sum(x.get("est_annual_income") or 0 for x in location), 2),

@@ -1485,10 +1485,29 @@ function taxContent(bracket, audit){
       wrap.appendChild(tb);
     } else { wrap.appendChild(el('div','muted','No harvestable losses in taxable accounts.')); }
     const n1=el('div','muted'); n1.style.cssText='font-size:10px;line-height:1.45;margin:8px 0 18px;'; n1.textContent=tlh.note||''; wrap.appendChild(n1);
-    wrap.appendChild(el('div','ph','ASSET LOCATION · INCOME ASSETS IN TAXABLE'));
+    wrap.appendChild(el('div','ph','DIVIDEND INCOME · ALL ACCOUNTS + TAXABLE LOCATION'));
+    // --- all-accounts dividend income (spans taxable + tax-deferred + roth + hsa) ---
+    const inc=a.dividend_income||{};
+    if(inc.est_annual_income_all_accounts!=null){
+      const incLine=el('div'); incLine.style.cssText='font-size:12px;margin-bottom:3px;';
+      incLine.innerHTML=`Est. dividend income <span style="color:var(--grn)">~${usd(inc.est_annual_income_all_accounts)}/yr</span> <span class="muted">across all accounts (${inc.count} payer${inc.count===1?'':'s'})</span>`;
+      wrap.appendChild(incLine);
+      const bs=inc.by_tax_status||{};
+      const chip=el('div','muted'); chip.style.cssText='font-size:10px;margin-bottom:7px;';
+      chip.innerHTML=`taxable ${usd(bs.taxable||0)} <span style="opacity:.5">·</span> tax-deferred ${usd(bs.deferred||0)} <span style="opacity:.5">·</span> roth ${usd(bs.roth||0)}`+((bs.hsa)?` <span style="opacity:.5">·</span> hsa ${usd(bs.hsa)}`:'');
+      wrap.appendChild(chip);
+      if(inc.by_ticker && inc.by_ticker.length){
+        const tbi=el('table'); const hri=el('tr'); hri.innerHTML='<th class="l">SYM</th><th>VALUE</th><th>YIELD</th><th>EST INCOME/YR</th><th>ACCTS</th>'; tbi.appendChild(hri);
+        inc.by_ticker.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td>${usd(c.value)}</td><td style="color:var(--amber)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td><td title="${(c.accounts||[]).join(', ').replace(/"/g,'')}">${c.account_count}</td>`; tbi.appendChild(tr); });
+        wrap.appendChild(tbi);
+      }
+      const ni=el('div','muted'); ni.style.cssText='font-size:10px;line-height:1.45;margin:8px 0 14px;'; ni.textContent=inc.note||''; wrap.appendChild(ni);
+    }
+    // --- taxable-only relocation audit (which of the above sits in taxable & is worth sheltering) ---
+    const relHead=el('div','ph','↳ TAXABLE-ONLY · RELOCATION CANDIDATES'); relHead.style.cssText+='border:none;padding:0;margin:6px 0 6px;font-size:11px;'; wrap.appendChild(relHead);
     if(loc.misplaced && loc.misplaced.length){
       const tot2=el('div'); tot2.style.cssText='font-size:11px;margin-bottom:6px;';
-      tot2.innerHTML=`<span class="muted">~</span>${usd(loc.est_annual_income_in_taxable)}<span class="muted">/yr of taxable distributions across ${loc.count} holding(s)</span>`;
+      tot2.innerHTML=`<span class="muted">~</span>${usd(loc.est_annual_income_in_taxable)}<span class="muted">/yr of that income is taxable distributions across ${loc.count} high-yield holding(s) — sheltering these in an IRA/401k stops the yearly tax:</span>`;
       wrap.appendChild(tot2);
       const tb2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>YIELD</th><th>EST INCOME/YR</th>'; tb2.appendChild(hr2);
       loc.misplaced.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td style="color:var(--amber)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td>`; tb2.appendChild(tr); });
