@@ -1116,6 +1116,8 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
                 f"recent news: {'PRESENT' if have_news else 'NONE'} "
                 f"({inputs_present} of 4 input sources available)")
     prompt = (
+        f"Today is {datetime.date.today().isoformat()}; treat news, prices and TTM figures as of that date "
+        "and do not assume an earlier year.\n"
         "You are a research analyst. Using ONLY the data provided below, return a JSON object with keys: "
         "rating (one of Buy, Hold, Sell), confidence (low, med, high), thesis, bull_case, bear_case, key_risks. "
         "This is informational only and NOT financial advice.\n"
@@ -3742,6 +3744,31 @@ def paper_run():
 
 
 # ---------------------------------------------------------------------------
+# Date grounding — prepended to EVERY LLM persona/analysis system prompt.
+# The local models' training data predates "today" (left to themselves they
+# guess ~early 2025), so without an explicit current date they misresolve
+# "this year", the current tax year / standard deduction / brackets, TTM
+# windows, "recent" news, etc. The OWUI-era personas carried a
+# `TODAY IS {{CURRENT_DATE}}` line; the in-app rewrite dropped it — this is the
+# single chokepoint that restores it for the chat (Fiduciary + Strategist),
+# the paper-trading run, the advisory run, and the research briefs.
+# ---------------------------------------------------------------------------
+def _today_line():
+    t = datetime.date.today()
+    human = t.strftime("%A, %B ") + str(t.day) + ", " + str(t.year)
+    return (f"TODAY IS {t.isoformat()} ({human}). Resolve all relative dates (\"this year\", "
+            "\"this quarter\", \"YTD\", \"last week\", and the \"current\" tax year / standard "
+            "deduction / tax brackets) against it. Your training data predates today, so DISTRUST "
+            "any date, tax-year, or \"current\" figure you recall — trust this date and your tools, "
+            "and use web_search when a value may have changed since your training.")
+
+
+def _sys(prompt):
+    """System prompt with the current date grounded in front of it."""
+    return _today_line() + "\n\n" + prompt
+
+
+# ---------------------------------------------------------------------------
 # STRATEGIST — server-side autonomous tool loop (replaces the OWUI/n8n path).
 # Drives Ollama /api/chat directly; every tool is an in-process function, so
 # the loop runs to completion under OUR iteration cap (no OWUI pass-through,
@@ -3873,7 +3900,7 @@ def _do_strategist(max_iter=20):
     try:
         _strat_state.update(status="running", iterations=0, started=int(time.time()), finished=0)
         messages = [
-            {"role": "system", "content": STRATEGIST_PROMPT},
+            {"role": "system", "content": _sys(STRATEGIST_PROMPT)},
             {"role": "user", "content": "Perform your weekly review now: call get_paper_portfolio, research "
              "a few opportunities, make any buy/sell trades you judge worthwhile, then call log_report with "
              "your summary. Be efficient — don't deep-dive every name."},
@@ -4020,7 +4047,7 @@ def _do_advice(amount, question, max_iter=None):
         _advice_state.update(status="running", iterations=0, started=int(time.time()), finished=0,
                              amount=amt, question=question or None, advice="")
         messages = [
-            {"role": "system", "content": STRATEGIST_ADVICE_PROMPT},
+            {"role": "system", "content": _sys(STRATEGIST_ADVICE_PROMPT)},
             {"role": "user", "content": ask},
         ]
         for i in range(max_iter):
@@ -4394,7 +4421,7 @@ def _chat_stream(persona_key, session_id, user_msg):
         yield _sse("session", {"session_id": session_id, "persona": persona_key})
 
         history = _chat_messages(session_id)[-CHAT_MAX_HISTORY:]
-        messages = [{"role": "system", "content": persona["prompt"]}]
+        messages = [{"role": "system", "content": _sys(persona["prompt"])}]
         for m in history:
             if m["role"] in ("user", "assistant"):
                 messages.append({"role": m["role"], "content": m["content"] or ""})
