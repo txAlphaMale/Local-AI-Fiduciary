@@ -799,6 +799,60 @@ def get_scorecard():
     return _scorecard()
 
 
+# --- Calibration memory (N13 candidate 2): feed the model its OWN scored track record into the brief
+#     prompt so it self-calibrates confidence against reality — Reflexion-style self-critique via
+#     CONTEXT, deliberately NOT an extra LLM generation (near-zero cost on Pascal). Cached so a nightly
+#     batch computes the scorecard once, not once per brief. Best-effort: silent, empty on any failure. ---
+CALIB_INJECT = os.environ.get("CALIB_INJECT", "1").lower() in ("1", "true", "yes", "on")
+CALIB_TTL = int(os.environ.get("CALIB_TTL", "3600"))            # recompute the line at most this often (s)
+CALIB_MIN_CALLS = int(os.environ.get("CALIB_MIN_CALLS", "10"))  # don't inject until enough scored calls to matter
+_calib_cache = {"ts": 0.0, "text": ""}
+
+
+def _calibration_line():
+    """A compact one-liner on how the model's OWN past Buy/Hold/Sell calls actually performed, for
+    injection into the brief prompt so it calibrates confidence against its real track record. Returns
+    "" when disabled, empty, too small to be meaningful, or on any error. Cached for CALIB_TTL so the
+    (price-fetching) scorecard runs once per batch, not per brief."""
+    if not CALIB_INJECT:
+        return ""
+    now = time.time()
+    if _calib_cache["ts"] > 0 and (now - _calib_cache["ts"]) < CALIB_TTL:
+        return _calib_cache["text"]                            # fresh (even if ""): don't recompute the scorecard
+    text = ""
+    try:
+        sc = _scorecard()
+        if sc.get("status") == "ready" and (sc.get("scored_calls") or 0) >= CALIB_MIN_CALLS:
+            def fmt(a):
+                return f"{a['avg_fwd_return_pct']:+.1f}% (n={a['n']})" if a else "n/a"
+            bc = sc.get("by_confidence") or {}
+            br = sc.get("by_rating") or {}
+            parts = []
+            conf_bits = [f"{c}: {fmt(bc.get(c))}" for c in ("high", "med", "low") if bc.get(c)]
+            if conf_bits:
+                parts.append("by your stated confidence — " + ", ".join(conf_bits))
+            rate_bits = [f"{r}: {fmt(br.get(r))}" for r in ("Buy", "Hold", "Sell") if br.get(r)]
+            if rate_bits:
+                parts.append("by rating — " + ", ".join(rate_bits))
+            tail = []
+            if sc.get("buy_minus_hold_pct") is not None:
+                tail.append(f"Buy-minus-Hold edge {sc['buy_minus_hold_pct']:+.1f}pts")
+            if sc.get("directional_hit_rate_pct") is not None:
+                tail.append(f"directional hit-rate {sc['directional_hit_rate_pct']:.0f}%")
+            if tail:
+                parts.append("; ".join(tail))
+            if parts:
+                text = ("CALIBRATION — your OWN past calls, forward return measured after "
+                        f">={sc.get('min_age_days')}d over {sc.get('scored_calls')} scored calls (small "
+                        "samples are NOISY — treat as a weak prior, not a rule): " + " | ".join(parts)
+                        + ". If a confidence tier has not actually out-earned the tier below it, be "
+                        "stricter before awarding it here.\n")
+    except Exception:
+        text = ""
+    _calib_cache.update(ts=now, text=text)
+    return text
+
+
 @app.get("/api/securities")
 def securities():
     """Unique securities (with a ticker) for the daily analysis job to research."""
@@ -1106,6 +1160,7 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
                                "metrics": fundamentals.get("metrics"), "ratios": fundamentals.get("ratios"),
                                "scores": fundamentals.get("scores")})
     val_txt = json.dumps(valuation) if valuation else "not available"
+    calib_block = _calibration_line()   # the model's own scored track record (may be ""); calibrates confidence
     # explicit coverage signal so the model rates confidence on what it WAS given, not an assumption of thinness
     n_analysts = (grounded or {}).get("analyst_total") or 0
     have_val = bool(valuation)
@@ -1133,6 +1188,7 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
         "foreign listings), or the signals CONFLICT so sharply that no call is well-supported.\n"
         "Do NOT default to low when the data is actually rich — EARN 'high' when the evidence lines up, 'med' is "
         "the normal case for a well-covered stock with mixed signals. Reserve 'low' for genuinely thin/conflicting data.\n"
+        f"{calib_block}"
         "Analyze fundamentals with a GAAP lens: liquidity (current/quick), profitability (gross/operating/net "
         "margins, ROE/ROA, revenue growth and the multi-year trend), solvency (debt-to-equity/assets, interest "
         "coverage), efficiency (asset turnover), and quality of earnings (operating cash flow and free cash flow "
