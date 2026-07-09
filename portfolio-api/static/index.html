@@ -1256,6 +1256,18 @@ function exposureContent(){
     if(c.flags && c.flags.length){
       c.flags.forEach(fl=>{ const x=el('div'); x.style.cssText='padding:2px 0;font-size:12px;color:var(--amber);'; x.textContent='⚠ '+fl; wrap.appendChild(x); });
     }
+    // look-through concentration: TRUE single-name HHI incl. holdings inside funds (SEC N-PORT)
+    const lc=ex.lookthrough_concentration;
+    if(lc && lc.hhi!=null){
+      const worse=(lc.top_position_pct||0)-(c.top_position_pct||0);
+      const lr=el('div'); lr.style.cssText='font-size:11px;margin:6px 0 2px;color:var(--txt);';
+      lr.innerHTML=`<span style="color:var(--blu)">▸ LOOK-THROUGH (true single-name, incl. inside funds):</span> `+
+        `top ${lc.top_position_pct==null?'—':lc.top_position_pct+'%'} · top-5 ${lc.top5_pct==null?'—':lc.top5_pct+'%'} · `+
+        `eff. holdings ${lc.effective_holdings==null?'—':lc.effective_holdings} `+
+        `<span class="muted">(${lc.funds_resolved||0}/${lc.funds_total||0} funds resolved)</span>`+
+        (worse>=3?` <span style="color:var(--amber)">— ${worse.toFixed(0)}pts higher than the direct view</span>`:'');
+      wrap.appendChild(lr);
+    }
     // sector bars
     if(ex.by_sector && ex.by_sector.length){
       const sh=el('div','ph','SECTOR ALLOCATION'); sh.style.marginTop='12px'; wrap.appendChild(sh);

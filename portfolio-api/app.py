@@ -3181,6 +3181,26 @@ def _exposure():
         conc["flags"].append(f"top-5 {sum(weights[:5]):.0f}% (> 60%)")
     if sectors and (sectors[0]["weight_pct"] or 0) > 35 and sectors[0]["sector"] not in ("Cash",):
         conc["flags"].append(f"{sectors[0]['sector']} {sectors[0]['weight_pct']:.0f}% (> 35%)")
+    # Look-through concentration (R3): reuse the already-computed fund look-through cache to report
+    # TRUE single-name HHI/top-position — which can be materially higher than the direct view when
+    # your funds hold names you also own directly. Additive; the direct `conc` above is unchanged.
+    lt = _read_lt()
+    lt_conc = None
+    if lt and lt.get("true_exposure"):
+        ltw = sorted((r.get("weight_pct") or 0 for r in lt["true_exposure"]), reverse=True)
+        if ltw:
+            lt_hhi = round(sum((w / 100.0) ** 2 for w in ltw), 4)
+            lt_conc = {"top_position_pct": ltw[0], "top5_pct": round(sum(ltw[:5]), 2),
+                       "hhi": lt_hhi, "effective_holdings": round(1 / lt_hhi, 1) if lt_hhi else None,
+                       "funds_resolved": lt.get("funds_resolved"), "funds_total": lt.get("funds_total"),
+                       "as_of": lt.get("generated_at"),
+                       "note": "TRUE single-name concentration INCLUDING holdings inside your funds "
+                               "(SEC N-PORT look-through). Exceeds the direct-view HHI when funds overlap "
+                               "your direct names; computed over the look-through cache (top holdings), so "
+                               "run /api/run-lookthrough to refresh it."}
+            top_d = weights[0] if weights else 0
+            if ltw[0] - top_d >= 3:      # true single-name exposure is materially bigger than it looks
+                conc["flags"].append(f"true top name {ltw[0]:.0f}% via look-through (direct view {top_d:.0f}%)")
     pbeta = round(beta_num / beta_den, 2) if beta_den else None
     stress = [{**s,
                "est_portfolio_pct": round(pbeta * s["market_pct"], 1) if pbeta is not None else None,
@@ -3191,6 +3211,7 @@ def _exposure():
             "portfolio_beta_coverage_pct": round(beta_den / invested * 100, 1) if invested else None,
             "portfolio_beta_cash_diluted": round(beta_num / invested, 2) if invested else None,
             "by_sector": sectors, "concentration": conc,
+            "lookthrough_concentration": lt_conc,
             "stress_test": stress,
             "positions": sorted(positions, key=lambda p: -(p["value"] or 0)),
             "note": "True sector allocation (direct stocks classified via Finnhub; funds NOT yet looked "
