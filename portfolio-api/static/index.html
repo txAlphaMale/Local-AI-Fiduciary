@@ -1196,7 +1196,7 @@ function driftContent(){
   }
   if(r.ips_allocation && r.ips_allocation.length){
     const h=el('div','ph','IPS SLEEVE DRIFT · US / INTL / BOND / CASH'); h.style.marginTop='14px'; wrap.appendChild(h);
-    const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin-bottom:6px;'; sub.textContent='asset-CLASS drift vs your Investment Policy Statement (heuristic classification; funds not yet looked-through by class)'; wrap.appendChild(sub);
+    const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin-bottom:6px;'; sub.textContent='asset-CLASS drift vs your Investment Policy Statement — '+(r.ips_sleeve_source==='lookthrough'?'funds split into equity/bond/cash via SEC N-PORT look-through':'heuristic classification (run look-through to split funds by asset class)'); wrap.appendChild(sub);
     const t=el('table'); const head=el('tr');
     head.innerHTML='<th class="l">SLEEVE</th><th>TARGET</th><th>ACTUAL</th><th>DRIFT</th><th>±$</th>';
     t.appendChild(head);

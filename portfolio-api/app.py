@@ -1447,10 +1447,19 @@ def _rebalance():
 
     # ---- IPS asset-CLASS sleeve drift (the policy the IPS actually defines) ----
     sleeve_targets = policy.get("targets_by_sleeve") or {}
-    sl_val = {}
-    for c in (d.get("consolidated") or []):
-        s = _sleeve(c)
-        sl_val[s] = sl_val.get(s, 0) + (c.get("value") or 0)
+    # Prefer the look-through-refined asset-class split (funds split into equity/bond/cash by N-PORT
+    # assetCat) from the cached look-through; fall back to the whole-fund name heuristic when absent.
+    _lt = _read_lt()
+    _acv = (_lt or {}).get("asset_class_value") if _lt else None
+    if _acv:
+        sl_val = dict(_acv)
+        sleeve_source = "lookthrough"
+    else:
+        sl_val = {}
+        for c in (d.get("consolidated") or []):
+            s = _sleeve(c)
+            sl_val[s] = sl_val.get(s, 0) + (c.get("value") or 0)
+        sleeve_source = "heuristic"
     sl_actual = {s: (round(v / invested * 100, 2) if invested else 0) for s, v in sl_val.items()}
     ips_alloc = []
     for s, tgt in sleeve_targets.items():
@@ -1528,11 +1537,14 @@ def _rebalance():
             f"on a name to let its dividends pool for rebalancing instead.")
 
     out = {"generated_at": int(time.time()), "invested_value": invested, "policy": policy,
-           "allocation": alloc, "ips_allocation": ips_alloc, "concentration": conc, "suggestions": suggestions,
+           "allocation": alloc, "ips_allocation": ips_alloc, "ips_sleeve_source": sleeve_source,
+           "concentration": conc, "suggestions": suggestions,
            "drip_pressure": drip_pressure[:12], "drip_reinvest_annual_total": drip_reinvest_total,
            "note": "Informational rebalancing analysis — SUGGESTIONS ONLY, no orders are placed. "
                    "'ips_allocation' measures drift against your IPS asset-CLASS sleeves (US/Intl/Bond/Cash), "
                    "which is what the IPS actually specifies; 'allocation' is the older by-Monarch-type view. "
+                   "'ips_sleeve_source' = 'lookthrough' when funds are split into equity/bond/cash by SEC "
+                   "N-PORT assetCat (run /api/run-lookthrough to enable), else 'heuristic' (whole-fund by name). "
                    "'drip_pressure' estimates how fast DRIP-on holdings grow their own weight (reinvested "
                    "dividends aren't available to rebalance). Consider tax impact (esp. in taxable accounts) "
                    "and transaction costs before acting; consult a licensed professional for decisions."}
@@ -3291,6 +3303,19 @@ def _norm_name(s):
     return " ".join(toks).strip()
 
 
+def _assetcat_bucket(ac):
+    """Map an SEC N-PORT assetCat code to a coarse sleeve bucket (equity / bond / cash / other).
+    assetCat gives asset CLASS but not country, so US-vs-Intl is left to the fund's name heuristic."""
+    ac = (ac or "").upper().strip()
+    if ac in ("EC", "EP"):
+        return "equity"
+    if ac in ("DBT", "LON", "SN") or ac.startswith("ABS"):
+        return "bond"
+    if ac in ("STIV", "RA"):
+        return "cash"
+    return "other"
+
+
 def _lookthrough():
     """Aggregate TRUE single-name exposure: direct positions PLUS the portfolio's proportional
     share of each fund's underlying holdings (from SEC NPORT-P). Merges fund holdings into direct
@@ -3301,6 +3326,7 @@ def _lookthrough():
     cons = [c for c in d.get("consolidated", []) if c.get("ticker")]
     invested = round(sum(c.get("value") or 0 for c in cons), 2)
     agg = {}   # key -> {ticker,name,direct,fund,sources:set}
+    acv = {}   # asset-class sleeve $ (look-through-refined: funds split by N-PORT assetCat)
     # map normalized direct-holding names -> their ticker, so name-only fund holdings can fold in
     direct_name_to_ticker = {}
     for c in cons:
@@ -3332,6 +3358,8 @@ def _lookthrough():
             except Exception as e:
                 fh = {"resolved": False, "reason": "look-through error: " + str(e)[:80]}
             if fh and fh.get("resolved"):
+                # the fund's equity "home" sleeve (assetCat lacks country) — keeps intl detection
+                equity_home = "Intl Equity" if _sleeve(c) == "Intl Equity" else "US Equity"
                 distributed = 0.0
                 # NPORT pctVal can sum to >100% (cash sweeps / leverage counted on top of equity);
                 # scale down so a fund never distributes more than its own market value.
@@ -3357,21 +3385,30 @@ def _lookthrough():
                         continue
                     add(key, h.get("name"), ktkr, fund=contrib, src=tkr)
                     distributed += contrib
+                    # asset-class sleeve split by N-PORT assetCat (equity → the fund's home sleeve)
+                    _bkt = _assetcat_bucket(h.get("asset_cat"))
+                    _sl = equity_home if _bkt == "equity" else (
+                        "Bond" if _bkt == "bond" else ("Cash" if _bkt == "cash" else "Other"))
+                    acv[_sl] = acv.get(_sl, 0.0) + contrib
                 residual = round(val - distributed, 2)
                 if residual > 1:
                     add("RESID:" + tkr, tkr + " — other holdings", None, fund=residual, src=tkr)
+                    acv[_sleeve(c)] = acv.get(_sleeve(c), 0.0) + residual   # undistributed → fund's heuristic sleeve
                 funds_status.append({"ticker": tkr, "resolved": True, "as_of": fh.get("as_of"),
                                      "count": fh.get("count"),
                                      "ticker_coverage_pct": fh.get("ticker_coverage_pct"),
                                      "distributed_pct": round(distributed / val * 100, 1) if val else None})
             else:
                 add("FUND:" + tkr, tkr + " (not looked through)", tkr, fund=val, src=tkr)
+                acv[_sleeve(c)] = acv.get(_sleeve(c), 0.0) + val   # unresolved fund → heuristic sleeve
                 funds_status.append({"ticker": tkr, "resolved": False,
                                      "reason": (fh or {}).get("reason", "unresolved")})
         elif typ == "Cash":
             add("CASH", "Cash", None, direct=val)
+            acv["Cash"] = acv.get("Cash", 0.0) + val
         else:
             add(tkr, c.get("name") or tkr, tkr, direct=val, src="direct")
+            acv[_sleeve(c)] = acv.get(_sleeve(c), 0.0) + val   # direct holding → its sleeve
 
     rows = []
     for e in agg.values():
@@ -3392,6 +3429,7 @@ def _lookthrough():
     resolved_n = sum(1 for f in funds_status if f.get("resolved"))
     return {"generated_at": int(time.time()), "invested_value": invested,
             "true_exposure": rows[:40], "funds": funds_status,
+            "asset_class_value": {k: round(v, 2) for k, v in acv.items()},
             "funds_resolved": resolved_n, "funds_total": len(funds_status),
             "hidden_exposure": [{"ticker": r["ticker"], "name": r["name"],
                                  "total_value": r["total_value"], "fund_value": r["fund_value"],
