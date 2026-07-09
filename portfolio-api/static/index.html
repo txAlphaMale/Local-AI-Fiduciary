@@ -664,6 +664,13 @@ function researchBrief(d){
   const vb=[]; if(va.pe_forward!=null) vb.push('fwd P/E '+(+va.pe_forward).toFixed(1)); if(va.ps_ttm!=null) vb.push('P/S '+(+va.ps_ttm).toFixed(1)); if(va.dividend_yield_pct!=null) vb.push('yld '+(+va.dividend_yield_pct).toFixed(2)+'%');
   if(gb.length) html+=`<div style="color:var(--blu);font-size:10px;margin-top:4px">▸ GAAP: ${gb.join(' · ')}</div>`;
   if(vb.length) html+=`<div style="color:var(--amber);font-size:10px;margin-top:1px">▸ VAL: ${vb.join(' · ')}</div>`;
+  const ver=m.verification;
+  if(ver&&ver.checked&&ver.grounded_score!=null){
+    const thr=(ver.threshold!=null?ver.threshold:0.6), sc=Math.round(ver.grounded_score*100), low=ver.grounded_score<thr;
+    html+=`<div class="${low?'neg':'pos'}" style="font-size:10px;margin-top:6px">🔍 GROUNDEDNESS ${sc}% <span class="muted">· share of claims supported by the provided data (flagged &lt; ${Math.round(thr*100)}%)</span>`+(ver.assessment?` <span class="muted">· ${dsc(ver.assessment)}</span>`:'')+`</div>`;
+    if(Array.isArray(ver.unsupported_claims)&&ver.unsupported_claims.length) html+=`<div class="neg" style="font-size:10px;margin-top:1px">⚑ UNSUPPORTED: ${dsc(ver.unsupported_claims.join('; '))}</div>`;
+    if(m.confidence_adjusted) html+=`<div class="muted" style="font-size:10px;margin-top:1px">confidence lowered ${dsc(m.confidence_original)}→${dsc(m.confidence)} (weakly grounded in the data)</div>`;
+  }
   html+=`<div class="muted" style="font-size:10px;margin-top:6px">Educational, not advice.</div>`;
   wrap.innerHTML=html; return wrap;
 }
@@ -672,7 +679,7 @@ function researchIdea(t){
   box.innerHTML='';
   box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
   const wait=el('div','muted'); wait.style.cssText='font-size:11px;padding:6px 0;';
-  wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM). Leaving this sub-tab cancels the view but not the run.';
+  wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM), then a second 🔍 groundedness pass fact-checks the brief against that data. Leaving this sub-tab cancels the view but not the run.';
   box.appendChild(wait);
   box.scrollIntoView({behavior:'smooth',block:'nearest'});
   const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), 300000);

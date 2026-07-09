@@ -950,6 +950,7 @@ def get_research(ticker: str):
         fund = edgar.fundamentals(t)
         news = _news(t, t)
         llm = _llm(t, t, None, None, g, news, fund, val)
+        llm = _verify_and_apply(t, t, llm, g, news, fund, val, force=True)   # on-demand → always verify
         return {"ticker": t, "generated_at": int(time.time()), "grounded": g,
                 "valuation": val, "fundamentals": fund, "llm": llm}
     except Exception as e:
@@ -1224,6 +1225,98 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
     return {"error": "non-JSON model response", "raw": (raw or "")[:600]}
 
 
+# --- Brief verifier (N13 candidate 1): a groundedness / LLM-as-judge pass that checks the brief's
+#     claims are supported by the DATA the model was actually given (not by world knowledge), then
+#     downgrades confidence + surfaces unsupported claims — it NEVER rewrites the thesis. This is one
+#     EXTRA generation, so it is gated (BRIEF_VERIFY) to where a human is about to act: on-demand N9
+#     research (force=True) and directional Buy/Sell nightly calls only — never the Hold batch. ---
+BRIEF_VERIFY = os.environ.get("BRIEF_VERIFY", "1").lower() in ("1", "true", "yes", "on")
+BRIEF_VERIFY_THRESHOLD = float(os.environ.get("BRIEF_VERIFY_THRESHOLD", "0.6"))  # below this → downgrade confidence
+_CONF_ORDER = ["low", "med", "high"]
+
+
+def _downgrade_conf(c):
+    try:
+        i = _CONF_ORDER.index((c or "").lower())
+    except ValueError:
+        return c
+    return _CONF_ORDER[max(0, i - 1)]
+
+
+def _verify_brief(sym, name, brief, grounded, news, fundamentals=None, valuation=None):
+    """LLM-as-judge groundedness check: does the brief's rating/thesis/bull/bear/risks follow from the
+    SOURCE DATA provided (not from outside knowledge)? One extra model call. Returns a verification
+    dict; on any failure returns {checked: False, reason} so the caller leaves the brief untouched."""
+    claims = {k: brief.get(k) for k in ("rating", "thesis", "bull_case", "bear_case", "key_risks")
+              if brief.get(k)}
+    if not claims:
+        return {"checked": False, "reason": "no claims to verify"}
+    fund_txt = "not available"
+    if fundamentals and fundamentals.get("available"):
+        fund_txt = json.dumps({"metrics": fundamentals.get("metrics"), "ratios": fundamentals.get("ratios"),
+                               "scores": fundamentals.get("scores")})
+    val_txt = json.dumps(valuation) if valuation else "not available"
+    prompt = (
+        "You are a fiduciary compliance reviewer. Judge ONLY whether the analyst brief below is GROUNDED "
+        "in the SOURCE DATA provided — i.e. each material claim is supported by, or reasonably inferable "
+        "from, that data. Do NOT judge whether the claims are true in the wider world and do NOT use "
+        "outside knowledge: a claim the source data neither states nor implies is UNSUPPORTED even if it "
+        "sounds plausible. A rating is supported when the data broadly points that way; it is unsupported "
+        "when the data is silent or points the other way.\n"
+        "Return ONLY a JSON object with keys: grounded_score (a number 0.0-1.0 = the fraction of the "
+        "brief's material claims that ARE supported by the source data), unsupported_claims (a list of "
+        "short strings, each paraphrasing one claim NOT supported by the data — [] if all are supported), "
+        "assessment (one sentence).\n"
+        f"SOURCE DATA —\n"
+        f"Analyst consensus: {json.dumps(grounded)}.\n"
+        f"SEC GAAP fundamentals: {fund_txt}.\n"
+        f"Valuation multiples: {val_txt}.\n"
+        f"Recent news: {news}\n"
+        f"ANALYST BRIEF to review for {sym} ({name}): {json.dumps(claims)}"
+    )
+    raw, err = _ollama_generate(prompt)
+    if err:
+        return {"checked": False, "reason": err}
+    v = _parse_json_obj(raw)
+    if v is None:
+        return {"checked": False, "reason": "non-JSON verifier response"}
+    try:
+        score = float(v.get("grounded_score"))
+        score = max(0.0, min(1.0, score))
+    except (TypeError, ValueError):
+        score = None
+    uns = v.get("unsupported_claims") or []
+    if not isinstance(uns, list):
+        uns = [str(uns)]
+    return {"checked": True, "grounded_score": score,
+            "unsupported_claims": [str(x) for x in uns][:10],
+            "assessment": str(v.get("assessment") or "")[:400],
+            "threshold": BRIEF_VERIFY_THRESHOLD}
+
+
+def _verify_and_apply(sym, name, llm, grounded, news, fundamentals=None, valuation=None, force=False):
+    """Gate + apply the groundedness verifier. Runs only when BRIEF_VERIFY is on AND (this is an
+    on-demand request [force] OR the rating is directional Buy/Sell) — so the nightly Hold batch never
+    pays the extra generation. Attaches a `verification` block; if the brief scores below
+    BRIEF_VERIFY_THRESHOLD it downgrades confidence one notch (recording the original) and NEVER
+    rewrites the thesis. Best-effort: any verifier failure leaves the brief exactly as-is."""
+    if not BRIEF_VERIFY or not isinstance(llm, dict) or llm.get("error"):
+        return llm
+    if not (force or llm.get("rating") in ("Buy", "Sell")):
+        return llm
+    ver = _verify_brief(sym, name, llm, grounded, news, fundamentals, valuation)
+    llm["verification"] = ver
+    score = ver.get("grounded_score") if ver.get("checked") else None
+    if score is not None and score < BRIEF_VERIFY_THRESHOLD:
+        orig = llm.get("confidence")
+        new = _downgrade_conf(orig)
+        if new != orig:
+            llm["confidence"] = new
+            llm["confidence_original"] = orig
+            llm["confidence_adjusted"] = True
+    return llm
+
+
 def _do_analysis(limit):
     if not _run_lock.acquire(blocking=False):
         return
@@ -1240,6 +1333,7 @@ def _do_analysis(limit):
             fund = edgar.fundamentals(c["ticker"])
             val = _valuation(c["ticker"])
             llm = _llm(c["ticker"], c["name"], c.get("weight_pct"), c.get("gain_pct"), g, news, fund, val)
+            llm = _verify_and_apply(c["ticker"], c["name"], llm, g, news, fund, val)  # Buy/Sell only (not Holds)
             briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
                                    "valuation": val, "llm": llm, "updated_at": int(time.time())}
             _log_rating(c["ticker"], llm)   # record rating+price for the AI scorecard
