@@ -4014,6 +4014,30 @@ STRAT_LLM_TIMEOUT = int(os.environ.get("STRAT_LLM_TIMEOUT", "1800"))   # per-cal
 _strat_lock = threading.Lock()
 _strat_state = {"status": "idle", "iterations": 0, "started": 0, "finished": 0}
 
+# --- Strategist run telemetry (N13 candidate 3): a durable, capped JSONL audit log of every
+#     autonomous weekly run so the ReAct loop is OBSERVABLE, not a black box. One record per run:
+#     iterations used, how it ended (report / no_tool_calls / cap / error), whether it converged,
+#     repeated ("wandering") tool calls, trades placed, search-budget burn, per-tool histogram,
+#     duration. Best-effort — never raises, never influences the run. ---
+STRAT_RUN_LOG_FILE = os.environ.get("STRAT_RUN_LOG_FILE", "/data/strategist_runs.jsonl")
+STRAT_RUN_LOG_MAX = int(os.environ.get("STRAT_RUN_LOG_MAX", "200"))
+
+
+def _log_strategist_run(rec):
+    try:
+        os.makedirs(os.path.dirname(STRAT_RUN_LOG_FILE) or ".", exist_ok=True)
+        try:
+            with open(STRAT_RUN_LOG_FILE, encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        except Exception:
+            lines = []
+        lines.append(json.dumps(rec, default=str))
+        lines = lines[-STRAT_RUN_LOG_MAX:]
+        with open(STRAT_RUN_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
 
 def _strategist_dispatch(name, args):
     """Run one tool call in-process and return a JSON-serializable result."""
@@ -4064,6 +4088,12 @@ def _strategist_dispatch(name, args):
 def _do_strategist(max_iter=20):
     if not _strat_lock.acquire(blocking=False):
         return
+    _t0 = time.time()
+    # Per-run telemetry — pure instrumentation; it records what the loop did, never changes decisions.
+    telem = {"ts": int(_t0), "max_iter": max_iter, "iterations": 0, "tool_calls": {},
+             "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
+             "nudged": False, "converged": False, "ended": "unknown", "error": None}
+    _seen_sigs = set()
     try:
         _strat_state.update(status="running", iterations=0, started=int(time.time()), finished=0)
         messages = [
@@ -4078,11 +4108,14 @@ def _do_strategist(max_iter=20):
         # the daily pipelines. The interactive chat + on-demand advisory runs are deliberately NOT
         # capped here (they're user-paced).
         search_budget = _knob("strategist_search_budget")
+        telem["search_budget"] = search_budget
         search_calls = 0
         for i in range(max_iter):
             _strat_state["iterations"] = i + 1
+            telem["iterations"] = i + 1
             # Force convergence before we run out of steps: tell it to stop researching and finish.
             if i == max_iter - 5:
+                telem["nudged"] = True
                 messages.append({"role": "system", "content": "You have used most of your available steps. "
                     "Stop researching now — place any final trades you want, then call log_report with your "
                     "summary on this turn."})
@@ -4094,11 +4127,15 @@ def _do_strategist(max_iter=20):
                                         "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
                                   timeout=STRAT_LLM_TIMEOUT)
                 if r.status_code >= 400:
+                    telem["ended"] = "ollama_error"
+                    telem["error"] = f"ollama {r.status_code}"
                     _strat_state.update(status=f"error: ollama {r.status_code}: {r.text[:200]}",
                                         finished=int(time.time()))
                     return
                 msg = (r.json() or {}).get("message") or {}
             except Exception as e:
+                telem["ended"] = "exception"
+                telem["error"] = str(e)[:200]
                 _strat_state.update(status=f"error: {e}", finished=int(time.time()))
                 return
             tcs = msg.get("tool_calls") or []
@@ -4107,6 +4144,7 @@ def _do_strategist(max_iter=20):
                 asst["tool_calls"] = tcs
             messages.append(asst)
             if not tcs:
+                telem["ended"] = "no_tool_calls"   # model stopped calling tools without logging a report
                 break
             for tc in tcs:
                 fn = tc.get("function") or {}
@@ -4117,6 +4155,18 @@ def _do_strategist(max_iter=20):
                         a = json.loads(a)
                     except Exception:
                         a = {}
+                # telemetry: per-tool count, wandering (identical call repeated in this run), trades placed
+                telem["tool_calls"][nm] = telem["tool_calls"].get(nm, 0) + 1
+                try:
+                    _sig = (nm, json.dumps(a, sort_keys=True, default=str))
+                except Exception:
+                    _sig = (nm, str(a))
+                if _sig in _seen_sigs:
+                    telem["repeat_calls"] += 1
+                else:
+                    _seen_sigs.add(_sig)
+                if nm in ("paper_buy", "paper_sell"):
+                    telem["trades"] += 1
                 if nm == "web_search":
                     if search_calls >= search_budget:
                         result = {"error": f"web-search budget for this run is spent "
@@ -4141,14 +4191,21 @@ def _do_strategist(max_iter=20):
                         _tr = json.dumps({"tool": nm, "_note": "result too large; summarized",
                                           "keys": (list(result.keys()) if isinstance(result, dict) else "list")})
                 messages.append({"role": "tool", "content": _tr})
+            telem["search_calls"] = search_calls
             if reported:       # report logged — run is complete, don't burn another slow turn
+                telem["ended"] = "report"
                 break
         if not reported:
+            if telem["ended"] == "unknown":
+                telem["ended"] = "cap"   # exhausted all iterations without a natural stop or a report
             final = next((m["content"] for m in reversed(messages)
                           if m.get("role") == "assistant" and m.get("content")), "")
             _log_report(final or "Weekly run ended without an explicit report (may have hit the step cap).")
+        telem["converged"] = reported
         _strat_state.update(status="idle", finished=int(time.time()))
     finally:
+        telem["duration_s"] = round(time.time() - _t0, 1)
+        _log_strategist_run(telem)
         _strat_lock.release()
 
 
@@ -4167,6 +4224,37 @@ def run_strategist(x_analysis_token: str = Header(default="")):
 @app.get("/api/run-strategist/status")
 def run_strategist_status():
     return _strat_state
+
+
+@app.get("/api/strategist-runs")
+def strategist_runs(limit: int = 50):
+    """Telemetry for recent autonomous Strategist runs — observability for the ReAct loop (is it
+    converging, wandering, or hitting the step cap?). Read-only. `summary` aggregates the window so
+    'does it wander?' is answerable at a glance; `runs` is the newest-first per-run detail."""
+    try:
+        with open(STRAT_RUN_LOG_FILE, encoding="utf-8") as f:
+            rows = [json.loads(x) for x in f.read().splitlines() if x.strip()]
+    except Exception:
+        rows = []
+    rows = rows[-max(1, min(limit, STRAT_RUN_LOG_MAX)):][::-1]
+    done = [r for r in rows if r.get("iterations")]
+    summary = None
+    if done:
+        n = len(done)
+        summary = {
+            "runs": n,
+            "avg_iterations": round(sum(r.get("iterations", 0) for r in done) / n, 1),
+            "max_iter": done[0].get("max_iter"),
+            "converged_pct": round(100 * sum(1 for r in done if r.get("converged")) / n, 1),
+            "hit_cap_pct": round(100 * sum(1 for r in done if r.get("ended") == "cap") / n, 1),
+            "no_report_pct": round(100 * sum(1 for r in done if r.get("ended") == "no_tool_calls") / n, 1),
+            "avg_repeat_calls": round(sum(r.get("repeat_calls", 0) for r in done) / n, 1),
+            "avg_trades": round(sum(r.get("trades", 0) for r in done) / n, 1),
+            "avg_search_calls": round(sum(r.get("search_calls", 0) for r in done) / n, 1),
+            "note": "avg_iterations near max_iter, or non-trivial hit_cap_pct / avg_repeat_calls, is the "
+                    "signal that the ReAct loop wanders and a plan-then-execute wrapper would help.",
+        }
+    return {"summary": summary, "runs": rows}
 
 
 # ---------------------------------------------------------------------------
