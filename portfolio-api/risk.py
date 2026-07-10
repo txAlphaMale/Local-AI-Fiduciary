@@ -368,3 +368,92 @@ def treynor(ann_return_pct, risk_free_pct, beta):
     if beta in (None, 0):
         return None
     return round((ann_return_pct - risk_free_pct) / beta, 2)
+
+
+# ----------------------------- attribution (G5) -----------------------------
+
+def contribution_to_return(weights, rets_by_ticker, order):
+    """Per-holding CONTRIBUTION-to-return over the reconstructed window, chain-linked so the
+    parts sum EXACTLY to the total portfolio return (geometric/Cariño-consistent decomposition:
+    each day's weighted holding return is grown by the portfolio's cumulative return up to the
+    prior day, telescoping to Prod(1+r_port)-1). Assumes CURRENT weights held throughout (the
+    risk-ramp assumption) — this answers 'given how I'm positioned, which names drive the
+    return', not a true historical-weights attribution. Returns None if degenerate.
+
+    Also reports each holding's standalone window return (sizing-independent) and its share of
+    the total — the 'did concentration pay' lens: big weight + small share = dead weight;
+    small weight + big share = an underbet winner."""
+    tickers = [t for t in order if rets_by_ticker.get(t)]
+    if not tickers:
+        return None
+    n = min(len(rets_by_ticker[t]) for t in tickers)
+    if n < 2:
+        return None
+    wsum = sum(weights.get(t, 0.0) for t in tickers) or 1.0
+    w = {t: weights.get(t, 0.0) / wsum for t in tickers}
+    contrib = {t: 0.0 for t in tickers}
+    hold_cum = {t: 1.0 for t in tickers}
+    cum = 1.0
+    for i in range(n):
+        p_prev = cum
+        step = 0.0
+        for t in tickers:
+            r = rets_by_ticker[t][i]
+            contrib[t] += w[t] * r * p_prev
+            hold_cum[t] *= (1 + r)
+            step += w[t] * r
+        cum *= (1 + step)
+    total = cum - 1.0
+    rows = []
+    for t in tickers:
+        rows.append({"ticker": t, "weight_pct": round(w[t] * 100, 2),
+                     "window_return_pct": round((hold_cum[t] - 1) * 100, 2),
+                     "contribution_pct": round(contrib[t] * 100, 2),
+                     "share_of_return_pct": round(contrib[t] / total * 100, 1) if total else None})
+    rows.sort(key=lambda x: -(x["contribution_pct"]))
+    return {"total_return_pct": round(total * 100, 2), "days": n, "holdings": rows,
+            "check_sum_pct": round(sum(r["contribution_pct"] for r in rows), 2),
+            "note": "Chain-linked contribution: parts sum to the total portfolio return. Assumes "
+                    "CURRENT weights over the window (risk ramp), so it shows which names drive "
+                    "your present positioning, not the actual past path. Window return = each "
+                    "name's own return; share = its slice of the total."}
+
+
+_YEAR_SECONDS = 365.0 * 86400.0
+
+
+def _xnpv(rate, flows, t0):
+    # flows carry UNIX-SECOND timestamps; convert elapsed seconds to years for discounting.
+    return sum(cf / ((1 + rate) ** ((t - t0) / _YEAR_SECONDS)) for t, cf in flows)
+
+
+def xirr(flows):
+    """Money-weighted (dollar-weighted) internal rate of return from DATED cash flows.
+    flows: list of (unix_ts_SECONDS, amount) — NEGATIVE = capital in (deposits/starting/seed
+    cost), POSITIVE = capital out (terminal value / withdrawals). Returns an ANNUAL decimal
+    rate, or None if there's no sign change (can't solve) or <2 flows. Robust bisection on
+    NPV=0. Guards against underflow at the low bound."""
+    if len(flows) < 2:
+        return None
+    amts = [cf for _, cf in flows]
+    if not (any(a < 0 for a in amts) and any(a > 0 for a in amts)):
+        return None
+    t0 = min(t for t, _ in flows)
+    lo, hi = -0.9999, 100.0
+    flo, fhi = _xnpv(lo, flows, t0), _xnpv(hi, flows, t0)
+    if flo == 0:
+        return lo
+    if fhi == 0:
+        return hi
+    if flo * fhi > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        fm = _xnpv(mid, flows, t0)
+        if abs(fm) < 1e-9:
+            return round(mid, 6)
+        if flo * fm < 0:
+            hi, fhi = mid, fm
+        else:
+            lo, flo = mid, fm
+    return round((lo + hi) / 2.0, 6)

@@ -1016,6 +1016,150 @@ def run_risk_suite(x_analysis_token: str = Header(default="")):
     return {"status": "started"}
 
 
+# ============ G5: performance attribution — per-holding contribution + money-weighted IRR ============
+# Reuses the G4 reconstructed history (per-ticker Stooq dailies, cached) for a chain-linked
+# per-holding contribution-to-return ("did concentration pay?"), and the paper book's KNOWN
+# dated flows for a real money-weighted IRR. Cached + background-built like the risk suite.
+ATTRIB_FILE = os.environ.get("ATTRIB_FILE", "/data/attribution.json")
+ATTRIB_TTL = int(os.environ.get("ATTRIB_TTL", "86400"))
+_attrib_lock = threading.Lock()
+
+
+def _paper_irr(p, marked):
+    """Money-weighted (dollar-weighted) IRR of the hypothetical paper book from its KNOWN
+    external cash flows: starting cash + seed cost at inception, each recurring/manual deposit
+    at its timestamp (money IN = negative), and today's marked value (money OUT = positive).
+    Buys/sells are INTERNAL and excluded. Simple return (total gain / capital) shown alongside."""
+    created = p.get("created")
+    flows = []
+    base_in = (marked.get("starting_cash") or 0) + (marked.get("seed_basis") or 0)
+    if created and base_in:
+        flows.append((int(created), -float(base_in)))
+    for tx in (p.get("transactions") or []):
+        if tx.get("action") == "deposit" and tx.get("ts"):
+            flows.append((int(tx["ts"]), -float(tx.get("value") or 0)))
+    now = int(time.time())
+    if marked.get("total_value") is not None:
+        flows.append((now, float(marked["total_value"])))
+    r = risk.xirr(flows)
+    years = round((now - created) / (365.0 * 86400.0), 2) if created else None
+    return {"money_weighted_irr_pct": round(r * 100, 2) if r is not None else None,
+            "simple_return_pct": marked.get("return_pct"),
+            "invested_capital": marked.get("invested_capital"),
+            "current_value": marked.get("total_value"),
+            "since": created, "years": years, "n_flows": len(flows),
+            "short_window": bool(years is not None and years < 0.25),
+            "note": "Money-weighted IRR annualizes the paper book's return accounting for WHEN "
+                    "capital went in (starting cash + seed cost + deposits); buys/sells are "
+                    "internal. Simple return = total gain / capital in (not annualized). Over a "
+                    "very short window the annualized IRR is unstable."}
+
+
+def _attribution():
+    """Per-holding contribution-to-return (real holdings, reconstructed window) + paper-book IRR."""
+    d = _data()
+    cons = [c for c in d.get("consolidated", [])
+            if c.get("ticker") and (c.get("type") or "") != "Cash"]
+    weights = {}
+    for c in cons:
+        weights[c["ticker"]] = weights.get(c["ticker"], 0.0) + (c.get("value") or 0.0)
+    invested = round(sum(weights.values()), 2)
+    contribution = None
+    if weights:
+        series = {}
+        for t in weights:
+            s = _stooq_daily(t)
+            if len(s) >= 30:
+                series[t] = s
+        dates, rets = risk.align_returns(series)
+        order = [t for t in series if rets.get(t)]
+        if len(dates) - 1 >= _knob("risk_min_days") and order:
+            contribution = risk.contribution_to_return(weights, rets, order)
+            resolved = round(sum(weights[t] for t in order), 2)
+            contribution["coverage_pct"] = round(resolved / invested * 100, 1) if invested else 0.0
+            contribution["unresolved"] = sorted(t for t in weights if t not in series)
+            contribution["window"] = {"from": dates[0], "to": dates[-1], "common_days": len(dates)}
+            hold = contribution["holdings"]
+            by_w = sorted(hold, key=lambda h: -(h["weight_pct"] or 0))
+            top_w, top_c = (by_w[0] if by_w else None), (hold[0] if hold else None)
+            drag = min(hold, key=lambda h: (h["contribution_pct"] or 0)) if hold else None
+            verdict = None
+            if top_w and top_c:
+                if top_w["ticker"] == top_c["ticker"]:
+                    verdict = (f"Your largest position ({top_w['ticker']}, {top_w['weight_pct']}%) was also "
+                               f"your top return driver ({top_w['share_of_return_pct']}% of the return) — "
+                               "concentration PAID over this window.")
+                elif (top_w["contribution_pct"] or 0) < 0:
+                    verdict = (f"Your largest position ({top_w['ticker']}, {top_w['weight_pct']}%) DETRACTED "
+                               f"({top_w['contribution_pct']}pt) — concentration HURT over this window.")
+                else:
+                    verdict = (f"Your top driver was {top_c['ticker']} ({top_c['share_of_return_pct']}% of the "
+                               f"return) while your largest weight is {top_w['ticker']} ({top_w['weight_pct']}%) "
+                               "— sizing and contribution diverge.")
+            contribution["concentration_check"] = {
+                "top_contributor": top_c["ticker"] if top_c else None,
+                "top_contributor_share_pct": top_c["share_of_return_pct"] if top_c else None,
+                "largest_weight": top_w["ticker"] if top_w else None,
+                "largest_weight_pct": top_w["weight_pct"] if top_w else None,
+                "largest_weight_share_pct": top_w["share_of_return_pct"] if top_w else None,
+                "biggest_drag": (drag["ticker"] if (drag and (drag["contribution_pct"] or 0) < 0) else None),
+                "biggest_drag_pct": (drag["contribution_pct"] if (drag and (drag["contribution_pct"] or 0) < 0) else None),
+                "verdict": verdict}
+    paper = _paper_marked(_read_paper())
+    paper_perf = _paper_irr(_read_paper(), paper)
+    return {"generated_at": int(time.time()), "invested_noncash": invested,
+            "contribution": contribution, "paper_performance": paper_perf,
+            "note": "Attribution. Per-holding contribution is chain-linked (parts sum to the total) "
+                    "over the reconstructed window and assumes CURRENT weights (risk ramp), so it "
+                    "shows what today's positioning would have driven, not the literal past path. "
+                    "Money-weighted IRR is on the hypothetical paper book, where cash-flow dates are "
+                    "known. Informational, not advice."}
+
+
+def _read_attrib():
+    try:
+        with open(ATTRIB_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_attrib():
+    if not _attrib_lock.acquire(blocking=False):
+        return
+    try:
+        res = _attribution()
+        os.makedirs(os.path.dirname(ATTRIB_FILE) or ".", exist_ok=True)
+        with open(ATTRIB_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _attrib_lock.release()
+
+
+@app.get("/api/attribution")
+def get_attribution():
+    """G5 performance attribution, CACHED (reuses the cached per-ticker daily history; first
+    build runs in the background if that cache is cold). Refreshes when stale."""
+    cached = _read_attrib()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < ATTRIB_TTL)
+    if not fresh and not _attrib_lock.locked():
+        threading.Thread(target=_do_attrib, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First attribution build is running — refresh in a moment."}
+
+
+@app.post("/api/run-attribution")
+def run_attribution(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_attrib, daemon=True).start()
+    return {"status": "started"}
+
+
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------
 RATING_LOG_FILE = os.environ.get("RATING_LOG_FILE", "/data/rating_log.json")
 
