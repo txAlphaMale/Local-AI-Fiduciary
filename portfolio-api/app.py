@@ -37,6 +37,8 @@ import sizing      # position sizing & concentration action program (G7) — CVa
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
+import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
+import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -1624,6 +1626,257 @@ def get_avenues():
         return _avenues()
     except Exception as e:
         return JSONResponse({"error": f"avenues engine failed: {e}"}, status_code=500)
+
+
+# ============ G14: thesis & exit-trigger registry — exit-discipline-as-code ============
+# Per holding: WHY you own it + the fundamentals AT ENTRY + pre-registered falsifiable exit
+# triggers (FCF-margin decay, reverse-DCF implied-growth ceiling, Piotroski floor, drawdown,
+# custom). Each run checks current fundamentals against them; a tripped trigger is a pre-committed
+# review/exit signal that forces a brief citing the broken condition. Read-only; MODELS the sell.
+THESES_FILE = os.environ.get("THESES_FILE", "/data/theses.json")
+THESES_EVAL_FILE = os.environ.get("THESES_EVAL_FILE", "/data/theses_eval.json")
+THESES_TTL = int(os.environ.get("THESES_TTL", "43200"))       # cache the evaluation ~12h
+_theses_lock = threading.Lock()
+
+
+def _read_theses():
+    try:
+        with open(THESES_FILE, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _write_theses(reg):
+    os.makedirs(os.path.dirname(THESES_FILE) or ".", exist_ok=True)
+    with open(THESES_FILE, "w", encoding="utf-8") as f:
+        json.dump(reg, f, ensure_ascii=False, indent=2)
+
+
+def _thesis_metrics(sym):
+    """Current fundamentals for trigger evaluation — same edgar/valuation/reverse-DCF stack the
+    scanner uses. Returns the metric keys thesis.py triggers reference."""
+    fund = edgar.fundamentals(sym) or {}
+    val = _valuation(sym) or {}
+    m = (fund.get("metrics") or {}) if fund.get("available") else {}
+    r = (fund.get("ratios") or {}) if fund.get("available") else {}
+    rd = _reverse_dcf(val, fund) or {}
+    pio = ((fund.get("scores") or {}).get("piotroski_f") or {}) if fund.get("available") else {}
+    return {"price": _price(sym), "fcf_margin_pct": r.get("fcf_margin_pct"),
+            "rev_growth_pct": m.get("revenue_growth_pct"), "net_margin_pct": r.get("net_margin_pct"),
+            "piotroski": pio.get("score"), "pe_forward": val.get("pe_forward") or val.get("pe_ttm"),
+            "implied_growth_pct": rd.get("implied_growth_pct"),
+            "accruals_ratio_pct": _accruals_ratio(fund), "as_of": int(time.time())}
+
+
+def _accruals_ratio(fund):
+    """Balance-sheet accruals ratio = (net income − operating cash flow) / total assets, in %.
+    A high positive value (earnings running well ahead of cash) is a classic earnings-QUALITY red
+    flag (Sloan 1996) — the robust, low-data-requirement subset of a Beneish-style screen. A FLAG
+    among many (noisy for high-growth names), never a veto. None if the inputs aren't available."""
+    if not fund or not fund.get("available"):
+        return None
+    ttm = fund.get("ttm") or {}
+    ni = ttm.get("net_income") if ttm.get("net_income") is not None else fund.get("net_income")
+    ocf = ttm.get("operating_cash_flow") if ttm.get("operating_cash_flow") is not None else fund.get("operating_cash_flow")
+    ta = fund.get("total_assets")
+    if ni is None or ocf is None or not ta:
+        return None
+    return round((ni - ocf) / ta * 100.0, 1)
+
+
+def _evaluate_theses():
+    reg = _read_theses()
+    out = []
+    for tk, spec in reg.items():
+        try:
+            mtr = _thesis_metrics(tk)
+        except Exception:
+            mtr = {}
+        ev = thesis.evaluate_thesis(spec, mtr)
+        ev["metrics"] = mtr
+        out.append(ev)
+    out.sort(key=lambda e: (-e["tripped_count"], e["ticker"] or ""))
+    return {"generated_at": int(time.time()), "evaluations": out,
+            "tripped_total": sum(1 for e in out if e["tripped_count"] > 0),
+            "registered": len(reg)}
+
+
+def _read_theses_eval():
+    try:
+        with open(THESES_EVAL_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_theses_eval():
+    if not _theses_lock.acquire(blocking=False):
+        return
+    try:
+        res = _evaluate_theses()
+        os.makedirs(os.path.dirname(THESES_EVAL_FILE) or ".", exist_ok=True)
+        with open(THESES_EVAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _theses_lock.release()
+
+
+@app.get("/api/theses")
+def get_theses():
+    """The thesis registry + the cached exit-trigger evaluation + holdings that still lack a
+    thesis (to prompt seeding). Evaluation runs in the background (an edgar fetch per name)."""
+    reg = _read_theses()
+    cached = _read_theses_eval()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < THESES_TTL)
+    if reg and not fresh and not _theses_lock.locked():
+        threading.Thread(target=_do_theses_eval, daemon=True).start()
+    held = []
+    try:
+        held = [c.get("ticker") for c in _data().get("consolidated", [])
+                if c.get("ticker") and (c.get("type") or "") not in ("Cash", "Mutual Fund", "ETF")]
+    except Exception:
+        pass
+    unregistered = sorted(t for t in held if t not in reg)
+    return {"registry": reg, "evaluation": (cached or {"evaluations": [], "note": "run pending"}),
+            "unregistered_holdings": unregistered, "refreshing": bool(reg and not fresh),
+            "trigger_types": list(thesis.METRIC_LABELS.keys()),
+            "note": "Pre-registered, falsifiable exit triggers per holding. A tripped trigger is a "
+                    "pre-committed review/exit signal — exit discipline decided in advance, not in a "
+                    "drawdown. Educational, not advice."}
+
+
+@app.post("/api/theses")
+async def post_theses(req: Request):
+    """Upsert a holding's thesis. Body: {ticker, thesis, triggers?[...], entry?{...}}. If entry is
+    omitted, a snapshot of current fundamentals is taken as the entry baseline; if triggers are
+    omitted, a sensible default set is used."""
+    body = await req.json()
+    tk = str(body.get("ticker") or "").upper().strip()
+    if not tk:
+        return JSONResponse({"error": "ticker required"}, status_code=400)
+    reg = _read_theses()
+    cur = dict(reg.get(tk) or {})
+    cur["ticker"] = tk
+    if "thesis" in body:
+        cur["thesis"] = str(body.get("thesis") or "")
+    if isinstance(body.get("triggers"), list):
+        cur["triggers"] = body["triggers"]
+    elif not cur.get("triggers"):
+        cur["triggers"] = thesis.default_triggers()
+    if isinstance(body.get("entry"), dict):
+        cur["entry"] = body["entry"]
+    elif not cur.get("entry"):
+        snap = {}
+        try:
+            snap = _thesis_metrics(tk)
+        except Exception:
+            snap = {}
+        snap["date"] = datetime.date.today().isoformat()
+        cur["entry"] = snap
+    now = int(time.time())
+    cur.setdefault("created", now)
+    cur["updated"] = now
+    reg[tk] = cur
+    _write_theses(reg)
+    threading.Thread(target=_do_theses_eval, daemon=True).start()
+    return {"ok": True, "ticker": tk, "thesis": cur}
+
+
+@app.post("/api/theses/delete")
+async def delete_theses(req: Request):
+    body = await req.json()
+    tk = str(body.get("ticker") or "").upper().strip()
+    reg = _read_theses()
+    if tk in reg:
+        reg.pop(tk, None)
+        _write_theses(reg)
+        threading.Thread(target=_do_theses_eval, daemon=True).start()
+        return {"ok": True, "deleted": tk}
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+
+@app.post("/api/run-theses")
+def run_theses(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_theses_eval, daemon=True).start()
+    return {"status": "started"}
+
+
+# ============ G9: rental real-estate deal underwriter ============
+# Turns the AVENUES real-estate assumption into an actual deal: NOI/cap/DSCR/CoC + after-tax
+# levered IRR over the hold (with depreciation recapture + LTCG at sale). Also surfaces the
+# owner's EXISTING real-estate accounts (normally exclude_account_types'd out of analysis).
+# The app supplies deal inputs; county comps stay manual. Pure CPU, read-only.
+REALESTATE_FILE = os.environ.get("REALESTATE_FILE", "/data/realestate.json")
+
+
+def _re_defaults():
+    return {"price": 400000, "down_pct": 25, "closing_pct": 3,
+            "loan_rate_pct": _knob("avenue_debt_apr_pct"), "term_years": 30,
+            "gross_annual_rent": 32000, "vacancy_pct": 5, "opex_pct": 35,
+            "annual_appreciation_pct": _knob("avenue_re_appreciation_pct"), "rent_growth_pct": 2,
+            "hold_years": 10, "sale_cost_pct": 7, "land_frac": 0.2, "depr_years": 27.5,
+            "bonus_depr_pct": 0, "marginal_tax_pct": 24, "ltcg_pct": _knob("sizing_ltcg_rate_pct")}
+
+
+def _realestate_holdings():
+    """Existing real-estate account values from the portfolio feed (they're excluded from the
+    securities analysis, so surface them here). Defensive across balance field names."""
+    out, total = [], 0.0
+    try:
+        for a in (_data().get("accounts") or []):
+            typ = str(a.get("type") or "")
+            if "real estate" in typ.lower() or typ.lower() in ("real_estate", "realestate"):
+                bal = a.get("balance")
+                if bal is None:
+                    bal = a.get("displayBalance") if a.get("displayBalance") is not None else a.get("value")
+                bal = float(bal or 0)
+                total += bal
+                out.append({"name": a.get("name"), "type": typ, "value": round(bal, 2)})
+    except Exception:
+        pass
+    return out, round(total, 2)
+
+
+@app.get("/api/realestate")
+def get_realestate():
+    """Last underwrite (if any) + existing real-estate holdings + grounded default inputs."""
+    last = None
+    try:
+        with open(REALESTATE_FILE, encoding="utf-8") as f:
+            last = json.load(f)
+    except Exception:
+        last = None
+    holdings, total = _realestate_holdings()
+    return {"last": last, "existing_holdings": holdings, "existing_total": total,
+            "defaults": _re_defaults(),
+            "note": "Underwrite a rental deal (income → financing → tax → after-tax IRR). Existing "
+                    "real-estate accounts are surfaced here since they're excluded from the "
+                    "securities analysis. Comps/rents are your inputs; confirm tax treatment with a CPA."}
+
+
+@app.post("/api/realestate/underwrite")
+async def post_realestate(req: Request):
+    """Underwrite a deal. Body = the input keys (see realestate.underwrite); missing keys default.
+    Persists the last run. Not a money action."""
+    body = await req.json()
+    inp = {**_re_defaults(), **{k: v for k, v in (body or {}).items() if v is not None}}
+    try:
+        result = realestate.underwrite(inp)
+    except Exception as e:
+        return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
+    rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
+    try:
+        os.makedirs(os.path.dirname(REALESTATE_FILE) or ".", exist_ok=True)
+        with open(REALESTATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+    except Exception:
+        pass
+    return rec
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------
@@ -4058,6 +4311,7 @@ def _screen_one(sym, crit):
             "rev_growth_pct": rev_g, "fcf_margin_pct": fcf_m, "net_margin_pct": r.get("net_margin_pct"),
             "piotroski": pio_score, "pe_forward": pe_fwd, "analyst_rating": g.get("rating"), "analyst_buy_pct": buy_pct,
             "target_mean": tgt, "expected_return_pct": exp_ret, "opportunity_score": opp_score,
+            "accruals_ratio_pct": _accruals_ratio(fund),   # earnings-quality flag (Sloan) — info, not a gate
             "fit_score": fit_score, "max_score": max_score, "checks": checks}
 
 
@@ -4585,6 +4839,47 @@ STRESS_SCENARIOS = [
     {"name": "1987 Black Monday (1 day)", "market_pct": -20, "detail": "single-session crash"},
 ]
 
+# Asset-class-aware HYPOTHETICAL shocks — the fix for the beta stress test's hidden assumption
+# that bonds always hedge. Each applies a separate shock to equity / bond / cash sleeves, so a
+# stock-AND-bond-both-down regime (2022) shows its true bite. Shocks are round-number planning
+# stresses, not forecasts. (equity, bond, cash) in %.
+MACRO_SCENARIOS = [
+    {"name": "2022 replay — stocks & bonds BOTH down", "equity": -18, "bond": -13, "cash": 0,
+     "detail": "the beta method wrongly assumes bonds hedge; in 2022 they fell WITH stocks"},
+    {"name": "Rates +300bp", "equity": -8, "bond": -15, "cash": 0,
+     "detail": "duration ~5 hits bonds; higher discount rate pressures long-duration equity"},
+    {"name": "1970s-style stagflation", "equity": -20, "bond": -18, "cash": -8,
+     "detail": "real value: equity & bonds fall, inflation erodes cash's purchasing power"},
+    {"name": "2008-style GFC (flight to quality)", "equity": -37, "bond": 5, "cash": 0,
+     "detail": "the contrast case — here Treasuries DID rally as equities crashed"},
+]
+
+
+def _macro_stress(invested, positions):
+    """Per-sleeve hypothetical stress. Splits the book equity/bond/cash from the SEC look-through
+    asset_class_value when available, else a heuristic; applies each scenario's per-class shocks."""
+    lt = _read_lt() or {}
+    acv = lt.get("asset_class_value") or {}
+    if acv and (acv.get("equity") or acv.get("bond")):
+        eq, bd, csh = acv.get("equity", 0.0), acv.get("bond", 0.0), acv.get("cash", 0.0)
+        src = "SEC N-PORT look-through asset classes"
+    else:
+        csh = sum((p.get("value") or 0) for p in positions if p.get("sector") == "Cash")
+        eq, bd = invested - csh, 0.0
+        src = "heuristic (no look-through cache — bond funds counted as equity; run /api/run-lookthrough)"
+    rows = []
+    for s in MACRO_SCENARIOS:
+        imp = eq * s["equity"] / 100.0 + bd * s["bond"] / 100.0 + csh * s["cash"] / 100.0
+        rows.append({"name": s["name"], "detail": s["detail"],
+                     "equity_pct": s["equity"], "bond_pct": s["bond"], "cash_pct": s["cash"],
+                     "dollar_impact": round(imp), "pct_impact": round(imp / invested * 100, 1) if invested else None})
+    rows.sort(key=lambda r: (r["dollar_impact"] or 0))
+    return {"equity_value": round(eq, 2), "bond_value": round(bd, 2), "cash_value": round(csh, 2),
+            "source": src, "scenarios": rows,
+            "note": "Per-sleeve shocks (equity/bond/cash separately) so a stock-AND-bond-both-down "
+                    "regime shows its true impact — unlike the beta test, which implicitly assumes "
+                    "bonds hedge. Round-number planning stresses, not forecasts."}
+
 
 def _exposure():
     """True sector allocation, value-weighted portfolio beta, and concentration metrics.
@@ -4655,6 +4950,7 @@ def _exposure():
             "by_sector": sectors, "concentration": conc,
             "lookthrough_concentration": lt_conc,
             "stress_test": stress,
+            "macro_stress": _macro_stress(invested, positions),
             "positions": sorted(positions, key=lambda p: -(p["value"] or 0)),
             "note": "True sector allocation (direct stocks classified via Finnhub; funds NOT yet looked "
                     "through), value-weighted portfolio beta (1.0 = market), concentration (HHI, effective "

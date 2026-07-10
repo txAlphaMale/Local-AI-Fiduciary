@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -289,6 +289,7 @@ function render(){
       haveAnalysis && {key:'briefs',label:'B/S/H BRIEFS',build:()=>analysisContent(ANALYSIS)},
       hasDisc && {key:'discovered',label:'DISCOVERED',build:()=>discoveredContent()},
       haveIdeas && {key:'scanner',label:'SCANNER · IDEAS',build:()=>scannerContent()},
+      (THESES && !THESES.error) && {key:'theses',label:'THESES · EXIT',build:()=>thesesContent()},
     ]));
   } else if(TAB==='audits'){
     tc.appendChild(panelSubtabs('audits',[
@@ -1187,6 +1188,7 @@ function planContent(r){
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},
     (EST && !EST.error) && {key:'estate',label:'ESTATE',build:()=>estateContent()},
     (ROTH && !ROTH.error) && {key:'roth',label:'ROTH · RATE CURVE',build:()=>rothContent()},
+    (REALESTATE && !REALESTATE.error) && {key:'realestate',label:'REAL ESTATE',build:()=>realEstateContent()},
   ]));
   return outer;
 }
@@ -1495,6 +1497,20 @@ function exposureContent(){
         t.appendChild(tr); });
       wrap.appendChild(t);
     }
+    const ms=ex.macro_stress;
+    if(ms && ms.scenarios && ms.scenarios.length){
+      const mh=el('div','ph','HYPOTHETICAL MACRO STRESS · PER-SLEEVE (bonds don\'t always hedge)'); mh.style.marginTop='12px'; wrap.appendChild(mh);
+      const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin:2px 0 4px;'; sub.textContent=`equity ${u0(ms.equity_value)} · bond ${u0(ms.bond_value)} · cash ${u0(ms.cash_value)} · via ${ms.source}`; wrap.appendChild(sub);
+      const t2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">SCENARIO</th><th>EQ / BD / CASH</th><th>EST $ IMPACT</th><th>% PORTFOLIO</th>'; t2.appendChild(hr2);
+      ms.scenarios.forEach(s=>{ const pos=(s.dollar_impact||0)>=0; const tr=el('tr');
+        tr.innerHTML=`<td class="l" title="${s.detail||''}">${s.name}</td>`+
+          `<td class="muted">${s.equity_pct}/${s.bond_pct}/${s.cash_pct}%</td>`+
+          `<td class="${pos?'pos':'neg'}">${u0(s.dollar_impact)}</td>`+
+          `<td class="${pos?'pos':'neg'}">${s.pct_impact==null?'—':s.pct_impact+'%'}</td>`;
+        t2.appendChild(tr); });
+      wrap.appendChild(t2);
+      if(ms.note){ const mn=el('div','muted'); mn.style.cssText='margin-top:4px;font-size:10px;line-height:1.4;'; mn.textContent=ms.note; wrap.appendChild(mn); }
+    }
     if(ex.note){ const n=el('div','muted'); n.style.cssText='margin-top:8px;font-size:10px;line-height:1.4;'; n.textContent=ex.note; wrap.appendChild(n); }
   } else if(ex && ex.computing){
     const eh=el('div','muted'); eh.style.cssText='margin-top:16px;font-size:11px;'; eh.textContent='True-exposure scan is running (classifying each holding by sector) — hit REFRESH in a moment.'; wrap.appendChild(eh);
@@ -1800,6 +1816,51 @@ function rothContent(){
   return wrap;
 }
 
+const RE_FIELDS=[['price','Price $'],['down_pct','Down %'],['closing_pct','Closing %'],['loan_rate_pct','Loan rate %'],['term_years','Term yr'],['gross_annual_rent','Gross rent $/yr'],['vacancy_pct','Vacancy %'],['opex_pct','OpEx % of EGI'],['annual_appreciation_pct','Appreciation %'],['rent_growth_pct','Rent growth %'],['hold_years','Hold yr'],['sale_cost_pct','Sale cost %'],['land_frac','Land frac'],['bonus_depr_pct','Bonus depr %'],['marginal_tax_pct','Marginal tax %'],['ltcg_pct','LTCG %']];
+async function runUnderwrite(){
+  const body={}; RE_FIELDS.forEach(([k])=>{ const v=document.getElementById('re-'+k); if(v && v.value!=='') body[k]=parseFloat(v.value); });
+  const r=await fetch('/api/realestate/underwrite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  REALESTATE={...REALESTATE, last:await r.json()}; render();
+}
+function realEstateContent(){
+  const wrap=el('div'); const R=REALESTATE;
+  if(!R || R.error){ const e=el('div','muted'); e.textContent='Real-estate underwriter not available.'; wrap.appendChild(e); return wrap; }
+  // existing holdings
+  if((R.existing_holdings||[]).length){
+    const eh=el('div','ph','EXISTING REAL ESTATE (excluded from securities analysis)'); eh.style.cssText='font-size:11px;'; wrap.appendChild(eh);
+    R.existing_holdings.forEach(h=>{ const d=el('div','muted'); d.style.cssText='font-size:11px;'; d.textContent=`${h.name||'—'}: ${usd(h.value)}`; wrap.appendChild(d); });
+    const tt=el('div'); tt.style.cssText='font-size:11px;margin:2px 0 8px;'; tt.innerHTML=`<b>Total: ${usd(R.existing_total)}</b>`; wrap.appendChild(tt);
+  }
+  const h=el('div','ph','UNDERWRITE A RENTAL DEAL'); wrap.appendChild(h);
+  const cur=(R.last&&R.last.inputs)||R.defaults||{};
+  const form=el('div'); form.style.cssText='display:flex;flex-wrap:wrap;gap:6px 12px;margin:6px 0;';
+  RE_FIELDS.forEach(([k,lab])=>{ const c=el('div'); c.style.cssText='display:flex;flex-direction:column;';
+    c.innerHTML=`<label class="muted" style="font-size:9px;">${lab}</label>`;
+    const inp=el('input'); inp.id='re-'+k; inp.type='number'; inp.step='any'; inp.value=(cur[k]!=null?cur[k]:''); inp.style.cssText='width:100px;font-size:11px;';
+    c.appendChild(inp); form.appendChild(c); });
+  wrap.appendChild(form);
+  const btn=el('button','btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:12px;margin:4px 0 10px;'; btn.onclick=runUnderwrite; wrap.appendChild(btn);
+  // results
+  const res=R.last&&R.last.result;
+  if(res){
+    const rh=el('div','ph','DEAL METRICS'); rh.style.cssText='font-size:11px;'; wrap.appendChild(rh);
+    const strip=el('div'); strip.style.cssText='display:flex;gap:20px;flex-wrap:wrap;margin:6px 0;';
+    const m=(l,v,cls)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:16px;" class="${cls||''}">${v}</div></div>`;
+    strip.innerHTML=m('CAP RATE',(res.cap_rate_pct!=null?res.cap_rate_pct+'%':'—'))+
+      m('DSCR',(res.dscr!=null?res.dscr:'—'),(res.dscr!=null&&res.dscr<1.25?'neg':''))+
+      m('CASH-ON-CASH',(res.cash_on_cash_pct!=null?res.cash_on_cash_pct+'%':'—'),(res.cash_on_cash_pct<0?'neg':'pos'))+
+      m('AFTER-TAX IRR ('+res.hold_years+'yr)',(res.after_tax_irr_pct!=null?res.after_tax_irr_pct+'%':'—'),(res.after_tax_irr_pct>=0?'pos':'neg'));
+    wrap.appendChild(strip);
+    const det=el('div','muted'); det.style.cssText='font-size:11px;margin:2px 0;';
+    det.innerHTML=`NOI ${usd(res.noi_year1)}/yr · debt service ${usd(res.annual_debt_service)}/yr · cash invested ${usd(res.cash_invested)} · yr-1 cashflow ${usd(res.pretax_cashflow_year1)} · est sale ${usd(res.sale_price_est)} · annual depr ${usd(res.annual_depreciation)}`;
+    wrap.appendChild(det);
+    (res.flags||[]).forEach(f=>{ const fl=el('div'); fl.style.cssText='color:var(--amber);font-size:11px;margin:2px 0;'; fl.textContent='⚠ '+f; wrap.appendChild(fl); });
+    const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; rn.textContent=res.note||''; wrap.appendChild(rn);
+  }
+  const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; nn.textContent=R.note||''; wrap.appendChild(nn);
+  return wrap;
+}
+
 function leverageContent(){
   const wrap=el('div'); const v=LEVERAGE;
   if(!v || v.error){ const e=el('div','muted'); e.textContent='Leverage model not available.'; wrap.appendChild(e); return wrap; }
@@ -1919,6 +1980,71 @@ function avenuesContent(){
     wrap.appendChild(on);
   } else { const nb=el('div','muted'); nb.style.cssText='font-size:11px;'; nb.textContent='No one-time tax alpha available right now (no 0%-harvest room, Roth arb, or match).'; wrap.appendChild(nb); }
   const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; rn.textContent=a.note||''; wrap.appendChild(rn);
+  return wrap;
+}
+
+async function saveThesis(ticker, thesisText, triggersJson){
+  let triggers=undefined;
+  if(triggersJson!=null && triggersJson.trim()){ try{ triggers=JSON.parse(triggersJson); }catch(e){ alert('Triggers must be valid JSON: '+e); return; } }
+  const body={ticker:ticker, thesis:thesisText||''}; if(triggers!==undefined) body.triggers=triggers;
+  await fetch('/api/theses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await fetch('/api/theses'); THESES=await r.json(); render();
+}
+async function deleteThesis(ticker){ if(!confirm('Delete thesis for '+ticker+'?')) return;
+  await fetch('/api/theses/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker})});
+  const r=await fetch('/api/theses'); THESES=await r.json(); render();
+}
+function toggleThesisEdit(id){ const d=document.getElementById(id); if(d) d.style.display=(d.style.display==='none'?'block':'none'); }
+
+function thesesContent(){
+  const wrap=el('div'); const T=THESES;
+  if(!T || T.error){ const e=el('div','muted'); e.textContent='Thesis registry not available.'; wrap.appendChild(e); return wrap; }
+  const ev=(T.evaluation&&T.evaluation.evaluations)||[];
+  const h=el('div','ph','THESIS & EXIT-TRIGGER REGISTRY · EXIT-DISCIPLINE-AS-CODE'); wrap.appendChild(h);
+  const trippedN=ev.filter(e=>e.tripped_count>0).length;
+  const bn=el('div'); bn.style.cssText='font-size:12px;margin:4px 0 8px;'+(trippedN?'color:var(--amber);':'color:var(--muted);');
+  bn.textContent=ev.length? (trippedN? `⚠ ${trippedN} of ${ev.length} theses have TRIPPED exit triggers — pre-committed review/exit.` : `All ${ev.length} theses intact (no triggers tripped).`) : 'No theses registered yet — add one below.';
+  if(T.refreshing){ const rf=el('span','muted'); rf.style.fontSize='10px'; rf.textContent=' (re-evaluating…)'; bn.appendChild(rf); }
+  wrap.appendChild(bn);
+  // per-holding cards (tripped first — already sorted server-side)
+  ev.forEach(e=>{
+    const card=el('div'); card.style.cssText='border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0;'+(e.tripped_count>0?'border-left:3px solid var(--amber);':'');
+    const top=el('div'); top.style.cssText='display:flex;justify-content:space-between;align-items:baseline;gap:8px;';
+    top.innerHTML=`<div style="font-size:14px;"><b>${e.ticker}</b> <span style="font-size:11px;color:${e.tripped_count>0?'var(--amber)':'var(--muted)'}">${e.action}</span></div>`;
+    const btns=el('div'); const edId='thed-'+e.ticker;
+    const eb=el('a'); eb.textContent='edit'; eb.style.cssText='font-size:10px;color:var(--muted);cursor:pointer;margin-right:8px;'; eb.onclick=()=>toggleThesisEdit(edId);
+    const db=el('a'); db.textContent='delete'; db.style.cssText='font-size:10px;color:var(--muted);cursor:pointer;'; db.onclick=()=>deleteThesis(e.ticker);
+    btns.appendChild(eb); btns.appendChild(db); top.appendChild(btns); card.appendChild(top);
+    if(e.thesis){ const th=el('div'); th.style.cssText='font-size:11px;margin:3px 0;color:var(--txt);'; th.textContent=e.thesis; card.appendChild(th); }
+    const en=e.entry||{}; if(en.date||en.fcf_margin_pct!=null){ const es=el('div','muted'); es.style.cssText='font-size:9px;margin:2px 0;'; es.textContent=`entry ${en.date||'—'}: price ${usd(en.price)} · FCF margin ${en.fcf_margin_pct==null?'—':en.fcf_margin_pct+'%'} · Piotroski ${en.piotroski==null?'—':en.piotroski}`; card.appendChild(es); }
+    // triggers
+    (e.triggers||[]).forEach(t=>{
+      const status=(t.tripped===true?'✗ TRIPPED':(t.tripped===false?'✓ ok':'? n/a'));
+      const col=(t.tripped===true?'var(--amber)':(t.tripped===false?'var(--pos,#7bc47f)':'var(--muted)'));
+      const tr=el('div'); tr.style.cssText='font-size:10px;margin:1px 0;display:flex;justify-content:space-between;gap:8px;';
+      tr.innerHTML=`<span>${t.label}</span><span style="color:${col};white-space:nowrap;">cur ${t.current==null?'—':t.current} · ${status}</span>`;
+      card.appendChild(tr);
+    });
+    // editor (hidden)
+    const ed=el('div'); ed.id=edId; ed.style.cssText='display:none;margin-top:6px;border-top:1px solid var(--line);padding-top:6px;';
+    const ta=el('textarea'); ta.value=e.thesis||''; ta.placeholder='thesis (why you own it)'; ta.style.cssText='width:100%;height:40px;font-size:11px;box-sizing:border-box;';
+    const tj=el('textarea'); tj.value=JSON.stringify(e.triggers_spec||T.registry[e.ticker]&&T.registry[e.ticker].triggers||[],null,0); tj.style.cssText='width:100%;height:52px;font-size:10px;font-family:monospace;box-sizing:border-box;margin-top:4px;';
+    const sv=el('button','btn'); sv.textContent='Save'; sv.style.cssText='font-size:11px;margin-top:4px;'; sv.onclick=()=>saveThesis(e.ticker, ta.value, tj.value);
+    ed.appendChild(el('div','muted','thesis:')); ed.appendChild(ta); ed.appendChild(el('div','muted','triggers (JSON array):')); ed.appendChild(tj); ed.appendChild(sv);
+    card.appendChild(ed);
+    wrap.appendChild(card);
+  });
+  // unregistered holdings
+  const unreg=T.unregistered_holdings||[];
+  if(unreg.length){
+    const uh=el('div','ph','HOLDINGS WITHOUT A THESIS'); uh.style.cssText='font-size:11px;margin-top:14px;'; wrap.appendChild(uh);
+    const chips=el('div'); chips.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin:4px 0;';
+    unreg.forEach(tk=>{ const c=el('button','btn'); c.textContent='+ '+tk; c.style.cssText='font-size:10px;'; c.title='Register '+tk+' with default exit triggers (snapshots current fundamentals as entry)';
+      c.onclick=()=>saveThesis(tk,'', null); chips.appendChild(c); });
+    wrap.appendChild(chips);
+    const un=el('div','muted'); un.style.cssText='font-size:9px;'; un.textContent='Adding snapshots current fundamentals as the entry baseline + seeds default triggers (Piotroski≤3, FCF-margin decay 10pt, implied-growth>40%, −30% drawdown). Edit after.'; wrap.appendChild(un);
+  }
+  const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:10px;'; nn.textContent=T.note||''; wrap.appendChild(nn);
   return wrap;
 }
 
