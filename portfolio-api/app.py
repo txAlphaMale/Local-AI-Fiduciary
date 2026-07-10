@@ -33,6 +33,7 @@ import knowledge  # local user-populated RAG over a knowledge folder (N12) — s
 import grounding  # dated-constant registry + staleness watchdog (G13a)
 import estate     # estate & generational-wealth engine (G2) — step-up, gift-vs-hold, titling
 import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
+import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -143,6 +144,10 @@ SETTING_SPECS = {
     "risk_hist_years":   {"env": "RISK_HIST_YEARS",   "default": 2,   "cast": int,   "label": "Risk suite: years of daily history to reconstruct (risk ramp)", "group": "Risk suite"},
     "risk_hist_max_age": {"env": "RISK_HIST_MAX_AGE", "default": 3,   "cast": int,   "label": "Risk suite: refetch a ticker's daily history after (days)", "group": "Risk suite"},
     "risk_min_days":     {"env": "RISK_SUITE_MIN_DAYS","default": 60, "cast": int,   "label": "Risk suite: minimum common trading days to compute", "group": "Risk suite"},
+    "sizing_loss_budget_pct": {"env": "SIZING_LOSS_BUDGET_PCT", "default": 5.0, "cast": float, "label": "Sizing: max % of net worth at risk from ONE name (CVaR)", "group": "Position sizing"},
+    "sizing_horizon_days":    {"env": "SIZING_HORIZON_DAYS",    "default": 20,  "cast": int,   "label": "Sizing: CVaR loss-budget horizon (days)", "group": "Position sizing"},
+    "sizing_stage_years":     {"env": "SIZING_STAGE_YEARS",     "default": 5,   "cast": int,   "label": "Sizing: staged-sale years (spread the trim)", "group": "Position sizing"},
+    "sizing_ltcg_rate_pct":   {"env": "SIZING_LTCG_RATE_PCT",   "default": 15.0,"cast": float, "label": "Sizing: residual LTCG rate for the staged sale (%)", "group": "Position sizing"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1157,6 +1162,146 @@ def run_attribution(x_analysis_token: str = Header(default="")):
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     threading.Thread(target=_do_attrib, daemon=True).start()
+    return {"status": "started"}
+
+
+# ============ G7: position sizing & concentration action program ============
+# Prices the concentration CHOICES: a CVaR-based max single-name loss budget (the primary,
+# measurable sizing gate), inverse-vol target weights, and a tax-aware staged-sale schedule
+# that spends the annual 0%-LTCG budget first. Reuses the G4 per-ticker daily history (cached)
+# for vol/CVaR and tax.py for the harvest budget / stacked LTCG tax. Read-only — never trades.
+SIZING_FILE = os.environ.get("SIZING_FILE", "/data/sizing.json")
+SIZING_TTL = int(os.environ.get("SIZING_TTL", "86400"))
+_sizing_lock = threading.Lock()
+
+
+def _ticker_stats(sym, horizon_days):
+    """Annualized vol, trailing mean, and horizon-scaled 95% CVaR for one ticker from its cached
+    daily history (shared with the risk suite). None if too little data."""
+    s = _stooq_daily(sym)
+    if len(s) < 40:
+        return None
+    rets = risk.pct_returns([c for _, c in s])
+    if len(rets) < 30:
+        return None
+    m = sum(rets) / len(rets)
+    sd = (sum((x - m) ** 2 for x in rets) / len(rets)) ** 0.5
+    cv = risk.hist_var_cvar(rets, 95)
+    cvar_frac = (cv["cvar_frac"] * (horizon_days ** 0.5)) if cv else None
+    return {"vol_annual": round(sd * (252 ** 0.5), 4), "mu_annual": round(m * 252, 4),
+            "cvar_frac": cvar_frac}
+
+
+def _sizing():
+    """Assemble the G7 sizing/action program from reconstructed per-ticker risk + embedded gains."""
+    d = _data()
+    nw = d.get("net_worth") or d.get("invested_value") or 0.0
+    cons = [c for c in d.get("consolidated", [])
+            if c.get("ticker") and (c.get("type") or "") != "Cash"]
+    invested = round(sum(c.get("value") or 0 for c in cons), 2)
+    horizon = _knob("sizing_horizon_days")
+    positions = []
+    for c in cons:
+        st = _ticker_stats(c["ticker"], horizon)
+        if not st:
+            continue
+        gain, val = c.get("gain"), (c.get("value") or 0.0)
+        gf = (gain / val) if (gain is not None and val) else None
+        positions.append({"ticker": c["ticker"], "value": val, "weight_pct": c.get("weight_pct"),
+                          "gain": gain, "gain_fraction_pct": round(gf * 100, 1) if gf is not None else None,
+                          "vol_annual": st["vol_annual"], "mu_annual": st["mu_annual"],
+                          "cvar_frac": st["cvar_frac"]})
+    if not positions:
+        return {"status": "building", "generated_at": int(time.time()),
+                "note": "Position sizing needs reconstructed daily history (shared with the risk "
+                        "suite). Build the RISK suite first, or retry in a moment."}
+    lb_pct = _knob("sizing_loss_budget_pct")
+    lb = sizing.loss_budget_analysis(positions, nw, lb_pct, horizon)
+    targets = sizing.inverse_vol_targets(positions)
+    tmap = {p["ticker"]: p for p in positions}
+    for r in lb["positions"]:
+        p = tmap.get(r["ticker"]) or {}
+        r["current_weight_pct"] = p.get("weight_pct")
+        r["target_weight_pct"] = targets.get(r["ticker"])
+        r["gain_fraction_pct"] = p.get("gain_fraction_pct")
+        r["half_kelly_ceiling_pct"] = sizing.half_kelly_ceiling(p.get("mu_annual"), p.get("vol_annual"))
+        r["exchange_fund_note"] = sizing.exchange_fund_note(p.get("weight_pct"), p.get("gain_fraction_pct"))
+    # staged sale over over-budget names that carry a GAIN (losses don't add tax cost)
+    over = [r for r in lb["positions"] if r["over_budget"]]
+    total_trim = round(sum(r["suggested_trim"] or 0 for r in over), 2)
+    total_gain = 0.0
+    for r in over:
+        gf = (tmap.get(r["ticker"]) or {}).get("gain_fraction_pct")
+        if gf and gf > 0 and r["suggested_trim"]:
+            total_gain += r["suggested_trim"] * (gf / 100.0)
+    total_gain = round(total_gain, 2)
+    budget0, now_tax = 0.0, None
+    try:
+        cfg = _read_retire()
+        ctx = _tax_ctx(cfg)
+        gross_ord = float(cfg.get("annual_expenses_override") or 0) or 0.0
+        ded = tax.standard_deduction(ctx["status"], ctx["age"], ctx["spouse_age"])
+        ord_tax = max(0.0, gross_ord - ded)
+        budget0 = tax.gains_harvest_budget(gross_ord, ctx["status"], ded,
+                                           ctx["age"], ctx["spouse_age"])["gains_at_0pct_budget"]
+        now_tax = tax.ltcg_tax(ord_tax, total_gain, ctx["status"])[0]
+    except Exception:
+        budget0, now_tax = 0.0, None
+    staged = (sizing.staged_diversification_plan(total_trim, total_gain, budget0,
+              _knob("sizing_ltcg_rate_pct"), now_tax, max_years=_knob("sizing_stage_years"))
+              if total_trim > 0 else None)
+    return {"status": "ready", "generated_at": int(time.time()), "net_worth": round(nw, 2),
+            "invested_noncash": invested, "resolved": sorted(tmap.keys()),
+            "unresolved": sorted(c["ticker"] for c in cons if c["ticker"] not in tmap),
+            "loss_budget": lb, "inverse_vol_targets": targets, "staged_sale": staged,
+            "note": "Position sizing & concentration action program. The CVaR loss budget is the "
+                    "PRIMARY gate (measurable); inverse-vol targets equalize standalone risk; the "
+                    "staged sale spends the 0%-LTCG budget first. Kelly is a caveated reference "
+                    "only (single-name edge is unmeasurable). Read-only — never places a trade; "
+                    "confirm any sale + its tax with a CPA."}
+
+
+def _read_sizing():
+    try:
+        with open(SIZING_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_sizing():
+    if not _sizing_lock.acquire(blocking=False):
+        return
+    try:
+        res = _sizing()
+        os.makedirs(os.path.dirname(SIZING_FILE) or ".", exist_ok=True)
+        with open(SIZING_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _sizing_lock.release()
+
+
+@app.get("/api/sizing")
+def get_sizing():
+    """G7 position sizing / concentration action program, CACHED (reuses the cached per-ticker
+    daily history; first build runs in the background if that cache is cold)."""
+    cached = _read_sizing()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < SIZING_TTL)
+    if not fresh and not _sizing_lock.locked():
+        threading.Thread(target=_do_sizing, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First sizing build is running — refresh in a moment."}
+
+
+@app.post("/api/run-sizing")
+def run_sizing(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_sizing, daemon=True).start()
     return {"status": "started"}
 
 

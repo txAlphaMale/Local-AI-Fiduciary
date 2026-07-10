@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -301,12 +301,14 @@ function render(){
     const hasExp=(EXP && (!EXP.error || EXP.computing));
     const hasRisk=((RISK && !RISK.error) || (RISKSUITE && !RISKSUITE.error));
     const hasAttrib=(ATTRIB && !ATTRIB.error);
+    const hasSizing=(SIZING && !SIZING.error);
     const hasLT=(LT && ((!LT.error && LT.true_exposure) || LT.computing));
     tc.appendChild(panelSubtabs('insights',[
       {key:'drift',label:'POLICY · DRIFT',build:()=>driftContent()},
       hasExp && {key:'exposure',label:'EXPOSURE',build:()=>exposureContent()},
       hasRisk && {key:'risk',label:'RISK',build:()=>riskContent()},
       hasAttrib && {key:'attribution',label:'ATTRIBUTION',build:()=>attributionContent()},
+      hasSizing && {key:'sizing',label:'SIZING',build:()=>sizingContent()},
       hasLT && {key:'lookthrough',label:'LOOK-THROUGH',build:()=>lookthroughContent()},
     ]));
   }
@@ -1655,6 +1657,79 @@ function attributionContent(){
     rb.onclick=()=>{ fetch('/api/run-attribution',{method:'POST'}); rb.textContent='building…'; rb.disabled=true; }; wrap.appendChild(rb);
   }
   const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; rn.textContent=a.note||''; wrap.appendChild(rn);
+  return wrap;
+}
+
+function sizingContent(){
+  const wrap=el('div'); const s=SIZING;
+  if(!s || s.error){ const e=el('div','muted'); e.textContent='Sizing not available.'; wrap.appendChild(e); return wrap; }
+  if(s.status!=='ready'){
+    const b=el('div','muted'); b.style.cssText='font-size:11px;'; b.textContent=s.note||'Building position-sizing program…'; wrap.appendChild(b);
+    const rb=el('button','btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:6px;font-size:11px;display:block;';
+    rb.onclick=()=>{ fetch('/api/run-sizing',{method:'POST'}); rb.textContent='building…'; rb.disabled=true; }; wrap.appendChild(rb);
+    return wrap;
+  }
+  const lb=s.loss_budget||{};
+  const h=el('div','ph','LOSS BUDGET · MAX SINGLE-NAME CVaR (primary gate)'); wrap.appendChild(h);
+  const sum=el('div','muted'); sum.style.cssText='font-size:11px;margin:2px 0 8px;';
+  sum.innerHTML=`budget = ${lb.loss_budget_pct}% of net worth = <b>${usd(lb.budget_dollars)}</b> at ${lb.horizon_days}-day CVaR · `+
+    `<span style="color:${(lb.total_over_budget||0)>0?'var(--amber)':'var(--txt)'}">${lb.total_over_budget||0} name(s) over budget</span>`+
+    ((lb.total_suggested_trim||0)>0?` · suggested trim ${usd(lb.total_suggested_trim)}`:'');
+  wrap.appendChild(sum);
+  const tbl=el('table','tbl'); tbl.style.cssText='width:100%;font-size:12px;border-collapse:collapse;';
+  const cols=['TICKER','CURRENT','TARGET','CVaR','AT RISK','%NW','MAX POS','TRIM'];
+  tbl.innerHTML='<thead><tr>'+cols.map((c,i)=>`<th style="text-align:${i?'right':'left'};padding:3px 8px;border-bottom:1px solid var(--line);" class="muted">${c}</th>`).join('')+'</tr></thead>';
+  const tb=el('tbody');
+  (lb.positions||[]).forEach(r=>{
+    const tr=el('tr'); if(r.over_budget) tr.style.background='rgba(240,180,80,0.07)';
+    tr.innerHTML=`<td style="padding:3px 8px;">${r.ticker}${r.over_budget?' <span style="color:var(--amber)">⚠</span>':''}</td>`+
+      `<td style="text-align:right;padding:3px 8px;">${r.current_weight_pct==null?'—':r.current_weight_pct+'%'}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="muted">${r.target_weight_pct==null?'—':r.target_weight_pct+'%'}</td>`+
+      `<td style="text-align:right;padding:3px 8px;">${r.cvar_pct_horizon}%</td>`+
+      `<td style="text-align:right;padding:3px 8px;">${usd(r.at_risk_dollars)}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="${(r.at_risk_pct_of_nw||0)>lb.loss_budget_pct?'neg':''}">${r.at_risk_pct_of_nw==null?'—':r.at_risk_pct_of_nw+'%'}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="muted">${usd(r.max_position_value)}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="${(r.suggested_trim||0)>0?'neg':''}">${(r.suggested_trim||0)>0?usd(r.suggested_trim):'—'}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); wrap.appendChild(tbl);
+  const ln=el('div','muted'); ln.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;';
+  ln.textContent='TARGET = inverse-volatility weight (equalizes standalone risk). MAX POS = budget ÷ CVaR. '+(lb.note||''); wrap.appendChild(ln);
+  // ½-Kelly reference (de-emphasized)
+  const kel=(lb.positions||[]).filter(r=>r.half_kelly_ceiling_pct!=null).map(r=>`${r.ticker} ${r.half_kelly_ceiling_pct}%`);
+  if(kel.length){ const kl=el('div','muted'); kl.style.cssText='font-size:10px;margin-top:4px;'; kl.textContent='½-Kelly reference ceilings (unreliable for single names — reference only): '+kel.join(' · '); wrap.appendChild(kl); }
+  // staged sale
+  const sp=s.staged_sale;
+  const sh=el('div','ph','STAGED SALE · SPEND THE 0%-LTCG BUDGET FIRST'); sh.style.marginTop='16px'; wrap.appendChild(sh);
+  if(sp){
+    const ss=el('div'); ss.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:6px 0;';
+    const m=(l,v,cls)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:15px;" class="${cls||''}">${v}</div></div>`;
+    ss.innerHTML=
+      m('0% BUDGET/YR',usd(sp.annual_0pct_budget))+
+      m('SELL-NOW TAX',usd(sp.sell_now_tax),'neg')+
+      m('STAGED TAX',usd(sp.staged_total_tax))+
+      m('TAX SAVED',usd(sp.tax_saved_vs_now),(sp.tax_saved_vs_now>0?'pos':''))+
+      m('YEARS',sp.years_tax_free+(sp.residual_gain>0?'+':''));
+    wrap.appendChild(ss);
+    if((sp.schedule||[]).length){
+      const sc=el('div','muted'); sc.style.cssText='font-size:11px;margin:2px 0;';
+      sc.innerHTML='<span style="letter-spacing:1px;">SCHEDULE (tax-free):</span> '+sp.schedule.map(y=>`Y${y.year} sell ${usd(y.value_sold)} (gain ${usd(y.gain_realized)})`).join(' · ');
+      wrap.appendChild(sc);
+    }
+    if(sp.residual_gain>0){ const rr=el('div','muted'); rr.style.cssText='font-size:10px;'; rr.textContent=`residual gain ${usd(sp.residual_gain)} taxed at ${sp.ltcg_rate_pct}% = ${usd(sp.residual_tax_at_ltcg)} after ${sp.years_tax_free} years of 0% harvesting.`; wrap.appendChild(rr); }
+    const sn=el('div','muted'); sn.style.cssText='font-size:10px;line-height:1.4;margin-top:4px;'; sn.textContent=sp.note||''; wrap.appendChild(sn);
+  } else {
+    const nb=el('div','muted'); nb.style.cssText='font-size:11px;'; nb.textContent='No over-budget names carrying a taxable gain — nothing to stage.'; wrap.appendChild(nb);
+  }
+  // exchange-fund notes
+  const xf=(lb.positions||[]).filter(r=>r.exchange_fund_note);
+  if(xf.length){
+    const xh=el('div'); xh.style.cssText='margin-top:12px;font-size:11px;';
+    xf.forEach(r=>{ const x=el('div'); x.style.cssText='font-size:10px;margin:3px 0;border-left:3px solid var(--bd2);padding-left:8px;'; x.innerHTML=`<b>${r.ticker}</b> — ${r.exchange_fund_note}`; xh.appendChild(x); });
+    wrap.appendChild(xh);
+  }
+  if((s.unresolved||[]).length){ const ur=el('div','muted'); ur.style.cssText='font-size:10px;margin-top:8px;'; ur.textContent='no daily data (excluded): '+s.unresolved.join(', '); wrap.appendChild(ur); }
+  const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; rn.textContent=s.note||''; wrap.appendChild(rn);
   return wrap;
 }
 
