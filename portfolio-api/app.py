@@ -36,6 +36,7 @@ import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/eff
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
+import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -163,6 +164,18 @@ SETTING_SPECS = {
     "leverage_paths":             {"env": "LEVERAGE_PATHS",             "default": 3000, "cast": int,   "label": "Leverage: ruin-model bootstrap paths", "group": "Leverage"},
     "leverage_expected_return_pct":{"env": "LEVERAGE_EXPECTED_RETURN_PCT","default": 7.0, "cast": float, "label": "Leverage: assumed asset expected return (borrow-vs-sell) (%)", "group": "Leverage"},
     "leverage_ltcg_rate_pct":     {"env": "LEVERAGE_LTCG_RATE_PCT",     "default": 15.0, "cast": float, "label": "Leverage: LTCG rate for the sell alternative (%)", "group": "Leverage"},
+    "avenue_market_return_pct":   {"env": "AVENUE_MARKET_RETURN_PCT",   "default": 7.0,  "cast": float, "label": "Cross-avenue: broad-index expected return (%)", "group": "Cross-avenue"},
+    "avenue_div_yield_pct":       {"env": "AVENUE_DIV_YIELD_PCT",       "default": 1.3,  "cast": float, "label": "Cross-avenue: index dividend yield (taxed yearly) (%)", "group": "Cross-avenue"},
+    "avenue_concentrated_return_pct":{"env": "AVENUE_CONCENTRATED_RETURN_PCT","default": 7.0,"cast": float, "label": "Cross-avenue: concentrated-add expected return (%)", "group": "Cross-avenue"},
+    "avenue_treasury_yield_pct":  {"env": "AVENUE_TREASURY_YIELD_PCT",  "default": 4.55, "cast": float, "label": "Cross-avenue: Treasury/bond yield (%)", "group": "Cross-avenue"},
+    "avenue_debt_apr_pct":        {"env": "AVENUE_DEBT_APR_PCT",        "default": 6.57, "cast": float, "label": "Cross-avenue: your debt APR (pay-down return) (%)", "group": "Cross-avenue"},
+    "avenue_debt_deductible":     {"env": "AVENUE_DEBT_DEDUCTIBLE",     "default": 0.0,  "cast": float, "label": "Cross-avenue: debt interest deductible? (1=yes,0=no)", "group": "Cross-avenue"},
+    "avenue_re_cap_rate_pct":     {"env": "AVENUE_RE_CAP_RATE_PCT",     "default": 6.0,  "cast": float, "label": "Cross-avenue: real-estate cap rate (%)", "group": "Cross-avenue"},
+    "avenue_re_appreciation_pct": {"env": "AVENUE_RE_APPRECIATION_PCT", "default": 2.0,  "cast": float, "label": "Cross-avenue: real-estate appreciation (%)", "group": "Cross-avenue"},
+    "avenue_re_depr_shield_frac": {"env": "AVENUE_RE_DEPR_SHIELD_FRAC", "default": 0.6,  "cast": float, "label": "Cross-avenue: RE income fraction shielded by depreciation", "group": "Cross-avenue"},
+    "avenue_roth_future_rate_pct":{"env": "AVENUE_ROTH_FUTURE_RATE_PCT","default": 24.0, "cast": float, "label": "Cross-avenue: expected future (RMD) marginal rate for Roth arb (%)", "group": "Cross-avenue"},
+    "avenue_match_rate_pct":      {"env": "AVENUE_MATCH_RATE_PCT",      "default": 0.0,  "cast": float, "label": "Cross-avenue: employer/HSA match rate (%, 0 if none)", "group": "Cross-avenue"},
+    "avenue_match_cap_dollars":   {"env": "AVENUE_MATCH_CAP_DOLLARS",   "default": 0.0,  "cast": float, "label": "Cross-avenue: annual match-eligible contribution ($)", "group": "Cross-avenue"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1538,6 +1551,79 @@ def run_leverage(x_analysis_token: str = Header(default="")):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     threading.Thread(target=_do_leverage, daemon=True).start()
     return {"status": "started"}
+
+
+# ============ G12: cross-avenue after-tax comparison sheet ============
+# Where should the marginal dollar go? Reduces every avenue to a comparable AFTER-TAX return with
+# a risk/liquidity tag. Pulls the live marginal rate + 0%-harvest budget from tax.py, the Roth
+# fill from the G8 curve, and the loan rate from G6; everything else is a SETTINGS assumption.
+# Pure CPU, live. Read-only decision-support.
+
+
+def _avenues():
+    cfg = _read_retire()
+    ctx = _tax_ctx(cfg)
+    status = ctx["status"]
+    gross_ord = 0.0
+    try:
+        gross_ord = float(cfg.get("annual_expenses_override") or cfg.get("roth_base_ordinary") or 0) or 0.0
+    except Exception:
+        gross_ord = 0.0
+    ded = tax.standard_deduction(status, ctx["age"], ctx["spouse_age"])
+    taxable_ord = max(0.0, gross_ord - ded)
+    marginal_rate = tax.marginal_ordinary_rate(taxable_ord, status) * 100.0
+    try:
+        harvest_budget = tax.gains_harvest_budget(gross_ord, status, ded,
+                                                  ctx["age"], ctx["spouse_age"])["gains_at_0pct_budget"]
+    except Exception:
+        harvest_budget = 0.0
+    # Roth fill + the marginal rate at that fill (the "convert now at" rate), from the G8 curve.
+    roth_fill, roth_now = 0.0, marginal_rate
+    try:
+        cur = _marginal_curve()
+        roth_fill = (cur.get("recommended_fill") or {}).get("fill_to") or 0.0
+        at = (cur.get("recommended_fill") or {}).get("at_point") or {}
+        if at.get("avg_rate_pct") is not None:
+            roth_now = at["avg_rate_pct"]
+    except Exception:
+        pass
+    inp = {
+        "marginal_ordinary_rate_pct": marginal_rate,
+        "ltcg_rate_pct": _knob("sizing_ltcg_rate_pct"),
+        "debt_apr_pct": _knob("avenue_debt_apr_pct"),
+        "debt_deductible": _knob("avenue_debt_deductible") > 0,
+        "treasury_yield_pct": _knob("avenue_treasury_yield_pct"),
+        "market_return_pct": _knob("avenue_market_return_pct"),
+        "div_yield_pct": _knob("avenue_div_yield_pct"),
+        "concentrated_return_pct": _knob("avenue_concentrated_return_pct"),
+        "re_cap_rate_pct": _knob("avenue_re_cap_rate_pct"),
+        "re_appreciation_pct": _knob("avenue_re_appreciation_pct"),
+        "re_depr_shield_frac": _knob("avenue_re_depr_shield_frac"),
+        "loan_rate_pct": _knob("leverage_loan_rate_pct"),
+        "harvest_budget": harvest_budget,
+        "roth_fill": roth_fill,
+        "roth_now_rate_pct": roth_now,
+        "roth_future_rate_pct": _knob("avenue_roth_future_rate_pct"),
+        "match_rate_pct": _knob("avenue_match_rate_pct"),
+        "match_cap_dollars": _knob("avenue_match_cap_dollars"),
+    }
+    sheet = avenues.build_sheet(inp)
+    sheet["generated_at"] = int(time.time())
+    sheet["assumptions"] = {"marginal_ordinary_rate_pct": round(marginal_rate, 1),
+                            "ltcg_rate_pct": _knob("sizing_ltcg_rate_pct"),
+                            "harvest_budget": round(harvest_budget, 0),
+                            "roth_fill": round(roth_fill, 0), "roth_now_rate_pct": round(roth_now, 1),
+                            "baseline_ordinary_income": round(gross_ord, 0), "filing_status": status}
+    return sheet
+
+
+@app.get("/api/avenues")
+def get_avenues():
+    """G12 cross-avenue after-tax comparison sheet (pure CPU, live)."""
+    try:
+        return _avenues()
+    except Exception as e:
+        return JSONResponse({"error": f"avenues engine failed: {e}"}, status_code=500)
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------
