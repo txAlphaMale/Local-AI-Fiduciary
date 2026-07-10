@@ -167,6 +167,7 @@ DEFAULT_PAPER_CASH = float(os.environ.get("PAPER_STARTING_CASH", "2000"))
 DEFAULT_SCANNER = {"watchlist": [], "include_holding_peers": False,
                    "criteria": {"min_rev_growth_pct": 15.0, "min_fcf_margin_pct": 0.0,
                                 "max_pe_forward": 60.0, "min_analyst_buy_pct": 60.0,
+                                "min_piotroski": 0,   # 0 = off; when >0 it becomes a 5th fit criterion
                                 "max_share_price": None, "min_share_price": None},
                    "strategy_description": "Quality growth: durable revenue growth, positive free cash flow, "
                                            "analyst support, and a valuation that isn't extreme.",
@@ -1153,6 +1154,74 @@ def _ollama_generate(prompt):
     return None, "no response"
 
 
+RDCF_DISCOUNT = float(os.environ.get("RDCF_DISCOUNT_PCT", "10")) / 100.0
+RDCF_TERM_GROWTH = float(os.environ.get("RDCF_TERM_GROWTH_PCT", "2.5")) / 100.0
+RDCF_YEARS = int(os.environ.get("RDCF_YEARS", "10"))
+
+
+def _reverse_dcf(valuation, fundamentals):
+    """Reverse-DCF: solve for the annual FCF growth rate the CURRENT market cap implies, given trailing
+    FCF, an N-year high-growth phase, a Gordon terminal, and a discount rate. A quick 'what does the
+    price assume' read — compare the implied growth to the company's actual growth. APPROXIMATION: uses
+    market cap vs FCF (equity-level, not FCFF/enterprise value; ignores net debt/cash). Returns None
+    when FCF<=0 or market cap/FCF is unavailable (reverse-DCF is undefined for negative FCF)."""
+    if not (valuation and fundamentals and fundamentals.get("available")):
+        return None
+    mcap_musd = valuation.get("market_cap_musd")
+    if not mcap_musd or mcap_musd <= 0:
+        return None
+    m = fundamentals.get("metrics") or {}
+    fcf = (fundamentals.get("ttm") or {}).get("free_cash_flow")
+    if fcf is None:
+        fcf = m.get("free_cash_flow")
+    if fcf is None or fcf <= 0:
+        return None
+    mcap = mcap_musd * 1e6
+    r, gt, N = RDCF_DISCOUNT, RDCF_TERM_GROWTH, RDCF_YEARS
+
+    def pv(g):
+        total, f = 0.0, float(fcf)
+        for i in range(1, N + 1):
+            f *= (1 + g)
+            total += f / (1 + r) ** i
+        total += (f * (1 + gt) / (r - gt)) / (1 + r) ** N     # Gordon terminal on year-N FCF
+        return total
+
+    lo, hi = -0.5, 1.0
+    if pv(lo) > mcap:      # price implies growth below the model floor
+        return {"implied_growth_pct": None, "fcf_ttm_musd": round(fcf / 1e6, 1),
+                "discount_pct": round(r * 100, 1), "terminal_growth_pct": round(gt * 100, 2), "years": N,
+                "note": "Price implies FCF growth below the model's -50% floor (trough FCF?). Reverse-DCF."}
+    if pv(hi) < mcap:      # price implies > 100%/yr — clamp
+        implied = 1.0
+    else:
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if pv(mid) < mcap:
+                lo = mid
+            else:
+                hi = mid
+        implied = (lo + hi) / 2
+    ig = round(implied * 100, 1)
+    actual = (m.get("trends") or {}).get("revenue_cagr_pct")
+    if actual is None:
+        actual = m.get("revenue_growth_pct")
+    verdict = None
+    if actual is not None:
+        if ig - actual >= 10:
+            verdict = "demanding — price implies FCF growth well above recent revenue growth"
+        elif actual - ig >= 10:
+            verdict = "undemanding — price implies less growth than recently realized"
+        else:
+            verdict = "roughly in line with recent revenue growth"
+    return {"implied_growth_pct": ig, "vs_actual_growth_pct": actual, "assessment": verdict,
+            "fcf_ttm_musd": round(fcf / 1e6, 1), "discount_pct": round(r * 100, 1),
+            "terminal_growth_pct": round(gt * 100, 2), "years": N,
+            "note": "Reverse-DCF: the annual FCF growth (N yrs high-growth + terminal) the CURRENT market "
+                    "cap implies vs trailing FCF. Approximation — market cap vs FCF, ignores net debt; "
+                    "compare implied vs actual growth to judge how demanding the price is. Not advice."}
+
+
 def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuation=None):
     fund_avail = bool(fundamentals and fundamentals.get("available"))
     fund_txt = "not available (foreign listing, fund/ETF, or not SEC-registered)"
@@ -1162,6 +1231,16 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
                                "scores": fundamentals.get("scores")})
     val_txt = json.dumps(valuation) if valuation else "not available"
     calib_block = _calibration_line()   # the model's own scored track record (may be ""); calibrates confidence
+    _rdcf = _reverse_dcf(valuation, fundamentals)   # implied-growth read from price vs FCF (may be None)
+    rdcf_line = ""
+    if _rdcf and _rdcf.get("implied_growth_pct") is not None:
+        rdcf_line = (f"REVERSE-DCF: at today's market cap the price implies roughly "
+                     f"{_rdcf['implied_growth_pct']}%/yr FCF growth for {_rdcf['years']} years "
+                     f"(discount {_rdcf['discount_pct']}%, terminal {_rdcf['terminal_growth_pct']}%)"
+                     + (f", vs recent revenue growth {_rdcf['vs_actual_growth_pct']}%"
+                        if _rdcf.get("vs_actual_growth_pct") is not None else "")
+                     + f" — {_rdcf.get('assessment') or 'judge whether that is achievable'}. Weigh whether "
+                       "that implied growth is realistic for this business.\n")
     # explicit coverage signal so the model rates confidence on what it WAS given, not an assumption of thinness
     n_analysts = (grounded or {}).get("analyst_total") or 0
     have_val = bool(valuation)
@@ -1203,6 +1282,7 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
         "still warrant caution, and the reverse. Also weigh price momentum and the multi-year growth trajectory: "
         "a durable, high-growth winner can stay richly valued, so do not mechanically downgrade on a high multiple "
         "alone — but flag clearly when the price has outrun the fundamentals.\n"
+        f"{rdcf_line}"
         "When present, weigh the disciplined quant scores in `scores`: the PIOTROSKI F-SCORE (fundamental "
         "strength out of 9 — 7+ strong, <=3 weak) and the ALTMAN Z' distress score (>2.9 safe, <1.23 "
         "distress); a high-growth name with a weak F-score or distress Z is a red flag worth calling out.\n"
@@ -1221,6 +1301,8 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
         return {"error": err}
     parsed = _parse_json_obj(raw)
     if parsed is not None:
+        if isinstance(parsed, dict) and _rdcf:
+            parsed["reverse_dcf"] = _rdcf     # surface the implied-growth read alongside the model's call
         return parsed
     return {"error": "non-JSON model response", "raw": (raw or "")[:600]}
 
@@ -2605,10 +2687,16 @@ def _screen_one(sym, crit):
 
     def chk(name, ok, value):
         checks.append({"criterion": name, "pass": bool(ok), "value": value})
+    pio = ((fund.get("scores") or {}).get("piotroski_f") or {}) if fund.get("available") else {}
+    pio_score = pio.get("score")
     chk("rev_growth", rev_g is not None and rev_g >= crit.get("min_rev_growth_pct", 0), rev_g)
     chk("fcf_margin", fcf_m is not None and fcf_m >= crit.get("min_fcf_margin_pct", 0), fcf_m)
     chk("valuation", pe_fwd is not None and pe_fwd <= crit.get("max_pe_forward", 1e12), pe_fwd)
     chk("analyst", buy_pct is not None and buy_pct >= crit.get("min_analyst_buy_pct", 0), buy_pct)
+    # Piotroski F is an OPT-IN 5th criterion (only when min_piotroski>0), so the default 4-check
+    # fit_score / OPP_MIN_FIT gate is unchanged for users who don't set a floor.
+    if crit.get("min_piotroski", 0) > 0:
+        chk("piotroski", pio_score is not None and pio_score >= crit.get("min_piotroski", 0), pio_score)
     # Forward expected return = analyst-target-implied 12mo upside (same sane bound as the
     # portfolio signals). NOT a promise — analyst targets are noisy and mean-reverting.
     tgt = g.get("target_mean")
@@ -2626,7 +2714,7 @@ def _screen_one(sym, crit):
     opp_score = round((exp_ret or 0.0) * fit_frac, 1)
     return {"ticker": sym, "available": bool(fund.get("available")), "price": price,
             "rev_growth_pct": rev_g, "fcf_margin_pct": fcf_m, "net_margin_pct": r.get("net_margin_pct"),
-            "pe_forward": pe_fwd, "analyst_rating": g.get("rating"), "analyst_buy_pct": buy_pct,
+            "piotroski": pio_score, "pe_forward": pe_fwd, "analyst_rating": g.get("rating"), "analyst_buy_pct": buy_pct,
             "target_mean": tgt, "expected_return_pct": exp_ret, "opportunity_score": opp_score,
             "fit_score": fit_score, "max_score": max_score, "checks": checks}
 

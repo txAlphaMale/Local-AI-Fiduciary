@@ -585,7 +585,7 @@ function analysisContent(a){
 function saveScanner(){
   const wl=(document.getElementById('scan-wl').value||'').split(/[,\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
   const crit={};
-  ['min_rev_growth_pct','min_fcf_margin_pct','max_pe_forward','min_analyst_buy_pct','max_share_price','min_share_price'].forEach(k=>{
+  ['min_rev_growth_pct','min_fcf_margin_pct','max_pe_forward','min_analyst_buy_pct','min_piotroski','max_share_price','min_share_price'].forEach(k=>{
     const x=document.getElementById('scan-'+k).value; if(x!=='') crit[k]=parseFloat(x);
   });
   const disco=(document.getElementById('scan-disco').value||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
@@ -612,7 +612,8 @@ function scannerContent(){
     `<div style="margin-bottom:7px;">Min rev growth <input id="scan-min_rev_growth_pct" type="number" value="${c.min_rev_growth_pct}" style="width:50px;"/>%`+
     ` · Min FCF margin <input id="scan-min_fcf_margin_pct" type="number" value="${c.min_fcf_margin_pct}" style="width:50px;"/>%`+
     ` · Max fwd P/E <input id="scan-max_pe_forward" type="number" value="${c.max_pe_forward}" style="width:50px;"/>`+
-    ` · Min analyst buy <input id="scan-min_analyst_buy_pct" type="number" value="${c.min_analyst_buy_pct}" style="width:50px;"/>%</div>`+
+    ` · Min analyst buy <input id="scan-min_analyst_buy_pct" type="number" value="${c.min_analyst_buy_pct}" style="width:50px;"/>%`+
+    ` · Min Piotroski F <input id="scan-min_piotroski" type="number" min="0" max="9" value="${c.min_piotroski==null?0:c.min_piotroski}" style="width:44px;"/><span class="muted" style="font-size:10px;">/9 (0=off)</span></div>`+
     `<div style="margin-bottom:7px;">Max $/share <input id="scan-max_share_price" type="number" value="${c.max_share_price!=null?c.max_share_price:''}" placeholder="any" style="width:64px;"/> · Min $/share <input id="scan-min_share_price" type="number" value="${c.min_share_price!=null?c.min_share_price:''}" placeholder="any" style="width:64px;"/></div>`+
     `<div style="margin-bottom:7px;"><label style="cursor:pointer;"><input id="scan-peers" type="checkbox" ${r.include_holding_peers?'checked':''}/> include peers of my holdings</label></div>`+
     `<div style="margin-bottom:7px;">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
@@ -664,6 +665,12 @@ function researchBrief(d){
   const vb=[]; if(va.pe_forward!=null) vb.push('fwd P/E '+(+va.pe_forward).toFixed(1)); if(va.ps_ttm!=null) vb.push('P/S '+(+va.ps_ttm).toFixed(1)); if(va.dividend_yield_pct!=null) vb.push('yld '+(+va.dividend_yield_pct).toFixed(2)+'%');
   if(gb.length) html+=`<div style="color:var(--blu);font-size:10px;margin-top:4px">▸ GAAP: ${gb.join(' · ')}</div>`;
   if(vb.length) html+=`<div style="color:var(--amber);font-size:10px;margin-top:1px">▸ VAL: ${vb.join(' · ')}</div>`;
+  const rd=m.reverse_dcf;
+  if(rd && rd.implied_growth_pct!=null){
+    const dem=/demanding/.test(rd.assessment||'');
+    html+=`<div style="font-size:10px;margin-top:1px;color:${dem?'var(--amber)':'var(--mut)'}">▸ REVERSE-DCF: price implies ~${rd.implied_growth_pct}%/yr FCF growth (${rd.years}y)`+
+      (rd.vs_actual_growth_pct!=null?` vs ${rd.vs_actual_growth_pct}% actual`:'')+(rd.assessment?` — ${dsc(rd.assessment)}`:'')+`</div>`;
+  }
   const ver=m.verification;
   if(ver&&ver.checked&&ver.grounded_score!=null){
     const thr=(ver.threshold!=null?ver.threshold:0.6), sc=Math.round(ver.grounded_score*100), low=ver.grounded_score<thr;
