@@ -30,6 +30,7 @@ import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat t
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
 import knowledge  # local user-populated RAG over a knowledge folder (N12) — search_knowledge tool
+import grounding  # dated-constant registry + staleness watchdog (G13a)
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -83,6 +84,10 @@ DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   "current_age": None, "target_age": 60, "exclude_account_types": ["Real Estate"],
                   "income_target_yield_pct": 3.5, "optimistic_real_return_pct": 8.0,
                   "volatility_pct": None,
+                  # Funded ratio (G1): share of spending that is essential ("needs") vs
+                  # flexible ("wants") — needs are discounted risk-free, wants at your
+                  # expected real return.
+                  "needs_pct_of_expenses": 65,
                   # Tax engine (G5): federal-only (TX has no state income tax).
                   "filing_status": "mfj", "spouse_age": None,
                   # Ordinary bracket to "fill" with Roth conversions in low years.
@@ -125,6 +130,7 @@ SETTING_SPECS = {
     "tlh_min_loss":  {"env": "TLH_MIN_LOSS",  "default": 50,      "cast": float, "label": "Ignore TLH losses below ($)", "group": "Tax audit"},
     "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
     "strategist_search_budget": {"env": "STRATEGIST_SEARCH_BUDGET", "default": 20, "cast": int, "label": "Strategist web-search calls per autonomous run", "group": "Strategist"},
+    "tips_fallback_pct": {"env": "TIPS_FALLBACK_PCT", "default": 2.0, "cast": float, "label": "TIPS real yield fallback (%) when FRED is unreachable", "group": "Funded ratio"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -784,10 +790,44 @@ def _scorecard(min_age_days=None):
     edge = None
     if by_rating["Buy"] and by_rating["Hold"]:
         edge = round(by_rating["Buy"]["avg_fwd_return_pct"] - by_rating["Hold"]["avg_fwd_return_pct"], 2)
+    # ---- G13c: calibration — does stated confidence carry real information? ----
+    # Map each confidence tier to an implied P(directional call is right) and score it
+    # against the realized hit (Buy→rose, Sell→fell). Brier = mean (p − outcome)²:
+    # 0.25 is a coin flip; lower is better. The per-tier gap (actual − implied) is the
+    # honest read: a 'high' tier that hits like the 'low' tier is decoration, not signal.
+    CONF_P = {"high": 0.75, "med": 0.60, "low": 0.50}
+    calibration = None
+    cal_calls = [x for x in directional if x.get("confidence") in CONF_P]
+    if cal_calls:
+        briers = []
+        tiers = {}
+        for x in cal_calls:
+            p = CONF_P[x["confidence"]]
+            hit = 1.0 if ((x["rating"] == "Buy" and x["fwd_return_pct"] > 0)
+                          or (x["rating"] == "Sell" and x["fwd_return_pct"] < 0)) else 0.0
+            briers.append((p - hit) ** 2)
+            t = tiers.setdefault(x["confidence"], {"n": 0, "hits": 0})
+            t["n"] += 1
+            t["hits"] += int(hit)
+        by_tier = []
+        for c in ("high", "med", "low"):
+            t = tiers.get(c)
+            if t:
+                actual = round(t["hits"] / t["n"] * 100, 1)
+                by_tier.append({"confidence": c, "n": t["n"], "implied_hit_pct": CONF_P[c] * 100,
+                                "actual_hit_pct": actual,
+                                "gap_pts": round(actual - CONF_P[c] * 100, 1)})
+        calibration = {"brier": round(sum(briers) / len(briers), 3), "coin_flip_brier": 0.25,
+                       "n": len(cal_calls), "implied_p": CONF_P, "by_tier": by_tier,
+                       "note": ("Brier score of the model's stated confidence vs realized directional "
+                                "hits (implied P: high 75% / med 60% / low 50% — an assumption, stated "
+                                "so it can be argued with). Below 0.25 beats a coin flip; a tier whose "
+                                "actual hit rate doesn't exceed the tier below it is not earning its "
+                                "label. Small samples are noisy.")}
     return {"status": "ready" if scored else "building", "scored_calls": len(scored),
             "logged_calls": len(log), "min_age_days": min_age,
             "by_rating": by_rating, "by_confidence": by_conf,
-            "buy_minus_hold_pct": edge,
+            "buy_minus_hold_pct": edge, "calibration": calibration,
             "directional_hit_rate_pct": round(hits / len(directional) * 100, 1) if directional else None,
             "recent": sorted(scored, key=lambda x: -x.get("ts", 0))[:20],
             "note": "Forward return from each dated rating's price to now, by rating & confidence. "
@@ -798,6 +838,17 @@ def _scorecard(min_age_days=None):
 @app.get("/api/scorecard")
 def get_scorecard():
     return _scorecard()
+
+
+@app.get("/api/grounding")
+def get_grounding():
+    """G13 grounding watchdog: the dated-constant registry (every tax/ACA/SS figure with its
+    source + verification date + staleness tripwire) and the LLM-as-judge verdict audit.
+    Cheap: attribute reads + one small file — no prices, no LLM. Confidence calibration
+    (Brier) lives on /api/scorecard (it needs price fetches)."""
+    g = grounding.summary()
+    g["verifier"] = _verifier_summary()
+    return g
 
 
 # --- Calibration memory (N13 candidate 2): feed the model its OWN scored track record into the brief
@@ -1314,6 +1365,62 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
 #     research (force=True) and directional Buy/Sell nightly calls only — never the Hold batch. ---
 BRIEF_VERIFY = os.environ.get("BRIEF_VERIFY", "1").lower() in ("1", "true", "yes", "on")
 BRIEF_VERIFY_THRESHOLD = float(os.environ.get("BRIEF_VERIFY_THRESHOLD", "0.6"))  # below this → downgrade confidence
+# G13b: keep every verifier verdict (durable JSONL) so judge quality is itself auditable —
+# sample entries for human labeling, watch the downgrade rate, catch a drifting judge.
+VERIFIER_LOG_FILE = os.environ.get("VERIFIER_LOG_FILE", "/data/verifier_log.jsonl")
+VERIFIER_LOG_MAX = int(os.environ.get("VERIFIER_LOG_MAX", "1000"))
+
+
+def _log_verifier(ticker, llm, ver):
+    """Append one JSONL row per verifier verdict (capped). Best-effort, never raises."""
+    try:
+        row = {"ts": int(time.time()), "date": datetime.date.today().isoformat(),
+               "ticker": ticker, "rating": (llm or {}).get("rating"),
+               "checked": bool(ver.get("checked")),
+               "grounded_score": ver.get("grounded_score"),
+               "unsupported_n": len(ver.get("unsupported_claims") or []),
+               "downgraded": bool((llm or {}).get("confidence_adjusted")),
+               "confidence": (llm or {}).get("confidence"),
+               "confidence_original": (llm or {}).get("confidence_original"),
+               "reason": ver.get("reason")}
+        lines = []
+        try:
+            with open(VERIFIER_LOG_FILE, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            pass
+        lines.append(json.dumps(row))
+        lines = lines[-VERIFIER_LOG_MAX:]
+        os.makedirs(os.path.dirname(VERIFIER_LOG_FILE) or ".", exist_ok=True)
+        with open(VERIFIER_LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
+def _verifier_summary(recent=10):
+    """Aggregate judge behavior from the verdict log: volume, average groundedness, downgrade
+    rate, failure rate — the 'is the judge itself sane?' dashboard (G13b)."""
+    try:
+        with open(VERIFIER_LOG_FILE, encoding="utf-8") as f:
+            rows = [json.loads(x) for x in f.read().splitlines() if x.strip()]
+    except Exception:
+        rows = []
+    if not rows:
+        return {"status": "empty", "note": "No verifier verdicts logged yet — they accrue as "
+                "Buy/Sell and on-demand briefs get the groundedness pass."}
+    ok = [r for r in rows if r.get("checked")]
+    scores = [r["grounded_score"] for r in ok if r.get("grounded_score") is not None]
+    return {"status": "ready", "verdicts": len(rows), "checked": len(ok),
+            "check_failure_pct": round((len(rows) - len(ok)) / len(rows) * 100, 1),
+            "avg_grounded_score": round(sum(scores) / len(scores), 3) if scores else None,
+            "below_threshold_pct": round(sum(1 for s in scores if s < BRIEF_VERIFY_THRESHOLD)
+                                         / len(scores) * 100, 1) if scores else None,
+            "downgrade_pct": round(sum(1 for r in ok if r.get("downgraded")) / len(ok) * 100, 1) if ok else None,
+            "recent": rows[-recent:][::-1],
+            "note": "Every LLM-as-judge verdict, logged for calibration: sample entries against the "
+                    "underlying briefs to label the judge itself. A downgrade rate near 0% or 100% "
+                    "means the threshold (or the judge) needs attention."}
 _CONF_ORDER = ["low", "med", "high"]
 
 
@@ -1396,6 +1503,7 @@ def _verify_and_apply(sym, name, llm, grounded, news, fundamentals=None, valuati
             llm["confidence"] = new
             llm["confidence_original"] = orig
             llm["confidence_adjusted"] = True
+    _log_verifier(sym, llm, ver)   # G13b: verdicts are themselves audited
     return llm
 
 
@@ -2057,6 +2165,120 @@ def _portfolio_signals(d):
             "dividend_coverage_pct": round(yld_cov / total * 100, 1)}
 
 
+# ---- G1: Funded ratio — the household-balance-sheet solvency gauge -----------------
+# funded ratio = PV(investable + future savings) / PV(retirement spending liability).
+# Spending splits into NEEDS (essential — discounted at the RISK-FREE real TIPS yield,
+# because an essential liability shouldn't be funded by hoping equity returns show up)
+# and WANTS (flexible — discounted at your expected real return). The needs-only ratio
+# >= 1.0 is the actuarial "your essentials are funded without equity risk" line.
+TIPS_CACHE_FILE = os.environ.get("TIPS_CACHE_FILE", "/data/tips_yield.json")
+TIPS_SERIES = os.environ.get("TIPS_SERIES", "DFII10")   # FRED: 10-yr TIPS constant-maturity real yield
+
+
+def _tips_real_yield():
+    """Latest 10-yr TIPS real yield (%) from FRED's public fredgraph CSV (no API key),
+    fetched at most once per day (cached to /data). Falls back to the `tips_fallback_pct`
+    knob when FRED is unreachable. Returns (yield_pct, source, observation_date)."""
+    today = datetime.date.today()
+    try:
+        with open(TIPS_CACHE_FILE, encoding="utf-8") as f:
+            c = json.load(f) or {}
+        if c.get("fetched") == today.isoformat() and c.get("yield_pct") is not None:
+            return c["yield_pct"], c.get("source") or f"FRED {TIPS_SERIES}", c.get("obs_date")
+    except Exception:
+        pass
+    try:
+        r = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv",
+                         params={"id": TIPS_SERIES,
+                                 "cosd": (today - datetime.timedelta(days=45)).isoformat()},
+                         timeout=20)
+        r.raise_for_status()
+        obs = []
+        for ln in r.text.strip().splitlines()[1:]:
+            parts = ln.split(",")
+            if len(parts) >= 2 and parts[1].strip() not in (".", ""):
+                obs.append((parts[0].strip(), float(parts[1])))
+        if obs:
+            dt, y = obs[-1]
+            try:
+                os.makedirs(os.path.dirname(TIPS_CACHE_FILE) or ".", exist_ok=True)
+                with open(TIPS_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"fetched": today.isoformat(), "yield_pct": y,
+                               "obs_date": dt, "source": f"FRED {TIPS_SERIES}"}, f)
+            except Exception:
+                pass
+            return y, f"FRED {TIPS_SERIES}", dt
+    except Exception:
+        pass
+    return _knob("tips_fallback_pct"), "fallback knob (FRED unreachable)", None
+
+
+def _funded_ratio(investable, annual_savings, gross_draw, acc_yrs, ret_yrs,
+                  needs_pct, exp_real_pct, ss_schedule=None):
+    """Actuarial funded ratio in REAL terms, matching the Monte Carlo's cash flows:
+    the liability is each retirement year's GROSS portfolio draw (tax gross-up and
+    Social-Security offsets already applied via `gross_draw`/`ss_schedule`), split
+    needs/wants and discounted from TODAY. Assets = investable now + future savings
+    discounted risk-free (conservative: paychecks aren't equity). Returns a dict."""
+    tips_pct, tips_src, tips_asof = _tips_real_yield()
+    r_needs = max(0.0, float(tips_pct or 0)) / 100.0
+    r_wants = max(r_needs, float(exp_real_pct or 0) / 100.0)   # never discount wants below risk-free
+    needs_frac = min(1.0, max(0.0, float(needs_pct or 65) / 100.0))
+    sched = sorted(ss_schedule or [], key=lambda t: t[0])
+
+    def _draw(y):
+        base = gross_draw
+        for sy, sv in sched:
+            if y >= sy:
+                base = sv
+        return max(0.0, base)
+
+    pv_needs = pv_wants = 0.0
+    for y in range(int(ret_yrs)):
+        t = acc_yrs + y + 1                       # end-of-year convention, years from today
+        dr = _draw(y)
+        pv_needs += (dr * needs_frac) / ((1 + r_needs) ** t)
+        pv_wants += (dr * (1 - needs_frac)) / ((1 + r_wants) ** t)
+    pv_savings = sum((annual_savings or 0) / ((1 + r_needs) ** t)
+                     for t in range(1, int(acc_yrs) + 1))
+    pv_assets = (investable or 0) + pv_savings
+    pv_liab = pv_needs + pv_wants
+    fr = round(pv_assets / pv_liab, 3) if pv_liab > 0 else None
+    fr_ess = round(pv_assets / pv_needs, 3) if pv_needs > 0 else None
+    return {"funded_ratio": fr, "essential_funded_ratio": fr_ess,
+            "pv_assets": round(pv_assets, 2), "pv_investable": round(investable or 0, 2),
+            "pv_future_savings": round(pv_savings, 2),
+            "pv_liability": round(pv_liab, 2), "pv_needs": round(pv_needs, 2),
+            "pv_wants": round(pv_wants, 2),
+            "needs_pct_of_expenses": round(needs_frac * 100, 1),
+            "discount": {"needs_real_pct": round(r_needs * 100, 2),
+                         "wants_real_pct": round(r_wants * 100, 2),
+                         "tips_source": tips_src, "tips_asof": tips_asof},
+            "note": ("Funded ratio = PV(investable + future savings) ÷ PV(retirement spending, "
+                     "gross of tax, net of the Social Security floor), all in today's dollars. "
+                     "NEEDS are discounted at the live 10-yr TIPS real yield (risk-free matching "
+                     "for essentials); WANTS at your expected real return. ≥1.0 = fully funded; "
+                     "the ESSENTIAL ratio ≥1.0 means needs are covered without equity risk. "
+                     "Tracked daily beside net worth. Informational, not advice.")}
+
+
+def _snapshot_funded(fr):
+    """Merge today's funded ratio into the daily value-history row (idempotent per day),
+    so solvency accrues a history right beside net worth. Best-effort, never raises."""
+    if fr is None:
+        return
+    try:
+        hist = _read_value_history()
+        today = datetime.date.today().isoformat()
+        if hist and hist[-1].get("date") == today:
+            hist[-1]["funded_ratio"] = fr
+            os.makedirs(os.path.dirname(VALUE_HISTORY_FILE) or ".", exist_ok=True)
+            with open(VALUE_HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(hist, f)
+    except Exception:
+        pass
+
+
 def _retirement():
     d = _data()
     cfg = _read_retire()
@@ -2096,6 +2318,7 @@ def _retirement():
                    "income_target_yield_pct": cfg.get("income_target_yield_pct"),
                    "optimistic_real_return_pct": cfg.get("optimistic_real_return_pct"),
                    "volatility_pct": cfg.get("volatility_pct") or MC_VOLATILITY_PCT,
+                   "needs_pct_of_expenses": cfg.get("needs_pct_of_expenses"),
                    # Tax / ACA / SS config echoes so the PLAN editor can prefill them (G1/G2/G5).
                    "filing_status": cfg.get("filing_status") or "mfj",
                    "convert_fill_to_rate": cfg.get("convert_fill_to_rate"),
@@ -2185,6 +2408,7 @@ def _retirement():
     monte_carlo = None
     bridge = None
     social_security = None
+    funded = None
     if annual_expenses:
         if age is not None and cfg.get("target_age"):
             acc_yrs = max(0, int(cfg["target_age"]) - int(age))
@@ -2280,12 +2504,22 @@ def _retirement():
             bridge = _bridge_plan(annual_expenses, age, retire_age)
         except Exception:
             bridge = None
+        # ---- Funded ratio (G1): same cash flows as the MC, valued as a balance sheet ----
+        try:
+            funded = _funded_ratio(investable, annual_savings, mc_expenses, acc_yrs, ret_yrs,
+                                   cfg.get("needs_pct_of_expenses"),
+                                   cfg.get("expected_real_return_pct") or r * 100,
+                                   ss_schedule=ss_schedule)
+            _snapshot_funded((funded or {}).get("funded_ratio"))
+        except Exception:
+            funded = None
 
     return {"generated_at": int(time.time()), "investable_assets": investable, "fi_number": fi_number,
             "progress_pct": progress_pct, "years_to_fi": years, "fi_year": fi_year, "fi_age": fi_age,
             "annual_savings": annual_savings, "coast_fi": coast, "sensitivity": sens,
             "portfolio_signals": signals, "scenarios": scenarios, "income": income,
             "monte_carlo": monte_carlo, "bridge": bridge, "social_security": social_security,
+            "funded_ratio": funded,
             "assumptions": assumptions, "notes": notes,
             "note": "Informational FIRE projection — not financial advice. Tune assumptions in the config."}
 

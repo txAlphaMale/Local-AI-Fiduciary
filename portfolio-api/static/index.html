@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -295,6 +295,7 @@ function render(){
       {key:'accounts',label:'ACCOUNTS',build:()=>accountsEditor()},
       haveTax && {key:'tax',label:'TAX · TLH',build:()=>taxContent(TAX, TAXAUDIT)},
       haveFL && {key:'fees',label:'FEES · LIQUIDITY',build:()=>flContent(FL)},
+      GROUND && !GROUND.error && {key:'grounding',label:'GROUNDING',build:()=>groundingContent()},
     ]));
   } else if(TAB==='insights' && haveInsights){
     const hasExp=(EXP && (!EXP.error || EXP.computing));
@@ -755,6 +756,62 @@ function alertsContent(){
   return wrap;
 }
 
+function groundingContent(){
+  // G13 grounding watchdog: dated-constant registry + LLM-as-judge audit + confidence calibration.
+  const g=GROUND||{}, wrap=el('div');
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
+  const yearNow=new Date().getFullYear();
+  // ---- staleness alerts ----
+  const als=g.alerts||[];
+  if(als.length){ als.forEach(a2=>{ const w=el('div'); w.style.cssText='font-size:11px;margin-bottom:6px;color:'+((a2.level==='stale'||a2.level==='action')?'var(--amber)':'var(--muted)'); w.textContent=(a2.level==='stale'?'⚠ ':'• ')+a2.msg; wrap.appendChild(w); }); }
+  else{ const ok=el('div'); ok.style.cssText='font-size:11px;margin-bottom:6px;color:var(--grn)'; ok.textContent='✓ every dated constant is current for '+yearNow+' — next re-verification window: January '+(yearNow+1); wrap.appendChild(ok); }
+  // ---- dated-constant registry ----
+  wrap.appendChild(el('div','ph','DATED CONSTANTS · TAX / ACA / SOCIAL SECURITY'));
+  const t=el('table'); const hr=el('tr');
+  hr.innerHTML='<th class="l">PARAMETER</th><th>APPLIES TO</th><th>KIND</th><th class="l">SOURCE</th><th>VERIFIED</th>'; t.appendChild(hr);
+  (g.params||[]).forEach(p=>{
+    const stale=p.applies_to_year&&p.applies_to_year<yearNow;
+    const tr=el('tr');
+    tr.innerHTML=`<td class="l sym" title="${esc(JSON.stringify(p.value))}">${esc(p.label||p.key)}</td>`+
+      `<td class="${stale?'neg':''}">${p.applies_to_year||'statutory'}${stale?' ⚠':''}</td>`+
+      `<td class="muted" style="font-size:10px">${esc(p.kind||'')}</td>`+
+      `<td class="l" style="font-size:10px">${p.source_url?`<a href="${esc(p.source_url)}" target="_blank" rel="noopener" style="color:var(--blu)">${esc((p.source||p.source_url).slice(0,70))}</a>`:esc(p.source||'')}</td>`+
+      `<td class="muted">${esc(p.verified||'—')}</td>`;
+    t.appendChild(tr);
+  });
+  wrap.appendChild(t);
+  const gn=el('div','muted'); gn.style.cssText='font-size:10px;line-height:1.45;margin:6px 0 14px;'; gn.textContent=g.note||''; wrap.appendChild(gn);
+  // ---- verifier (LLM-as-judge) audit ----
+  const v=g.verifier||{};
+  const vh=el('div','ph','LLM-AS-JUDGE · GROUNDEDNESS VERDICT AUDIT'); vh.style.marginTop='4px'; wrap.appendChild(vh);
+  if(v.status!=='ready'){ const w=el('div','muted'); w.style.cssText='font-size:11px;margin:6px 0 14px;'; w.textContent=v.note||'no verdicts yet'; wrap.appendChild(w); }
+  else{
+    const vs=el('div'); vs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    vs.innerHTML=st('VERDICTS',v.verdicts)+
+      st('AVG GROUNDEDNESS',(v.avg_grounded_score!=null?Math.round(v.avg_grounded_score*100)+'%':'—'),(v.avg_grounded_score||0)>=0.6?'pos':'neg')+
+      st('BELOW THRESHOLD',(v.below_threshold_pct!=null?v.below_threshold_pct+'%':'—'))+
+      st('DOWNGRADED',(v.downgrade_pct!=null?v.downgrade_pct+'%':'—'))+
+      st('JUDGE FAILURES',(v.check_failure_pct!=null?v.check_failure_pct+'%':'—'));
+    wrap.appendChild(vs);
+    const vn=el('div','muted'); vn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;'; vn.textContent=v.note||''; wrap.appendChild(vn);
+  }
+  // ---- confidence calibration (Brier), from the scorecard ----
+  const c=(SCORE&&!SCORE.error?SCORE.calibration:null);
+  const ch=el('div','ph','CONFIDENCE CALIBRATION · BRIER SCORE'); ch.style.marginTop='4px'; wrap.appendChild(ch);
+  if(!c){ const w=el('div','muted'); w.style.cssText='font-size:11px;margin:6px 0;'; w.textContent='Accrues once enough directional (Buy/Sell) calls age past the scorecard window.'; wrap.appendChild(w); }
+  else{
+    const cs=el('div'); cs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    cs.innerHTML=st('BRIER',c.brier,(c.brier<=c.coin_flip_brier?'pos':'neg'))+st('COIN FLIP','0.25')+st('CALLS',c.n);
+    wrap.appendChild(cs);
+    const ct=el('table'); const chr=el('tr'); chr.innerHTML='<th class="l">CONFIDENCE</th><th>N</th><th>IMPLIED HIT</th><th>ACTUAL HIT</th><th>GAP</th>'; ct.appendChild(chr);
+    (c.by_tier||[]).forEach(x=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${esc(x.confidence)}</td><td>${x.n}</td><td>${x.implied_hit_pct}%</td><td>${x.actual_hit_pct}%</td><td class="${x.gap_pts>=0?'pos':'neg'}">${x.gap_pts>0?'+':''}${x.gap_pts}pt</td>`; ct.appendChild(tr); });
+    wrap.appendChild(ct);
+    const cn=el('div','muted'); cn.style.cssText='font-size:10px;line-height:1.45;margin-top:4px;'; cn.textContent=c.note||''; wrap.appendChild(cn);
+  }
+  return wrap;
+}
+
 function saveRetire(){
   const num=id=>{const x=document.getElementById(id).value; return x===''?null:parseFloat(x);};
   const val=id=>{const e=document.getElementById(id); return e?e.value:'';};
@@ -774,6 +831,7 @@ function saveRetire(){
   const fs=val('ret-fs'); if(fs) body.filing_status=fs;
   const opt=(id,key,xf)=>{const v=num(id); if(v!=null) body[key]=xf?xf(v):v;};
   opt('ret-fill','convert_fill_to_rate',v=>v/100);   // UI shows % ; config stores a decimal rate
+  opt('ret-needs','needs_pct_of_expenses');          // funded-ratio needs/wants split (G1)
   opt('ret-hh','household_size');
   opt('ret-slcsp','aca_slcsp_annual');
   opt('ret-by','birth_year');
@@ -830,7 +888,7 @@ function planContent(r){
     const wrap=el('div');
     const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;margin-bottom:14px;';
     ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">ASSUMPTIONS · EDIT</div>`+
-      `<div style="margin-bottom:7px;">Withdrawal rate <input id="ret-wr" type="number" step="0.1" value="${pv(a.withdrawal_rate_pct)}" style="width:54px;"/>% &nbsp; Real return <input id="ret-rr" type="number" step="0.1" value="${pv(a.expected_real_return_pct)}" style="width:54px;"/>% &nbsp; Optimistic <input id="ret-opt" type="number" step="0.1" value="${pv(a.optimistic_real_return_pct)}" placeholder="8" style="width:54px;"/>% &nbsp; Volatility <input id="ret-vol" type="number" step="0.5" value="${pv(a.volatility_pct)}" placeholder="16" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(Monte Carlo)</span></div>`+
+      `<div style="margin-bottom:7px;">Withdrawal rate <input id="ret-wr" type="number" step="0.1" value="${pv(a.withdrawal_rate_pct)}" style="width:54px;"/>% &nbsp; Real return <input id="ret-rr" type="number" step="0.1" value="${pv(a.expected_real_return_pct)}" style="width:54px;"/>% &nbsp; Optimistic <input id="ret-opt" type="number" step="0.1" value="${pv(a.optimistic_real_return_pct)}" placeholder="8" style="width:54px;"/>% &nbsp; Volatility <input id="ret-vol" type="number" step="0.5" value="${pv(a.volatility_pct)}" placeholder="16" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(Monte Carlo)</span> &nbsp; Needs <input id="ret-needs" type="number" step="5" min="0" max="100" value="${pv(a.needs_pct_of_expenses)}" placeholder="65" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(essential share of spending — funded ratio)</span></div>`+
       `<div style="margin-bottom:7px;">Current age <input id="ret-age" type="number" value="${pv(a.current_age)}" placeholder="—" style="width:54px;"/> &nbsp; Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/></div>`+
       `<div style="margin-bottom:9px;">Annual expenses <input id="ret-exp" type="number" value="${a.expenses_source==='override'?Math.round(a.annual_expenses):''}" placeholder="${a.expenses_source==='monarch_cashflow'?'Monarch '+Math.round(a.annual_expenses):'set target $'}" style="width:120px;"/> &nbsp; Annual savings <input id="ret-sav" type="number" value="" placeholder="${a.annual_savings!=null?Math.round(a.annual_savings):'set $'}" style="width:120px;"/></div>`+
       `<div style="margin-bottom:9px;">Income target yield <input id="ret-yield" type="number" step="0.1" value="${pv(a.income_target_yield_pct)}" placeholder="3.5" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(for the dividend-income view)</span></div>`+
@@ -856,6 +914,20 @@ function planContent(r){
     wrap.appendChild(stats);
     const bar=el('div'); bar.style.cssText='height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-bottom:14px;';
     const fill=el('div'); fill.style.cssText=`height:100%;width:${Math.min(100,r.progress_pct||0)}%;background:var(--grn);`; bar.appendChild(fill); wrap.appendChild(bar);
+    if(r.funded_ratio && r.funded_ratio.funded_ratio!=null){
+      const f=r.funded_ratio, fd=f.discount||{};
+      const fc=v=>v>=1?'pos':(v>=0.8?'':'neg');
+      const fh=el('div','ph','FUNDED RATIO · HOUSEHOLD BALANCE SHEET'); fh.style.marginTop='4px'; wrap.appendChild(fh);
+      const fr=el('div'); fr.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+      fr.innerHTML=st('FUNDED',Math.round(f.funded_ratio*100)+'%',fc(f.funded_ratio))+
+        st('ESSENTIALS ONLY',(f.essential_funded_ratio!=null?Math.round(f.essential_funded_ratio*100)+'%':'—'),fc(f.essential_funded_ratio||0))+
+        st('PV ASSETS',u0(f.pv_assets))+st('PV SPENDING',u0(f.pv_liability))+
+        st('TIPS REAL YIELD',(fd.needs_real_pct!=null?fd.needs_real_pct+'%':'—'));
+      wrap.appendChild(fr);
+      const fn=el('div','muted'); fn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;';
+      fn.textContent=`Needs ${f.needs_pct_of_expenses}% of spending discounted at ${fd.needs_real_pct}% (${fd.tips_source||'TIPS'}${fd.tips_asof?' · '+fd.tips_asof:''}); wants at ${fd.wants_real_pct}%. `+(f.note||'');
+      wrap.appendChild(fn);
+    }
     if(r.monte_carlo){
       const mc=r.monte_carlo, eb=mc.ending_balance_real||{};
       const sc=mc.success_pct>=80?'pos':(mc.success_pct>=60?'':'neg');
