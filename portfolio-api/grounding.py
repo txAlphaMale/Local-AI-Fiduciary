@@ -25,11 +25,13 @@ import datetime
 import tax
 import aca
 import ss
+import estate
 
 # Month precision is deliberate: the modules were authored/verified against the
 # cited primary sources in July 2026 (see each module's docstring). If you
 # re-verify a figure, bump the date here.
-VERIFIED = {"tax": "2026-07", "aca": "2026-07", "ss": "2026-07"}
+VERIFIED = {"tax": "2026-07", "aca": "2026-07", "ss": "2026-07",
+            "estate": "2026-07-10"}   # verified vs Rev. Proc. 2025-32 coverage at build time
 
 # kind: "indexed" re-publishes every year (MUST re-verify annually);
 #       "statutory" is fixed in law until Congress acts (verify the law still stands);
@@ -92,6 +94,17 @@ PARAM_SPECS = [
      "source": lambda: "IRC §86 (thresholds NOT inflation-indexed since 1983/1993)",
      "source_url": "https://www.irs.gov/publications/p915",
      "module": "ss"},
+    {"key": "estate.exemption", "label": "Estate/gift basic exclusion + GST exemption + top rate",
+     "value": lambda: {"exemption": estate.ESTATE_EXEMPTION, "gst": estate.GST_EXEMPTION,
+                       "top_rate": estate.TOP_RATE},
+     "year": lambda: estate.TAX_YEAR, "kind": "indexed", "source": lambda: estate.SOURCE,
+     "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/estate-tax",
+     "module": "estate"},
+    {"key": "estate.annual_exclusion", "label": "Annual gift-tax exclusion per donee (+529 superfund ×5)",
+     "value": lambda: {"exclusion": estate.ANNUAL_EXCLUSION, "superfund_years": estate.SUPERFUND_YEARS},
+     "year": lambda: estate.TAX_YEAR, "kind": "indexed", "source": lambda: estate.SOURCE,
+     "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/frequently-asked-questions-on-gift-taxes",
+     "module": "estate"},
 ]
 
 

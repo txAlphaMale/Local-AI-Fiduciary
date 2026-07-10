@@ -31,6 +31,7 @@ import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with t
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
 import knowledge  # local user-populated RAG over a knowledge folder (N12) — search_knowledge tool
 import grounding  # dated-constant registry + staleness watchdog (G13a)
+import estate     # estate & generational-wealth engine (G2) — step-up, gift-vs-hold, titling
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -88,6 +89,8 @@ DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   # flexible ("wants") — needs are discounted risk-free, wants at your
                   # expected real return.
                   "needs_pct_of_expenses": 65,
+                  # Estate (G2): heirs/donees for the annual-exclusion gifting runway.
+                  "estate_donees": None,
                   # Tax engine (G5): federal-only (TX has no state income tax).
                   "filing_status": "mfj", "spouse_age": None,
                   # Ordinary bracket to "fill" with Roth conversions in low years.
@@ -131,6 +134,11 @@ SETTING_SPECS = {
     "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
     "strategist_search_budget": {"env": "STRATEGIST_SEARCH_BUDGET", "default": 20, "cast": int, "label": "Strategist web-search calls per autonomous run", "group": "Strategist"},
     "tips_fallback_pct": {"env": "TIPS_FALLBACK_PCT", "default": 2.0, "cast": float, "label": "TIPS real yield fallback (%) when FRED is unreachable", "group": "Funded ratio"},
+    "rb_lower_band":  {"env": "RB_LOWER_BAND",  "default": 70,  "cast": float, "label": "Risk-based guardrails: cut spending when success < (%)", "group": "Monte Carlo"},
+    "rb_upper_band":  {"env": "RB_UPPER_BAND",  "default": 99,  "cast": float, "label": "Risk-based guardrails: raise spending when success > (%)", "group": "Monte Carlo"},
+    "rb_adjust_pct":  {"env": "RB_ADJUST_PCT",  "default": 10,  "cast": float, "label": "Risk-based guardrails: spending adjustment step (%)", "group": "Monte Carlo"},
+    "rb_inner_runs":  {"env": "RB_INNER_RUNS",  "default": 400, "cast": int,   "label": "Risk-based guardrails: paths per success-grid cell", "group": "Monte Carlo"},
+    "estate_heir_ltcg_pct": {"env": "ESTATE_HEIR_LTCG_PCT", "default": 15.0, "cast": float, "label": "Gift-vs-hold: assumed heir LTCG rate (%)", "group": "Estate"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -849,6 +857,64 @@ def get_grounding():
     g = grounding.summary()
     g["verifier"] = _verifier_summary()
     return g
+
+
+@app.get("/api/estate")
+def get_estate():
+    """G2 estate & generational view: snapshot vs the federal exemption, per-account step-up
+    ledger, gift-vs-hold on the top embedded-gain taxable positions, annual-exclusion gifting
+    runway, titling/beneficiary audit, trust triggers. Decision-support only — not legal advice."""
+    try:
+        d = _data()
+        cfg = _read_retire()
+        married = tax.norm_status(cfg.get("filing_status") or "mfj") == "mfj"
+        growth = cfg.get("expected_real_return_pct") or 5.0
+        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+                       for a in d.get("accounts", [])}
+        accounts, taxable_positions = [], []
+        for acct in d.get("by_account", []):
+            name = acct.get("account")
+            status = acct_status.get(name) or _account_tax_status(name, "Investments")
+            if status == "na":
+                continue
+            hs = acct.get("holdings", [])
+            val = sum(h.get("value") or 0 for h in hs)
+            gains = [h.get("gain") for h in hs if h.get("gain") is not None]
+            costs = [h.get("cost_total") for h in hs if h.get("cost_total") is not None]
+            accounts.append({"name": name, "tax_status": status, "value": val,
+                             "gain_total": sum(gains) if gains else None,
+                             "basis_total": sum(costs) if costs else None})
+            if status == "taxable":
+                for h in hs:
+                    g_ = h.get("gain")
+                    if g_ and g_ > 0 and (h.get("value") or 0) > 0:
+                        taxable_positions.append({"ticker": h.get("ticker"), "account": name,
+                                                  "value": h["value"], "gain": g_})
+        snap = estate.snapshot(d.get("net_worth"), married, growth)
+        over = (snap.get("taxable_estate_if_today") or 0) > 0
+        taxable_positions.sort(key=lambda x: -x["gain"])
+        gvh = []
+        for p in taxable_positions[:5]:
+            a_ = estate.gift_vs_hold(p["value"], p["value"] - p["gain"],
+                                     heir_ltcg_pct=_knob("estate_heir_ltcg_pct"),
+                                     growth_pct=growth, years=20, estate_over_exemption=over)
+            a_["ticker"], a_["account"] = p["ticker"], p["account"]
+            gvh.append(a_)
+        return {"generated_at": int(time.time()),
+                "snapshot": snap,
+                "stepup": estate.stepup_ledger(accounts),
+                "gift_vs_hold": {"positions": gvh,
+                                 "note": "Top embedded-gain TAXABLE positions, modeled gift-now vs "
+                                         "hold-for-step-up over 20 years at your assumed real return."},
+                "gifting": estate.gifting_capacity(cfg.get("estate_donees") or 0, married,
+                                                   years=10, growth_pct=growth),
+                "titling": estate.titling_audit(accounts),
+                "trusts": estate.trust_triggers(d.get("net_worth"), married,
+                                                cross_year=snap.get("years_until_exemption_crossed")),
+                "note": "Educational decision-support, not legal/tax advice — estate documents need "
+                        "a licensed attorney; confirm figures with a CPA."}
+    except Exception as e:
+        return JSONResponse({"error": f"estate view unavailable: {e}"}, status_code=502)
 
 
 # --- Calibration memory (N13 candidate 2): feed the model its OWN scored track record into the brief
@@ -2015,8 +2081,76 @@ def _years_to_fi(assets, annual_savings, real_return, target):
     return None
 
 
+# ---- G3: risk-based guardrails — success-probability lookup table --------------------
+# The risk-based policy needs P(plan succeeds | current withdrawal rate, years left) EVERY
+# simulated year. A nested Monte Carlo (an inner MC per outer path-year) is ~100M+ path-years
+# — infeasible in pure Python — so we precompute a coarse (withdrawal-rate × years-remaining)
+# success grid ONCE with the same return model and bilinearly interpolate. Cached in-memory
+# per (mean, vol, runs) so repeated /api/retirement calls don't rebuild it.
+_SUCCESS_TABLE_CACHE = {}
+_RB_RATES = (0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.14, 0.20)   # withdrawal-rate grid
+_RB_YEARS = (1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50)            # years-remaining grid
+
+
+def _success_table(mean_real, vol, max_years, inner_runs=None):
+    """Build (or fetch cached) the success grid and return a lookup fn(rate, years_left)->p.
+    success = a portfolio of 1.0 funding a constant real spend of `rate` for `years_left`
+    years, returns ~ Normal(mean_real, vol) — the same model as the headline MC."""
+    inner_runs = int(inner_runs or _knob("rb_inner_runs"))
+    ygrid = tuple(y for y in _RB_YEARS if y <= max(1, int(max_years))) or (1,)
+    if ygrid[-1] < max_years:
+        ygrid = ygrid + (int(max_years),)
+    key = (round(mean_real, 4), round(vol, 4), inner_runs, ygrid[-1])
+    if key in _SUCCESS_TABLE_CACHE:
+        grid, ygrid = _SUCCESS_TABLE_CACHE[key]
+    else:
+        grid = {}
+        for rate in _RB_RATES:
+            for yrs in ygrid:
+                succ = 0
+                for _ in range(inner_runs):
+                    b = 1.0
+                    for _y in range(yrs):
+                        b -= rate
+                        if b <= 0:
+                            break
+                        b *= (1 + max(-0.95, random.gauss(mean_real, vol)))
+                    if b > 0:
+                        succ += 1
+                grid[(rate, yrs)] = succ / inner_runs
+        _SUCCESS_TABLE_CACHE[key] = (grid, ygrid)
+        if len(_SUCCESS_TABLE_CACHE) > 8:      # bound the cache (assumption changes evict oldest)
+            _SUCCESS_TABLE_CACHE.pop(next(iter(_SUCCESS_TABLE_CACHE)))
+
+    def _interp(axis, v):
+        """Neighbors + weight for linear interpolation along a sorted grid axis (clamped)."""
+        if v <= axis[0]:
+            return axis[0], axis[0], 0.0
+        if v >= axis[-1]:
+            return axis[-1], axis[-1], 0.0
+        for i in range(1, len(axis)):
+            if v <= axis[i]:
+                lo, hi = axis[i - 1], axis[i]
+                return lo, hi, (v - lo) / (hi - lo)
+        return axis[-1], axis[-1], 0.0
+
+    def lookup(rate, years_left):
+        if years_left <= 0:
+            return 1.0
+        if rate <= 0:
+            return 1.0
+        r0, r1, wr = _interp(_RB_RATES, rate)
+        y0, y1, wy = _interp(ygrid, years_left)
+        p00, p01 = grid[(r0, y0)], grid[(r0, y1)]
+        p10, p11 = grid[(r1, y0)], grid[(r1, y1)]
+        return (p00 * (1 - wr) + p10 * wr) * (1 - wy) + (p01 * (1 - wr) + p11 * wr) * wy
+
+    return lookup
+
+
 def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_years, ret_years, runs=None,
-                 gk_band=0.20, gk_adjust=0.10, draw_mode="normal", spend_schedule=None):
+                 gk_band=0.20, gk_adjust=0.10, draw_mode="normal", spend_schedule=None,
+                 rb_success_fn=None, rb_lower=0.70, rb_upper=0.99, rb_adjust=0.10, rb_floor_frac=None):
     """Monte Carlo retirement success probability in REAL (today's-dollar) terms. Each path runs
     `acc_years` of contributions then `ret_years` of withdrawals, annual real returns ~ Normal(mean,vol).
     Runs TWO withdrawal policies over the SAME return sequence per path for a fair comparison:
@@ -2058,6 +2192,8 @@ def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_yea
     s_succ, s_finals, s_depl = 0, [], []
     g_succ, g_finals = 0, []
     g_final_spend, g_min_spend, g_cut_paths = [], [], 0
+    r_succ, r_finals = 0, []
+    r_final_spend, r_min_spend, r_cut_paths, r_raise_paths = [], [], 0, 0
     for _ in range(runs):
         bal = start
         for _y in range(acc_years):
@@ -2105,8 +2241,47 @@ def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_yea
         g_min_spend.append(minr)
         if cut:
             g_cut_paths += 1
+        # --- RISK-BASED guardrails (G3, same draws): spend flexes on PLAN HEALTH, not on a
+        #     fixed rate band. Each year the current withdrawal rate + remaining horizon map
+        #     (via the precomputed success table) to P(success); below rb_lower the spend is
+        #     cut rb_adjust, above rb_upper it is raised. Cuts FLOOR at rb_floor_frac of the
+        #     initial spend — the G1 "needs" line — so flexibility never eats essentials.
+        #     Unlike Guyton-Klinger this only cuts when the PLAN is actually at risk, which
+        #     avoids GK's needlessly deep cuts after recoverable drawdowns. ---
+        if rb_success_fn is not None:
+            b, w, dep, minr = start_ret, annual_expenses, None, 1.0
+            cut = raised = False
+            floor_w = (annual_expenses * rb_floor_frac) if rb_floor_frac else 0.0
+            for y in range(ret_years):
+                if b > 0:
+                    p = rb_success_fn(w / b, ret_years - y)
+                    if p is not None:
+                        if p < rb_lower and w > floor_w:
+                            w = max(floor_w, w * (1 - rb_adjust))
+                            cut = True
+                        elif p > rb_upper:
+                            w *= (1 + rb_adjust)
+                            raised = True
+                b -= max(0.0, w - _ss_cut(y))
+                if annual_expenses:
+                    minr = min(minr, w / annual_expenses)
+                if b <= 0:
+                    dep = y
+                    b = 0
+                    break
+                b *= (1 + draws[y])
+            if dep is None and b > 0:
+                r_succ += 1
+            r_finals.append(b)
+            r_final_spend.append((w / annual_expenses) if annual_expenses else 1.0)
+            r_min_spend.append(minr)
+            if cut:
+                r_cut_paths += 1
+            if raised:
+                r_raise_paths += 1
     s_finals.sort()
     g_finals.sort()
+    r_finals.sort()
 
     def pctl(xs, p):
         if not xs:
@@ -2120,18 +2295,37 @@ def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_yea
     if s_depl:
         s_depl.sort()
         med_dep = s_depl[len(s_depl) // 2]
-    return {"runs": runs, "success_pct": round(s_succ / runs * 100, 1) if runs else None,
-            "accumulation_years": acc_years, "retirement_years": ret_years,
-            "mean_real_return_pct": round(mean_real * 100, 2), "volatility_pct": round(vol * 100, 2),
-            "ending_balance_real": {"p10": pctl(s_finals, 10), "p50": pctl(s_finals, 50), "p90": pctl(s_finals, 90)},
-            "median_years_into_retirement_if_depleted": med_dep,
-            "guardrails": {
-                "success_pct": round(g_succ / runs * 100, 1) if runs else None,
-                "band_pct": round(gk_band * 100), "adjust_pct": round(gk_adjust * 100),
-                "median_final_spend_pct_of_initial": round((med(g_final_spend) or 1) * 100, 1),
-                "median_worst_spend_pct_of_initial": round((med(g_min_spend) or 1) * 100, 1),
-                "paths_that_cut_spending_pct": round(g_cut_paths / runs * 100, 1) if runs else None,
-                "ending_balance_real": {"p10": pctl(g_finals, 10), "p50": pctl(g_finals, 50), "p90": pctl(g_finals, 90)}}}
+    res = {"runs": runs, "success_pct": round(s_succ / runs * 100, 1) if runs else None,
+           "accumulation_years": acc_years, "retirement_years": ret_years,
+           "mean_real_return_pct": round(mean_real * 100, 2), "volatility_pct": round(vol * 100, 2),
+           "ending_balance_real": {"p10": pctl(s_finals, 10), "p50": pctl(s_finals, 50), "p90": pctl(s_finals, 90)},
+           "median_years_into_retirement_if_depleted": med_dep,
+           "guardrails": {
+               "success_pct": round(g_succ / runs * 100, 1) if runs else None,
+               "band_pct": round(gk_band * 100), "adjust_pct": round(gk_adjust * 100),
+               "median_final_spend_pct_of_initial": round((med(g_final_spend) or 1) * 100, 1),
+               "median_worst_spend_pct_of_initial": round((med(g_min_spend) or 1) * 100, 1),
+               "paths_that_cut_spending_pct": round(g_cut_paths / runs * 100, 1) if runs else None,
+               "ending_balance_real": {"p10": pctl(g_finals, 10), "p50": pctl(g_finals, 50), "p90": pctl(g_finals, 90)}}}
+    if rb_success_fn is not None and runs:
+        res["risk_based"] = {
+            "success_pct": round(r_succ / runs * 100, 1),
+            "lower_band_pct": round(rb_lower * 100), "upper_band_pct": round(rb_upper * 100),
+            "adjust_pct": round(rb_adjust * 100),
+            "spend_floor_pct_of_initial": round(rb_floor_frac * 100, 1) if rb_floor_frac else None,
+            "median_final_spend_pct_of_initial": round((med(r_final_spend) or 1) * 100, 1),
+            "median_worst_spend_pct_of_initial": round((med(r_min_spend) or 1) * 100, 1),
+            "paths_that_cut_spending_pct": round(r_cut_paths / runs * 100, 1),
+            "paths_that_raised_spending_pct": round(r_raise_paths / runs * 100, 1),
+            "ending_balance_real": {"p10": pctl(r_finals, 10), "p50": pctl(r_finals, 50), "p90": pctl(r_finals, 90)},
+            "note": ("PRIMARY withdrawal policy: each year the current withdrawal rate + remaining "
+                     "horizon map to a probability the plan still succeeds (precomputed success grid, "
+                     "same return model); spending cuts "
+                     f"{round(rb_adjust * 100)}% only when success drops below {round(rb_lower * 100)}% "
+                     f"and rises when it exceeds {round(rb_upper * 100)}%. Cuts never go below "
+                     "the essential-needs floor. Guyton-Klinger is kept below as a comparison — its "
+                     "fixed rate bands force deeper cuts than plan health actually requires.")}
+    return res
 
 
 def _portfolio_signals(d):
@@ -2464,8 +2658,18 @@ def _retirement():
             social_security = {"available": False, "error": f"ss floor failed: {e}"}
             ss_schedule = None
 
+        # G3: precompute the success grid for the risk-based policy (cached; coarse inner MC).
+        try:
+            _rb_fn = _success_table(r, vol_pct / 100.0, ret_yrs)
+        except Exception:
+            _rb_fn = None
         monte_carlo = _monte_carlo(investable, annual_savings or 0, mc_expenses, r,
-                                   vol_pct / 100.0, acc_yrs, ret_yrs, spend_schedule=ss_schedule)
+                                   vol_pct / 100.0, acc_yrs, ret_yrs, spend_schedule=ss_schedule,
+                                   rb_success_fn=_rb_fn,
+                                   rb_lower=_knob("rb_lower_band") / 100.0,
+                                   rb_upper=_knob("rb_upper_band") / 100.0,
+                                   rb_adjust=_knob("rb_adjust_pct") / 100.0,
+                                   rb_floor_frac=(cfg.get("needs_pct_of_expenses") or 65) / 100.0)
         monte_carlo["withdrawal_tax_pct"] = mc_tax
         monte_carlo["gross_annual_withdrawal"] = round(mc_expenses, 2)
         monte_carlo["tax_model"] = ("bracket-engine 2026 (%s)" % _tctx["status"]

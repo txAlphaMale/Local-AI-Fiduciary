@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -756,6 +756,92 @@ function alertsContent(){
   return wrap;
 }
 
+function saveDonees(){
+  const v=document.getElementById('est-donees'); const n=(v&&v.value!=='')?Number(v.value):null;
+  fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estate_donees:n})})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+function estateContent(){
+  // G2 estate & generational view: snapshot, step-up ledger, gift-vs-hold, gifting runway, titling, trusts.
+  const g=EST||{}, wrap=el('div');
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
+  const u=v=>v==null?'—':'$'+Math.round(v).toLocaleString();
+  const s=g.snapshot||{};
+  // ---- snapshot strip ----
+  const ss2=el('div'); ss2.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:2px 0 8px;';
+  ss2.innerHTML=st('NET ESTATE',u(s.net_estate))+
+    st('HOUSEHOLD SHIELD',u(s.household_shield))+
+    st('SHIELD USED',(s.pct_of_shield_used!=null?s.pct_of_shield_used+'%':'—'),(s.pct_of_shield_used||0)>=80?'neg':'pos')+
+    st('EST. TAX IF TODAY',u(s.est_federal_tax_if_today),(s.est_federal_tax_if_today||0)>0?'neg':'pos')+
+    st('CROSSES EXEMPTION',(s.years_until_exemption_crossed!=null?'~'+s.years_until_exemption_crossed+'y':'not at assumed growth'));
+  wrap.appendChild(ss2);
+  const sn=el('div','muted'); sn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:12px;';
+  sn.textContent=(s.note||'')+(s.portability_note?' '+s.portability_note:''); wrap.appendChild(sn);
+  // ---- step-up ledger ----
+  const su=g.stepup||{};
+  wrap.appendChild(el('div','ph','STEP-UP LEDGER · WHAT DEATH-BASIS RESET IS WORTH'));
+  const t1=el('table'); const h1=el('tr'); h1.innerHTML='<th class="l">ACCOUNT</th><th>STATUS</th><th>VALUE</th><th>EMBEDDED GAIN</th><th class="l">TREATMENT AT DEATH</th>'; t1.appendChild(h1);
+  (su.accounts||[]).forEach(a=>{ const tr=el('tr');
+    tr.innerHTML=`<td class="l sym">${esc(a.account)}</td><td class="muted">${esc(a.tax_status)}</td><td>${u(a.value)}</td><td class="${(a.embedded_gain||0)>0?'pos':''}">${a.embedded_gain!=null?u(a.embedded_gain):'—'}</td><td class="l muted" style="font-size:10px">${esc(a.treatment)}</td>`;
+    t1.appendChild(tr); });
+  wrap.appendChild(t1);
+  const sun=el('div'); sun.style.cssText='font-size:11px;margin:6px 0;';
+  sun.innerHTML=`<span class="muted">Taxable embedded gain a step-up would wipe:</span> <span class="pos">${u(su.taxable_embedded_gain)}</span>`;
+  wrap.appendChild(sun);
+  const cpn=el('div'); cpn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:12px;color:var(--amber);';
+  cpn.textContent='⚑ '+(su.community_property_note||''); wrap.appendChild(cpn);
+  // ---- gift vs hold ----
+  const gv=(g.gift_vs_hold||{});
+  if((gv.positions||[]).length){
+    wrap.appendChild(el('div','ph','GIFT vs HOLD · TOP EMBEDDED-GAIN POSITIONS'));
+    const t2=el('table'); const h2=el('tr'); h2.innerHTML='<th class="l">TICKER</th><th>VALUE</th><th>GAIN</th><th>HEIR CG TAX IF GIFTED</th><th>WIPED IF HELD</th><th>VERDICT</th>'; t2.appendChild(h2);
+    gv.positions.forEach(p=>{ const tr=el('tr');
+      tr.innerHTML=`<td class="l sym">${esc(p.ticker)}</td><td>${u(p.value)}</td><td>${u(p.embedded_gain)}</td><td class="neg">${u((p.gift_now||{}).heir_cg_tax_when_sold)}</td><td class="pos">${u((p.hold_to_death||{}).cg_tax_wiped_by_stepup)}</td><td class="${p.verdict==='hold for step-up'?'pos':'neg'}">${esc(p.verdict)}</td>`;
+      t2.appendChild(tr); });
+    wrap.appendChild(t2);
+    const gvn=el('div','muted'); gvn.style.cssText='font-size:10px;line-height:1.45;margin:4px 0 12px;';
+    gvn.textContent=((gv.positions[0]||{}).note)||''; wrap.appendChild(gvn);
+  }
+  // ---- gifting capacity ----
+  const gc=g.gifting||{};
+  wrap.appendChild(el('div','ph','GIFTING RUNWAY · ANNUAL EXCLUSION'));
+  const gce=el('div'); gce.style.cssText='font-size:12px;margin:6px 0;';
+  gce.innerHTML=`Donees (heirs/beneficiaries): <input id="est-donees" type="number" min="0" step="1" value="${gc.donees!=null?gc.donees:''}" style="width:54px;"/> <button onclick="saveDonees()">↳ SAVE</button>`;
+  wrap.appendChild(gce);
+  if(gc.donees>0){
+    const gs2=el('div'); gs2.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+    gs2.innerHTML=st('PER DONEE / YR',u(gc.per_donee_per_year))+
+      st('ANNUAL CAPACITY',u(gc.annual_capacity))+
+      st('REMOVED OVER '+gc.years+'Y',u(gc.total_removed))+
+      st('FV OUTSIDE ESTATE',u(gc.future_value_outside_estate),'pos')+
+      st('529 SUPERFUND',u(gc.superfund_529_per_beneficiary));
+    wrap.appendChild(gs2);
+  }
+  const gcn=el('div','muted'); gcn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:12px;';
+  gcn.textContent=gc.note||''; wrap.appendChild(gcn);
+  // ---- titling & beneficiary audit ----
+  const ti=g.titling||{};
+  wrap.appendChild(el('div','ph','TITLING & BENEFICIARY AUDIT · HOW EACH ACCOUNT TRANSFERS'));
+  const t3=el('table'); const h3=el('tr'); h3.innerHTML='<th class="l">ACCOUNT</th><th>VALUE</th><th class="l">PASSES BY</th><th class="l">ACTION</th>'; t3.appendChild(h3);
+  (ti.accounts||[]).forEach(a=>{ const tr=el('tr');
+    tr.innerHTML=`<td class="l sym">${esc(a.account)}</td><td>${u(a.value)}</td><td class="l muted" style="font-size:10px">${esc(a.passes_by)}</td><td class="l" style="font-size:10px">${esc(a.action)}</td>`;
+    t3.appendChild(tr); });
+  wrap.appendChild(t3);
+  const tin=el('div','muted'); tin.style.cssText='font-size:10px;line-height:1.45;margin:4px 0 12px;';
+  tin.textContent=ti.note||''; wrap.appendChild(tin);
+  // ---- trust triggers ----
+  const tr2=(g.trusts||{});
+  wrap.appendChild(el('div','ph','TRUST DECISION SUPPORT · TRIGGERS'));
+  (tr2.triggers||[]).forEach(x=>{ const w=el('div'); w.style.cssText='font-size:11px;line-height:1.5;margin:4px 0;';
+    w.innerHTML=`<span class="sym">${esc(x.vehicle)}</span> <span class="muted">— when: ${esc(x.trigger)}.</span> <span class="muted" style="font-size:10px">${esc(x.why)}</span>`;
+    wrap.appendChild(w); });
+  const trn=el('div','muted'); trn.style.cssText='font-size:10px;line-height:1.45;margin-top:6px;';
+  trn.textContent=(tr2.note||'')+' '+(g.note||''); wrap.appendChild(trn);
+  return wrap;
+}
+
 function groundingContent(){
   // G13 grounding watchdog: dated-constant registry + LLM-as-judge audit + confidence calibration.
   const g=GROUND||{}, wrap=el('div');
@@ -945,9 +1031,24 @@ function planContent(r){
           (drop!=null?` <span class="muted">(${drop>0?'−'+drop:'+'+(-drop)}pt vs Normal — the tail risk the headline hides)</span>`:'');
         wrap.appendChild(fl);
       }
+      if(mc.risk_based){
+        const rb=mc.risk_based, rsc=rb.success_pct>=80?'pos':(rb.success_pct>=60?'':'neg');
+        const rh=el('div','ph','RISK-BASED GUARDRAILS · PRIMARY SPENDING POLICY'); rh.style.marginTop='4px'; wrap.appendChild(rh);
+        const rs=el('div'); rs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
+        const rdelta=Math.round((rb.success_pct-mc.success_pct)*10)/10;
+        rs.innerHTML=st('SUCCESS',(rb.success_pct!=null?rb.success_pct+'%':'—'),rsc)+
+          st('vs STATIC',(rdelta>=0?'+':'')+rdelta+'pt',rdelta>0?'pos':(rdelta<0?'neg':''))+
+          st('WORST-CASE SPEND',(rb.median_worst_spend_pct_of_initial!=null?rb.median_worst_spend_pct_of_initial+'%':'—'))+
+          st('TYPICAL END SPEND',(rb.median_final_spend_pct_of_initial!=null?rb.median_final_spend_pct_of_initial+'%':'—'))+
+          st('PATHS THAT CUT',(rb.paths_that_cut_spending_pct!=null?rb.paths_that_cut_spending_pct+'%':'—'))+
+          st('NEEDS FLOOR',(rb.spend_floor_pct_of_initial!=null?rb.spend_floor_pct_of_initial+'%':'—'));
+        wrap.appendChild(rs);
+        const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:14px;';
+        rn.textContent=rb.note||''; wrap.appendChild(rn);
+      }
       if(mc.guardrails){
         const gk=mc.guardrails, gsc=gk.success_pct>=80?'pos':(gk.success_pct>=60?'':'neg');
-        const gh=el('div','ph','GUYTON-KLINGER GUARDRAILS · FLEXIBLE SPENDING'); gh.style.marginTop='4px'; wrap.appendChild(gh);
+        const gh=el('div','ph',(mc.risk_based?'GUYTON-KLINGER · COMPARISON (fixed rate bands)':'GUYTON-KLINGER GUARDRAILS · FLEXIBLE SPENDING')); gh.style.marginTop='4px'; wrap.appendChild(gh);
         const gs=el('div'); gs.style.cssText='display:flex;gap:26px;flex-wrap:wrap;margin:8px 0;';
         const delta=Math.round((gk.success_pct-mc.success_pct)*10)/10;
         gs.innerHTML=st('SUCCESS',(gk.success_pct!=null?gk.success_pct+'%':'—'),gsc)+
@@ -1078,6 +1179,7 @@ function planContent(r){
     haveSS && {key:'ss',label:'SOCIAL SECURITY',build:ssSec},
     haveBridge && {key:'bridge',label:'ACA BRIDGE',build:bridgeSec},
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},
+    (EST && !EST.error) && {key:'estate',label:'ESTATE',build:()=>estateContent()},
   ]));
   return outer;
 }
