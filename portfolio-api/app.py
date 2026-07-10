@@ -32,6 +32,7 @@ import ss      # Social Security benefit + taxation engine (G2) — real-terms M
 import knowledge  # local user-populated RAG over a knowledge folder (N12) — search_knowledge tool
 import grounding  # dated-constant registry + staleness watchdog (G13a)
 import estate     # estate & generational-wealth engine (G2) — step-up, gift-vs-hold, titling
+import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -139,6 +140,9 @@ SETTING_SPECS = {
     "rb_adjust_pct":  {"env": "RB_ADJUST_PCT",  "default": 10,  "cast": float, "label": "Risk-based guardrails: spending adjustment step (%)", "group": "Monte Carlo"},
     "rb_inner_runs":  {"env": "RB_INNER_RUNS",  "default": 400, "cast": int,   "label": "Risk-based guardrails: paths per success-grid cell", "group": "Monte Carlo"},
     "estate_heir_ltcg_pct": {"env": "ESTATE_HEIR_LTCG_PCT", "default": 15.0, "cast": float, "label": "Gift-vs-hold: assumed heir LTCG rate (%)", "group": "Estate"},
+    "risk_hist_years":   {"env": "RISK_HIST_YEARS",   "default": 2,   "cast": int,   "label": "Risk suite: years of daily history to reconstruct (risk ramp)", "group": "Risk suite"},
+    "risk_hist_max_age": {"env": "RISK_HIST_MAX_AGE", "default": 3,   "cast": int,   "label": "Risk suite: refetch a ticker's daily history after (days)", "group": "Risk suite"},
+    "risk_min_days":     {"env": "RISK_SUITE_MIN_DAYS","default": 60, "cast": int,   "label": "Risk suite: minimum common trading days to compute", "group": "Risk suite"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -700,13 +704,16 @@ def _risk_metrics():
                      "information_ratio": round(ma / sda * (252 ** 0.5), 2) if sda else None,
                      "note": "Portfolio vs benchmark over the recorded window (both from daily closes; flow "
                              "noise applies). Excess = your cumulative return minus the benchmark's."}
+    # Calmar (return per unit of max-drawdown pain) + Treynor (return per unit of market risk).
+    calmar = risk.calmar(ann_ret * 100, maxdd * 100)
+    treynor = risk.treynor(ann_ret * 100, rf * 100, (bench or {}).get("beta_vs_benchmark")) if bench else None
     return {"status": "ready", "days_recorded": n, "since": pts[0][0], "benchmark": bench,
             "annualized_volatility_pct": round(ann_vol * 100, 1),
             "annualized_return_pct": round(ann_ret * 100, 1),
             "max_drawdown_pct": round(maxdd * 100, 1), "max_drawdown_date": dd_date,
             "best_day_pct": round(best * 100, 2) if best is not None else None,
             "worst_day_pct": round(worst * 100, 2) if worst is not None else None,
-            "sharpe": sharpe, "sortino": sortino,
+            "sharpe": sharpe, "sortino": sortino, "calmar": calmar, "treynor": treynor,
             "note": "Realized from your recorded daily portfolio value. Deposits/withdrawals add some "
                     "noise to volatility & Sharpe (risk-free "
                     + os.environ.get("RISK_FREE_PCT", "4.0") + "%); max drawdown is robust. Informational."}
@@ -720,6 +727,293 @@ def get_risk_metrics():
 @app.get("/api/value-history")
 def get_value_history():
     return {"history": _read_value_history()}
+
+
+# ============ G4: tail & co-movement risk suite (VaR/CVaR, correlation, factors) ============
+# The "risk ramp": rather than wait ~20 days of live snapshots to accrue, reconstruct 2-3 yr
+# of daily portfolio returns from CURRENT holdings x their historical dailies (assumes today's
+# weights held throughout — stated clearly in the output). Data: Stooq free daily CSV per
+# ticker (cached); Fama-French 5+momentum daily from Ken French's free library (cached). All
+# heavy math is in risk.py. Defensive everywhere — unreachable sources degrade gracefully.
+PRICE_HIST_DIR = os.environ.get("PRICE_HIST_DIR", "/data/price_hist")
+FF_FACTORS_FILE = os.environ.get("FF_FACTORS_FILE", "/data/ff_factors.json")
+FF_MAX_AGE = int(os.environ.get("FF_MAX_AGE_DAYS", "7"))            # refetch factor library weekly
+RISK_SUITE_FILE = os.environ.get("RISK_SUITE_FILE", "/data/risk_suite.json")
+RISK_SUITE_TTL = int(os.environ.get("RISK_SUITE_TTL", "86400"))    # serve cached suite up to ~1 day
+_risk_lock = threading.Lock()
+_FF_NAMES = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]
+
+
+def _stooq_daily(sym):
+    """Daily close history for a US-listed ticker from Stooq's free CSV endpoint, cached per
+    ticker to PRICE_HIST_DIR and refetched only after risk_hist_max_age days. Returns
+    [[date, close], ...] ascending by date, trimmed to ~risk_hist_years, or [] on any
+    failure (defensive — deploy-iterates against the live source on the host)."""
+    if not sym:
+        return []
+    safe = re.sub(r"[^A-Za-z0-9.\-]", "", sym).upper()
+    path = os.path.join(PRICE_HIST_DIR, safe + ".json")
+    max_age = _knob("risk_hist_max_age") * 86400
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if time.time() - (cached.get("fetched") or 0) < max_age and cached.get("series"):
+            return cached["series"]
+    except Exception:
+        cached = None
+    series = []
+    try:
+        url = "https://stooq.com/q/d/l/"
+        r = requests.get(url, params={"s": safe.lower() + ".us", "i": "d"}, timeout=25)
+        if r.status_code < 400 and r.text and "Date,Open" in r.text[:64]:
+            for line in r.text.strip().splitlines()[1:]:
+                parts = line.split(",")
+                if len(parts) >= 5:
+                    dt, close = parts[0], parts[4]
+                    try:
+                        series.append([dt, float(close)])
+                    except ValueError:
+                        continue
+    except Exception:
+        series = []
+    if series:
+        series.sort(key=lambda x: x[0])
+        keep = _knob("risk_hist_years") * 252 + 10
+        series = series[-keep:]
+        try:
+            os.makedirs(PRICE_HIST_DIR, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"fetched": int(time.time()), "series": series}, f)
+        except Exception:
+            pass
+        return series
+    # fetch failed — fall back to any stale cache we still have rather than nothing
+    return (cached or {}).get("series", []) if cached else []
+
+
+def _parse_ff_csv(text, value_names):
+    """Parse a Ken French daily factor CSV (already unzipped). Rows are 'YYYYMMDD, v1, v2, ...'
+    in PERCENT; the daily table ends at the first blank/non-date line. value_names maps the
+    file's data columns (in order) to our factor keys. Returns {YYYYMMDD: {key: decimal}}."""
+    out = {}
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if not parts or not re.fullmatch(r"\d{8}", parts[0] or ""):
+            if out:                      # date block finished (footer/annual table follows)
+                if len(parts[0] or "") == 6:   # monthly/annual section starts (YYYYMM) — stop
+                    break
+                continue
+            continue
+        vals = parts[1:]
+        row = {}
+        ok = True
+        for i, key in enumerate(value_names):
+            try:
+                row[key] = float(vals[i]) / 100.0
+            except (IndexError, ValueError):
+                ok = False
+                break
+        if ok:
+            out[parts[0]] = row
+    return out
+
+
+def _fetch_ken_french():
+    """Download FF5 + momentum DAILY factor libraries (free Ken French zips), merge on date,
+    cache to FF_FACTORS_FILE. Best-effort; returns the merged {YYYYMMDD:{...}} or {}."""
+    import io
+    import zipfile
+    base = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+    merged = {}
+    try:
+        r = requests.get(base + "F-F_Research_Data_5_Factors_2x3_daily_CSV.zip", timeout=40)
+        if r.status_code < 400:
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            txt = z.read(z.namelist()[0]).decode("latin-1")
+            five = _parse_ff_csv(txt, ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"])
+            merged = {d: dict(v) for d, v in five.items()}
+    except Exception:
+        pass
+    try:
+        r = requests.get(base + "F-F_Momentum_Factor_daily_CSV.zip", timeout=40)
+        if r.status_code < 400:
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            txt = z.read(z.namelist()[0]).decode("latin-1")
+            mom = _parse_ff_csv(txt, ["Mom"])
+            for d, v in mom.items():
+                if d in merged:
+                    merged[d]["Mom"] = v["Mom"]
+    except Exception:
+        pass
+    if merged:
+        try:
+            with open(FF_FACTORS_FILE, "w", encoding="utf-8") as f:
+                json.dump({"fetched": int(time.time()), "factors": merged}, f)
+        except Exception:
+            pass
+    return merged
+
+
+def _read_ff():
+    """Merged FF factor map, from cache when fresh else refetched. {} if never obtained."""
+    try:
+        with open(FF_FACTORS_FILE, encoding="utf-8") as f:
+            c = json.load(f)
+        if time.time() - (c.get("fetched") or 0) < FF_MAX_AGE * 86400 and c.get("factors"):
+            return c["factors"]
+    except Exception:
+        c = None
+    fresh = _fetch_ken_french()
+    if fresh:
+        return fresh
+    return (c or {}).get("factors", {}) if c else {}
+
+
+def _reconstructed_stats(port):
+    """Annualized return/vol, max drawdown, Sharpe, Calmar from the reconstructed daily series
+    (compounded — flow-free, since it's rebuilt from prices, unlike the live-snapshot panel)."""
+    n = len(port)
+    if n < 2:
+        return {}
+    cum, peak, maxdd = 1.0, 1.0, 0.0
+    for r in port:
+        cum *= (1 + r)
+        peak = max(peak, cum)
+        dd = cum / peak - 1
+        if dd < maxdd:
+            maxdd = dd
+    ann_ret = cum ** (252.0 / n) - 1
+    m = sum(port) / n
+    sd = (sum((x - m) ** 2 for x in port) / n) ** 0.5
+    ann_vol = sd * (252 ** 0.5)
+    rf = float(os.environ.get("RISK_FREE_PCT", "4.0")) / 100.0
+    sharpe = round((ann_ret - rf) / ann_vol, 2) if ann_vol else None
+    return {"days": n, "annualized_return_pct": round(ann_ret * 100, 1),
+            "annualized_vol_pct": round(ann_vol * 100, 1),
+            "max_drawdown_pct": round(maxdd * 100, 1), "sharpe": sharpe,
+            "calmar": risk.calmar(ann_ret * 100, maxdd * 100)}
+
+
+def _risk_factor_exposure(ret_dates, port):
+    """Regress the reconstructed portfolio's daily EXCESS return on FF5+momentum. ret_dates
+    are 'YYYY-MM-DD' aligned to port. None if the factor library is unavailable or no overlap."""
+    ff = _read_ff()
+    if not ff:
+        return None
+    cols = [[] for _ in _FF_NAMES]
+    excess = []
+    for i, dt in enumerate(ret_dates):
+        row = ff.get(dt.replace("-", ""))
+        if not row or any(k not in row for k in _FF_NAMES) or "RF" not in row:
+            continue
+        excess.append(port[i] - row["RF"])
+        for j, nm in enumerate(_FF_NAMES):
+            cols[j].append(row[nm])
+    if len(excess) < 30:
+        return None
+    return risk.factor_exposure(excess, cols, _FF_NAMES)
+
+
+def _risk_suite():
+    """Assemble the G4 tail/co-movement suite from reconstructed daily history. Status:
+    'unavailable' (no holdings), 'building' (not enough resolvable history yet), or 'ready'."""
+    d = _data()
+    cons = [c for c in d.get("consolidated", [])
+            if c.get("ticker") and (c.get("type") or "") != "Cash"]
+    weights = {}
+    for c in cons:
+        weights[c["ticker"]] = weights.get(c["ticker"], 0.0) + (c.get("value") or 0.0)
+    invested = round(sum(weights.values()), 2)
+    if not weights or invested <= 0:
+        return {"status": "unavailable", "generated_at": int(time.time()),
+                "note": "No non-cash holdings to analyze."}
+    series = {}
+    for t in weights:
+        s = _stooq_daily(t)
+        if len(s) >= 30:
+            series[t] = s
+    resolved_val = round(sum(weights[t] for t in series), 2)
+    coverage = round(resolved_val / invested * 100, 1) if invested else 0.0
+    dates, rets = risk.align_returns(series)
+    order = [t for t in series if rets.get(t)]
+    min_days = _knob("risk_min_days")
+    if len(dates) - 1 < min_days or not order:
+        return {"status": "building", "generated_at": int(time.time()),
+                "common_days": max(len(dates) - 1, 0), "days_needed": min_days,
+                "coverage_pct": coverage, "resolved": sorted(order),
+                "unresolved": sorted(t for t in weights if t not in series),
+                "note": f"Reconstructing daily history from holdings ({len(dates)-1}/{min_days} "
+                        "common trading days across resolvable tickers). Tickers without free "
+                        "Stooq daily data (many funds / foreign listings) are excluded; the "
+                        "suite reflects the covered share of the book."}
+    port = risk.portfolio_returns(weights, rets)
+    ret_dates = dates[1:]
+    cmat = risk.corr_matrix(rets, order)
+    cov = risk.cov_matrix(rets, order)
+    return {
+        "status": "ready", "generated_at": int(time.time()),
+        "coverage_pct": coverage, "invested_noncash": invested,
+        "resolved": sorted(order),
+        "unresolved": sorted(t for t in weights if t not in series),
+        "window": {"from": dates[0], "to": dates[-1], "common_days": len(dates)},
+        "tail_risk": risk.var_table(port),
+        "reconstructed_stats": _reconstructed_stats(port),
+        "diversification": risk.effective_bets(cov, weights, order),
+        "top_correlations": risk.top_correlations(cmat, order),
+        "correlation_order": order,
+        "correlation_matrix": [[None if v is None else round(v, 2) for v in row] for row in cmat],
+        "factor_exposure": _risk_factor_exposure(ret_dates, port),
+        "note": "RISK RAMP: daily portfolio history RECONSTRUCTED from your CURRENT holdings x "
+                "their historical daily closes (Stooq), i.e. it assumes today's weights held "
+                "throughout the window — not your actual past path. VaR/CVaR are historical "
+                "simulation (empirical tail, captures skew/fat-tails); effective bets & the "
+                "correlation matrix expose hidden single-factor risk; factor betas come from the "
+                "Fama-French daily library. Informational, not advice.",
+    }
+
+
+def _read_risk_suite():
+    try:
+        with open(RISK_SUITE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_risk_suite():
+    if not _risk_lock.acquire(blocking=False):
+        return
+    try:
+        res = _risk_suite()
+        os.makedirs(os.path.dirname(RISK_SUITE_FILE) or ".", exist_ok=True)
+        with open(RISK_SUITE_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _risk_lock.release()
+
+
+@app.get("/api/risk-suite")
+def get_risk_suite():
+    """G4 tail/co-movement suite, CACHED (fetches daily history per holding + the factor
+    library, so the first build runs in the background). Refreshes when stale."""
+    cached = _read_risk_suite()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < RISK_SUITE_TTL)
+    if not fresh and not _risk_lock.locked():
+        threading.Thread(target=_do_risk_suite, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "note": "First risk-suite build is running (fetching daily "
+            "history per holding) — refresh in a moment.", "computing": True}
+
+
+@app.post("/api/run-risk-suite")
+def run_risk_suite(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_risk_suite, daemon=True).start()
+    return {"status": "started"}
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------

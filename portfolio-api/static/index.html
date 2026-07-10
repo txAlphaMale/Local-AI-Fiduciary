@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -299,7 +299,7 @@ function render(){
     ]));
   } else if(TAB==='insights' && haveInsights){
     const hasExp=(EXP && (!EXP.error || EXP.computing));
-    const hasRisk=(RISK && !RISK.error);
+    const hasRisk=((RISK && !RISK.error) || (RISKSUITE && !RISKSUITE.error));
     const hasLT=(LT && ((!LT.error && LT.true_exposure) || LT.computing));
     tc.appendChild(panelSubtabs('insights',[
       {key:'drift',label:'POLICY · DRIFT',build:()=>driftContent()},
@@ -1510,6 +1510,8 @@ function riskContent(){
         m('MAX DRAWDOWN',(rk.max_drawdown_pct!=null?rk.max_drawdown_pct+'%':'—'),(rk.max_drawdown_pct||0)<-20)+
         m('SHARPE',(rk.sharpe!=null?rk.sharpe:'—'))+
         m('SORTINO',(rk.sortino!=null?rk.sortino:'—'))+
+        m('CALMAR',(rk.calmar!=null?rk.calmar:'—'))+
+        m('TREYNOR',(rk.treynor!=null?rk.treynor:'—'))+
         m('WORST DAY',(rk.worst_day_pct!=null?rk.worst_day_pct+'%':'—'));
       wrap.appendChild(rr);
       if(rk.benchmark){
@@ -1526,6 +1528,73 @@ function riskContent(){
     } else {
       const rb=el('div','muted'); rb.style.cssText='font-size:11px;';
       rb.textContent=rk.note||('Building risk history ('+(rk.days_recorded||0)+'/'+(rk.days_needed||20)+' days).'); wrap.appendChild(rb);
+    }
+  }
+  // ---- G4: TAIL & CO-MOVEMENT SUITE (reconstructed "risk ramp" history) ----
+  const rs=RISKSUITE;
+  if(rs && !rs.error){
+    const sh=el('div','ph','TAIL & CO-MOVEMENT RISK · RISK RAMP (reconstructed)'); sh.style.marginTop='22px'; wrap.appendChild(sh);
+    if(rs.status==='ready'){
+      const cov=el('div','muted'); cov.style.cssText='font-size:10px;margin:2px 0 8px;';
+      cov.textContent=`${rs.coverage_pct}% of non-cash value covered · ${rs.window.common_days} common trading days (${rs.window.from} → ${rs.window.to})`+
+        (rs.unresolved&&rs.unresolved.length?` · no free daily data: ${rs.unresolved.join(', ')}`:''); wrap.appendChild(cov);
+      // VaR / CVaR
+      const th=el('div','ph','VALUE AT RISK · EXPECTED SHORTFALL (historical sim)'); th.style.cssText='font-size:11px;margin-top:6px;'; wrap.appendChild(th);
+      const tr=el('div'); tr.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:6px 0;';
+      (rs.tail_risk||[]).forEach(t=>{
+        const h1=(t.by_horizon||[]).find(h=>h.days===1)||{}, h10=(t.by_horizon||[]).find(h=>h.days===10)||{};
+        tr.innerHTML+=`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${t.level_pct}% CONFIDENCE</div>`+
+          `<div style="font-size:14px;color:var(--amber)">1d VaR ${h1.var_pct}% · CVaR ${h1.cvar_pct}%</div>`+
+          `<div class="muted" style="font-size:11px;">10d VaR ${h10.var_pct}% · CVaR ${h10.cvar_pct}%</div></div>`;});
+      wrap.appendChild(tr);
+      const tn=el('div','muted'); tn.style.cssText='font-size:10px;margin:-2px 0 8px;';
+      tn.textContent='VaR = the loss exceeded on the worst (100−confidence)% of days; CVaR (expected shortfall) = the average loss ON those worst days. Empirical (captures fat tails). 10-day scaled √t.'; wrap.appendChild(tn);
+      // reconstructed stats
+      const st=rs.reconstructed_stats||{};
+      if(st.days){
+        const sr=el('div'); sr.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:6px 0;';
+        const m2=(l,v)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:14px;">${v}</div></div>`;
+        sr.innerHTML=m2('ANN. RETURN',(st.annualized_return_pct!=null?st.annualized_return_pct+'%':'—'))+
+          m2('ANN. VOL',(st.annualized_vol_pct!=null?st.annualized_vol_pct+'%':'—'))+
+          m2('MAX DRAWDOWN',(st.max_drawdown_pct!=null?st.max_drawdown_pct+'%':'—'))+
+          m2('SHARPE',(st.sharpe!=null?st.sharpe:'—'))+m2('CALMAR',(st.calmar!=null?st.calmar:'—'));
+        wrap.appendChild(sr);
+      }
+      // diversification / effective bets
+      const dv=rs.diversification||{};
+      const dr=el('div'); dr.style.cssText='font-size:12px;margin:8px 0 2px;';
+      dr.innerHTML=`<b>Effective bets:</b> <span style="color:${(dv.effective_bets||99)< (dv.n_holdings||1)*0.5?'var(--amber)':'var(--txt)'}">${dv.effective_bets==null?'—':dv.effective_bets}</span> of ${dv.n_holdings||'—'} holdings `+
+        `<span class="muted">· diversification ratio ${dv.diversification_ratio==null?'—':dv.diversification_ratio}</span>`;
+      wrap.appendChild(dr);
+      const dn=el('div','muted'); dn.style.cssText='font-size:10px;margin-bottom:6px;';
+      dn.textContent='Effective bets (PCA/Meucci): how many INDEPENDENT bets the book really is — far below the holding count means names move on one shared factor. Diversification ratio ~1 = little offsetting.'; wrap.appendChild(dn);
+      // top correlations
+      const tcs=rs.top_correlations||[];
+      if(tcs.length){
+        const cc=el('div'); cc.style.cssText='font-size:11px;margin:4px 0;';
+        cc.innerHTML='<span class="muted" style="font-size:10px;letter-spacing:1px;">HIGHEST PAIRWISE CORRELATIONS</span><br>'+
+          tcs.slice(0,6).map(p=>`${p.a}·${p.b} <span style="color:${Math.abs(p.corr)>0.7?'var(--amber)':'var(--txt)'}">${p.corr}</span>`).join(' &nbsp; ');
+        wrap.appendChild(cc);
+      }
+      // factor exposure
+      const fe=rs.factor_exposure;
+      const fh=el('div','ph','FACTOR EXPOSURE · FAMA-FRENCH 5 + MOMENTUM'); fh.style.cssText='font-size:11px;margin-top:12px;'; wrap.appendChild(fh);
+      if(fe && fe.factor_betas){
+        const fr=el('div'); fr.style.cssText='display:flex;gap:18px;flex-wrap:wrap;margin:6px 0;';
+        Object.entries(fe.factor_betas).forEach(([k,v])=>{ fr.innerHTML+=`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${k}</div><div style="font-size:14px;">${v}</div></div>`; });
+        fr.innerHTML+=`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">ALPHA</div><div style="font-size:14px;">${fe.alpha_annualized_pct}%/yr</div></div>`+
+          `<div><div class="muted" style="font-size:10px;letter-spacing:1px;">R²</div><div style="font-size:14px;">${fe.r2==null?'—':fe.r2}</div></div>`;
+        wrap.appendChild(fr);
+        const fn=el('div','muted'); fn.style.cssText='font-size:10px;margin-bottom:4px;'; fn.textContent=fe.note||''; wrap.appendChild(fn);
+      } else {
+        const fb=el('div','muted'); fb.style.cssText='font-size:10px;'; fb.textContent='Factor library not yet available (Ken French daily data fetches on the host). This fills in once /api/risk-suite reaches the factor source.'; wrap.appendChild(fb);
+      }
+      const rn2=el('div','muted'); rn2.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; rn2.textContent=rs.note||''; wrap.appendChild(rn2);
+    } else {
+      const sb=el('div','muted'); sb.style.cssText='font-size:11px;';
+      sb.textContent=rs.note||('Risk suite '+(rs.status||'building')+((rs.common_days!=null)?(' ('+rs.common_days+'/'+(rs.days_needed||60)+' days)'):'')+'.'); wrap.appendChild(sb);
+      if(rs.status!=='unavailable'){ const rf=el('button','btn'); rf.textContent='Build now'; rf.style.cssText='margin-top:6px;font-size:11px;';
+        rf.onclick=()=>{ fetch('/api/run-risk-suite',{method:'POST'}); rf.textContent='building…'; rf.disabled=true; }; wrap.appendChild(rf); }
     }
   }
   return wrap;
