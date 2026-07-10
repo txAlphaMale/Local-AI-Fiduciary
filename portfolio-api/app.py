@@ -35,6 +35,7 @@ import estate     # estate & generational-wealth engine (G2) — step-up, gift-v
 import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
+import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -155,6 +156,13 @@ SETTING_SPECS = {
     "roth_rmd_age":           {"env": "ROTH_RMD_AGE",           "default": 73,  "cast": int,   "label": "Roth ladder: RMD age (end of the conversion window)", "group": "Roth / marginal curve"},
     "roth_conversion_growth_pct": {"env": "ROTH_CONVERSION_GROWTH_PCT", "default": 5.0, "cast": float, "label": "Roth ladder: assumed traditional-balance growth (%)", "group": "Roth / marginal curve"},
     "roth_irmaa_from_age":    {"env": "ROTH_IRMAA_FROM_AGE",    "default": 63,  "cast": int,   "label": "Marginal curve: model IRMAA from this age (2-yr lookback)", "group": "Roth / marginal curve"},
+    "leverage_loan_rate_pct":     {"env": "LEVERAGE_LOAN_RATE_PCT",     "default": 7.0,  "cast": float, "label": "Leverage: SBLOC/margin APR (variable, SOFR-based) (%)", "group": "Leverage"},
+    "leverage_maintenance_pct":   {"env": "LEVERAGE_MAINTENANCE_PCT",   "default": 35.0, "cast": float, "label": "Leverage: broker maintenance-margin requirement (%)", "group": "Leverage"},
+    "leverage_ruin_tolerance_pct":{"env": "LEVERAGE_RUIN_TOLERANCE_PCT","default": 5.0,  "cast": float, "label": "Leverage: max acceptable P(margin call) for 'prudent' LTV (%)", "group": "Leverage"},
+    "leverage_horizon_years":     {"env": "LEVERAGE_HORIZON_YEARS",     "default": 2,    "cast": int,   "label": "Leverage: ruin-model horizon (years)", "group": "Leverage"},
+    "leverage_paths":             {"env": "LEVERAGE_PATHS",             "default": 3000, "cast": int,   "label": "Leverage: ruin-model bootstrap paths", "group": "Leverage"},
+    "leverage_expected_return_pct":{"env": "LEVERAGE_EXPECTED_RETURN_PCT","default": 7.0, "cast": float, "label": "Leverage: assumed asset expected return (borrow-vs-sell) (%)", "group": "Leverage"},
+    "leverage_ltcg_rate_pct":     {"env": "LEVERAGE_LTCG_RATE_PCT",     "default": 15.0, "cast": float, "label": "Leverage: LTCG rate for the sell alternative (%)", "group": "Leverage"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1420,6 +1428,116 @@ def get_roth():
         return _roth_plan()
     except Exception as e:
         return JSONResponse({"error": f"roth/marginal-curve engine failed: {e}"}, status_code=500)
+
+
+# ============ G6: asset-backed borrowing — RUIN-MODEL-FIRST ============
+# Leads with the risk: a bootstrap margin-call ("ruin") probability vs LTV drawn from the book's
+# OWN fat-tailed reconstructed returns (G4) -> a conservative max prudent LTV; then an after-tax
+# borrow-vs-sell comparison and the buy-borrow-die risks. Only TAXABLE/brokerage assets are
+# pledgeable. Cached + background-built (the bootstrap is a couple seconds). MODELS borrowing —
+# never borrows, never places an order.
+LEVERAGE_FILE = os.environ.get("LEVERAGE_FILE", "/data/leverage.json")
+LEVERAGE_TTL = int(os.environ.get("LEVERAGE_TTL", "86400"))
+_leverage_lock = threading.Lock()
+
+
+def _leverage():
+    """Ruin curve + borrow-vs-sell on the pledgeable (taxable) book, using reconstructed returns."""
+    d = _data()
+    bal = _balances_by_tax_status()
+    collateral = bal.get("taxable", 0.0)      # only taxable/brokerage assets can be pledged
+    cons = [c for c in d.get("consolidated", [])
+            if c.get("ticker") and (c.get("type") or "") != "Cash"]
+    weights, gain_num, gain_den = {}, 0.0, 0.0
+    for c in cons:
+        v = c.get("value") or 0.0
+        weights[c["ticker"]] = weights.get(c["ticker"], 0.0) + v
+        g = c.get("gain")
+        if g is not None and v:
+            gain_num += g
+            gain_den += v
+    gain_fraction = (gain_num / gain_den) if gain_den else 0.0
+    series = {}
+    for t in weights:
+        s = _stooq_daily(t)
+        if len(s) >= 30:
+            series[t] = s
+    dates, rets = risk.align_returns(series)
+    order = [t for t in series if rets.get(t)]
+    port = (risk.portfolio_returns(weights, rets)
+            if (len(dates) - 1 >= _knob("risk_min_days") and order) else [])
+    if not port:
+        return {"status": "building", "generated_at": int(time.time()),
+                "note": "Leverage ruin model needs reconstructed daily history (shared with the "
+                        "risk suite). Build the RISK suite first, or retry shortly."}
+    maint = _knob("leverage_maintenance_pct") / 100.0
+    horizon_days = int(_knob("leverage_horizon_years") * 252)
+    grid = [i / 100.0 for i in range(5, 61, 5)]
+    ruin = leverage.ruin_curve(port, grid, maint, horizon_days,
+                               n_paths=_knob("leverage_paths"),
+                               tolerance_pct=_knob("leverage_ruin_tolerance_pct"))
+    prudent_ltv = (ruin or {}).get("max_prudent_ltv_pct", 0.0) / 100.0
+    draw = round(collateral * prudent_ltv, 2)
+    bvs = leverage.borrow_vs_sell(draw, gain_fraction, _knob("leverage_ltcg_rate_pct"),
+                                  _knob("leverage_loan_rate_pct"),
+                                  _knob("leverage_expected_return_pct"),
+                                  _knob("leverage_horizon_years"))
+    return {"status": "ready", "generated_at": int(time.time()),
+            "collateral_value": round(collateral, 2),
+            "gain_fraction_pct": round(gain_fraction * 100, 1),
+            "loan_rate_pct": _knob("leverage_loan_rate_pct"),
+            "expected_return_pct": _knob("leverage_expected_return_pct"),
+            "ruin": ruin, "prudent_draw": draw, "borrow_vs_sell": bvs,
+            "risks": leverage.BUY_BORROW_DIE_RISKS,
+            "note": "Only taxable/brokerage assets are pledgeable (retirement accounts can't be). "
+                    "The ruin curve is the binding constraint — the max prudent LTV keeps the "
+                    "margin-call probability under tolerance using your own fat-tailed returns. "
+                    "Loan rate is variable (SOFR-based). MODELS borrowing only — never borrows. "
+                    "Not advice; a margin call can force a sale at the worst time."}
+
+
+def _read_leverage():
+    try:
+        with open(LEVERAGE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_leverage():
+    if not _leverage_lock.acquire(blocking=False):
+        return
+    try:
+        res = _leverage()
+        os.makedirs(os.path.dirname(LEVERAGE_FILE) or ".", exist_ok=True)
+        with open(LEVERAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _leverage_lock.release()
+
+
+@app.get("/api/leverage")
+def get_leverage():
+    """G6 asset-backed borrowing ruin model + borrow-vs-sell, CACHED (bootstrap runs in the
+    background; reuses the cached per-ticker daily history)."""
+    cached = _read_leverage()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < LEVERAGE_TTL)
+    if not fresh and not _leverage_lock.locked():
+        threading.Thread(target=_do_leverage, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First leverage build is running (margin-call bootstrap) — refresh shortly."}
+
+
+@app.post("/api/run-leverage")
+def run_leverage(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_leverage, daemon=True).start()
+    return {"status": "started"}
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------

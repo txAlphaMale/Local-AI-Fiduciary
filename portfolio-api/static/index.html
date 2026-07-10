@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -309,6 +309,7 @@ function render(){
       hasRisk && {key:'risk',label:'RISK',build:()=>riskContent()},
       hasAttrib && {key:'attribution',label:'ATTRIBUTION',build:()=>attributionContent()},
       hasSizing && {key:'sizing',label:'SIZING',build:()=>sizingContent()},
+      (LEVERAGE && !LEVERAGE.error) && {key:'leverage',label:'LEVERAGE',build:()=>leverageContent()},
       hasLT && {key:'lookthrough',label:'LOOK-THROUGH',build:()=>lookthroughContent()},
     ]));
   }
@@ -1795,6 +1796,75 @@ function rothContent(){
     lt.appendChild(lb); wrap.appendChild(lt);
   }
   const ln=el('div','muted'); ln.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; ln.textContent=(ld.note||'')+' '+(r.note||''); wrap.appendChild(ln);
+  return wrap;
+}
+
+function leverageContent(){
+  const wrap=el('div'); const v=LEVERAGE;
+  if(!v || v.error){ const e=el('div','muted'); e.textContent='Leverage model not available.'; wrap.appendChild(e); return wrap; }
+  if(v.status!=='ready'){
+    const b=el('div','muted'); b.style.cssText='font-size:11px;'; b.textContent=v.note||'Building leverage ruin model…'; wrap.appendChild(b);
+    const rb=el('button','btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:6px;font-size:11px;display:block;';
+    rb.onclick=()=>{ fetch('/api/run-leverage',{method:'POST'}); rb.textContent='building…'; rb.disabled=true; }; wrap.appendChild(rb);
+    return wrap;
+  }
+  const ru=v.ruin||{};
+  const h=el('div','ph','RUIN MODEL FIRST · P(MARGIN CALL) vs LTV'); wrap.appendChild(h);
+  // headline: max prudent LTV
+  const fs=el('div'); fs.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:8px 0 4px;';
+  const m=(l,x,cls)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:16px;" class="${cls||''}">${x}</div></div>`;
+  fs.innerHTML=m('MAX PRUDENT LTV',(ru.max_prudent_ltv_pct!=null?ru.max_prudent_ltv_pct+'%':'—'),'pos')+
+    m('PRUDENT DRAW',usd(v.prudent_draw))+
+    m('PLEDGEABLE (TAXABLE)',usd(v.collateral_value))+
+    m('LOAN RATE',(v.loan_rate_pct+'% var'))+
+    m('MAINT. MARGIN',(ru.maintenance_pct!=null?ru.maintenance_pct+'%':'—'));
+  wrap.appendChild(fs);
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;margin:2px 0 6px;';
+  sub.textContent=`keeps P(margin call) ≤ ${ru.tolerance_pct}% over ${Math.round((ru.horizon_days||0)/252*10)/10}yr, ${ru.n_paths} bootstrap paths of your own returns`;
+  wrap.appendChild(sub);
+  // ruin table
+  const tbl=el('table','tbl'); tbl.style.cssText='width:100%;font-size:12px;border-collapse:collapse;';
+  tbl.innerHTML='<thead><tr>'+['LTV','DROP TO CALL','','P(MARGIN CALL)'].map((x,i)=>`<th style="text-align:${i===0?'left':(i===2?'left':'right')};padding:3px 8px;border-bottom:1px solid var(--line);" class="muted">${x}</th>`).join('')+'</tr></thead>';
+  const tb=el('tbody'); const maxP=100;
+  (ru.rows||[]).forEach(rw=>{
+    const over=rw.p_margin_call_pct>ru.tolerance_pct;
+    const prudent=(rw.ltv_pct===ru.max_prudent_ltv_pct);
+    const w=Math.round((rw.p_margin_call_pct||0)/maxP*100);
+    const tr=el('tr'); if(prudent) tr.style.background='rgba(120,200,120,0.12)';
+    tr.innerHTML=`<td style="padding:3px 8px;">${rw.ltv_pct}%${prudent?' ◄ prudent':''}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="muted">−${rw.breach_drawdown_pct}%</td>`+
+      `<td style="padding:3px 8px;width:80px;"><div style="height:8px;background:${over?'var(--neg,#e6788a)':'var(--accent,#6ab0f3)'};width:${w}%;border-radius:2px;"></div></td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="${over?'neg':'pos'}">${rw.p_margin_call_pct}%</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); wrap.appendChild(tbl);
+  const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; rn.textContent=ru.note||''; wrap.appendChild(rn);
+  // borrow vs sell
+  const bs=v.borrow_vs_sell;
+  const bh=el('div','ph','BORROW vs SELL · AFTER-TAX (at the prudent draw)'); bh.style.marginTop='16px'; wrap.appendChild(bh);
+  if(bs && v.prudent_draw>0){
+    const bstrip=el('div'); bstrip.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:6px 0;';
+    bstrip.innerHTML=m('SELL: TAX NOW',usd(bs.sell_tax_now),'neg')+
+      m('SELL: GROWTH FORGONE',usd(bs.growth_forgone_if_sold),'neg')+
+      m('BORROW: INTEREST '+bs.horizon_years+'YR',usd(bs.interest_over_horizon),'neg')+
+      m('ANNUAL CARRY',(bs.annual_carry_pct+'%'),(bs.annual_carry_pct<0?'pos':'neg'))+
+      m('BREAKEVEN RETURN',bs.breakeven_asset_return_pct+'%');
+    wrap.appendChild(bstrip);
+    const verdict=el('div'); verdict.style.cssText='font-size:12px;margin:4px 0;border-left:3px solid '+(bs.borrow_favored_on_carry?'var(--accent,#6ab0f3)':'var(--amber)')+';padding:4px 10px;';
+    verdict.textContent=bs.borrow_favored_on_carry
+      ? `On carry alone, borrowing beats selling: the asset's assumed ${v.expected_return_pct}% return exceeds the ${v.loan_rate_pct}% loan rate, and borrowing defers ${usd(bs.tax_deferred_by_borrowing)} of LTCG (erased at death via step-up). But that ignores the risks below.`
+      : `On carry alone, selling wins here: the ${v.loan_rate_pct}% loan rate exceeds the assumed ${v.expected_return_pct}% asset return, so the debt bleeds ${bs.annual_carry_pct}%/yr on top of the risks below.`;
+    wrap.appendChild(verdict);
+    const bn=el('div','muted'); bn.style.cssText='font-size:10px;line-height:1.4;'; bn.textContent=bs.note||''; wrap.appendChild(bn);
+  } else {
+    const nb=el('div','muted'); nb.style.cssText='font-size:11px;'; nb.textContent='No prudent leverage available on this book (max prudent LTV rounds to 0 — the concentrated volatility can\'t safely support a loan).'; wrap.appendChild(nb);
+  }
+  // risks
+  if((v.risks||[]).length){
+    const rh=el('div','ph','BUY-BORROW-DIE · RISKS (not a free lunch)'); rh.style.marginTop='14px'; wrap.appendChild(rh);
+    v.risks.forEach(x=>{ const rr=el('div'); rr.style.cssText='font-size:11px;margin:4px 0;border-left:3px solid var(--amber);padding-left:8px;'; rr.textContent=x; wrap.appendChild(rr); });
+  }
+  const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; nn.textContent=v.note||''; wrap.appendChild(nn);
   return wrap;
 }
 
