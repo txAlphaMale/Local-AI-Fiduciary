@@ -34,6 +34,7 @@ import grounding  # dated-constant registry + staleness watchdog (G13a)
 import estate     # estate & generational-wealth engine (G2) — step-up, gift-vs-hold, titling
 import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
+import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -148,6 +149,12 @@ SETTING_SPECS = {
     "sizing_horizon_days":    {"env": "SIZING_HORIZON_DAYS",    "default": 20,  "cast": int,   "label": "Sizing: CVaR loss-budget horizon (days)", "group": "Position sizing"},
     "sizing_stage_years":     {"env": "SIZING_STAGE_YEARS",     "default": 5,   "cast": int,   "label": "Sizing: staged-sale years (spread the trim)", "group": "Position sizing"},
     "sizing_ltcg_rate_pct":   {"env": "SIZING_LTCG_RATE_PCT",   "default": 15.0,"cast": float, "label": "Sizing: residual LTCG rate for the staged sale (%)", "group": "Position sizing"},
+    "roth_target_ceiling_pct":{"env": "ROTH_TARGET_CEILING_PCT","default": 24.0,"cast": float, "label": "Roth ladder: fill conversions up to this marginal rate (%)", "group": "Roth / marginal curve"},
+    "roth_sweep_max":         {"env": "ROTH_SWEEP_MAX",         "default": 300000,"cast": int, "label": "Marginal curve: max next-dollar income to sweep ($)", "group": "Roth / marginal curve"},
+    "roth_sweep_step":        {"env": "ROTH_SWEEP_STEP",        "default": 2500,"cast": int,   "label": "Marginal curve: sweep step ($)", "group": "Roth / marginal curve"},
+    "roth_rmd_age":           {"env": "ROTH_RMD_AGE",           "default": 73,  "cast": int,   "label": "Roth ladder: RMD age (end of the conversion window)", "group": "Roth / marginal curve"},
+    "roth_conversion_growth_pct": {"env": "ROTH_CONVERSION_GROWTH_PCT", "default": 5.0, "cast": float, "label": "Roth ladder: assumed traditional-balance growth (%)", "group": "Roth / marginal curve"},
+    "roth_irmaa_from_age":    {"env": "ROTH_IRMAA_FROM_AGE",    "default": 63,  "cast": int,   "label": "Marginal curve: model IRMAA from this age (2-yr lookback)", "group": "Roth / marginal curve"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1303,6 +1310,116 @@ def run_sizing(x_analysis_token: str = Header(default="")):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     threading.Thread(target=_do_sizing, daemon=True).start()
     return {"status": "started"}
+
+
+# ============ G8: unified marginal-rate curve + multi-year Roth conversion ladder ============
+# Composes EVERY marginal cost of the next dollar of ordinary income into one curve: federal
+# ordinary tax + the LTCG "bump zone" + NIIT (all from tax.effective_rate), the ACA premium-
+# subsidy phase-out + 400%-FPL cliff (aca.py, pre-65), and IRMAA Medicare steps (roth.py,
+# age 63+). Then a multi-year Roth ladder fills conversions up to a target ceiling over the
+# pre-RMD valley. Pure CPU (no network) — computed on request. SS deprioritized (torpedo omitted).
+
+
+def _ptc_dollars(magi_value, actx):
+    """Annual PTC (subsidy) $ at a MAGI, or None if no SLCSP configured (can't dollarize)."""
+    if not actx.get("slcsp_annual"):
+        return None
+    est = aca.ptc_estimate(magi_value, actx["household_size"], actx["slcsp_annual"])
+    if not est.get("eligible"):
+        return 0.0                      # coverage gap or over the cliff → no subsidy
+    return est.get("estimated_annual_ptc", 0.0)
+
+
+def _marginal_curve():
+    """Sweep the next dollar of ordinary income (a Roth conversion) and compose the total
+    marginal cost at each point. Returns the point series (+ per-point tax/aca/irmaa split),
+    the recommended fill-to, the ACA cliff, and IRMAA step markers."""
+    cfg = _read_retire()
+    ctx = _tax_ctx(cfg)
+    actx = _aca_ctx(cfg)
+    status = ctx["status"]
+    age = cfg.get("current_age")
+    base_ord = float(cfg.get("roth_base_ordinary") or 0)
+    ltcg = float(cfg.get("roth_base_ltcg") or 0)
+    magi_base = base_ord + ltcg
+    step, mx = _knob("roth_sweep_step"), _knob("roth_sweep_max")
+    irmaa_on = (age is None) or (age >= _knob("roth_irmaa_from_age"))
+    people_med = 2 if status == "mfj" else 1
+    aca_pre65 = (age is None) or (age < 65)
+    er0 = tax.effective_rate(base_ord, ltcg, status, age=ctx["age"], spouse_age=ctx["spouse_age"],
+                             include_niit=True, magi=magi_base)
+    tax0 = er0["total_tax"]
+    ptc0 = _ptc_dollars(magi_base, actx) if aca_pre65 else None
+    irmaa0 = roth.irmaa_annual_part_b(magi_base, status, people_med) if irmaa_on else 0.0
+    deltas, costs, comps = [], [], []
+    d = 0
+    while d <= mx:
+        er = tax.effective_rate(base_ord + d, ltcg, status, age=ctx["age"],
+                                spouse_age=ctx["spouse_age"], include_niit=True, magi=magi_base + d)
+        tax_cost = er["total_tax"] - tax0
+        aca_cost = 0.0
+        if aca_pre65 and ptc0 is not None:
+            ptc = _ptc_dollars(magi_base + d, actx)
+            aca_cost = max(0.0, (ptc0 or 0) - (ptc or 0))
+        irmaa_cost = (roth.irmaa_annual_part_b(magi_base + d, status, people_med) - irmaa0) if irmaa_on else 0.0
+        deltas.append(d)
+        costs.append(tax_cost + aca_cost + irmaa_cost)
+        comps.append({"tax": round(tax_cost, 0), "aca": round(aca_cost, 0), "irmaa": round(irmaa_cost, 0)})
+        d += step
+    points = roth.marginal_and_avg(deltas, costs)
+    for i, p in enumerate(points):
+        p["components"] = comps[i]
+    cliff_delta, cliff_info = None, None
+    if aca_pre65 and actx.get("household_size"):
+        cl = aca.cliff(magi_base, actx["household_size"])
+        hr = cl.get("headroom_to_cliff")
+        if hr is not None and hr > 0:
+            cliff_delta, cliff_info = hr, cl
+    ceiling = _knob("roth_target_ceiling_pct")
+    fill = roth.recommend_fill(points, ceiling, cliff_delta)
+    irmaa_markers = ([round(e - magi_base, 0) for e in roth.irmaa_tier_edges(status)
+                      if magi_base < e <= magi_base + mx] if irmaa_on else [])
+    return {"points": points, "recommended_fill": fill, "ceiling_pct": ceiling,
+            "aca_cliff_delta": cliff_delta, "aca_cliff": cliff_info,
+            "irmaa_markers": irmaa_markers, "irmaa_modeled": irmaa_on,
+            "assumptions": {"base_ordinary": base_ord, "ltcg": ltcg, "current_age": age,
+                            "filing_status": status, "aca_pre65": aca_pre65,
+                            "slcsp_annual": actx.get("slcsp_annual"),
+                            "household_size": actx.get("household_size"),
+                            "people_on_medicare": people_med, "magi_base": magi_base},
+            "note": "Effective MARGINAL rate on the next dollar of ordinary income (a Roth "
+                    "conversion), composing federal ordinary tax + the LTCG bump zone + NIIT + the "
+                    "ACA subsidy phase-out/cliff (pre-65) + IRMAA steps (63+). Texas adds no state "
+                    "tax, so this IS the whole marginal cost. Educational — size with a CPA."}
+
+
+def _roth_plan():
+    """Marginal curve + a multi-year conversion ladder over the pre-RMD valley."""
+    curve = _marginal_curve()
+    cfg = _read_retire()
+    age = cfg.get("current_age")
+    rmd = _knob("roth_rmd_age")
+    n_years = min(40, max(0, rmd - age)) if age else 10
+    trad = _balances_by_tax_status().get("deferred", 0.0)
+    fill = curve["recommended_fill"]["fill_to"]
+    ld = roth.ladder(fill, n_years, age, datetime.date.today().year, trad,
+                     growth_pct=_knob("roth_conversion_growth_pct"),
+                     aca_cliff_fill=curve.get("aca_cliff_delta"), aca_until_age=65)
+    return {"generated_at": int(time.time()), "curve": curve, "ladder": ld,
+            "trad_balance": round(trad, 2), "rmd_age": rmd, "annual_fill": fill,
+            "note": "The ladder converts up to the recommended fill each year (or the tighter "
+                    "ACA-cliff cap while under 65) until RMD age, moving pre-tax dollars to Roth "
+                    "in the low-rate years. Each conversion has its own 5-year clock. Read-only "
+                    "decision-support — not tax advice; confirm conversions with a CPA."}
+
+
+@app.get("/api/roth")
+def get_roth():
+    """G8 unified marginal-rate curve + multi-year Roth conversion ladder (pure CPU, live)."""
+    try:
+        return _roth_plan()
+    except Exception as e:
+        return JSONResponse({"error": f"roth/marginal-curve engine failed: {e}"}, status_code=500)
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------

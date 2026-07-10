@@ -26,12 +26,14 @@ import tax
 import aca
 import ss
 import estate
+import roth
 
 # Month precision is deliberate: the modules were authored/verified against the
 # cited primary sources in July 2026 (see each module's docstring). If you
 # re-verify a figure, bump the date here.
 VERIFIED = {"tax": "2026-07", "aca": "2026-07", "ss": "2026-07",
-            "estate": "2026-07-10"}   # verified vs Rev. Proc. 2025-32 coverage at build time
+            "estate": "2026-07-10",   # verified vs Rev. Proc. 2025-32 coverage at build time
+            "roth": "2026-07-10"}     # IRMAA verified vs CMS 2026 Part B fact sheet (G8)
 
 # kind: "indexed" re-publishes every year (MUST re-verify annually);
 #       "statutory" is fixed in law until Congress acts (verify the law still stands);
@@ -105,6 +107,12 @@ PARAM_SPECS = [
      "year": lambda: estate.TAX_YEAR, "kind": "indexed", "source": lambda: estate.SOURCE,
      "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/frequently-asked-questions-on-gift-taxes",
      "module": "estate"},
+    {"key": "roth.irmaa", "label": "Medicare IRMAA Part B brackets + standard premium (2-yr MAGI lookback)",
+     "value": lambda: {"std_monthly": roth.IRMAA_PART_B_STD_MONTHLY,
+                       "multipliers": roth.IRMAA_MULTIPLIERS, "thresholds": roth.IRMAA_THRESHOLDS},
+     "year": lambda: roth.IRMAA_YEAR, "kind": "indexed", "source": lambda: roth.IRMAA_SOURCE,
+     "source_url": "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
+     "module": "roth"},
 ]
 
 

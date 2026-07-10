@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -1184,6 +1184,7 @@ function planContent(r){
     haveBridge && {key:'bridge',label:'ACA BRIDGE',build:bridgeSec},
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},
     (EST && !EST.error) && {key:'estate',label:'ESTATE',build:()=>estateContent()},
+    (ROTH && !ROTH.error) && {key:'roth',label:'ROTH · RATE CURVE',build:()=>rothContent()},
   ]));
   return outer;
 }
@@ -1730,6 +1731,70 @@ function sizingContent(){
   }
   if((s.unresolved||[]).length){ const ur=el('div','muted'); ur.style.cssText='font-size:10px;margin-top:8px;'; ur.textContent='no daily data (excluded): '+s.unresolved.join(', '); wrap.appendChild(ur); }
   const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; rn.textContent=s.note||''; wrap.appendChild(rn);
+  return wrap;
+}
+
+function rothContent(){
+  const wrap=el('div'); const r=ROTH;
+  if(!r || r.error){ const e=el('div','muted'); e.textContent=(r&&r.error)||'Roth/marginal-curve not available.'; wrap.appendChild(e); return wrap; }
+  const c=r.curve||{}; const a=c.assumptions||{}; const rf=c.recommended_fill||{};
+  const h=el('div','ph','UNIFIED MARGINAL-RATE CURVE · NEXT DOLLAR OF INCOME'); wrap.appendChild(h);
+  const asum=el('div','muted'); asum.style.cssText='font-size:10px;margin:2px 0 6px;';
+  asum.textContent=`baseline: ${usd(a.base_ordinary)} ordinary + ${usd(a.ltcg)} LTCG (MAGI ${usd(a.magi_base)}) · ${a.filing_status.toUpperCase()} · age ${a.current_age==null?'—':a.current_age}`+
+    (a.aca_pre65?` · ACA pre-65${a.slcsp_annual?' (SLCSP '+usd(a.slcsp_annual)+')':' (set SLCSP for $ subsidy slope)'}`:'')+
+    (c.irmaa_modeled?' · IRMAA modeled':'');
+  wrap.appendChild(asum);
+  // recommended fill strip
+  const fillMr=(rf.at_point&&rf.at_point.marginal_rate_pct!=null)?rf.at_point.marginal_rate_pct+'%':'—';
+  const fs=el('div'); fs.style.cssText='display:flex;gap:22px;flex-wrap:wrap;margin:6px 0;';
+  const m=(l,v,cls)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:16px;" class="${cls||''}">${v}</div></div>`;
+  fs.innerHTML=m('FILL CONVERSION TO',usd(rf.fill_to),'pos')+m('MARGINAL AT FILL',fillMr)+m('CEILING',c.ceiling_pct+'%')+
+    (c.aca_cliff_delta!=null?m('ACA CLIFF AT +',usd(c.aca_cliff_delta),'neg'):'');
+  wrap.appendChild(fs);
+  // marginal-rate table (sample every ~$25k) with inline bars + component split
+  const pts=(c.points||[]); const step=(pts.length>1?(pts[1].delta-pts[0].delta):2500); const every=Math.max(1,Math.round(25000/step));
+  const rows=pts.filter((p,i)=>i>0 && (i%every===0 || (rf.fill_to&&Math.abs(p.delta-rf.fill_to)<step/2)));
+  const maxMr=Math.max(30,...rows.map(p=>p.marginal_rate_pct||0));
+  const tbl=el('table','tbl'); tbl.style.cssText='width:100%;font-size:12px;border-collapse:collapse;';
+  tbl.innerHTML='<thead><tr>'+['CONVERT +','MARGINAL','','AVG','TAX·ACA·IRMAA'].map((x,i)=>`<th style="text-align:${i===0?'left':(i===2?'left':'right')};padding:3px 8px;border-bottom:1px solid var(--line);" class="muted">${x}</th>`).join('')+'</tr></thead>';
+  const tb=el('tbody');
+  rows.forEach(p=>{
+    const isFill=(rf.fill_to&&Math.abs(p.delta-rf.fill_to)<step/2);
+    const overCeil=(p.marginal_rate_pct||0)>c.ceiling_pct;
+    const cmp=p.components||{}; const w=Math.round((p.marginal_rate_pct||0)/maxMr*100);
+    const tr=el('tr'); if(isFill) tr.style.background='rgba(120,200,120,0.10)';
+    tr.innerHTML=`<td style="padding:3px 8px;">${usd(p.delta)}${isFill?' ◄ fill':''}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="${overCeil?'neg':''}">${p.marginal_rate_pct==null?'—':p.marginal_rate_pct+'%'}</td>`+
+      `<td style="padding:3px 8px;width:90px;"><div style="height:8px;background:${overCeil?'var(--amber)':'var(--accent,#6ab0f3)'};width:${w}%;border-radius:2px;"></div></td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="muted">${p.avg_rate_pct==null?'—':p.avg_rate_pct+'%'}</td>`+
+      `<td style="text-align:right;padding:3px 8px;" class="muted">${usd(cmp.tax)}·${usd(cmp.aca)}·${usd(cmp.irmaa)}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); wrap.appendChild(tbl);
+  if((c.irmaa_markers||[]).length){ const im=el('div','muted'); im.style.cssText='font-size:10px;margin-top:4px;'; im.textContent='IRMAA step(s) at conversion +'+c.irmaa_markers.map(x=>usd(x)).join(', +'); wrap.appendChild(im); }
+  const cn=el('div','muted'); cn.style.cssText='font-size:10px;line-height:1.4;margin-top:4px;'; cn.textContent=c.note||''; wrap.appendChild(cn);
+  // ladder
+  const ld=r.ladder||{};
+  const lh=el('div','ph','MULTI-YEAR ROTH LADDER · PRE-RMD VALLEY'); lh.style.marginTop='16px'; wrap.appendChild(lh);
+  const lsum=el('div','muted'); lsum.style.cssText='font-size:10px;margin:2px 0 6px;';
+  lsum.textContent=`traditional balance ${usd(r.trad_balance)} · convert ~${usd(r.annual_fill)}/yr to RMD age ${r.rmd_age} · total ${usd(ld.total_converted)} · remaining ${usd(ld.trad_remaining)}`;
+  wrap.appendChild(lsum);
+  if((ld.years||[]).length){
+    const lt=el('table','tbl'); lt.style.cssText='width:100%;font-size:12px;border-collapse:collapse;';
+    lt.innerHTML='<thead><tr>'+['YEAR','AGE','CONVERT','ACCESSIBLE','TRAD AFTER'].map((x,i)=>`<th style="text-align:${i<2?'left':'right'};padding:3px 8px;border-bottom:1px solid var(--line);" class="muted">${x}</th>`).join('')+'</tr></thead>';
+    const lb=el('tbody');
+    ld.years.forEach(y=>{
+      const tr=el('tr');
+      tr.innerHTML=`<td style="padding:3px 8px;">${y.year||'—'}</td>`+
+        `<td style="padding:3px 8px;">${y.age==null?'—':y.age}</td>`+
+        `<td style="text-align:right;padding:3px 8px;">${usd(y.conversion)}${y.aca_capped?' <span style="color:var(--amber)">ACA-cap</span>':''}</td>`+
+        `<td style="text-align:right;padding:3px 8px;" class="muted">age ${y.accessible_at_age==null?'—':y.accessible_at_age}</td>`+
+        `<td style="text-align:right;padding:3px 8px;" class="muted">${usd(y.trad_after)}</td>`;
+      lb.appendChild(tr);
+    });
+    lt.appendChild(lb); wrap.appendChild(lt);
+  }
+  const ln=el('div','muted'); ln.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; ln.textContent=(ld.note||'')+' '+(r.note||''); wrap.appendChild(ln);
   return wrap;
 }
 
