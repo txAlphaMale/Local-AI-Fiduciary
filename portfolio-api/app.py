@@ -40,6 +40,7 @@ import avenues     # cross-avenue after-tax comparison sheet (G12) — where the
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
+import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical return sequences
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -146,6 +147,7 @@ SETTING_SPECS = {
     "rb_upper_band":  {"env": "RB_UPPER_BAND",  "default": 99,  "cast": float, "label": "Risk-based guardrails: raise spending when success > (%)", "group": "Monte Carlo"},
     "rb_adjust_pct":  {"env": "RB_ADJUST_PCT",  "default": 10,  "cast": float, "label": "Risk-based guardrails: spending adjustment step (%)", "group": "Monte Carlo"},
     "rb_inner_runs":  {"env": "RB_INNER_RUNS",  "default": 400, "cast": int,   "label": "Risk-based guardrails: paths per success-grid cell", "group": "Monte Carlo"},
+    "mc_block_years": {"env": "MC_BLOCK_YEARS", "default": 5,   "cast": int,   "label": "Block-bootstrap MC: block length (years of contiguous history)", "group": "Monte Carlo"},
     "estate_heir_ltcg_pct": {"env": "ESTATE_HEIR_LTCG_PCT", "default": 15.0, "cast": float, "label": "Gift-vs-hold: assumed heir LTCG rate (%)", "group": "Estate"},
     "risk_hist_years":   {"env": "RISK_HIST_YEARS",   "default": 2,   "cast": int,   "label": "Risk suite: years of daily history to reconstruct (risk ramp)", "group": "Risk suite"},
     "risk_hist_max_age": {"env": "RISK_HIST_MAX_AGE", "default": 3,   "cast": int,   "label": "Risk suite: refetch a ticker's daily history after (days)", "group": "Risk suite"},
@@ -1931,6 +1933,73 @@ async def post_business(req: Request):
     return rec
 
 
+# ============ Attention digest — materiality-filtered "what needs attention" ============
+# The read-side of the alerting layer: aggregates signals the other modules ALREADY compute
+# (exit-trigger trips, sizing loss-budget breaches, concentration/stress flags, grounding
+# staleness) into one prioritized list. Reads cached outputs — cheap, read-only, no new data.
+
+
+def _alerts_digest():
+    alerts = []
+
+    def add(level, cat, msg, where):
+        alerts.append({"level": level, "category": cat, "message": msg, "where": where})
+
+    # 1) Exit discipline — tripped thesis triggers (G14)
+    for e in ((_read_theses_eval() or {}).get("evaluations") or []):
+        if e.get("tripped_count", 0) > 0:
+            add("action", "Exit discipline",
+                f"{e.get('ticker')}: {e.get('action')} — {', '.join(e.get('tripped_labels') or [])}",
+                "RESEARCH → THESES")
+    # 2) Position sizing — single-name loss-budget breaches (G7)
+    for r in (((_read_sizing() or {}).get("loss_budget") or {}).get("positions") or []):
+        if r.get("over_budget"):
+            add("warn", "Position sizing",
+                f"{r.get('ticker')} exceeds the single-name CVaR loss budget "
+                f"(at-risk {r.get('at_risk_pct_of_nw')}% of net worth; suggested trim "
+                f"${(r.get('suggested_trim') or 0):,.0f})", "INSIGHTS → SIZING")
+    # 3) Concentration + macro stress (G4 / exposure)
+    ex = _read_exp() or {}
+    for f in ((ex.get("concentration") or {}).get("flags") or []):
+        add("warn", "Concentration", f, "INSIGHTS → EXPOSURE")
+    ms = ex.get("macro_stress") or {}
+    scen = ms.get("scenarios") or []
+    if scen:
+        worst = min(scen, key=lambda s: (s.get("pct_impact") or 0))
+        if (worst.get("pct_impact") or 0) <= -20:
+            add("info", "Stress", f"Worst modeled macro scenario '{worst.get('name')}': "
+                f"{worst.get('pct_impact')}% ({usd_neg(worst.get('dollar_impact'))})",
+                "INSIGHTS → EXPOSURE")
+    # 4) Data grounding staleness (G13)
+    try:
+        for a in grounding.alerts():
+            if a.get("level") in ("stale", "action"):
+                add("action", "Data grounding", a.get("msg"), "AUDITS → GROUNDING")
+    except Exception:
+        pass
+
+    order = {"action": 0, "warn": 1, "info": 2}
+    alerts.sort(key=lambda a: order.get(a["level"], 9))
+    return {"generated_at": int(time.time()), "alerts": alerts,
+            "counts": {lvl: sum(1 for a in alerts if a["level"] == lvl) for lvl in ("action", "warn", "info")},
+            "note": "Materiality-filtered digest of what needs attention, aggregated from the exit-trigger "
+                    "registry, the sizing loss budget, concentration/stress, and the grounding watchdog. "
+                    "Reads cached results (build the RISK/SIZING/THESES panels to populate). Read-only, not advice."}
+
+
+def usd_neg(n):
+    try:
+        return ("-$" + format(abs(round(n)), ",")) if n is not None else "—"
+    except Exception:
+        return "—"
+
+
+@app.get("/api/alerts")
+def get_alerts():
+    """Attention digest — prioritized action/warn/info items aggregated across the modules."""
+    return _alerts_digest()
+
+
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------
 RATING_LOG_FILE = os.environ.get("RATING_LOG_FILE", "/data/rating_log.json")
 
@@ -3450,12 +3519,19 @@ def _monte_carlo(start, annual_savings, annual_expenses, mean_real, vol, acc_yea
     g_final_spend, g_min_spend, g_cut_paths = [], [], 0
     r_succ, r_finals = 0, []
     r_final_spend, r_min_spend, r_cut_paths, r_raise_paths = [], [], 0, 0
+    _block_years = int(_knob("mc_block_years"))
     for _ in range(runs):
+        # BLOCK-BOOTSTRAP (additive 3rd draw mode): sample one contiguous historical sequence per
+        # path for the whole horizon, preserving multi-year serial structure. normal/t paths below
+        # are UNCHANGED (still call _dr() inline).
+        _seq = (mcblock.block_sequence(acc_years + ret_years, random, mean_real, vol, _block_years)
+                if draw_mode == "block" else None)
         bal = start
         for _y in range(acc_years):
-            bal = bal * (1 + max(-0.95, _dr())) + sav
+            bal = bal * (1 + max(-0.95, (_seq[_y] if _seq is not None else _dr()))) + sav
         start_ret = bal
-        draws = [max(-0.95, _dr()) for _ in range(ret_years)]   # shared sequence
+        draws = ([max(-0.95, x) for x in _seq[acc_years:]] if _seq is not None
+                 else [max(-0.95, _dr()) for _ in range(ret_years)])   # shared sequence
         # --- STATIC withdrawal ---
         b, dep = start_ret, None
         for y in range(ret_years):
@@ -3960,6 +4036,24 @@ def _retirement():
                         "model hides — treat this lower number as the more conservative read."}
         except Exception:
             monte_carlo["fat_tail"] = None
+        try:
+            _bb = _monte_carlo(investable, annual_savings or 0, mc_expenses, r,
+                               vol_pct / 100.0, acc_yrs, ret_yrs, draw_mode="block",
+                               spend_schedule=ss_schedule)
+            _bs = mcblock.source_stats()
+            monte_carlo["block_bootstrap"] = {
+                "draw": "block_bootstrap_hist_sp500",
+                "block_years": int(_knob("mc_block_years")),
+                "success_pct": _bb.get("success_pct"),
+                "guardrails_success_pct": (_bb.get("guardrails") or {}).get("success_pct"),
+                "source": _bs["source"],
+                "note": "Same plan, but each path samples CONTIGUOUS multi-year blocks of the real "
+                        "historical return series (rescaled to your mean/vol) instead of independent "
+                        "Normal draws — so a simulated retirement can inherit an actual bad run "
+                        "(1929-32, 1973-74, 2000-02, 2007-09). Captures the sequence clustering the "
+                        "Normal model can't; a lower success rate here is the more honest read."}
+        except Exception:
+            monte_carlo["block_bootstrap"] = None
         try:
             bridge = _bridge_plan(annual_expenses, age, retire_age)
         except Exception:

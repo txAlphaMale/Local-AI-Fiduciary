@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -305,6 +305,7 @@ function render(){
     const hasSizing=(SIZING && !SIZING.error);
     const hasLT=(LT && ((!LT.error && LT.true_exposure) || LT.computing));
     tc.appendChild(panelSubtabs('insights',[
+      (ATTENTION && !ATTENTION.error && (ATTENTION.alerts||[]).length) && {key:'attention',label:'⚠ ATTENTION',build:()=>attentionContent()},
       {key:'drift',label:'POLICY · DRIFT',build:()=>driftContent()},
       hasExp && {key:'exposure',label:'EXPOSURE',build:()=>exposureContent()},
       hasRisk && {key:'risk',label:'RISK',build:()=>riskContent()},
@@ -1037,6 +1038,13 @@ function planContent(r){
         fl.innerHTML=`<span class="muted">FAT-TAIL (Student-t) success:</span> <span class="${ft.success_pct>=80?'pos':(ft.success_pct>=60?'':'neg')}">${ft.success_pct}%</span>`+
           (drop!=null?` <span class="muted">(${drop>0?'−'+drop:'+'+(-drop)}pt vs Normal — the tail risk the headline hides)</span>`:'');
         wrap.appendChild(fl);
+      }
+      if(mc.block_bootstrap && mc.block_bootstrap.success_pct!=null){
+        const bb=mc.block_bootstrap, bd=(mc.success_pct!=null?Math.round((mc.success_pct-bb.success_pct)*10)/10:null);
+        const bl=el('div'); bl.style.cssText='font-size:11px;margin:-6px 0 12px;';
+        bl.innerHTML=`<span class="muted">BLOCK-BOOTSTRAP (real history, ${bb.block_years}yr blocks) success:</span> <span class="${bb.success_pct>=80?'pos':(bb.success_pct>=60?'':'neg')}">${bb.success_pct}%</span>`+
+          (bd!=null?` <span class="muted">(${bd>0?'−'+bd:'+'+(-bd)}pt vs Normal — real sequence risk: 1929-32 / 2000-02 / 2007-09 runs)</span>`:'');
+        bl.title=bb.source||''; wrap.appendChild(bl);
       }
       if(mc.risk_based){
         const rb=mc.risk_based, rsc=rb.success_pct>=80?'pos':(rb.success_pct>=60?'':'neg');
@@ -2085,6 +2093,28 @@ function thesesContent(){
     const un=el('div','muted'); un.style.cssText='font-size:9px;'; un.textContent='Adding snapshots current fundamentals as the entry baseline + seeds default triggers (Piotroski≤3, FCF-margin decay 10pt, implied-growth>40%, −30% drawdown). Edit after.'; wrap.appendChild(un);
   }
   const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:10px;'; nn.textContent=T.note||''; wrap.appendChild(nn);
+  return wrap;
+}
+
+function attentionContent(){
+  const wrap=el('div'); const A=ATTENTION;
+  if(!A || A.error){ const e=el('div','muted'); e.textContent='Attention digest not available.'; wrap.appendChild(e); return wrap; }
+  const c=A.counts||{}; const list=A.alerts||[];
+  const h=el('div','ph','ATTENTION · WHAT NEEDS ACTION (materiality-filtered)'); wrap.appendChild(h);
+  const sum=el('div'); sum.style.cssText='font-size:12px;margin:4px 0 10px;';
+  if(!list.length){ sum.innerHTML='<span class="pos">✓ Nothing flagged right now.</span>'; wrap.appendChild(sum); const nn=el('div','muted'); nn.style.cssText='font-size:10px;margin-top:6px;'; nn.textContent=A.note||''; wrap.appendChild(nn); return wrap; }
+  sum.innerHTML=`<span class="neg">${c.action||0} action</span> · <span style="color:var(--amber)">${c.warn||0} watch</span> · <span class="muted">${c.info||0} info</span>`;
+  wrap.appendChild(sum);
+  const col={action:'var(--neg,#e6788a)',warn:'var(--amber)',info:'var(--bd2)'};
+  const lab={action:'ACTION',warn:'WATCH',info:'INFO'};
+  list.forEach(a=>{
+    const card=el('div'); card.style.cssText='border-left:3px solid '+(col[a.level]||'var(--bd2)')+';padding:5px 10px;margin:5px 0;background:rgba(255,255,255,0.02);';
+    card.innerHTML=`<div style="font-size:11px;"><span style="color:${col[a.level]||'var(--muted)'};font-weight:bold;font-size:9px;letter-spacing:1px;">${lab[a.level]||(a.level||'').toUpperCase()}</span> <span class="muted" style="font-size:9px;">· ${a.category}</span></div>`+
+      `<div style="font-size:12px;margin:2px 0;">${a.message}</div>`+
+      `<div class="muted" style="font-size:9px;">→ ${a.where}</div>`;
+    wrap.appendChild(card);
+  });
+  const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; nn.textContent=A.note||''; wrap.appendChild(nn);
   return wrap;
 }
 
