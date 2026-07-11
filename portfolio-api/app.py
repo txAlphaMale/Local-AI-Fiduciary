@@ -786,16 +786,75 @@ _risk_lock = threading.Lock()
 _FF_NAMES = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]
 
 
+def _fetch_stooq(safe):
+    """Daily [date, close] from Stooq's free CSV endpoint, or [] on failure. NOTE (2026-07): Stooq
+    began serving a JavaScript proof-of-work anti-bot page (HTML, not CSV) on some IPs, so this now
+    often returns [] and callers fall back to Yahoo."""
+    out = []
+    try:
+        r = requests.get("https://stooq.com/q/d/l/", params={"s": safe.lower() + ".us", "i": "d"},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        if r.status_code < 400 and r.text and "Date,Open" in r.text[:64]:
+            for line in r.text.strip().splitlines()[1:]:
+                parts = line.split(",")
+                if len(parts) >= 5:
+                    try:
+                        out.append([parts[0], float(parts[4])])
+                    except ValueError:
+                        continue
+    except Exception:
+        out = []
+    return out
+
+
+def _fetch_yahoo(safe, years):
+    """Daily [date, close] from the KEYLESS Yahoo chart API — the fallback when Stooq is unavailable.
+    No API key; tries query1 then query2; returns [] on any failure. Skips null closes (holidays/
+    halts)."""
+    rng = f"{max(1, int(years))}y"
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        out = []
+        try:
+            r = requests.get(f"https://{host}/v8/finance/chart/{safe}",
+                             params={"range": rng, "interval": "1d"},
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+            if r.status_code >= 400:
+                continue
+            res = (((r.json() or {}).get("chart") or {}).get("result") or [None])[0]
+            if not res:
+                continue
+            ts = res.get("timestamp") or []
+            quote = (((res.get("indicators") or {}).get("quote") or [{}])[0]) or {}
+            closes = quote.get("close") or []
+            for i, t in enumerate(ts):
+                c = closes[i] if i < len(closes) else None
+                if c is None:
+                    continue
+                try:
+                    d = datetime.datetime.utcfromtimestamp(int(t)).strftime("%Y-%m-%d")
+                    out.append([d, float(c)])
+                except (ValueError, OverflowError, OSError):
+                    continue
+            if out:
+                return out
+        except Exception:
+            continue
+    return []
+
+
 def _stooq_daily(sym):
-    """Daily close history for a US-listed ticker from Stooq's free CSV endpoint, cached per
-    ticker to PRICE_HIST_DIR and refetched only after risk_hist_max_age days. Returns
-    [[date, close], ...] ascending by date, trimmed to ~risk_hist_years, or [] on any
-    failure (defensive — deploy-iterates against the live source on the host)."""
+    """Daily close history for a US-listed ticker, cached per ticker to PRICE_HIST_DIR and refetched
+    only after risk_hist_max_age days. Tries Stooq's free CSV first, then falls back to the keyless
+    Yahoo chart API (Stooq began JS-walling its CSV endpoint 2026-07 — HTML, not CSV). Returns
+    [[date, close], ...] ascending, trimmed to ~risk_hist_years, or [] on total failure. Name kept
+    for call-site compatibility across G4/G5/G6/G7. Defensive — deploy-iterates against the live
+    sources on the host."""
     if not sym:
         return []
     safe = re.sub(r"[^A-Za-z0-9.\-]", "", sym).upper()
     path = os.path.join(PRICE_HIST_DIR, safe + ".json")
     max_age = _knob("risk_hist_max_age") * 86400
+    cached = None
     try:
         with open(path, encoding="utf-8") as f:
             cached = json.load(f)
@@ -803,33 +862,24 @@ def _stooq_daily(sym):
             return cached["series"]
     except Exception:
         cached = None
-    series = []
-    try:
-        url = "https://stooq.com/q/d/l/"
-        r = requests.get(url, params={"s": safe.lower() + ".us", "i": "d"}, timeout=25)
-        if r.status_code < 400 and r.text and "Date,Open" in r.text[:64]:
-            for line in r.text.strip().splitlines()[1:]:
-                parts = line.split(",")
-                if len(parts) >= 5:
-                    dt, close = parts[0], parts[4]
-                    try:
-                        series.append([dt, float(close)])
-                    except ValueError:
-                        continue
-    except Exception:
-        series = []
+    years = _knob("risk_hist_years")
+    series = _fetch_stooq(safe)
+    source = "stooq"
+    if not series:
+        series = _fetch_yahoo(safe, years)   # Stooq JS-walled → keyless Yahoo fallback
+        source = "yahoo"
     if series:
         series.sort(key=lambda x: x[0])
-        keep = _knob("risk_hist_years") * 252 + 10
+        keep = years * 252 + 10
         series = series[-keep:]
         try:
             os.makedirs(PRICE_HIST_DIR, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"fetched": int(time.time()), "series": series}, f)
+                json.dump({"fetched": int(time.time()), "series": series, "source": source}, f)
         except Exception:
             pass
         return series
-    # fetch failed — fall back to any stale cache we still have rather than nothing
+    # both sources failed — fall back to any stale cache we still have rather than nothing
     return (cached or {}).get("series", []) if cached else []
 
 
