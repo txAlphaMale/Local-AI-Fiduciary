@@ -22,6 +22,7 @@ METRIC_LABELS = {
     "pe_forward": "forward P/E", "implied_growth_pct": "reverse-DCF implied growth %",
     "expected_return_pct": "analyst upside %", "price": "price",
     "accruals_ratio_pct": "accruals ratio % (NI−CFO)/assets — earnings quality",
+    "valuation_percentile": "valuation percentile vs peers (0=cheapest…100=richest)",
 }
 OPS = ("<", "<=", ">", ">=")
 

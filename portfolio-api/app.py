@@ -1666,7 +1666,9 @@ def _thesis_metrics(sym):
             "rev_growth_pct": m.get("revenue_growth_pct"), "net_margin_pct": r.get("net_margin_pct"),
             "piotroski": pio.get("score"), "pe_forward": val.get("pe_forward") or val.get("pe_ttm"),
             "implied_growth_pct": rd.get("implied_growth_pct"),
-            "accruals_ratio_pct": _accruals_ratio(fund), "as_of": int(time.time())}
+            "accruals_ratio_pct": _accruals_ratio(fund),
+            "valuation_percentile": (_valuation_percentile(sym) or {}).get("cheapness_percentile"),
+            "as_of": int(time.time())}
 
 
 def _accruals_ratio(fund):
@@ -2369,6 +2371,53 @@ def _price(sym):
     q = _finnhub("quote", sym)
     c = q.get("c") if isinstance(q, dict) else None
     return c if c else None
+
+
+_VALCTX_CACHE = {}
+
+
+def _valuation_percentile(sym):
+    """Sector-relative valuation (Part-4): where the ticker's forward P/E sits vs its Finnhub
+    peer set — a CHEAPNESS percentile (0 = cheapest of the group, 100 = richest). A relative-value
+    read that own-multiple-in-a-vacuum misses; a rich reading is a candidate EXIT trigger. Cached
+    ~1 day in-process. None if peers/valuation are unavailable (foreign, funds, no key)."""
+    now = time.time()
+    hit = _VALCTX_CACHE.get(sym)
+    if hit and now - hit[0] < 86400:
+        return hit[1]
+    res = None
+    try:
+        peers = [str(p).upper() for p in (_finnhub("stock/peers", sym) or []) if p][:8]
+        universe = list(dict.fromkeys([sym.upper()] + peers))
+        pes = {}
+        for p in universe:
+            v = _valuation(p) or {}
+            pe = v.get("pe_forward") or v.get("pe_ttm")
+            if pe and pe > 0:
+                pes[p] = pe
+        mine = pes.get(sym.upper())
+        if mine is not None and len(pes) >= 3:
+            vals = sorted(pes.values())
+            below = sum(1 for x in vals if x < mine)
+            pct = round(below / len(vals) * 100)
+            med = vals[len(vals) // 2]
+            verdict = "cheap vs peers" if pct <= 33 else ("rich vs peers" if pct >= 67 else "in line")
+            res = {"forward_pe": round(mine, 1), "peer_median_pe": round(med, 1),
+                   "peer_count": len(pes), "cheapness_percentile": pct, "verdict": verdict}
+    except Exception:
+        res = None
+    _VALCTX_CACHE[sym] = (now, res)
+    return res
+
+
+@app.get("/api/valuation-context")
+def get_valuation_context(ticker: str):
+    """Sector-relative valuation percentile for one ticker (forward P/E vs Finnhub peers)."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return JSONResponse({"error": "ticker required"}, status_code=400)
+    r = _valuation_percentile(t)
+    return r or {"ticker": t, "available": False, "reason": "no peer/valuation data"}
 
 
 def _parse_json_obj(raw):
@@ -4307,7 +4356,18 @@ def _screen_one(sym, crit):
     # low-quality name doesn't outrank a high-quality one. Heuristic, per-dollar (a % return),
     # explicitly NOT influenced by share price. Educational only.
     opp_score = round((exp_ret or 0.0) * fit_frac, 1)
+    # Transparent 3-factor composite (quality + value + momentum), 0-100, reusing data already
+    # fetched (no extra calls). QUALITY = criteria fit fraction; VALUE = a monotone map of forward
+    # P/E (cheaper = higher, saturates by ~50x); MOMENTUM = normalized analyst upside. Averaged
+    # over the sub-scores that ARE available. Additive — does NOT change the fit gate / opp_score.
+    q_sub = round(fit_frac, 2)
+    v_sub = round(max(0.0, min(1.0, 1.0 - pe_fwd / 50.0)), 2) if (pe_fwd and pe_fwd > 0) else None
+    m_sub = round(max(0.0, min(1.0, (exp_ret + 20.0) / 70.0)), 2) if exp_ret is not None else None
+    _subs = [x for x in (q_sub, v_sub, m_sub) if x is not None]
+    composite = round(sum(_subs) / len(_subs) * 100, 1) if _subs else None
     return {"ticker": sym, "available": bool(fund.get("available")), "price": price,
+            "composite_score": composite,
+            "composite_subscores": {"quality": q_sub, "value": v_sub, "momentum": m_sub},
             "rev_growth_pct": rev_g, "fcf_margin_pct": fcf_m, "net_margin_pct": r.get("net_margin_pct"),
             "piotroski": pio_score, "pe_forward": pe_fwd, "analyst_rating": g.get("rating"), "analyst_buy_pct": buy_pct,
             "target_mean": tgt, "expected_return_pct": exp_ret, "opportunity_score": opp_score,

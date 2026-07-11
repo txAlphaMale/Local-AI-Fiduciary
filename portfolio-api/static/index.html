@@ -653,7 +653,7 @@ function scannerContent(){
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
     const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
     const ana=i.analyst_rating?`${i.analyst_rating}${i.analyst_buy_pct!=null?' '+i.analyst_buy_pct+'%':''}`:'—';
-    tr.innerHTML=`<td class="sym">${i.ticker}${i.already_held?' <span class="muted" style="font-size:9px">held</span>':''}</td>`+
+    tr.innerHTML=`<td class="sym">${i.ticker}${i.already_held?' <span class="muted" style="font-size:9px">held</span>':''}${i.composite_score!=null?` <span class="muted" style="font-size:9px" title="composite quality+value+momentum (0-100): Q ${(i.composite_subscores||{}).quality} · V ${(i.composite_subscores||{}).value} · M ${(i.composite_subscores||{}).momentum}">·c${i.composite_score}</span>`:''}</td>`+
       `<td>${i.price!=null?'$'+(+i.price).toFixed(2):'—'}</td>`+
       `<td class="${fitc}">${fit}</td>`+
       `<td class="${(i.expected_return_pct||0)>=0?'pos':'neg'}" title="${i.target_mean!=null?'analyst target $'+(+i.target_mean).toFixed(2):''}">${i.expected_return_pct!=null?(i.expected_return_pct>0?'+':'')+i.expected_return_pct+'%':'—'}</td>`+
