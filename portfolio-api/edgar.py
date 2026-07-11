@@ -418,6 +418,73 @@ def recent_8k(ticker, days=30, limit=4):
     return out
 
 
+def _fetch_form4_xml(cik_i, accnd):
+    """Fetch the raw ownership XML for one Form 4 accession folder (via its index.json).
+    Returns the XML text of the ownershipDocument, or None. Skips the xslF345 rendered variant."""
+    base = f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}"
+    try:
+        idx = requests.get(f"{base}/index.json", headers=_headers(), timeout=30)
+        if idx.status_code >= 400:
+            return None
+        items = ((idx.json() or {}).get("directory") or {}).get("item") or []
+    except Exception:
+        return None
+    names = [it.get("name") for it in items
+             if str(it.get("name", "")).lower().endswith(".xml")
+             and not str(it.get("name", "")).lower().startswith("xsl")]
+    for nm in names:
+        try:
+            rr = requests.get(f"{base}/{nm}", headers=_headers(), timeout=30)
+            if rr.status_code >= 400:
+                continue
+            if "ownershipDocument" in (rr.text or ""):
+                return rr.text
+        except Exception:
+            continue
+    return None
+
+
+def recent_form4(ticker, days=120, limit=16):
+    """Recent Form 4 (insider-transaction) filings for a ticker's issuer, as raw ownership XML.
+    Uses EDGAR browse-edgar (atom, owner='only' → ownership forms) to list the issuer's Form 4
+    filings, then fetches each filing's ownershipDocument XML. Returns a list of
+    {date, accession, xml} newest-first, bounded by `limit` and `days`. Free, authoritative public
+    data. Empty list if the ticker has no CIK or on any fetch failure (defensive throughout)."""
+    cik = get_cik(ticker)
+    if not cik:
+        return []
+    try:
+        r = requests.get("https://www.sec.gov/cgi-bin/browse-edgar",
+                         params={"action": "getcompany", "CIK": cik, "type": "4",
+                                 "dateb": "", "owner": "only", "count": str(max(limit * 2, 20)),
+                                 "output": "atom"},
+                         headers=_headers(), timeout=30)
+        if r.status_code >= 400:
+            return []
+        feed = r.text or ""
+    except Exception:
+        return []
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    out = []
+    for chunk in feed.split("<entry")[1:]:
+        mtype = re.search(r"<filing-type>([^<]+)</filing-type>", chunk)
+        if not mtype or mtype.group(1).strip() != "4":
+            continue
+        mdate = re.search(r"<filing-date>(\d{4}-\d{2}-\d{2})</filing-date>", chunk)
+        dt = mdate.group(1) if mdate else ""
+        if dt and dt < cutoff:
+            continue
+        mfold = re.search(r"/Archives/edgar/data/(\d+)/(\d+)/", chunk)
+        if not mfold:
+            continue
+        xml = _fetch_form4_xml(mfold.group(1), mfold.group(2))
+        if xml:
+            out.append({"date": dt, "accession": mfold.group(2), "xml": xml})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _annual(facts, tags):
     """For the first matching tag, return its annual (10-K/FY) series as
     [(end_date, value), ...] oldest->newest, deduped by end (latest filing wins)."""

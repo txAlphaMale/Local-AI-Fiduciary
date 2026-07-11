@@ -695,6 +695,17 @@ function researchBrief(d){
     html+=`<div style="font-size:10px;margin-top:1px;color:${dem?'var(--amber)':'var(--mut)'}">▸ REVERSE-DCF: price implies ~${rd.implied_growth_pct}%/yr FCF growth (${rd.years}y)`+
       (rd.vs_actual_growth_pct!=null?` vs ${rd.vs_actual_growth_pct}% actual`:'')+(rd.assessment?` — ${dsc(rd.assessment)}`:'')+`</div>`;
   }
+  const ins=d.insider;
+  if(ins && ins.available && ins.signal && ins.signal!=='no open-market activity'){
+    const usd=v=>{v=+v||0;const a=Math.abs(v);const s=a>=1e6?(v/1e6).toFixed(2)+'M':(a>=1e3?(v/1e3).toFixed(0)+'k':v.toFixed(0));return '$'+s;};
+    const buying=/buying/.test(ins.signal), selling=/selling/.test(ins.signal);
+    const col=buying?'var(--pos)':(selling?'var(--neg)':'var(--mut)');
+    const b=ins.buy||{}, s=ins.sell||{};
+    html+=`<div style="font-size:10px;margin-top:1px;color:${col}">▸ INSIDERS (Form 4, ${ins.lookback_days||''}d): <b>${dsc(ins.signal)}</b>`+
+      (ins.net_buy_pct!=null?` <span class="muted">net ${ins.net_buy_pct>0?'+':''}${ins.net_buy_pct}%</span>`:'')+
+      ` <span class="muted">· buy ${b.count||0}/${usd(b.value)} (${b.insiders||0} ppl) · sell ${s.count||0}/${usd(s.value)} (${s.insiders||0} ppl)`+
+      (ins.as_of?` · as of ${dsc(ins.as_of)}`:'')+` · open-market only, context not advice</span></div>`;
+  }
   const ver=m.verification;
   if(ver&&ver.checked&&ver.grounded_score!=null){
     const thr=(ver.threshold!=null?ver.threshold:0.6), sc=Math.round(ver.grounded_score*100), low=ver.grounded_score<thr;

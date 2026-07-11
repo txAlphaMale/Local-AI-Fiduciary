@@ -41,6 +41,7 @@ import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
 import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical return sequences
+import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -182,6 +183,8 @@ SETTING_SPECS = {
     "avenue_match_rate_pct":      {"env": "AVENUE_MATCH_RATE_PCT",      "default": 0.0,  "cast": float, "label": "Cross-avenue: employer/HSA match rate (%, 0 if none)", "group": "Cross-avenue"},
     "avenue_match_cap_dollars":   {"env": "AVENUE_MATCH_CAP_DOLLARS",   "default": 0.0,  "cast": float, "label": "Cross-avenue: annual match-eligible contribution ($)", "group": "Cross-avenue"},
     "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
+    "insider_lookback_days":      {"env": "INSIDER_LOOKBACK_DAYS",      "default": 120,  "cast": int,   "label": "Insider signal: Form 4 lookback window (days)", "group": "Insider signal"},
+    "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 20,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker", "group": "Insider signal"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1672,6 +1675,7 @@ def _thesis_metrics(sym):
             "implied_growth_pct": rd.get("implied_growth_pct"),
             "accruals_ratio_pct": _accruals_ratio(fund),
             "valuation_percentile": (_valuation_percentile(sym) or {}).get("cheapness_percentile"),
+            "insider_net_buy_pct": (_insider_signal(sym) or {}).get("net_buy_pct"),
             "as_of": int(time.time())}
 
 
@@ -2347,8 +2351,13 @@ def get_research(ticker: str):
         news = _news(t, t)
         llm = _llm(t, t, None, None, g, news, fund, val)
         llm = _verify_and_apply(t, t, llm, g, news, fund, val, force=True)   # on-demand → always verify
+        ins = None
+        try:
+            ins = _insider_signal(t)   # G15 context-only insider read (cached ~6h)
+        except Exception:
+            ins = None
         return {"ticker": t, "generated_at": int(time.time()), "grounded": g,
-                "valuation": val, "fundamentals": fund, "llm": llm}
+                "valuation": val, "fundamentals": fund, "llm": llm, "insider": ins}
     except Exception as e:
         return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
 
@@ -2493,6 +2502,8 @@ def _price(sym):
 
 
 _VALCTX_CACHE = {}
+_INSIDER_CACHE = {}   # ticker -> (ts, signal dict)
+INSIDER_TTL = int(os.environ.get("INSIDER_TTL", "21600"))   # cache the insider signal ~6h
 
 
 def _valuation_percentile(sym):
@@ -2537,6 +2548,47 @@ def get_valuation_context(ticker: str):
         return JSONResponse({"error": "ticker required"}, status_code=400)
     r = _valuation_percentile(t)
     return r or {"ticker": t, "available": False, "reason": "no peer/valuation data"}
+
+
+def _insider_signal(sym):
+    """G15: net OPEN-MARKET insider buy/sell signal for a ticker from its recent SEC Form 4 filings.
+    Context-only. Fetches the issuer's Form 4s (EDGAR), parses each, and aggregates. Cached ~6h
+    in-process (an EDGAR pull per ticker). None-ish {available:false} for foreign/funds/no filings."""
+    t = (sym or "").upper().strip()
+    if not t:
+        return None
+    now = time.time()
+    hit = _INSIDER_CACHE.get(t)
+    if hit and now - hit[0] < INSIDER_TTL:
+        return hit[1]
+    days = int(_knob("insider_lookback_days"))
+    res = None
+    try:
+        raw = edgar.recent_form4(t, days=days, limit=int(_knob("insider_max_filings")))
+        parsed = [insider.parse_form4(f.get("xml")) for f in raw]
+        parsed = [p for p in parsed if p]
+        if parsed:
+            res = insider.aggregate(parsed, t, days)
+            res["available"] = True
+        else:
+            res = {"ticker": t, "available": False,
+                   "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
+    except Exception as e:
+        res = {"ticker": t, "available": False, "reason": f"insider fetch error: {e}"}
+    _INSIDER_CACHE[t] = (now, res)
+    return res
+
+
+@app.get("/api/insider")
+def get_insider(ticker: str):
+    """Net open-market insider buy/sell signal for one ticker from recent SEC Form 4 filings (G15).
+    CONTEXT ONLY — cluster buying is the higher-signal event; selling is noisy. Not advice.
+    13F institutional ownership + short interest are data-gated (no free per-security SEC reverse
+    lookup) and are deferred to a data-provider MCP, not shown here."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return JSONResponse({"error": "ticker required"}, status_code=400)
+    return _insider_signal(t) or {"ticker": t, "available": False, "reason": "no data"}
 
 
 def _parse_json_obj(raw):
