@@ -39,6 +39,7 @@ import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-ca
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
+import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -178,6 +179,7 @@ SETTING_SPECS = {
     "avenue_roth_future_rate_pct":{"env": "AVENUE_ROTH_FUTURE_RATE_PCT","default": 24.0, "cast": float, "label": "Cross-avenue: expected future (RMD) marginal rate for Roth arb (%)", "group": "Cross-avenue"},
     "avenue_match_rate_pct":      {"env": "AVENUE_MATCH_RATE_PCT",      "default": 0.0,  "cast": float, "label": "Cross-avenue: employer/HSA match rate (%, 0 if none)", "group": "Cross-avenue"},
     "avenue_match_cap_dollars":   {"env": "AVENUE_MATCH_CAP_DOLLARS",   "default": 0.0,  "cast": float, "label": "Cross-avenue: annual match-eligible contribution ($)", "group": "Cross-avenue"},
+    "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
@@ -1875,6 +1877,54 @@ async def post_realestate(req: Request):
     try:
         os.makedirs(os.path.dirname(REALESTATE_FILE) or ".", exist_ok=True)
         with open(REALESTATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+    except Exception:
+        pass
+    return rec
+
+
+# ============ G11: small-business acquisition underwriter ============
+# The business-ownership leg of the all-avenue directive — underwrites buying a cash-flowing
+# small business (SDE multiple / DSCR / cash-on-cash / payback / after-tax levered IRR + QSBS).
+# Pure CPU, read-only. Rates as knobs (SBA 7(a) is variable on prime).
+BUSINESS_FILE = os.environ.get("BUSINESS_FILE", "/data/business.json")
+
+
+def _biz_defaults():
+    return {"price": 1000000, "sde": 300000, "revenue": 1500000, "down_pct": 15,
+            "seller_note_pct": 0, "loan_rate_pct": _knob("biz_loan_rate_pct"), "loan_term_years": 10,
+            "working_capital": 50000, "owner_salary": 0, "sde_growth_pct": 3, "hold_years": 5,
+            "exit_multiple": 0, "marginal_tax_pct": 24, "ltcg_pct": _knob("sizing_ltcg_rate_pct"), "qsbs": 0}
+
+
+@app.get("/api/business")
+def get_business():
+    last = None
+    try:
+        with open(BUSINESS_FILE, encoding="utf-8") as f:
+            last = json.load(f)
+    except Exception:
+        last = None
+    return {"last": last, "defaults": _biz_defaults(),
+            "note": "Underwrite a small-business acquisition (SDE → SBA/seller debt → after-tax IRR + "
+                    "QSBS). SDE add-backs need a Quality-of-Earnings review; SBA 7(a) rates are variable "
+                    "(prime-based). Educational, not advice — confirm structure/tax with counsel + CPA."}
+
+
+@app.post("/api/business/underwrite")
+async def post_business(req: Request):
+    """Underwrite a business acquisition. Body = bizacq.underwrite input keys; missing keys default.
+    Persists the last run. Not a money action."""
+    body = await req.json()
+    inp = {**_biz_defaults(), **{k: v for k, v in (body or {}).items() if v is not None}}
+    try:
+        result = bizacq.underwrite(inp)
+    except Exception as e:
+        return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
+    rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
+    try:
+        os.makedirs(os.path.dirname(BUSINESS_FILE) or ".", exist_ok=True)
+        with open(BUSINESS_FILE, "w", encoding="utf-8") as f:
             json.dump(rec, f)
     except Exception:
         pass

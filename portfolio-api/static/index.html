@@ -109,7 +109,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='positions', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -178,10 +178,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -1189,6 +1189,7 @@ function planContent(r){
     (EST && !EST.error) && {key:'estate',label:'ESTATE',build:()=>estateContent()},
     (ROTH && !ROTH.error) && {key:'roth',label:'ROTH · RATE CURVE',build:()=>rothContent()},
     (REALESTATE && !REALESTATE.error) && {key:'realestate',label:'REAL ESTATE',build:()=>realEstateContent()},
+    (BUSINESS && !BUSINESS.error) && {key:'business',label:'BUSINESS',build:()=>businessContent()},
   ]));
   return outer;
 }
@@ -1858,6 +1859,45 @@ function realEstateContent(){
     const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; rn.textContent=res.note||''; wrap.appendChild(rn);
   }
   const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; nn.textContent=R.note||''; wrap.appendChild(nn);
+  return wrap;
+}
+
+const BIZ_FIELDS=[['price','Price $'],['sde','SDE $/yr'],['revenue','Revenue $/yr'],['down_pct','Down %'],['seller_note_pct','Seller note %'],['loan_rate_pct','Loan rate %'],['loan_term_years','Term yr'],['working_capital','Working cap $'],['owner_salary','Owner W-2 draw $'],['sde_growth_pct','SDE growth %'],['hold_years','Hold yr'],['exit_multiple','Exit mult (0=entry)'],['marginal_tax_pct','Marginal tax %'],['ltcg_pct','LTCG %'],['qsbs','QSBS? (1/0)']];
+async function runBizUnderwrite(){
+  const body={}; BIZ_FIELDS.forEach(([k])=>{ const v=document.getElementById('bz-'+k); if(v && v.value!=='') body[k]=parseFloat(v.value); });
+  const r=await fetch('/api/business/underwrite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  BUSINESS={...BUSINESS, last:await r.json()}; render();
+}
+function businessContent(){
+  const wrap=el('div'); const B=BUSINESS;
+  if(!B || B.error){ const e=el('div','muted'); e.textContent='Business-acquisition underwriter not available.'; wrap.appendChild(e); return wrap; }
+  const h=el('div','ph','UNDERWRITE A BUSINESS ACQUISITION'); wrap.appendChild(h);
+  const cur=(B.last&&B.last.inputs)||B.defaults||{};
+  const form=el('div'); form.style.cssText='display:flex;flex-wrap:wrap;gap:6px 12px;margin:6px 0;';
+  BIZ_FIELDS.forEach(([k,lab])=>{ const c=el('div'); c.style.cssText='display:flex;flex-direction:column;';
+    c.innerHTML=`<label class="muted" style="font-size:9px;">${lab}</label>`;
+    const inp=el('input'); inp.id='bz-'+k; inp.type='number'; inp.step='any'; inp.value=(cur[k]!=null?cur[k]:''); inp.style.cssText='width:100px;font-size:11px;';
+    c.appendChild(inp); form.appendChild(c); });
+  wrap.appendChild(form);
+  const btn=el('button','btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:12px;margin:4px 0 10px;'; btn.onclick=runBizUnderwrite; wrap.appendChild(btn);
+  const res=B.last&&B.last.result;
+  if(res){
+    const rh=el('div','ph','DEAL METRICS'); rh.style.cssText='font-size:11px;'; wrap.appendChild(rh);
+    const strip=el('div'); strip.style.cssText='display:flex;gap:20px;flex-wrap:wrap;margin:6px 0;';
+    const m=(l,v,cls)=>`<div><div class="muted" style="font-size:10px;letter-spacing:1px;">${l}</div><div style="font-size:16px;" class="${cls||''}">${v}</div></div>`;
+    strip.innerHTML=m('SDE MULTIPLE',(res.entry_multiple!=null?res.entry_multiple+'x':'—'),(res.entry_multiple>4?'neg':''))+
+      m('DSCR',(res.dscr!=null?res.dscr:'—'),(res.dscr!=null&&res.dscr<1.5?'neg':''))+
+      m('CASH-ON-CASH',(res.cash_on_cash_pct!=null?res.cash_on_cash_pct+'%':'—'),(res.cash_on_cash_pct<0?'neg':'pos'))+
+      m('PAYBACK',(res.payback_years!=null?res.payback_years+'y':'—'))+
+      m('AFTER-TAX IRR ('+res.hold_years+'yr)',(res.after_tax_irr_pct!=null?res.after_tax_irr_pct+'%':'—'),(res.after_tax_irr_pct>=0?'pos':'neg'));
+    wrap.appendChild(strip);
+    const det=el('div','muted'); det.style.cssText='font-size:11px;margin:2px 0;';
+    det.innerHTML=`bank loan ${usd(res.bank_loan)}${res.seller_note>0?' + seller note '+usd(res.seller_note):''} · equity in ${usd(res.equity_injection)} · debt service ${usd(res.annual_debt_service)}/yr · free cash to owner yr-1 ${usd(res.free_cash_to_owner_year1)} · exit ${res.exit_multiple}x${res.qsbs?' · QSBS':''}`;
+    wrap.appendChild(det);
+    (res.flags||[]).forEach(f=>{ const fl=el('div'); fl.style.cssText='color:var(--amber);font-size:11px;margin:2px 0;'; fl.textContent='⚠ '+f; wrap.appendChild(fl); });
+    const rn=el('div','muted'); rn.style.cssText='font-size:10px;line-height:1.4;margin-top:6px;'; rn.textContent=res.note||''; wrap.appendChild(rn);
+  }
+  const nn=el('div','muted'); nn.style.cssText='font-size:10px;line-height:1.4;margin-top:8px;'; nn.textContent=B.note||''; wrap.appendChild(nn);
   return wrap;
 }
 
