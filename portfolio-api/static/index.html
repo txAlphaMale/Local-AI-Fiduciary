@@ -643,9 +643,16 @@ function scannerContent(){
     `<div style="margin-bottom:7px;">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
     `<div style="margin-bottom:7px;vertical-align:top;">Discovery queries <span class="muted" style="font-size:10px;">(one per line; newsfeed idea sources)</span><br/><textarea id="scan-disco" rows="3" style="width:430px;vertical-align:top;">${(r.discovery_queries||[]).join('\n').replace(/</g,'&lt;')}</textarea></div>`+
     `<div style="margin-bottom:9px;">Alert on holdings — top <input id="scan-alertlim" type="number" value="${r.alert_holdings_limit!=null?r.alert_holdings_limit:15}" style="width:52px;"/> by weight <span class="muted" style="font-size:10px;">(news/8-K alerts on your largest positions)</span></div>`+
-    `<button onclick="saveScanner()">↳ SAVE & RESCAN</button>`;
+    `<button onclick="saveScanner()">↳ SAVE & RESCAN</button>`+
+    `<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--bd2);">Analyze any ticker `+
+      `<input id="scan-any" type="text" placeholder="PLTR" onkeydown="if(event.key==='Enter')researchIdea((this.value||'').trim().toUpperCase())" style="width:90px;text-transform:uppercase;"/> `+
+      `<button onclick="researchIdea((document.getElementById('scan-any').value||'').trim().toUpperCase())">▸ analyze</button> `+
+      `<span class="muted" style="font-size:10px;">full B/S/H brief for any symbol — incl. holdings the growth screen filters out (adds insider + 13F watched-holder lines)</span></div>`;
   wrap.appendChild(ed);
-  if(!r.ideas || !r.ideas.length){ wrap.appendChild(el('div','muted','No watchlist ideas — add tickers above & Save, or see the DISCOVERED / NEWS ALERTS sub-tabs.')); return wrap; }
+  // on-demand analysis target (always present, even with no screened ideas — so 'analyze any ticker' works)
+  const abox=el('div'); abox.id='scan-analysis'; abox.style.marginTop='14px'; wrap.appendChild(abox);
+  if(LAST_SCAN_ANALYSIS && LAST_SCAN_ANALYSIS.data){ abox.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+LAST_SCAN_ANALYSIS.ticker)); abox.appendChild(researchBrief(LAST_SCAN_ANALYSIS.data)); }
+  if(!r.ideas || !r.ideas.length){ wrap.appendChild(el('div','muted','No watchlist ideas from the screen — use “Analyze any ticker” above for holdings the growth screen filters out, or see the DISCOVERED / NEWS ALERTS sub-tabs.')); return wrap; }
   const t=el('table'); const h=el('tr');
   h.innerHTML='<th class="l">SYM</th><th>PX</th><th>FIT</th><th title="analyst-target-implied 12mo upside — noisy, not a promise">EXP RET</th><th>REV g</th><th>FCF m</th><th>NET m</th><th>FWD P/E</th><th class="l">ANALYST</th><th class="l"></th>';
   t.appendChild(h);
@@ -667,8 +674,6 @@ function scannerContent(){
     t.appendChild(tr);
   });
   wrap.appendChild(t);
-  const abox=el('div'); abox.id='scan-analysis'; abox.style.marginTop='14px'; wrap.appendChild(abox);
-  if(LAST_SCAN_ANALYSIS && LAST_SCAN_ANALYSIS.data){ abox.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+LAST_SCAN_ANALYSIS.ticker)); abox.appendChild(researchBrief(LAST_SCAN_ANALYSIS.data)); }
   if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:10px;font-size:10px;line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
   return wrap;
 }
