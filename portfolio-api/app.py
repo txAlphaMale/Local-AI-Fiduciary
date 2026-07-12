@@ -42,6 +42,7 @@ import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
 import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical return sequences
 import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
+import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -1719,6 +1720,7 @@ def _thesis_metrics(sym):
     r = (fund.get("ratios") or {}) if fund.get("available") else {}
     rd = _reverse_dcf(val, fund) or {}
     pio = ((fund.get("scores") or {}).get("piotroski_f") or {}) if fund.get("available") else {}
+    inst = _inst_for(sym) or {}
     return {"price": _price(sym), "fcf_margin_pct": r.get("fcf_margin_pct"),
             "rev_growth_pct": m.get("revenue_growth_pct"), "net_margin_pct": r.get("net_margin_pct"),
             "piotroski": pio.get("score"), "pe_forward": val.get("pe_forward") or val.get("pe_ttm"),
@@ -1726,6 +1728,8 @@ def _thesis_metrics(sym):
             "accruals_ratio_pct": _accruals_ratio(fund),
             "valuation_percentile": (_valuation_percentile(sym) or {}).get("cheapness_percentile"),
             "insider_net_buy_pct": (_insider_signal(sym) or {}).get("net_buy_pct"),
+            "inst_holders": inst.get("holder_count"),
+            "inst_net_buyers": ((inst.get("buying") or 0) - (inst.get("selling") or 0)) if inst else None,
             "as_of": int(time.time())}
 
 
@@ -2401,13 +2405,18 @@ def get_research(ticker: str):
         news = _news(t, t)
         llm = _llm(t, t, None, None, g, news, fund, val)
         llm = _verify_and_apply(t, t, llm, g, news, fund, val, force=True)   # on-demand → always verify
-        ins = None
+        ins = inst = None
         try:
             ins = _insider_signal(t)   # G15 context-only insider read (cached ~6h)
         except Exception:
             ins = None
+        try:
+            inst = _inst_for(t)        # G15 forward-13F watched-holders slice (from cached build)
+        except Exception:
+            inst = None
         return {"ticker": t, "generated_at": int(time.time()), "grounded": g,
-                "valuation": val, "fundamentals": fund, "llm": llm, "insider": ins}
+                "valuation": val, "fundamentals": fund, "llm": llm,
+                "insider": ins, "institutional": inst}
     except Exception as e:
         return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
 
@@ -2639,6 +2648,168 @@ def get_insider(ticker: str):
     if not t:
         return JSONResponse({"error": "ticker required"}, status_code=400)
     return _insider_signal(t) or {"ticker": t, "available": False, "reason": "no data"}
+
+
+# ============ G15: institutional 13F forward whale-tracking (context-only) ============
+# Of the managers you WATCH, which hold each of your names, and did they add/trim/exit last quarter.
+# Free SEC EDGAR; long-only, ≤45-day-lagged — a conviction/turnover context lens, never a signal.
+MANAGERS_FILE = os.environ.get("MANAGERS_FILE", "/data/managers.json")
+INSTITUTIONAL_FILE = os.environ.get("INSTITUTIONAL_FILE", "/data/institutional.json")
+INSTITUTIONAL_TTL = int(os.environ.get("INSTITUTIONAL_TTL", "259200"))   # 13F is quarterly → ~3-day cache
+INST_MGR_TTL = int(os.environ.get("INST_MGR_TTL", "604800"))             # per-manager filings ~7 days
+_inst_lock = threading.Lock()
+_MGR13F_CACHE = {}   # cik -> (ts, [filings])
+
+
+def _read_managers():
+    """Watched-manager registry {cik: label}. Seeds a small default set on first run (editable)."""
+    try:
+        with open(MANAGERS_FILE, encoding="utf-8") as f:
+            m = json.load(f)
+        if isinstance(m, dict) and m:
+            return {str(k).zfill(10): v for k, v in m.items()}
+    except Exception:
+        pass
+    return dict(inst13f.DEFAULT_MANAGERS)
+
+
+def _write_managers(reg):
+    os.makedirs(os.path.dirname(MANAGERS_FILE) or ".", exist_ok=True)
+    with open(MANAGERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reg, f, ensure_ascii=False, indent=2)
+
+
+def _holdings_for_inst():
+    """The user's single-name equity holdings [{ticker, name}] (funds/ETFs/cash excluded — 13F is a
+    single-name long-equity report; funds have their own N-PORT look-through)."""
+    out = []
+    for c in _data().get("consolidated", []):
+        if c.get("ticker") and (c.get("type") or "") not in ("Cash", "Mutual Fund", "ETF"):
+            out.append({"ticker": c["ticker"], "name": c.get("name") or c["ticker"]})
+    return out
+
+
+def _manager_13f(cik):
+    """Latest two 13F-HR information tables for a manager CIK (cached ~7d in-process)."""
+    now = time.time()
+    hit = _MGR13F_CACHE.get(cik)
+    if hit and now - hit[0] < INST_MGR_TTL:
+        return hit[1]
+    fils = edgar.recent_13f(cik, n=2)
+    _MGR13F_CACHE[cik] = (now, fils)
+    return fils
+
+
+def _institutional():
+    holdings = _holdings_for_inst()
+    mgrs = _read_managers()
+    views = []
+    for cik, label in mgrs.items():
+        try:
+            fils = _manager_13f(cik)
+        except Exception:
+            fils = []
+        if not fils:
+            views.append({"manager": label, "cik": cik, "as_of": None, "matches": [],
+                          "unavailable": True})
+            continue
+        cur = fils[0].get("xml")
+        prev = fils[1].get("xml") if len(fils) > 1 else None
+        mv = inst13f.manager_holdings_of(cur, prev, holdings, manager=label)
+        mv["cik"] = cik
+        mv["as_of"] = fils[0].get("date")
+        mv["prev_as_of"] = fils[1].get("date") if len(fils) > 1 else None
+        views.append(mv)
+    by_holding = inst13f.aggregate_holdings(views, holdings)
+    return {"status": "ready", "generated_at": int(time.time()),
+            "managers": [{"cik": c, "label": l} for c, l in mgrs.items()],
+            "manager_views": views, "by_holding": by_holding,
+            "note": "Forward 13F whale-tracking: of the managers you watch, who holds each of your "
+                    "names and did they add/trim/exit last quarter. 13F is long-only and filed up to "
+                    "45 days after quarter-end — a conviction/turnover CONTEXT lens, not a live "
+                    "signal, and never a standalone buy/sell decision."}
+
+
+def _read_institutional():
+    try:
+        with open(INSTITUTIONAL_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _do_institutional():
+    if not _inst_lock.acquire(blocking=False):
+        return
+    try:
+        res = _institutional()
+        os.makedirs(os.path.dirname(INSTITUTIONAL_FILE) or ".", exist_ok=True)
+        with open(INSTITUTIONAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _inst_lock.release()
+
+
+def _inst_for(sym):
+    """Per-holding smart-money slice from the cached institutional build (or None)."""
+    d = _read_institutional() or {}
+    return (d.get("by_holding") or {}).get((sym or "").upper())
+
+
+@app.get("/api/institutional")
+def get_institutional():
+    """G15 forward 13F whale-tracking, CACHED (an EDGAR pull per watched manager runs in the
+    background; 13F is quarterly so the cache is long-lived). Context-only, never advice."""
+    cached = _read_institutional()
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < INSTITUTIONAL_TTL)
+    if not fresh and not _inst_lock.locked():
+        threading.Thread(target=_do_institutional, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First 13F build is running (one EDGAR pull per watched manager) — refresh shortly."}
+
+
+@app.post("/api/run-institutional")
+def run_institutional(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_institutional, daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/api/managers")
+def get_managers():
+    """The watched-manager registry {cik: label} used by the 13F tracker."""
+    return {"managers": _read_managers(), "defaults": inst13f.DEFAULT_MANAGERS,
+            "note": "13F filer CIKs of managers you want to track. Defaults are examples, not "
+                    "endorsements — edit to the investors whose conviction is relevant to your names."}
+
+
+@app.post("/api/managers")
+async def post_managers(req: Request):
+    """Add/rename a watched manager. Body: {cik, label}. cik = the manager's SEC 13F filer number."""
+    body = await req.json()
+    cik = re.sub(r"[^0-9]", "", str(body.get("cik") or ""))
+    if not cik:
+        return JSONResponse({"error": "numeric cik required"}, status_code=400)
+    reg = _read_managers()
+    reg[cik.zfill(10)] = str(body.get("label") or cik).strip()
+    _write_managers(reg)
+    return {"ok": True, "managers": reg}
+
+
+@app.post("/api/managers/delete")
+async def delete_manager(req: Request):
+    body = await req.json()
+    cik = str(body.get("cik") or "").zfill(10)
+    reg = _read_managers()
+    if cik in reg:
+        reg.pop(cik)
+        _write_managers(reg)
+    return {"ok": True, "managers": reg}
 
 
 def _parse_json_obj(raw):

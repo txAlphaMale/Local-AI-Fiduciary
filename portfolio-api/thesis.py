@@ -24,6 +24,8 @@ METRIC_LABELS = {
     "accruals_ratio_pct": "accruals ratio % (NI−CFO)/assets — earnings quality",
     "valuation_percentile": "valuation percentile vs peers (0=cheapest…100=richest)",
     "insider_net_buy_pct": "insider net open-market buying % (−100 all selling…+100 all buying)",
+    "inst_holders": "watched 13F managers holding it (count)",
+    "inst_net_buyers": "watched 13F managers net adding last quarter (buyers − sellers)",
 }
 OPS = ("<", "<=", ">", ">=")
 

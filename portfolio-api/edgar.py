@@ -485,6 +485,65 @@ def recent_form4(ticker, days=120, limit=16):
     return out
 
 
+def _fetch_13f_infotable(cik_i, accnd):
+    """Fetch the 13F-HR INFORMATION TABLE xml for one accession folder (via index.json). The
+    information table is the .xml doc containing <infoTable> rows (not primary_doc.xml / xsl).
+    Returns the XML text or None."""
+    base = f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}"
+    try:
+        idx = requests.get(f"{base}/index.json", headers=_headers(), timeout=30)
+        if idx.status_code >= 400:
+            return None
+        items = ((idx.json() or {}).get("directory") or {}).get("item") or []
+    except Exception:
+        return None
+    names = [it.get("name") for it in items
+             if str(it.get("name", "")).lower().endswith(".xml")
+             and not str(it.get("name", "")).lower().startswith("xsl")
+             and str(it.get("name", "")).lower() != "primary_doc.xml"]
+    for nm in names:
+        try:
+            rr = requests.get(f"{base}/{nm}", headers=_headers(), timeout=30)
+            if rr.status_code >= 400:
+                continue
+            if "infoTable" in (rr.text or ""):
+                return rr.text
+        except Exception:
+            continue
+    return None
+
+
+def recent_13f(cik, n=2):
+    """The latest n 13F-HR information-table XMLs for a manager's CIK, newest first, as
+    [{date, accession, xml}]. Two filings lets the caller diff quarter-over-quarter. Free EDGAR
+    data; [] if the CIK has no 13F-HR filings or on any fetch failure (defensive)."""
+    cik = str(cik).zfill(10) if cik else None
+    if not cik:
+        return []
+    try:
+        r = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
+                         headers=_headers(), timeout=30)
+        if r.status_code >= 400:
+            return []
+        recent = ((r.json() or {}).get("filings") or {}).get("recent") or {}
+    except Exception:
+        return []
+    forms = recent.get("form") or []
+    accs = recent.get("accessionNumber") or []
+    dates = recent.get("filingDate") or []
+    cands = sorted(((dates[i] if i < len(dates) else "", accs[i])
+                    for i, f in enumerate(forms) if f in ("13F-HR", "13F-HR/A")),
+                   reverse=True)
+    out = []
+    for dt, acc in cands:
+        xml = _fetch_13f_infotable(int(cik), acc.replace("-", ""))
+        if xml:
+            out.append({"date": dt, "accession": acc, "xml": xml})
+        if len(out) >= n:
+            break
+    return out
+
+
 def _annual(facts, tags):
     """For the first matching tag, return its annual (10-K/FY) series as
     [(end_date, value), ...] oldest->newest, deduped by end (latest filing wins)."""

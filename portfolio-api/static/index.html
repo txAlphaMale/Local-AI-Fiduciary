@@ -706,6 +706,13 @@ function researchBrief(d){
       ` <span class="muted">· buy ${b.count||0}/${usd(b.value)} (${b.insiders||0} ppl) · sell ${s.count||0}/${usd(s.value)} (${s.insiders||0} ppl)`+
       (ins.as_of?` · as of ${dsc(ins.as_of)}`:'')+` · open-market only, context not advice</span></div>`;
   }
+  const inst=d.institutional;
+  if(inst && inst.holder_count>0){
+    const net=(inst.buying||0)-(inst.selling||0);
+    const col=net>0?'var(--pos)':(net<0?'var(--neg)':'var(--mut)');
+    const names=(inst.holders||[]).slice(0,4).map(h=>{const ch=h.change;const s=(ch==='added'||ch==='new')?'▲':((ch==='trimmed'||ch==='exited')?'▼':'•');return s+dsc(h.manager)+(h.pct_change!=null?` ${h.pct_change>0?'+':''}${h.pct_change}%`:'');}).join(' · ');
+    html+=`<div style="font-size:10px;margin-top:1px;color:${col}">▸ 13F WATCHED HOLDERS: <b>${inst.holder_count}</b> (${inst.buying||0}▲ / ${inst.selling||0}▼ last Q) <span class="muted">${names} · long-only, ≤45d lag, context</span></div>`;
+  }
   const ver=m.verification;
   if(ver&&ver.checked&&ver.grounded_score!=null){
     const thr=(ver.threshold!=null?ver.threshold:0.6), sc=Math.round(ver.grounded_score*100), low=ver.grounded_score<thr;
