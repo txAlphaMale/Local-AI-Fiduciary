@@ -253,6 +253,38 @@ ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", 
 _run_lock = threading.Lock()
 _run_state = {"status": "idle", "analyzed": 0, "total": 0, "started": 0}
 
+# ---- Global GPU serialization (Increment A) --------------------------------
+# Every feature has its OWN lock (blocking=False skip-if-running), so DIFFERENT
+# features (analysis vs strategist vs discovery) never serialized against each
+# other at the GPU — two qwen-27b contexts could pile into Ollama's internal
+# same-model queue, and a job stuck waiting there can outrun the client's
+# LLM_TIMEOUT and fail. This single process-wide lock funnels EVERY heavy
+# generation (qwen-27b: /api/generate + both /api/chat sites) through one at a
+# time, so each job runs with a FRESH timeout the moment it holds the GPU.
+# Deliberately does NOT cover embeddings (bge-m3 is light and co-resides fine
+# under OLLAMA_MAX_LOADED_MODELS=2; gating it would just slow chat's RAG).
+# Ordering is always feature-lock -> _GPU (acquired only at the leaf call
+# sites), never the reverse, so no deadlock. Blocking acquire = no-drop; the
+# underlying request timeout bounds how long the lock can be held.
+_GPU = threading.Lock()
+_gpu_waiters = 0
+_gpu_waiters_lock = threading.Lock()
+
+class _gpu_slot:
+    """Context manager: serialize a heavy GPU call + track queue depth for /api/gpu."""
+    def __enter__(self):
+        global _gpu_waiters
+        with _gpu_waiters_lock:
+            _gpu_waiters += 1
+        _GPU.acquire()
+        return self
+    def __exit__(self, *exc):
+        global _gpu_waiters
+        _GPU.release()
+        with _gpu_waiters_lock:
+            _gpu_waiters -= 1
+        return False
+
 app = FastAPI(title="portfolio-terminal", version="0.1.0")
 _cache = {"ts": 0.0, "data": None}
 
@@ -2184,6 +2216,17 @@ def get_scorecard():
     return _scorecard()
 
 
+@app.get("/api/gpu")
+def get_gpu():
+    """GPU serialization status (Increment A). `busy` = a heavy qwen-27b job holds
+    the GPU; `queued` = jobs waiting behind it (waiters minus the one running).
+    Cheap: two ints, no LLM. A UI badge can poll this for visible queue depth."""
+    busy = _GPU.locked()
+    with _gpu_waiters_lock:
+        w = _gpu_waiters
+    return {"busy": busy, "waiters": w, "queued": max(0, w - (1 if busy else 0))}
+
+
 @app.get("/api/grounding")
 def get_grounding():
     """G13 grounding watchdog: the dated-constant registry (every tax/ACA/SS figure with its
@@ -2851,7 +2894,8 @@ def _ollama_generate(prompt):
             "options": {"temperature": 0.3, "num_ctx": ANALYSIS_NUM_CTX}}
     for body in ({**base, "think": ANALYSIS_THINK}, base):
         try:
-            r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
+            with _gpu_slot():   # serialize qwen-27b generation across all features
+                r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
         except Exception as e:
             return None, f"request failed: {e}"
         if r.status_code >= 400:
@@ -6382,12 +6426,13 @@ def _do_strategist(max_iter=20):
                     "Stop researching now — place any final trades you want, then call log_report with your "
                     "summary on this turn."})
             try:
-                r = requests.post(f"{OLLAMA}/api/chat",
-                                  json={"model": ANALYSIS_MODEL, "messages": messages,
-                                        "tools": STRATEGIST_TOOLS, "stream": False,
-                                        "keep_alive": LLM_KEEP_ALIVE,
-                                        "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
-                                  timeout=STRAT_LLM_TIMEOUT)
+                with _gpu_slot():   # serialize qwen-27b generation across all features
+                    r = requests.post(f"{OLLAMA}/api/chat",
+                                      json={"model": ANALYSIS_MODEL, "messages": messages,
+                                            "tools": STRATEGIST_TOOLS, "stream": False,
+                                            "keep_alive": LLM_KEEP_ALIVE,
+                                            "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
+                                      timeout=STRAT_LLM_TIMEOUT)
                 if r.status_code >= 400:
                     telem["ended"] = "ollama_error"
                     telem["error"] = f"ollama {r.status_code}"
@@ -6588,12 +6633,13 @@ def _do_advice(amount, question, max_iter=None):
                 messages.append({"role": "system", "content": "You have used most of your available steps. "
                     "Stop researching now and write your final deployment plan on this turn."})
             try:
-                r = requests.post(f"{OLLAMA}/api/chat",
-                                  json={"model": ANALYSIS_MODEL, "messages": messages,
-                                        "tools": STRATEGIST_ADVICE_TOOLS, "stream": False,
-                                        "keep_alive": LLM_KEEP_ALIVE,
-                                        "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
-                                  timeout=STRAT_LLM_TIMEOUT)
+                with _gpu_slot():   # serialize qwen-27b generation across all features
+                    r = requests.post(f"{OLLAMA}/api/chat",
+                                      json={"model": ANALYSIS_MODEL, "messages": messages,
+                                            "tools": STRATEGIST_ADVICE_TOOLS, "stream": False,
+                                            "keep_alive": LLM_KEEP_ALIVE,
+                                            "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
+                                      timeout=STRAT_LLM_TIMEOUT)
                 if r.status_code >= 400:
                     _advice_state.update(status=f"error: ollama {r.status_code}: {r.text[:200]}",
                                          finished=int(time.time()))
@@ -6967,7 +7013,7 @@ def _chat_stream(persona_key, session_id, user_msg):
             content_buf = ""
             tool_calls = []
             try:
-                with requests.post(f"{OLLAMA}/api/chat",
+                with _gpu_slot(), requests.post(f"{OLLAMA}/api/chat",
                                    json={"model": persona["model"], "messages": messages,
                                          "tools": persona["tools"], "stream": True,
                                          "keep_alive": LLM_KEEP_ALIVE,
