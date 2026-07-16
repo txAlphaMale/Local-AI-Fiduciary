@@ -110,7 +110,7 @@ const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -179,16 +179,317 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
     if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
   }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
   document.getElementById('refresh').textContent='↻ REFRESH';
+}
+
+// ============================================================================
+//  In-app WIKI / help (data-driven). Each entry is one W(id,cat,title,def,read,use):
+//  def = what it is, read = how to interpret it, use = when to act. Add a feature's
+//  help by adding one W(...) line. Rendered in the WIKI tab (searchable, by category)
+//  and deep-linked from per-section "?" affordances via wikiLink(id).
+// ============================================================================
+const WIKI_CATS = ['Getting started','Dashboard','Positions','Research','Insights & risk','Planning','Taxes & audits','Automation'];
+const WIKI = [];
+let WIKI_FOCUS=null, WIKI_OPEN={}, WIKI_Q='';
+function W(id,cat,title,def,read,use){ WIKI.push({id,cat,title,def,read,use}); }
+
+W('overview','Getting started','What this terminal is',
+  'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
+  'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
+  'Start on the Dashboard for the at-a-glance picture, then follow a cockpit chip or a tab into the detail. Nothing here is advice — it is decision-support you verify with a professional.');
+W('not-advice','Getting started','Not advice — how to trust the numbers',
+  'Every figure is computed locally from your data plus free/public APIs (SEC EDGAR, Finnhub, Tavily). The LLM-written briefs are opinions grounded in that data, not facts, and the tax/estate figures are educational models of current law.',
+  'Where a number depends on a live source that could be stale, the UI shows a freshness stamp or a grounding note. The AUDITS to GROUNDING tab lists every dated tax constant with its source and a re-verification date.',
+  'Treat briefs as a research analyst take to pressure-test, and confirm any tax, estate, or legal move with a CPA or attorney before acting.');
+W('job-queue','Getting started','Serial job queue and the gear badge',
+  'Heavy jobs (analysis, discovery, opportunity scan, strategist) run one at a time through a single serial queue so they never contend for the GPU. The badge in the header shows what is running and how many jobs are waiting.',
+  'A badge like running strategist, 2 queued means the strategist is running with two jobs behind it. Blank means idle. GET /api/jobs is the same data as a raw list.',
+  'If you fire several heavy jobs at once, expect them to line up rather than run together — that is by design. A duplicate of a job already queued or running is merged, not run twice.');
+W('scheduler','Getting started','Automated jobs (Task Schedule)',
+  'The recurring agents run on a built-in scheduler inside the app (no external service). Each job fires at a set time and is enqueued into the serial job queue.',
+  'Settings to Task Schedule lists every automated job, its cadence (daily, weekly on a given day, or monthly), and its time in 24-hour clock. Times run in the app timezone shown at the top of that panel.',
+  'Edit a job time and Save to override the default (applies within a minute, no restart); Reset restores the default. Turn the whole scheduler off with INTERNAL_SCHEDULER=0 to trigger everything by hand.');
+
+W('net-worth','Dashboard','Net worth',
+  'Every account value signed by type: assets add, liabilities (credit cards, loans, mortgage) subtract. It includes non-brokerage assets your provider tracks, such as a Zillow-valued home.',
+  'The headline figure is total assets minus total liabilities. The ACCOUNTS panel breaks it into holdings accounts plus an Other assets and liabilities section so you can see exactly what rolls up.',
+  'Use it as the top-of-funnel number for the funded-ratio and estate views. If it looks off, check the ACCOUNTS panel for a mis-synced balance.');
+W('invested','Dashboard','Invested value vs net worth',
+  'Invested value is the market value of your securities (what the risk, exposure and attribution engines analyze). Net worth is the whole balance sheet including cash, real estate and debts.',
+  'The two differ by your cash, real assets and liabilities. Securities-level analytics use invested value; planning views (funded ratio, estate) use net worth.',
+  'Concentration is about invested value; solvency is about net worth — pick the right one for the question.');
+W('allocation','Dashboard','Allocation donuts (institution / asset type)',
+  'Two doughnuts split your invested value — one by custodian/institution, one by asset type (stock, ETF, cash).',
+  'Each slice is a share of invested value; the legend lists top holdings with percentages. Institution concentration is custodial risk; asset-type mix is your rough stock/bond/cash posture.',
+  'Use the asset-type donut for a quick check against your target mix, and the institution donut to notice if too much sits at one custodian.');
+W('accounts-panel','Dashboard','Accounts — holdings plus other assets and liabilities',
+  'A list of every account: brokerage/holdings accounts first, then an Other assets and liabilities section for cash, the home, and debts that move net worth but hold no securities.',
+  'Holdings accounts show market value; the other section shows assets in normal color and liabilities in red. Together they reconcile to net worth.',
+  'This is where to confirm the terminal sees a real asset (the home) or a liability (a mortgage). A wrong balance here is usually a provider-sync issue to fix upstream.');
+W('movers','Dashboard','Top gainers / losers / day movers',
+  'Gainers and losers rank positions by total unrealized dollar gain/loss; day movers rank by the largest one-day percentage change.',
+  'Gainers/losers are lifetime P&L on the position (needs cost basis); day movers are today volatility regardless of basis.',
+  'Day movers surface what drives today swings; gainers/losers flag your most-appreciated names (step-up/harvest candidates) and biggest drags (thesis-review candidates).');
+W('growth-vs-spy','Dashboard','Portfolio vs SPY (growth of 100)',
+  'A line chart of your portfolio and SPY both indexed to 100 on the first recorded day, so you compare growth paths regardless of dollar size.',
+  'The series accrues from a daily snapshot, so it needs at least two days before it draws. Divergence from the SPY line is your relative performance.',
+  'Use it as a rough benchmark of whether your positioning beats a plain index over the window it has data for — not precise attribution.');
+W('cockpit','Dashboard','Cockpit — what needs attention',
+  'A persistent strip of chips summarizing everything outside a threshold: concentration, drift, tax-loss opportunities, high fees, illiquid names, ACA cliffs, FIRE success, hidden fund exposure.',
+  'Chip color encodes severity — amber is watch, green is opportunity/ok, grey is info. Each chip names the issue and a count.',
+  'Click a chip to jump to the tab with the full detail. Treat the cockpit as your daily triage list.');
+
+W('consolidated','Positions','Consolidated vs by-account',
+  'Consolidated merges the same security held in multiple accounts into one row; by-account shows each lot where it sits.',
+  'Consolidated answers how much AAPL do I own; by-account answers where is it and in which tax wrapper.',
+  'Use consolidated for concentration and thesis work; use by-account when a decision depends on tax location.');
+W('cost-basis','Positions','Cost basis and unrealized P/L',
+  'Cost basis is what you paid (detected per account — some providers report per-share, some a total). Unrealized P/L is current value minus basis.',
+  'A suspect flag or blank gain means the basis looked corrupt and was suppressed rather than shown wrong. Percentages are gain over basis.',
+  'Basis drives tax-loss harvesting, step-up value and staged-sale planning — if a key position shows no basis, fix it at the source.');
+W('analyst-rating','Positions','Analyst consensus rating',
+  'A Buy/Hold/Sell badge from Finnhub aggregation of Wall Street analyst ratings.',
+  'It is the street consensus, not the terminal view — the terminal own take is the B/S/H brief in Research.',
+  'Use it as one external data point; where it disagrees with your grounded brief, understand the gap before acting.');
+
+W('briefs','Research','Buy / Sell / Hold briefs',
+  'For each holding the local LLM writes a short thesis grounded in SEC fundamentals, valuation multiples, analyst consensus and news, ending in a Buy/Sell/Hold call with a confidence level.',
+  'Each brief carries a rating, a confidence (high/med/low), the sources it used, and a freshness stamp. Briefs sort actionable-first.',
+  'Read a brief as a starting analyst opinion to challenge, not a directive. Low confidence or few sources means dig further.');
+W('confidence','Research','Brief confidence and calibration',
+  'Confidence is the model stated conviction; calibration (in AUDITS to Grounding) tracks whether that confidence has matched reality via a Brier score.',
+  'A Brier score near 0.25 is coin-flip; lower is better. The per-tier table shows whether high-confidence briefs actually hit more than low.',
+  'If calibration shows overconfidence, discount high-confidence calls. This is how you learn how much to trust the briefs over time.');
+W('reverse-dcf','Research','Reverse-DCF (implied growth)',
+  'Rather than guessing a fair value, it solves for the free-cash-flow growth rate the current price already implies, given trailing FCF and a terminal growth assumption.',
+  'A line like price implies 12%/yr versus the actual revenue CAGR tells you if the market demands heroic, in-line, or undemanding growth.',
+  'Use it to sanity-check valuation: implied growth far above what the business has ever done means priced for perfection.');
+W('scanner','Research','Opportunity scanner',
+  'Screens a universe against your criteria (valuation, quality, momentum, optional minimum Piotroski) and ranks survivors by a forward expected-return opportunity score.',
+  'Each hit shows which checks it passed and its score; you edit criteria and limits in the panel. Higher score is more attractive on the heuristic.',
+  'Use it to generate a shortlist of ideas to then run a full B/S/H analysis on, not as a buy list on its own.');
+W('piotroski','Research','Piotroski F-score',
+  'A 0 to 9 accounting-quality score: nine pass/fail checks on profitability, leverage/liquidity and operating efficiency. Higher is healthier.',
+  '8 to 9 is strong, 0 to 2 is weak. In the scanner it is an optional gate that is off by default so it does not silently change your fit count.',
+  'Use it to avoid value traps — a cheap stock with a low F-score is cheap for a reason.');
+W('theses','Research','Theses and exit triggers',
+  'For any holding you record a falsifiable thesis with pre-committed exit triggers (FCF-margin decay, reverse-DCF implied growth too high, Piotroski floor, a drawdown, or a custom rule).',
+  'Each run re-checks the triggers against fresh data; a tripped trigger flags the position for EXIT REVIEW rather than auto-selling.',
+  'Use it to enforce sell discipline you set in a calm moment — the terminal reminds you of your own rules when the data breaks them.');
+W('alerts','Research','News alerts and discovery',
+  'The discovery agent scans news for your holdings and surfaces material items; discovered tracks new names it flags from the news flow.',
+  'Alerts are per-holding news hits; the cockpit shows a count. Discovery is idea-generation adjacent to what you own.',
+  'Skim alerts for anything that changes a thesis; treat discovered names as candidates for the scanner/analysis pipeline.');
+
+W('drift','Insights & risk','Policy and drift',
+  'Compares your actual allocation to your written investment policy (target sleeves, per-position cap, drift band) and flags what is out of band.',
+  'Each sleeve shows target vs actual and whether it breached the band; positions over your single-name cap are listed separately.',
+  'Use it to decide rebalancing — but weigh the tax cost of selling appreciated positions.');
+W('exposure','Insights & risk','Exposure — sector, beta, concentration (HHI)',
+  'True economic exposure: sector weights, portfolio beta, and a Herfindahl (HHI) concentration index, including a look-through that counts names held inside your funds.',
+  'HHI rises with concentration; the look-through line shows your true single-name exposure, which can exceed the direct view.',
+  'Use it to catch hidden concentration (mega-cap tech owned directly and via an index fund) and to see if your beta matches intent.');
+W('lookthrough','Insights & risk','Fund look-through (N-PORT)',
+  'Resolves each fund to its underlying holdings using SEC N-PORT filings, so exposure and concentration reflect what you truly own.',
+  'It splits each fund into equity/bond/cash by asset category and attributes single-name weight through to the underlying stocks. Coverage depends on filings being available.',
+  'Use it when much of your book is in funds — it turns 40% VTI into the actual companies and sleeves underneath.');
+W('var-cvar','Insights & risk','VaR and CVaR (tail risk)',
+  'Value-at-Risk is the loss you would not exceed on a normal bad day at a given confidence; CVaR (expected shortfall) is the average loss on the days worse than that.',
+  'Both are positive loss percentages at 1-day and 10-day horizons. CVaR is always at least VaR because it averages the deep tail.',
+  'Use CVaR, not VaR, to size how much a single bad stretch could cost — it feeds the position-sizing loss budget.');
+W('effective-bets','Insights & risk','Effective number of bets',
+  'A diversification measure (Meucci): how many truly independent risk sources you have after accounting for correlation. 1 is everything moves together; n is n independent bets.',
+  'Twenty names that all move together have an effective number near 1, not 20. A diversification ratio captures the same idea from correlations alone.',
+  'Use it to see through fake diversification — many tickers that are really one bet on the same factor.');
+W('factors','Insights & risk','Factor exposure (FF5 + momentum)',
+  'Regresses your reconstructed returns on the Fama-French 5 factors plus momentum to show which systematic bets drive your returns, plus an alpha.',
+  'Each factor beta is your loading; R-squared is how much of your movement the factors explain; alpha is the unexplained excess (often noise for a small book).',
+  'Use it to understand what you are really long — a value plus small-cap tilt — rather than assuming returns are stock-picking skill.');
+W('risk-ramp','Insights & risk','Risk ramp (reconstructed history)',
+  'Because current holdings have no shared past, the engine rebuilds a daily return series as if you had held today weights over the historical window.',
+  'It answers given how I am positioned now, how would that have behaved — not your actual path. Coverage shows the share of the book with usable price history.',
+  'Read the risk-suite numbers through this lens: they describe today positioning under history, which is what you want for forward risk.');
+W('attribution','Insights & risk','Contribution to return',
+  'Chain-linked attribution: how much each holding contributed to total return over the window, with the parts summing exactly to the whole.',
+  'Each name shows weight, own return, and contribution in points and as a share of total. Positive and negative contributors are colored.',
+  'Use it to see what actually drove performance — often a couple of names — and whether concentration paid or hurt.');
+W('money-weighted-irr','Insights & risk','Money-weighted return (XIRR)',
+  'The internal rate of return on the paper book actual cash flows (deposits in, current value out) — it credits the timing of contributions, unlike a simple percentage.',
+  'Shown alongside the simple return; a short-window flag warns when there is too little history for it to be meaningful.',
+  'Use IRR when contributions were uneven — it answers what did my money actually earn, which time-weighted returns hide.');
+W('sizing','Insights & risk','Position sizing (CVaR loss budget)',
+  'The primary gate: each name tail loss is its value times its CVaR; a loss budget (the percent of net worth you accept losing from one name) implies a maximum position value, and over-budget names get a suggested trim.',
+  'Over-budget rows are amber with a max-position and trim; it also shows inverse-volatility target weights and a de-emphasized half-Kelly reference.',
+  'Use the loss budget to right-size concentrated winners by how much damage they can do, not just by weight.');
+W('staged-sale','Insights & risk','Staged 0%-LTCG diversification',
+  'A tax-aware plan to trim an over-concentrated appreciated position over several years, spending the 0% long-term capital-gains bracket each year before pricing the rest at your LTCG rate.',
+  'It shows the year-by-year schedule, the tax if you sold everything now versus staged, and the total tax saved.',
+  'Use it when you must diversify a big winner but want to bleed the gain out at the lowest tax cost instead of one large hit.');
+W('leverage','Insights & risk','Leverage / ruin model',
+  'Models borrowing against taxable assets ruin-first: it bootstraps the probability of a margin call at each loan-to-value from your own fat-tailed returns, then reports a maximum prudent LTV and after-tax borrow-vs-sell math.',
+  'It shows margin-call probability rising with LTV, the borrow-vs-sell carry, and buy-borrow-die risks. The model never actually borrows.',
+  'Use it to pressure-test an SBLOC or margin idea against the downside first — the headline tax-free access ignores the call risk this surfaces.');
+W('avenues','Insights & risk','Cross-avenue (marginal dollar)',
+  'Ranks where your next dollar earns the best after-tax return across avenues: debt paydown, Treasuries, index, a concentrated position, real estate, or an SBLOC spread, plus one-time tax alpha.',
+  'Each avenue shows an after-tax expected return and any one-time boost; concentrated options carry a risk flag.',
+  'Use it to allocate new savings or a windfall to the highest after-tax use instead of defaulting to one bucket.');
+
+W('monte-carlo','Planning','Monte Carlo retirement',
+  'Simulates thousands of return paths for your plan and reports the share that never run out of money, under several withdrawal policies and return models.',
+  'The PLAN to FI strip shows success under a static rule plus guardrail policies and worst-case ending values. Very high success (99%+) can mean you are underspending.',
+  'Use it to judge whether your spend/save/retire-age plan is robust and how much dynamic spending rules improve it.');
+W('guardrails','Planning','Guardrails (Guyton-Klinger and risk-based)',
+  'Dynamic withdrawal policies that cut or raise spending as the portfolio moves. The risk-based policy adjusts by the current probability of success; Guyton-Klinger uses fixed rate bands.',
+  'The risk-based strip is primary (cuts below ~70% success, raises above ~99%) and never cuts into your essential needs floor; Guyton-Klinger is a comparison.',
+  'Use guardrails to see how flexible spending raises your safe success rate and how deep a cut a bad sequence would require.');
+W('fat-tail-block','Planning','Fat-tail and block-bootstrap models',
+  'Alternative Monte Carlo return engines: fat-tail draws have heavier crashes than a normal distribution; block-bootstrap stitches together real historical return sequences to preserve momentum and mean-reversion.',
+  'These usually read a few points below the normal model — that gap is the cost of the normal model optimism about tails and independence.',
+  'Use them as a stress check: a plan that only passes under the normal model is fragile to real-world tails.');
+W('funded-ratio','Planning','Funded ratio',
+  'A pension-style solvency check: present value of assets plus future savings divided by present value of retirement spending, splitting essential needs (discounted at the risk-free TIPS yield) from wants (discounted at your expected return).',
+  'At or above 100% is fully funded; the essentials-only ratio is the more conservative number. It uses the same cash flows as the Monte Carlo.',
+  'Use it as a cleaner am I there yet gauge than a success percentage, especially the essentials-only ratio.');
+W('social-security','Planning','Social Security',
+  'Estimates your benefit (PIA/FRA with COLA and taxation) and folds a benefit floor into the Monte Carlo so success is not understated by ignoring it.',
+  'The PLAN to SS sub-tab shows the benefit at different claim ages; the plan uses it as a real income floor.',
+  'Use it to see the claiming-age tradeoff and how much guaranteed income lowers the portfolio burden — some plans deliberately assume it is unavailable as a stress test.');
+W('aca','Planning','ACA / MAGI bridge',
+  'For early retirement before Medicare, models your marketplace subsidy: a MAGI ledger, the premium tax credit, and the 400%-of-poverty subsidy cliff (back for 2026, with a Texas gap below 100%).',
+  'It flags when planned income puts you over the cliff (0 subsidy) or into the sub-100% gap, and estimates the credit when you set your local benchmark Silver premium.',
+  'Use it to manage retirement-year income (Roth conversions, gains) so you do not accidentally blow past the subsidy cliff.');
+W('roth','Planning','Roth ladder and marginal-rate curve',
+  'Composes your true marginal rate on the next dollar — ordinary brackets, the capital-gains bump zone, NIIT, the ACA subsidy slope, and IRMAA steps — into one curve, then plans multi-year Roth conversions that fill low-rate room while respecting 5-year clocks and the pre-65 ACA cap.',
+  'The curve shows where the next dollar is cheap versus punitive; the ladder shows a year-by-year conversion amount. Texas has no state income tax, making conversions relatively cheap.',
+  'Use it to convert in low-income years up to the point where the marginal rate jumps — the curve makes those cliffs visible.');
+W('irmaa','Planning','IRMAA (Medicare surcharge)',
+  'Income-Related Monthly Adjustment Amount: above certain MAGI tiers your Medicare Part B premium steps up sharply, based on income two years prior.',
+  'It appears as steps in the marginal-rate curve — crossing a tier can cost far more than the tax on the dollar that crossed it.',
+  'Use it to avoid nudging MAGI just over an IRMAA threshold with a conversion or gain.');
+W('realestate','Planning','Real-estate underwriter',
+  'Underwrites a prospective rental deal: net operating income, cap rate, debt-service coverage (DSCR), cash-on-cash, and a levered after-tax IRR that accounts for depreciation recapture and capital-gains tax at sale.',
+  'Enter the deal inputs and it returns the full set; DSCR below ~1.2 and thin cash-on-cash are warning signs. Existing real-estate accounts are surfaced separately.',
+  'Use it to compare a specific property against your other avenues on an apples-to-apples after-tax IRR before committing.');
+W('business','Planning','Business-acquisition underwriter',
+  'Underwrites buying a small business: seller discretionary earnings multiple, DSCR, cash-on-cash, payback, and a levered after-tax IRR including the QSBS section 1202 gain exclusion where it applies.',
+  'Enter the deal and it returns the return/coverage set; it reuses the real-estate amortization and IRR engine.',
+  'Use it to evaluate an acquisition or search-fund idea on the same after-tax IRR basis as your market and real-estate options.');
+W('estate-snapshot','Planning','Estate snapshot vs exemption',
+  'Your net estate against the federal exemption (15M per person, ~30M married with portability for 2026), the headroom left, the tax if you died today, and the year your estate would cross the exemption at your assumed growth.',
+  'Texas has no state estate tax, so this is federal-only. The years until crossed figure is the trust-planning tripwire.',
+  'Under the exemption there is no estate tax to plan around — the action is basis (see step-up and gift-vs-hold). Near the exemption, irrevocable strategies need lead time.');
+W('stepup','Planning','Step-up ledger',
+  'Per-account view of what a death-basis step-up (IRC 1014) is worth: taxable accounts and the home get their embedded gain wiped; traditional IRA/401k is income in respect of a decedent (heirs pay ordinary tax); Roth passes tax-free; an HSA is the worst asset to die with.',
+  'The embedded gain a step-up would wipe totals taxable plus real estate. For the home, set its cost basis so the wiped gain is quantified; the section 121 exclusion already shelters 250k/500k on a lifetime sale, and Texas community property gets a full double step-up.',
+  'Use it to reverse the usual drawdown order late in life — spend IRA/HSA first and hold heavily-appreciated taxable positions and the home for the step-up.');
+W('gift-vs-hold','Planning','Gift vs hold',
+  'For an appreciated position, compares gifting now (the donee carries your basis and eventually pays capital-gains tax on the full gain) versus holding to death (the step-up erases the gain).',
+  'For an estate under the exemption, holding almost always wins on tax — gift cash or high-basis assets instead. Over the exemption, gifting future growth out of the 40% estate base can flip it.',
+  'Use it before a large lifetime gift of a winner — giving away appreciated stock is a common, expensive mistake for sub-exemption estates.');
+W('income-plan','Planning','Income / dividend plan',
+  'Aggregates the income your book throws off (dividends across all accounts, target yield) to plan for cash needs.',
+  'Dividend income sums across every account; the asset-location relocation list, by design, stays taxable-only.',
+  'Use it to see how much of your spending can be covered by portfolio income versus selling principal.');
+
+W('tax-brackets','Taxes & audits','Tax brackets and marginal rate',
+  'A full 2026 federal bracket engine (ordinary brackets, long-term capital gains, NIIT) that replaces flat tax assumptions everywhere a tax number is used.',
+  'It shows your marginal and effective rates given your income; Texas adds no state income tax. The same engine feeds the Roth curve, ACA and estate math.',
+  'Use it to see the real tax on an extra dollar of income or a realized gain before you trigger it.');
+W('tlh','Taxes & audits','Tax-loss harvesting',
+  'Finds positions at a loss in taxable accounts whose sale would generate a deductible capital loss to offset gains (and up to 3k of ordinary income).',
+  'It lists harvestable losses with the dollar amount; the cockpit shows the total. Mind the 30-day wash-sale rule on repurchase.',
+  'Use it near year-end or after a drawdown to bank losses — but never let the tax tail wag a good position, and avoid the wash sale.');
+W('asset-location','Taxes & audits','Asset location',
+  'Audits whether tax-inefficient holdings (high-yield, high-turnover) are sitting in taxable accounts where they should be tax-advantaged, and vice versa.',
+  'It flags misplaced holdings; the list is taxable-account-focused by design. Relocating is about which wrapper holds what, not what you own.',
+  'Use it to cut lifetime tax drag by moving income-heavy assets into IRAs/Roth and keeping tax-efficient index funds in taxable.');
+W('fees-liquidity','Taxes & audits','Fees and liquidity',
+  'Flags high-cost funds (by expense ratio where available) and hard-to-exit positions (thin trading volume) so you can see hidden frictions.',
+  'High-fee funds and thin/micro-liquidity names are flagged in the FEES and LIQUIDITY tab and summarized in the cockpit.',
+  'Use it to prune expensive funds with cheaper equivalents and to know which positions you cannot exit quickly in size.');
+W('drip','Taxes & audits','DRIP and fractional flags',
+  'Per-account settings for dividend reinvestment and fractional shares that make the tax, drift and income math correct (reinvested dividends are still taxable phantom income in taxable accounts).',
+  'Set the flags under AUDITS to Accounts; they feed the tax-audit, drift pressure and income cash-vs-reinvested calculations.',
+  'Set them accurately so the terminal models your actual cash flows — otherwise reinvested-dividend tax and drift will be off.');
+W('grounding','Taxes & audits','Grounding watchdog and calibration',
+  'A registry of every dated tax constant (brackets, LTCG, NIIT, FPL, Social Security bend points, estate exemption, IRMAA) with its source, the year it applies to, and a staleness tripwire, plus a calibration audit of the LLM briefs.',
+  'The registry flags a figure as stale when its year falls behind the calendar and nags for re-verification each January. The Brier score grades whether brief confidence matches outcomes.',
+  'Use it to trust the tax numbers (they carry sources) and to know how much to weight the model confidence.');
+
+W('strategist','Automation','Strategist (paper trading)',
+  'An autonomous agent that runs a hypothetical paper portfolio: it researches with real data and tools, then places simulated buy/sell decisions with fake money so you can watch its reasoning and track record.',
+  'It runs weekly or on demand through the serial job queue; the STRATEGIST tab shows its book, report, and activity log. No real orders are ever placed.',
+  'Use it as a transparent second opinion whose reasoning and paper P&L you can audit over time — never as an execution system.');
+W('chat','Automation','Chat personas',
+  'An in-app chat with a Fiduciary persona (planning/analysis) and a Strategist persona, both read-only, with tools to query your book and the research data. It has your knowledge documents in a local RAG.',
+  'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU.',
+  'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show.');
+
+// A small clickable "?" that deep-links into a WIKI entry. Drop wikiLink('id') into any header.
+function wikiLink(id){
+  const a=el('span',null,'?');
+  a.title='What is this? (opens the Wiki)';
+  a.style.cssText='cursor:pointer;display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;'+
+    'border:1px solid var(--bd2);border-radius:50%;font-size:10px;color:var(--mut);margin-left:6px;vertical-align:middle;';
+  a.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); WIKI_FOCUS=id; WIKI_OPEN[id]=true; TAB='wiki'; render(); };
+  return a;
+}
+function wikiContent(){
+  const wrap=el('div');
+  wrap.appendChild(el('div','ph','WIKI · HOW TO READ THIS TERMINAL'));
+  const intro=el('div','muted'); intro.style.cssText='font-size:11px;line-height:1.5;margin-bottom:10px;';
+  intro.textContent='Every feature explained: what it is, how to read it, and when to act. Search below, or click a "?" anywhere in the terminal to jump straight to the relevant entry.';
+  wrap.appendChild(intro);
+  const sb=el('input'); sb.type='search'; sb.placeholder='Search the wiki…'; sb.id='wiki-search';
+  sb.value=(WIKI_Q||''); sb.style.cssText='width:100%;max-width:360px;margin-bottom:12px;padding:5px 8px;';
+  sb.oninput=()=>{ WIKI_Q=sb.value; const box=document.getElementById('wiki-body'); if(box){ box.innerHTML=''; buildWiki(box); } };
+  wrap.appendChild(sb);
+  const body=el('div'); body.id='wiki-body'; wrap.appendChild(body);
+  buildWiki(body);
+  return wrap;
+}
+function buildWiki(box){
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const q=(WIKI_Q||'').trim().toLowerCase();
+  const match=e=> !q || (e.title+' '+e.def+' '+e.read+' '+e.use+' '+e.cat).toLowerCase().includes(q);
+  let shown=0;
+  WIKI_CATS.forEach(cat=>{
+    const items=WIKI.filter(e=>e.cat===cat && match(e));
+    if(!items.length) return;
+    const ch=el('div'); ch.style.cssText='letter-spacing:2px;font-size:10px;color:var(--amber);margin:14px 0 6px;'; ch.textContent=cat.toUpperCase();
+    box.appendChild(ch);
+    items.forEach(e=>{ shown++;
+      const card=el('div'); card.id='wiki-'+e.id;
+      card.style.cssText='border:1px solid var(--bd);border-radius:4px;margin:5px 0;padding:8px 11px;';
+      const open=!!WIKI_OPEN[e.id] || (WIKI_FOCUS===e.id);
+      const head=el('div'); head.style.cssText='cursor:pointer;display:flex;justify-content:space-between;align-items:center;';
+      head.innerHTML=`<span class="sym">${esc(e.title)}</span><span class="muted" style="font-size:11px;">${open?'−':'+'}</span>`;
+      head.onclick=()=>{ WIKI_OPEN[e.id]=!open; const b=document.getElementById('wiki-body'); b.innerHTML=''; buildWiki(b); };
+      card.appendChild(head);
+      if(open){
+        const d=el('div'); d.style.cssText='margin-top:7px;font-size:12px;line-height:1.5;';
+        d.innerHTML=`<div><span class="muted" style="font-size:10px;letter-spacing:1px;">WHAT IT IS</span><br>${esc(e.def)}</div>`+
+          `<div style="margin-top:6px;"><span class="muted" style="font-size:10px;letter-spacing:1px;">HOW TO READ IT</span><br>${esc(e.read)}</div>`+
+          `<div style="margin-top:6px;"><span class="muted" style="font-size:10px;letter-spacing:1px;">WHEN TO USE IT</span><br>${esc(e.use)}</div>`;
+        card.appendChild(d);
+      }
+      box.appendChild(card);
+    });
+  });
+  if(!shown){ const m=el('div','muted'); m.style.cssText='font-size:12px;'; m.textContent='No wiki entries match "'+WIKI_Q+'".'; box.appendChild(m); }
+  if(WIKI_FOCUS){ const id='wiki-'+WIKI_FOCUS; WIKI_FOCUS=null;
+    setTimeout(()=>{ const n=document.getElementById(id); if(n){ n.scrollIntoView({behavior:'smooth',block:'center'});
+      n.style.boxShadow='0 0 0 2px var(--amber)'; setTimeout(()=>{ n.style.boxShadow=''; },2400); } },60);
+  }
 }
 
 function render(){
@@ -211,7 +512,7 @@ function render(){
   const body=document.getElementById('body'); body.innerHTML='';
   charts.forEach(c=>c.destroy()); charts=[];
 
-  if(TAB!=='chat'){   // the CHAT tab uses the full panel; skip the cockpit strip above it
+  if(TAB!=='chat' && TAB!=='wiki'){   // CHAT and WIKI use the full panel; skip the cockpit strip above them
     body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip + tile router
   }
   // NOTE: the Dashboard visuals (allocation donuts · accounts · gainers/losers/day-movers ·
@@ -258,6 +559,7 @@ function render(){
   if(haveAudits) tabSpecs.push(['audits','AUDITS · TAX·FEES']);
   if(haveStrat) tabSpecs.push(['strategist','STRATEGIST']);
   tabSpecs.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
+  tabSpecs.push(['wiki','WIKI']);   // in-app help — always available (rightmost)
   // SETTINGS is NOT a top tab — it opens from the ⚙ gear in the top-right (N11).
   tabSpecs.forEach((ts,i)=>{
     if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--bd2);opacity:0.7;font-size:12px;user-select:none;'; tabBar.appendChild(sep); }
@@ -312,10 +614,12 @@ function render(){
   else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
   else if(TAB==='strategist' && haveStrat){ tc.appendChild(stratContent(STRAT)); }
   else if(TAB==='chat'){ tc.appendChild(chatContent()); }
+  else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
     tc.appendChild(panelSubtabs('settings',[
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
+      {key:'schedule',label:'TASK SCHEDULE',build:()=>scheduleContent()},
       {key:'knowledge',label:'KNOWLEDGE',build:()=>knowledgeContent()},
     ]));
   }
@@ -338,6 +642,7 @@ function cockpitPanel(){
   const p=el('div','panel'); p.style.cssText='margin-bottom:10px;padding:9px 12px;';
   const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:7px;';
   head.innerHTML='<span class="ph" style="border:none;padding:0;margin:0;">⚑ COCKPIT · WHAT NEEDS ATTENTION</span>';
+  head.appendChild(wikiLink('cockpit'));
   p.appendChild(head);
   const anyLoaded = EXP||INSIGHTS||TAX||TAXAUDIT||FL||RETIRE||DISCO;
   if(!anyLoaded){ const m=el('div','muted'); m.style.cssText='font-size:11px;'; m.textContent='Scanning your book (drift · concentration · tax · fees · liquidity · outlook)…'; p.appendChild(m); return p; }
@@ -416,7 +721,7 @@ function allocPanel(title,cid,items,total){
 
 function accountsPanel(d){
   const p=el('div','panel');
-  p.appendChild(el('div','ph','ACCOUNTS'));
+  const _ah=el('div','ph','ACCOUNTS'); _ah.appendChild(wikiLink('accounts-panel')); p.appendChild(_ah);
   d.by_account.forEach(a=>{
     const row=el('div','row');
     row.innerHTML=`<span class="nm">${a.account}<br><span class="sub">${shortInst(a.institution)}</span></span>`+
@@ -831,6 +1136,46 @@ function saveDonees(){
   fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estate_donees:n})})
     .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
 }
+function saveHomeBasis(){
+  const v=document.getElementById('est-homebasis'); const n=(v&&v.value!=='')?Number(v.value):null;
+  fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estate_home_basis:n})})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+
+// Task Schedule (SETTINGS sub-tab): the built-in scheduler's automated jobs with editable 24h times.
+function scheduleContent(){
+  const s=SCHEDULE||{}, wrap=el('div');
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const p2=n=>String(n==null?0:n).padStart(2,'0');
+  wrap.appendChild(el('div','ph','TASK SCHEDULE · AUTOMATED JOBS'));
+  const info=el('div','muted'); info.style.cssText='font-size:11px;line-height:1.5;margin-bottom:12px;';
+  info.innerHTML=`Times are 24-hour, in the app timezone (<b>${esc(s.tz||'server local')}</b>). Each job is enqueued into the serial job queue at its time; edits apply within a minute (no restart needed). Every job can also be run on demand.`+
+    (s.scheduler_enabled===false?' <span class="neg">⚠ The scheduler is currently DISABLED (INTERNAL_SCHEDULER=0) — these times won\'t fire until it\'s re-enabled.</span>':'');
+  wrap.appendChild(info);
+  const t=el('table'); const h=el('tr');
+  h.innerHTML='<th class="l">JOB</th><th class="l">CADENCE</th><th>TIME (24h)</th><th></th>'; t.appendChild(h);
+  (s.jobs||[]).forEach(j=>{ const tr=el('tr');
+    const reset=j.is_default?`<span class="muted" style="font-size:10px;">default</span>`
+      :`<button onclick="resetSchedule('${j.kind}')" style="font-size:10px;" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
+    tr.innerHTML=`<td class="l sym">${esc(j.label)}</td><td class="l muted">${esc(j.cadence)}</td>`+
+      `<td style="white-space:nowrap;"><input id="sch-h-${j.kind}" type="number" min="0" max="23" value="${j.hour}" style="width:44px;"/> <span class="muted">:</span> `+
+      `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
+      `<td style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> ${reset}</td>`;
+    t.appendChild(tr); });
+  wrap.appendChild(t);
+  return wrap;
+}
+function saveSchedule(kind){
+  const h=Number((document.getElementById('sch-h-'+kind)||{}).value);
+  const m=Number((document.getElementById('sch-m-'+kind)||{}).value);
+  if(!(h>=0&&h<=23)||!(m>=0&&m<=59)){ alert('Enter hour 0–23 and minute 0–59.'); return; }
+  fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[kind]:{hour:h,minute:m}})})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+}
+function resetSchedule(kind){
+  fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:kind})})
+    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Reset failed: '+e));
+}
 
 function estateContent(){
   // G2 estate & generational view: snapshot, step-up ledger, gift-vs-hold, gifting runway, titling, trusts.
@@ -851,15 +1196,19 @@ function estateContent(){
   sn.textContent=(s.note||'')+(s.portability_note?' '+s.portability_note:''); wrap.appendChild(sn);
   // ---- step-up ledger ----
   const su=g.stepup||{};
-  wrap.appendChild(el('div','ph','STEP-UP LEDGER · WHAT DEATH-BASIS RESET IS WORTH'));
+  const _slh=el('div','ph','STEP-UP LEDGER · WHAT DEATH-BASIS RESET IS WORTH'); _slh.appendChild(wikiLink('stepup')); wrap.appendChild(_slh);
   const t1=el('table'); const h1=el('tr'); h1.innerHTML='<th class="l">ACCOUNT</th><th>STATUS</th><th>VALUE</th><th>EMBEDDED GAIN</th><th class="l">TREATMENT AT DEATH</th>'; t1.appendChild(h1);
   (su.accounts||[]).forEach(a=>{ const tr=el('tr');
     tr.innerHTML=`<td class="l sym">${esc(a.account)}</td><td class="muted">${esc(a.tax_status)}</td><td>${u(a.value)}</td><td class="${(a.embedded_gain||0)>0?'pos':''}">${a.embedded_gain!=null?u(a.embedded_gain):'—'}</td><td class="l muted" style="font-size:10px">${esc(a.treatment)}</td>`;
     t1.appendChild(tr); });
   wrap.appendChild(t1);
   const sun=el('div'); sun.style.cssText='font-size:11px;margin:6px 0;';
-  sun.innerHTML=`<span class="muted">Taxable embedded gain a step-up would wipe:</span> <span class="pos">${u(su.taxable_embedded_gain)}</span>`;
+  sun.innerHTML=`<span class="muted">Embedded gain a step-up would wipe (taxable + real estate):</span> <span class="pos">${u(su.taxable_embedded_gain)}</span>`;
   wrap.appendChild(sun);
+  // primary-residence cost basis: lets the ledger quantify the home's wiped gain (value − basis)
+  const hb=el('div'); hb.style.cssText='font-size:11px;margin:4px 0;';
+  hb.innerHTML=`<span class="muted">Primary residence cost basis (purchase + improvements):</span> $<input id="est-homebasis" type="number" min="0" step="1000" value="${g.home_basis!=null?g.home_basis:''}" placeholder="unset" style="width:96px;"/> <button onclick="saveHomeBasis()">↳ SAVE</button>`;
+  wrap.appendChild(hb);
   const cpn=el('div'); cpn.style.cssText='font-size:10px;line-height:1.45;margin-bottom:12px;color:var(--amber);';
   cpn.textContent='⚑ '+(su.community_property_note||''); wrap.appendChild(cpn);
   // ---- gift vs hold ----

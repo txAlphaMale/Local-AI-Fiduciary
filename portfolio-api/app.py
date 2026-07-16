@@ -103,6 +103,10 @@ DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   "needs_pct_of_expenses": 65,
                   # Estate (G2): heirs/donees for the annual-exclusion gifting runway.
                   "estate_donees": None,
+                  # Estate (G2): cost basis (purchase price + capital improvements) of the
+                  # PRIMARY residence, so the step-up ledger can quantify the gain §1014 wipes.
+                  # Applied to the largest real-estate account. None = show value, gain unknown.
+                  "estate_home_basis": None,
                   # Tax engine (G5): federal-only (TX has no state income tax).
                   "filing_status": "mfj", "spouse_age": None,
                   # Ordinary bracket to "fill" with Roth conversions in low years.
@@ -300,7 +304,8 @@ _cache = {"ts": 0.0, "data": None}
 #  dropped-silently or run twice. The internal cron scheduler (stdlib only)
 #  enqueues the same jobs on a timetable — replacing the 6 n8n cron workflows
 #  so the whole schedule->queue->run->visibility loop lives in one process (the
-#  n8n container can then be dropped). Set INTERNAL_SCHEDULER=0 to keep n8n.
+#  external n8n container has been retired). Set INTERNAL_SCHEDULER=0 to disable
+#  the scheduler and run every job on demand instead.
 # ============================================================================
 _JOBS = {}                       # job_id -> record
 _JOBS_ORDER = []                 # insertion order (registry ring)
@@ -375,18 +380,39 @@ def get_jobs():
             "jobs": list(reversed(jobs))}      # newest first
 
 
-# ---- internal cron scheduler (stdlib) — replaces the 6 n8n workflows -------
-# Container-local time: set TZ=America/Chicago on portfolio-api (compose) so these
-# fire in Central like the old n8n crons did. dow uses Python weekday(): Mon=0..Sun=6.
+# ---- internal cron scheduler (stdlib) — the built-in job timetable ----------
+# Container-local time: set TZ=America/Chicago on portfolio-api (compose) so jobs
+# fire in your local time. dow uses Python weekday(): Mon=0..Sun=6. Per-job hour/
+# minute are user-overridable in the dashboard (Settings -> Task Schedule); the
+# cadence (dom/dow) is structural. Overrides persist to SCHEDULE_FILE and are
+# re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
-_SCHEDULES = [
-    ("analysis",      0, 18, "*", "*"),   # daily 18:00
-    ("discovery",     0,  7, "*", "*"),   # daily 07:00
-    ("opportunities", 0, 18, "*", "5"),   # Sat 18:00  (Python Sat=5)
-    ("rebalance",     0, 19, "*", "6"),   # Sun 19:00  (Python Sun=6)
-    ("retirement",    0,  8,  1,  "*"),   # 1st of month 08:00
-    ("strategist",    0, 17, "*", "4"),   # Fri 17:00  (Python Fri=4)
-]
+SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
+_SCHEDULE_ORDER = ["analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist"]
+_SCHEDULE_DEFAULTS = {
+    "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 18, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
+    "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
+    "opportunities": {"label": "Opportunity scan",              "hour": 18, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
+    "rebalance":     {"label": "Rebalance / drift refresh",     "hour": 19, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
+    "retirement":    {"label": "Retirement projection",         "hour":  8, "minute": 0, "dom":  1,  "dow": "*", "cadence": "monthly · 1st"},
+    "strategist":    {"label": "Strategist review",             "hour": 17, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
+}
+def _read_schedule():
+    """Defaults with saved hour/minute overrides merged on top (validated 0-23 / 0-59)."""
+    over = {}
+    try:
+        with open(SCHEDULE_FILE, encoding="utf-8") as f:
+            over = json.load(f) or {}
+    except Exception:
+        over = {}
+    out = {}
+    for k, d in _SCHEDULE_DEFAULTS.items():
+        o = over.get(k) or {}
+        hh, mm = o.get("hour"), o.get("minute")
+        out[k] = {**d,
+                  "hour":   int(hh) if isinstance(hh, (int, float)) and 0 <= hh <= 23 else d["hour"],
+                  "minute": int(mm) if isinstance(mm, (int, float)) and 0 <= mm <= 59 else d["minute"]}
+    return out
 def _sched_match(field, val):
     return field == "*" or int(field) == val
 def _scheduler_loop():
@@ -396,14 +422,63 @@ def _scheduler_loop():
         stamp = now.strftime("%Y%m%d%H%M")     # fire each due schedule once per minute
         if stamp != last:
             last = stamp
-            for kind, mi, ho, dom, dow in _SCHEDULES:
-                if (now.minute == mi and now.hour == ho
-                        and _sched_match(dom, now.day)
-                        and _sched_match(dow, now.weekday())):
+            for kind, s in _read_schedule().items():   # re-read each minute so edits apply live
+                if (now.minute == s["minute"] and now.hour == s["hour"]
+                        and _sched_match(s["dom"], now.day)
+                        and _sched_match(s["dow"], now.weekday())):
                     _enqueue(kind, source="scheduler")
         time.sleep(20)
 if INTERNAL_SCHEDULER:
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
+
+
+@app.get("/api/schedule")
+def get_schedule():
+    """The built-in job timetable: each automated job with its (overridable) 24h time,
+    cadence, and whether it's still on the default. Cheap: reads one small file."""
+    sched = _read_schedule()
+    jobs = []
+    for k in _SCHEDULE_ORDER:
+        s, dflt = sched[k], _SCHEDULE_DEFAULTS[k]
+        jobs.append({"kind": k, "label": s["label"], "cadence": s["cadence"],
+                     "hour": s["hour"], "minute": s["minute"],
+                     "default_hour": dflt["hour"], "default_minute": dflt["minute"],
+                     "is_default": (s["hour"] == dflt["hour"] and s["minute"] == dflt["minute"])})
+    return {"scheduler_enabled": INTERNAL_SCHEDULER, "tz": os.environ.get("TZ", ""), "jobs": jobs}
+
+
+@app.post("/api/schedule")
+async def post_schedule(req: Request):
+    """Override a job's fire time (24h). Body: {"<kind>": {"hour": H, "minute": M}, ...}
+    or {"reset": "<kind>"} to restore a job's default. Config only — no money action."""
+    body = await req.json()
+    try:
+        with open(SCHEDULE_FILE, encoding="utf-8") as f:
+            cur = json.load(f) or {}
+    except Exception:
+        cur = {}
+    if isinstance(body, dict) and body.get("reset") in _SCHEDULE_DEFAULTS:
+        cur.pop(body["reset"], None)
+    else:
+        for k, v in (body or {}).items():
+            if k not in _SCHEDULE_DEFAULTS or not isinstance(v, dict):
+                continue
+            entry = cur.get(k, {})
+            try:
+                if "hour" in v and 0 <= int(v["hour"]) <= 23:
+                    entry["hour"] = int(v["hour"])
+            except (TypeError, ValueError):
+                pass
+            try:
+                if "minute" in v and 0 <= int(v["minute"]) <= 59:
+                    entry["minute"] = int(v["minute"])
+            except (TypeError, ValueError):
+                pass
+            cur[k] = entry
+    os.makedirs(os.path.dirname(SCHEDULE_FILE) or ".", exist_ok=True)
+    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cur, f, indent=2)
+    return {"ok": True, "schedule": get_schedule()}
 
 
 # ---------------- mcpo / Monarch ----------------
@@ -2386,6 +2461,22 @@ def get_estate():
                     if g_ and g_ > 0 and (h.get("value") or 0) > 0:
                         taxable_positions.append({"ticker": h.get("ticker"), "account": name,
                                                   "value": h["value"], "gain": g_})
+        # Real assets (primary residence + other real estate): these get a §1014 step-up at
+        # death but hold no securities, so they're absent from by_account (and _account_tax_status
+        # returns "na"). Pull them from the full account list so the ledger reflects the home —
+        # usually the largest single step-up in the estate. Basis (residence purchase + improvements)
+        # is user-supplied via estate_home_basis; applied to the largest RE account (the residence).
+        home_basis = cfg.get("estate_home_basis")
+        re_accts = [a for a in d.get("accounts", [])
+                    if (a.get("type") or "").strip().lower() in ("real estate", "real_estate", "realestate")
+                    and a.get("is_asset") is not False and (a.get("balance") or 0) > 0]
+        re_accts.sort(key=lambda a: -(a.get("balance") or 0))
+        for i, a in enumerate(re_accts):
+            val = a.get("balance") or 0.0
+            basis = (float(home_basis) if (i == 0 and home_basis not in (None, "", 0)) else None)
+            gain = (max(0.0, val - basis) if basis is not None else None)
+            accounts.append({"name": a.get("name"), "tax_status": "real_estate", "value": val,
+                             "gain_total": gain, "basis_total": basis})
         snap = estate.snapshot(d.get("net_worth"), married, growth)
         over = (snap.get("taxable_estate_if_today") or 0) > 0
         taxable_positions.sort(key=lambda x: -x["gain"])
@@ -2398,6 +2489,7 @@ def get_estate():
             gvh.append(a_)
         return {"generated_at": int(time.time()),
                 "snapshot": snap,
+                "home_basis": home_basis,
                 "stepup": estate.stepup_ledger(accounts),
                 "gift_vs_hold": {"positions": gvh,
                                  "note": "Top embedded-gain TAXABLE positions, modeled gift-now vs "
@@ -2624,8 +2716,9 @@ def get_analysis():
 
 @app.post("/api/analysis")
 async def post_analysis(req: Request, x_analysis_token: str = Header(default="")):
-    """n8n writes briefs here. Body: {"ticker": "...", "grounded": {...}, "llm": {...}} (one)
-    or {"briefs": {ticker: {...}}} (bulk). Merges into the stored file."""
+    """External-writer endpoint for briefs (kept for API compatibility). Body:
+    {"ticker": "...", "grounded": {...}, "llm": {...}} (one) or {"briefs": {ticker: {...}}}
+    (bulk). Merges into the stored file. The internal analysis job writes briefs directly."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await req.json()
@@ -3364,7 +3457,8 @@ def _do_analysis(limit):
 
 @app.post("/api/run-analysis")
 def run_analysis(x_analysis_token: str = Header(default=""), limit: int = 0):
-    """Trigger the daily research run (background). n8n cron POSTs here once a day."""
+    """Trigger the daily research run. The internal scheduler enqueues this daily; you can
+    also POST here on demand. Both funnel through the serial job queue (deduped)."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not FINNHUB:
@@ -5048,7 +5142,7 @@ def get_opportunities():
 
 @app.post("/api/run-opportunities")
 def run_opportunities(x_analysis_token: str = Header(default="")):
-    """Recompute + cache the opportunity scan (for the weekly n8n schedule). Token-guarded."""
+    """Recompute + cache the opportunity scan (the weekly scheduled scan). Token-guarded."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if _opp_lock.locked():
@@ -6032,12 +6126,12 @@ def get_discovery():
             return json.load(f)
     except Exception:
         return {"generated_at": None, "discovered": [], "alerts": [],
-                "note": "No discovery run yet — POST /api/run-discovery (or the scheduled n8n job)."}
+                "note": "No discovery run yet — POST /api/run-discovery (or wait for the scheduled job)."}
 
 
 @app.post("/api/run-discovery")
 def run_discovery(x_analysis_token: str = Header(default="")):
-    """Trigger the background news discovery + holdings-alerts run (n8n schedules this)."""
+    """Trigger the background news discovery + holdings-alerts run (the internal scheduler runs this daily)."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("discovery", source="api")   # serial queue + dedup (Increment B)

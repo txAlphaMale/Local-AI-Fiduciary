@@ -17,17 +17,18 @@ UI (Fiduciary + Strategist personas, read-only tools) lives right in the dashboa
 
 ## What's in the stack
 
-Three containers via Docker Compose, plus Ollama on the host:
+Two containers via Docker Compose, plus Ollama on the host:
 
 | Service           | Role |
 |-------------------|------|
-| **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, and the built-in chat. |
+| **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, the built-in chat, **and the built-in job scheduler** (the recurring agent runs — see *Scheduling* below). |
 | **mcpo**          | Bridges MCP servers (Monarch, Tavily, time) to the app over HTTP. |
-| **n8n** *(optional)* | Schedules the recurring agent runs. Treated as an **external dependency** — bring your own n8n, or enable the bundled one with `--profile bundled-n8n`. See *Scheduling* below. |
 | **Ollama** *(host)* | Runs the local LLM that does the analysis & Strategist reasoning. Not a container here — see prerequisites. |
 
-So a plain `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`);
-Ollama and n8n are dependencies you provide (n8n only if you want scheduling).
+So `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`); Ollama
+is the only host dependency. Scheduling is internal — there is no separate scheduler
+container to run. *(Earlier versions used an external **n8n** container for cron; that has
+been retired in favor of a built-in scheduler. See `MIGRATION.md` if you're upgrading.)*
 
 The **dashboard** (`http://localhost:8097`) has tabs for Positions, Research (B/S/H
 briefs), Insights (drift), Plan (FIRE + Monte Carlo + Tax/ACA/Social-Security editor),
@@ -87,12 +88,10 @@ docker compose up -d --build
 ```
 
 > Running this **alongside another Compose stack on the same host?** The containers are
-> named `fiduciary-*` and mcpo isn't published, so nothing collides — except the two
-> published host ports. If `8097` or `5678` are taken, set `DASH_PORT` / `FID_N8N_PORT`
-> in `.env` (e.g. `FID_N8N_PORT=5679`). Note: use `FID_N8N_PORT`, not `N8N_PORT` — the
-> latter is read by n8n as its internal port and collides with its task-runner broker on 5679.
+> named `fiduciary-*` and mcpo isn't published, so nothing collides — except the one
+> published host port. If `8097` is taken, set `DASH_PORT` in `.env`.
 
-Then run **`python setup.py`** to import the n8n workflows and print any remaining steps.
+Then run **`python setup.py`** to validate your config and print any remaining steps.
 
 ---
 
@@ -133,34 +132,34 @@ wins and is shown read-only in the UI. Note: the **Monarch / Tavily / mcpo** key
 DRIP/fractional flags live under **AUDITS → ACCOUNTS**, and the plan/policy/scanner assumptions in
 their own panels.
 
-## Scheduling (n8n) — optional, bring-your-own
+## Scheduling — built in
 
-The recurring agents (daily research, weekly Strategist, drift, discovery, etc.) are
-driven by n8n workflows in `n8n/`. n8n is treated like Ollama: **an external dependency
-you may already run.** Pick one:
+The recurring agents run on a **scheduler inside `portfolio-api`** — no extra container,
+no HTTP round-trip. Each scheduled job is enqueued into the same **serial job queue** that
+all heavy work funnels through, so GPU work never overlaps and you get one place to see
+what's queued/running (`GET /api/jobs`, and the badge in the dashboard header).
 
-- **You already run n8n** *(recommended if so)* — leave the bundled one off
-  (`docker compose up -d` doesn't start it) and **import `n8n/*.n8n.json` into your
-  existing n8n**. The workflows call the dashboard at `http://host.docker.internal:8097`,
-  so any n8n on the same host can drive this stack.
-- **You don't run n8n** — start the bundled one:
-  ```bash
-  docker compose --profile bundled-n8n up -d
-  ```
-  It publishes on `FID_N8N_PORT` (default 5678).
-- **You don't want scheduling at all** — skip n8n entirely; every agent can still be
-  run on demand from the dashboard / REST API.
+Default schedule (container-local time — set `TZ` in `.env`, defaults to `America/Chicago`):
 
-Two things the workflows need regardless of which n8n runs them: the dashboard must be
-reachable at the URL in the HTTP nodes (default `http://host.docker.internal:8097` —
-edit the nodes if you changed `DASH_PORT` or run n8n off-host), and the `X-Analysis-Token`
-header must match this stack's `ANALYSIS_TOKEN`.
+| Job | Default time |
+|-----|-------------|
+| Daily analysis (B/S/H briefs) | every day 18:00 |
+| News discovery & alerts | every day 07:00 |
+| Opportunity scan | Saturday 18:00 |
+| Rebalance / drift refresh | Sunday 19:00 |
+| Retirement projection | 1st of month 08:00 |
+| Strategist review | Friday 17:00 |
+
+Change any of these in the dashboard under **⚙ Settings → Task Schedule** (24-hour times,
+each with an overridable default). The whole scheduler can be turned off with
+`INTERNAL_SCHEDULER=0` in `.env`. Every job can also be triggered on demand from the
+dashboard / REST API at any time — the queue dedupes a duplicate that's already queued or
+running rather than double-firing.
 
 ## Automated setup
 
-`setup.py` will validate your `.env` and templates, import the `n8n/portfolio-*.n8n.json`
-workflows via n8n's REST API, and pull the required Ollama model. See `INSTALL.md` for
-the full walkthrough.
+`setup.py` will validate your `.env` and templates and pull the required Ollama model.
+See `INSTALL.md` for the full walkthrough.
 
 ---
 

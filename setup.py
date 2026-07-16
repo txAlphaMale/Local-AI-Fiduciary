@@ -3,8 +3,9 @@
 setup.py — one-shot setup helper for the Fiduciary stack.
 
 Does what can be safely automated and prints a checklist for the rest. Safe to re-run.
-The n8n API calls are BEST-EFFORT (the API shape varies by version); if one fails, the
-script prints the manual step, which always works.
+
+Scheduling is built into portfolio-api (no external scheduler to configure) — see the
+"Task Schedule" note printed at the end and README.md.
 
 Usage:
     python3 setup.py                 # run all steps
@@ -12,11 +13,8 @@ Usage:
 
 Optional environment (steps skip gracefully if unset):
     OLLAMA_MODEL   default qwen3.6:27b
-    N8N_URL        default http://localhost:5678   (n8n is OPTIONAL — your own or the
-                   bundled --profile bundled-n8n; skip entirely if you don't schedule)
-    N8N_API_KEY    n8n -> Settings -> n8n API -> create key   (to auto-import workflows)
 """
-import os, sys, json, glob, shutil, subprocess, urllib.request, urllib.error
+import os, sys, shutil, subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -25,24 +23,6 @@ OK, WARN, ERR, DOT = "[ok]", "[!]", "[x]", " - "
 
 def log(sym, msg): print(f"  {sym} {msg}")
 def head(msg): print(f"\n=== {msg} ===")
-
-
-def http(method, url, headers=None, data=None, timeout=60):
-    body = json.dumps(data).encode() if isinstance(data, (dict, list)) else data
-    req = urllib.request.Request(url, data=body, method=method, headers=dict(headers or {}))
-    if isinstance(data, (dict, list)):
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode()
-            try:
-                return r.status, json.loads(raw)
-            except ValueError:
-                return r.status, raw
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()[:200]
-    except Exception as e:
-        return None, str(e)
 
 
 def step_env():
@@ -83,36 +63,15 @@ def step_model(skip=False):
             log(ERR, f"ollama pull {m} failed: {e}")
 
 
-def step_n8n():
-    head("3. n8n workflows")
-    url = os.environ.get("N8N_URL", "http://localhost:5678").rstrip("/")
-    key = os.environ.get("N8N_API_KEY")
-    files = sorted(glob.glob(str(ROOT / "n8n" / "portfolio-*.n8n.json")))
-    if not files:
-        log(WARN, "no n8n/portfolio-*.n8n.json workflows found")
-        return
-    if not key:
-        log(WARN, "N8N_API_KEY not set -> import these manually (n8n -> Workflows -> Import from File):")
-        for f in files:
-            log(DOT, os.path.basename(f))
-        log(DOT, "Then EITHER leave ANALYSIS_TOKEN blank (endpoints run unguarded) OR create a Header")
-        log(DOT, "Auth credential 'Portfolio Analysis Token' (header X-Analysis-Token) and bind it.")
-        return
-    hdr = {"X-N8N-API-KEY": key, "Accept": "application/json"}
-    for f in files:
-        try:
-            wf = json.load(open(f, encoding="utf-8"))
-        except Exception as e:
-            log(ERR, f"{os.path.basename(f)}: unreadable ({e})")
-            continue
-        payload = {k: wf[k] for k in ("name", "nodes", "connections", "settings") if k in wf}
-        payload.setdefault("settings", {})
-        status, resp = http("POST", f"{url}/api/v1/workflows", hdr, payload)
-        if status in (200, 201):
-            log(OK, f"imported {os.path.basename(f)}")
-        else:
-            log(ERR, f"{os.path.basename(f)}: import failed ({status}) {str(resp)[:100]}")
-    log(WARN, "After import: set up the 'Portfolio Analysis Token' credential (or blank ANALYSIS_TOKEN), then Publish each workflow.")
+def step_schedule():
+    head("3. Scheduling (built in)")
+    log(OK, "The recurring agents run on a scheduler inside portfolio-api — nothing to install.")
+    log(DOT, "Defaults (container-local time; set TZ in .env, default America/Chicago):")
+    log(" ", "  analysis 18:00 daily · discovery 07:00 daily · opportunity scan Sat 18:00")
+    log(" ", "  rebalance Sun 19:00 · retirement 1st 08:00 · strategist Fri 17:00")
+    log(DOT, "Change the times in the dashboard: Settings (gear) -> Task Schedule.")
+    log(DOT, "Disable the scheduler entirely with INTERNAL_SCHEDULER=0 in .env.")
+    log(DOT, "Every job can also be run on demand from the dashboard / REST API.")
 
 
 def step_provider():
@@ -131,7 +90,7 @@ def main():
     step_env()
     step_provider()
     step_model(skip)
-    step_n8n()
+    step_schedule()
     print("\nNext:  docker compose up -d --build")
     print("Then:  open the dashboard at http://localhost:8097 (chat is the CHAT tab)")
 

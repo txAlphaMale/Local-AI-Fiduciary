@@ -1,13 +1,13 @@
 # Fiduciary — fresh install
 
-A self-contained stack: `portfolio-api` + `mcpo` (and an optional `n8n`). Ollama runs on
-the host. See `README.md` for what each piece does; this is the step-by-step.
+A self-contained two-container stack: `portfolio-api` + `mcpo`. Ollama runs on the host,
+and scheduling is built into `portfolio-api` (no separate scheduler container). See
+`README.md` for what each piece does; this is the step-by-step.
 
 ## Files that matter
 
-- `portfolio-api/` — the brain (dashboard, REST API, every agent, the data providers, the built-in chat)
+- `portfolio-api/` — the brain (dashboard, REST API, every agent, the data providers, the built-in chat, the job scheduler)
 - `mcpo/config.json.example` — time + tavily (+ monarch only if you use it)
-- `n8n/portfolio-*.n8n.json` — the scheduled agent workflows (optional; see step 6)
 - `docker-compose.yml`, `.env.example`, `holdings.csv.example`, `snaptrade_register.py`, `setup.py`
 - `docs/DEPENDENCIES.md`
 
@@ -38,23 +38,20 @@ ollama pull bge-m3          # embeddings for the knowledge RAG
 | `monarch` | Set `MONARCH_EMAIL`/`PASSWORD`/`MFA_SECRET`. |
 
 ```bash
-# 5. Start the stack (portfolio-api + mcpo; n8n is opt-in, step 6)
+# 5. Start the stack (portfolio-api + mcpo)
 docker compose up -d --build
 
-# 6. Automate what can be automated (validates config, pulls models, imports n8n workflows)
+# 6. Automate what can be automated (validates config, pulls models)
 python3 setup.py
 ```
 
-**6. Scheduling (optional).** The recurring agents run as n8n workflows in `n8n/`. n8n is
-an external dependency — use your own, or start the bundled one:
-
-```bash
-docker compose --profile bundled-n8n up -d          # only if you want the bundled n8n
-```
-
-Import `n8n/portfolio-*.n8n.json` into whichever n8n you run (or let `setup.py` do it with
-`N8N_API_KEY` set). The workflows call `http://host.docker.internal:8097`; set each one's
-`X-Analysis-Token` header to match this stack's `ANALYSIS_TOKEN`.
+**6. Scheduling — built in, nothing to install.** The recurring agents run on a scheduler
+inside `portfolio-api`, enqueued into the same serial job queue as all heavy work. Default
+times (Central by default — set `TZ` in `.env`): analysis daily 18:00, discovery daily
+07:00, opportunity scan Sat 18:00, rebalance Sun 19:00, retirement 1st 08:00, strategist
+Fri 17:00. Change them in the dashboard under **⚙ Settings → Task Schedule**, or disable the
+scheduler entirely with `INTERNAL_SCHEDULER=0`. Every job can also be run on demand from the
+dashboard / REST API.
 
 ## Verify
 

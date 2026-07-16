@@ -97,6 +97,14 @@ def stepup_ledger(accounts):
             treatment = "step-up at death (IRC §1014) — embedded gain is never income-taxed"
             if gain and gain > 0:
                 wiped += gain
+        elif status == "real_estate":
+            treatment = ("step-up at death (IRC §1014) wipes the home's embedded gain. Note: a "
+                         "primary residence already gets the §121 exclusion ($250k single / $500k MFJ) "
+                         "on a LIFETIME sale, so the step-up's EXTRA benefit is the gain ABOVE that "
+                         "exclusion. TX community property gets the FULL double step-up if titled as "
+                         "community property. Set the residence cost basis to quantify the wiped gain.")
+            if gain and gain > 0:
+                wiped += gain
         elif status == "deferred":
             treatment = ("NO step-up — IRD: heirs pay ORDINARY income tax on withdrawals; "
                          "most non-spouse heirs must drain within 10 years (SECURE Act)")
@@ -204,6 +212,10 @@ def titling_audit(accounts):
             passes = "TOD registration if set; otherwise PROBATE via the will"
             action = ("add Transfer-on-Death registration (free at most brokerages) to skip probate; "
                       "confirm community-property titling for the double step-up")
+        elif status == "real_estate":
+            passes = "Transfer-on-Death deed if recorded; otherwise PROBATE via the will"
+            action = ("Texas allows a Transfer-on-Death Deed — record one to pass the home outside "
+                      "probate; confirm community-property titling (not JTWROS) for the double step-up")
         else:
             passes = "check registration"
             action = "review with counsel"
