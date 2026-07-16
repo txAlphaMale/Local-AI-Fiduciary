@@ -67,6 +67,10 @@ services:
       - MONARCH_ROUTE=monarch
       - MCPO_API_KEY=${MCPO_API_KEY}
       - CACHE_TTL=600
+      # Internal cron scheduler (Increment B) replaces the 6 n8n workflows. TZ makes it
+      # fire in your local time like n8n did; set INTERNAL_SCHEDULER=0 to keep using n8n.
+      - TZ=${TZ:-America/Chicago}
+      - INTERNAL_SCHEDULER=${INTERNAL_SCHEDULER:-1}
       - ANALYSIS_FILE=/data/analysis.json
       - ANALYSIS_TOKEN=${ANALYSIS_TOKEN}
       - FINNHUB_API_KEY=${FINNHUB_API_KEY}

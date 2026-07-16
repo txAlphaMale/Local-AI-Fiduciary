@@ -90,6 +90,7 @@
     <div class="brand">PORTFOLIO TERMINAL<small id="meta">loading…</small></div>
     <div class="topstats" id="stats"></div>
     <div class="controls">
+      <span id="jobs" style="font-size:11px;" title="serial job queue"></span>
       <span id="updated"></span>
       <button id="refresh">↻ REFRESH</button>
       <button id="gear" title="Settings" aria-label="Settings" style="font-size:15px;line-height:1;">⚙</button>
@@ -422,6 +423,30 @@ function accountsPanel(d){
       `<span style="text-align:right">${usd(a.value)}</span>`;
     p.appendChild(row);
   });
+  // OTHER ASSETS & LIABILITIES: everything in the net-worth roll-up that ISN'T a
+  // holdings/brokerage account — cash, the home (Zillow-valued), and all debts.
+  // These move net worth but were invisible here (this panel only listed
+  // holdings accounts), so the home + liabilities never showed. Liabilities carry
+  // a POSITIVE balance in the feed (= debt owed) and are shown negative/red.
+  const held=new Set((d.by_account||[]).map(a=>a.account));
+  const other=(d.accounts||[]).filter(a=>!held.has(a.name) && Math.round(a.balance||0)!==0);
+  const assets=other.filter(a=>a.is_asset!==false);
+  const liabs =other.filter(a=>a.is_asset===false);
+  const subhead=t=>{ const s=el('div','sub'); s.style.cssText='margin:9px 0 2px;letter-spacing:1px;color:var(--mut);'; s.textContent=t; return s; };
+  const line=(nm,inst,val,neg)=>{
+    const row=el('div','row');
+    row.innerHTML=`<span class="nm">${nm}<br><span class="sub">${shortInst(inst||'—')}</span></span>`+
+      `<span class="${neg?'neg':''}" style="text-align:right">${neg?'-'+usd(Math.abs(val)):usd(val)}</span>`;
+    return row;
+  };
+  if(assets.length){
+    p.appendChild(subhead('OTHER ASSETS'));
+    assets.sort((a,b)=>(b.balance||0)-(a.balance||0)).forEach(a=>p.appendChild(line(a.name,a.institution,a.balance,false)));
+  }
+  if(liabs.length){
+    p.appendChild(subhead('LIABILITIES'));
+    liabs.sort((a,b)=>(b.balance||0)-(a.balance||0)).forEach(a=>p.appendChild(line(a.name,a.institution,a.balance,true)));
+  }
   return p;
 }
 
@@ -2666,6 +2691,20 @@ document.getElementById('refresh').onclick=()=>load(true);
 document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
 load(false);
 setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-poll every 5 min (server caches); bg=true preserves scroll
+
+// Serial job-queue badge (Increment B): poll /api/jobs and show running/queued depth
+// in the header. Independent of the 5-min load so it updates live during a run. Idle = blank.
+function pollJobs(){
+  fetch('/api/jobs').then(r=>r.json()).then(j=>{
+    const b=document.getElementById('jobs'); if(!b) return;
+    if(j && (j.running || j.queued)){
+      const run=j.running?('▶ '+j.running):'';
+      const q=j.queued?(' · '+j.queued+' queued'):'';
+      b.innerHTML=`<span style="color:var(--amber)">⚙ ${run}${q}</span>`;
+    } else { b.textContent=''; }
+  }).catch(()=>{});
+}
+pollJobs(); setInterval(pollJobs, 15000);
 </script>
 </body>
 </html>

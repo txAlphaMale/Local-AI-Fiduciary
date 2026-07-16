@@ -20,6 +20,7 @@ import random
 import re
 import datetime
 import threading
+import queue
 
 import requests
 from fastapi import FastAPI, Request, Header
@@ -287,6 +288,122 @@ class _gpu_slot:
 
 app = FastAPI(title="portfolio-terminal", version="0.1.0")
 _cache = {"ts": 0.0, "data": None}
+
+
+# ============================================================================
+#  Serial heavy-job queue + internal scheduler (Increment B)
+#  ------------------------------------------------------------------------
+#  ONE FIFO worker runs heavy jobs strictly one-at-a-time, so GPU work never
+#  overlaps (belt-and-suspenders with the _GPU lock) and there is a single
+#  visible registry (GET /api/jobs) of what's queued/running/done. A duplicate
+#  submission of a kind already queued/running is COALESCED (deduped), never
+#  dropped-silently or run twice. The internal cron scheduler (stdlib only)
+#  enqueues the same jobs on a timetable — replacing the 6 n8n cron workflows
+#  so the whole schedule->queue->run->visibility loop lives in one process (the
+#  n8n container can then be dropped). Set INTERNAL_SCHEDULER=0 to keep n8n.
+# ============================================================================
+_JOBS = {}                       # job_id -> record
+_JOBS_ORDER = []                 # insertion order (registry ring)
+_JOBS_LOCK = threading.Lock()
+_JOB_Q = queue.Queue()
+_JOB_SEQ = 0
+JOBS_MAX = int(os.environ.get("JOBS_MAX", "50"))
+
+# kind -> (label, is_gpu, callable). Lambdas resolve _do_* / _rebalance /
+# _retirement at CALL time (defined later in the file) so forward refs are fine.
+_JOB_KINDS = {
+    "analysis":      ("Daily analysis (briefs)",   True,  lambda: _do_analysis(0)),
+    "discovery":     ("News discovery & alerts",   True,  lambda: _do_discovery()),
+    "opportunities": ("Opportunity scan",          True,  lambda: _do_opportunities()),
+    "strategist":    ("Strategist review",         True,  lambda: _do_strategist()),
+    "rebalance":     ("Rebalance / drift refresh", False, lambda: _rebalance()),
+    "retirement":    ("Retirement projection",     False, lambda: _retirement()),
+}
+
+def _enqueue(kind, source="manual"):
+    """Add a job unless one of the same kind is already queued/running (dedup).
+    Returns (job_id, created:bool)."""
+    spec = _JOB_KINDS.get(kind)
+    if not spec:
+        return None, False
+    global _JOB_SEQ
+    with _JOBS_LOCK:
+        for j in _JOBS.values():
+            if j["kind"] == kind and j["status"] in ("queued", "running"):
+                return j["id"], False          # coalesce a duplicate
+        _JOB_SEQ += 1
+        jid = f"{kind[:4]}-{_JOB_SEQ}"
+        _JOBS[jid] = {"id": jid, "kind": kind, "label": spec[0], "gpu": spec[1],
+                      "status": "queued", "source": source,
+                      "submitted": int(time.time()), "started": None,
+                      "finished": None, "error": None}
+        _JOBS_ORDER.append(jid)
+        while len(_JOBS_ORDER) > JOBS_MAX:      # trim the oldest record
+            _JOBS.pop(_JOBS_ORDER.pop(0), None)
+    _JOB_Q.put(jid)
+    return jid, True
+
+def _job_worker():
+    while True:
+        jid = _JOB_Q.get()
+        with _JOBS_LOCK:
+            rec = _JOBS.get(jid)
+        if not rec:
+            continue
+        rec["status"] = "running"; rec["started"] = int(time.time())
+        fn = _JOB_KINDS[rec["kind"]][2]
+        try:
+            fn()
+            rec["status"] = "done"
+        except Exception as e:
+            rec["status"] = "error"; rec["error"] = str(e)[:300]
+        finally:
+            rec["finished"] = int(time.time())
+
+threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
+
+
+@app.get("/api/jobs")
+def get_jobs():
+    """Serial job-queue registry (Increment B): queued/running/done in order + current
+    depth. A UI badge can poll this; pairs with /api/gpu. Cheap: in-memory only."""
+    with _JOBS_LOCK:
+        jobs = [dict(_JOBS[j]) for j in _JOBS_ORDER if j in _JOBS]
+    depth = sum(1 for j in jobs if j["status"] == "queued")
+    running = next((j["kind"] for j in jobs if j["status"] == "running"), None)
+    return {"queued": depth, "running": running, "scheduler": INTERNAL_SCHEDULER,
+            "jobs": list(reversed(jobs))}      # newest first
+
+
+# ---- internal cron scheduler (stdlib) — replaces the 6 n8n workflows -------
+# Container-local time: set TZ=America/Chicago on portfolio-api (compose) so these
+# fire in Central like the old n8n crons did. dow uses Python weekday(): Mon=0..Sun=6.
+INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
+_SCHEDULES = [
+    ("analysis",      0, 18, "*", "*"),   # daily 18:00
+    ("discovery",     0,  7, "*", "*"),   # daily 07:00
+    ("opportunities", 0, 18, "*", "5"),   # Sat 18:00  (Python Sat=5)
+    ("rebalance",     0, 19, "*", "6"),   # Sun 19:00  (Python Sun=6)
+    ("retirement",    0,  8,  1,  "*"),   # 1st of month 08:00
+    ("strategist",    0, 17, "*", "4"),   # Fri 17:00  (Python Fri=4)
+]
+def _sched_match(field, val):
+    return field == "*" or int(field) == val
+def _scheduler_loop():
+    last = None
+    while True:
+        now = datetime.datetime.now()
+        stamp = now.strftime("%Y%m%d%H%M")     # fire each due schedule once per minute
+        if stamp != last:
+            last = stamp
+            for kind, mi, ho, dom, dow in _SCHEDULES:
+                if (now.minute == mi and now.hour == ho
+                        and _sched_match(dom, now.day)
+                        and _sched_match(dow, now.weekday())):
+                    _enqueue(kind, source="scheduler")
+        time.sleep(20)
+if INTERNAL_SCHEDULER:
+    threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
 
 
 # ---------------- mcpo / Monarch ----------------
@@ -3252,10 +3369,9 @@ def run_analysis(x_analysis_token: str = Header(default=""), limit: int = 0):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not FINNHUB:
         return JSONResponse({"error": "FINNHUB_API_KEY not set"}, status_code=400)
-    if _run_lock.locked():
-        return {"ok": True, "status": "already running", **_run_state}
-    threading.Thread(target=_do_analysis, args=(limit,), daemon=True).start()
-    return {"ok": True, "status": "started"}
+    jid, created = _enqueue("analysis", source="api")   # serial queue + dedup (Increment B)
+    return {"ok": True, "status": "queued" if created else "already queued/running",
+            "job_id": jid, **_run_state}
 
 
 @app.get("/api/run-analysis/status")
@@ -5924,10 +6040,9 @@ def run_discovery(x_analysis_token: str = Header(default="")):
     """Trigger the background news discovery + holdings-alerts run (n8n schedules this)."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if _disc_lock.locked():
-        return {"ok": True, "status": "already running", **_disc_state}
-    threading.Thread(target=_do_discovery, daemon=True).start()
-    return {"ok": True, "status": "started"}
+    jid, created = _enqueue("discovery", source="api")   # serial queue + dedup (Increment B)
+    return {"ok": True, "status": "queued" if created else "already queued/running",
+            "job_id": jid, **_disc_state}
 
 
 @app.get("/api/run-discovery/status")
@@ -6194,10 +6309,9 @@ async def paper_recurring(req: Request):
 def paper_run():
     """Dashboard trigger for the Strategist's weekly review (local/unguarded; single-flighted by the
     same lock as /api/run-strategist, so it can't pile up concurrent runs)."""
-    if _strat_lock.locked():
-        return {"ok": True, "status": "already running", **_strat_state}
-    threading.Thread(target=_do_strategist, daemon=True).start()
-    return {"ok": True, "status": "started"}
+    jid, created = _enqueue("strategist", source="dashboard")   # serial queue + dedup (Increment B)
+    return {"ok": True, "status": "queued" if created else "already queued/running",
+            "job_id": jid, **_strat_state}
 
 
 # ---------------------------------------------------------------------------
@@ -6522,10 +6636,9 @@ def run_strategist(x_analysis_token: str = Header(default="")):
     immediately and runs in the background. Poll /api/run-strategist/status or /api/paper for results."""
     if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if _strat_lock.locked():
-        return {"ok": True, "status": "already running", **_strat_state}
-    threading.Thread(target=_do_strategist, daemon=True).start()
-    return {"ok": True, "status": "started"}
+    jid, created = _enqueue("strategist", source="api")   # serial queue + dedup (Increment B)
+    return {"ok": True, "status": "queued" if created else "already queued/running",
+            "job_id": jid, **_strat_state}
 
 
 @app.get("/api/run-strategist/status")
