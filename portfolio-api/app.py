@@ -45,6 +45,7 @@ import shortint    # G15 deferred half (P1) — FINRA consolidated short interes
 import cashdebt    # GAP-2 (P1) — emergency fund, idle-cash drag, payoff-vs-invest, refi, avalanche
 import performance # GAP-3 (P1) — TWR + policy-benchmark relative returns over standard periods
 import washsale    # GAP-4 (P1) — share-event ledger → wash-sale verdicts + replacement pairs for TLH
+import benefits    # GAP-5 (P1) — 401k match/headroom, HSA, Roth IRA, mega-backdoor capacity (2026-grounded)
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
@@ -333,6 +334,7 @@ _JOB_KINDS = {
     "rebalance":     ("Rebalance / drift refresh", False, lambda: _rebalance()),
     "retirement":    ("Retirement projection",     False, lambda: _retirement()),
     "backtest":      ("Decision backtest vs SPY",  False, lambda: _do_backtest()),
+    "narrative":     ("State-of-the-Wealth brief", True,  lambda: _do_narrative()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -411,6 +413,7 @@ _SCHEDULE_DEFAULTS = {
     "retirement":    {"label": "Retirement projection",         "hour":  8, "minute": 0, "dom":  1,  "dow": "*", "cadence": "monthly · 1st"},
     "strategist":    {"label": "Strategist review",             "hour": 17, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
     "backtest":      {"label": "Decision backtest vs SPY",      "hour": 20, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
+    "narrative":     {"label": "State-of-the-Wealth brief",     "hour":  7, "minute": 30, "dom": "*", "dow": "0", "cadence": "weekly · Monday"},
 }
 def _read_schedule():
     """Defaults with saved hour/minute overrides merged on top (validated 0-23 / 0-59)."""
@@ -3864,6 +3867,137 @@ async def post_retire_config(req: Request):
     return {"ok": True, "config": cfg}
 
 
+# ============ OPP-1: weekly "State of the Wealth" narrative brief ============
+# The family-office quarterly letter, weekly and personal: ONE plain-language note composing
+# every module's cached headline into "where you stand / what changed / one focus". Context
+# comes from caches only (cheap); the single LLM pass rides the serial GPU queue.
+NARRATIVE_FILE = os.environ.get("NARRATIVE_FILE", "/data/narrative.json")
+NARRATIVE_KEEP = int(os.environ.get("NARRATIVE_KEEP", "26"))
+
+
+def _narrative_context():
+    """Compact, numbers-only snapshot from the existing caches — no heavy recompute."""
+    ctx = {}
+    try:
+        d = _data()
+        ctx["net_worth"] = d.get("net_worth")
+        ctx["invested"] = d.get("invested_value")
+        hist = _read_value_history()
+        if hist:
+            wk = [h for h in hist if h.get("net_worth")][-8:]
+            if len(wk) >= 2:
+                ctx["net_worth_wk_change"] = round((wk[-1]["net_worth"] or 0) - (wk[0]["net_worth"] or 0), 2)
+            fr = next((h.get("funded_ratio") for h in reversed(hist) if h.get("funded_ratio")), None)
+            ctx["funded_ratio"] = fr
+    except Exception:
+        pass
+    for name, fn in (("risk_metrics", lambda: _risk_metrics()),):
+        try:
+            rm = fn() or {}
+            ctx["realized_vol_pct"] = rm.get("annualized_volatility_pct")
+            ctx["max_drawdown_pct"] = rm.get("max_drawdown_pct")
+            ctx["sharpe"] = rm.get("sharpe")
+        except Exception:
+            pass
+    try:
+        ex = _read_exp() or {}
+        ctx["concentration_flags"] = ((ex.get("concentration") or {}).get("flags") or [])[:3]
+        lt = ex.get("lookthrough_concentration") or {}
+        ctx["true_top_name_pct"] = lt.get("top_position_pct")
+    except Exception:
+        pass
+    try:
+        ctx["attention"] = [a.get("message") for a in (_alerts_digest() or [])[:6]]
+    except Exception:
+        pass
+    try:
+        ta = _tax_audit() or {}
+        tlh = ta.get("tax_loss_harvest") or {}
+        ctx["tlh_candidates"] = tlh.get("count")
+        ctx["tlh_total_loss"] = tlh.get("total_harvestable_loss")
+    except Exception:
+        pass
+    try:
+        with open(BACKTEST_FILE, encoding="utf-8") as f:
+            bt = json.load(f) or {}
+        h12 = ((bt.get("ratings") or {}).get("by_horizon") or {}).get("12m") or {}
+        ctx["backtest_12m_hit_pct"] = h12.get("hit_rate_pct")
+        ctx["paper_excess_vs_spy_pct"] = ((bt.get("paper") or {}).get("weighted_excess_pct"))
+    except Exception:
+        pass
+    try:
+        with open(PERF_FILE, encoding="utf-8") as f:
+            pf = json.load(f) or {}
+        ytd = (pf.get("periods") or {}).get("YTD") or {}
+        ctx["ytd_portfolio_pct"] = ytd.get("portfolio_pct")
+        ctx["ytd_excess_vs_policy_pct"] = ytd.get("excess_vs_policy_pct")
+    except Exception:
+        pass
+    try:
+        ctx["earnings_this_week"] = [f"{e['ticker']} {e.get('date')}" for e in _earnings_this_week()[:5]]
+    except Exception:
+        pass
+    return {k: v for k, v in ctx.items() if v not in (None, [], {})}
+
+
+def _do_narrative():
+    ctx = _narrative_context()
+    prompt = _sys(
+        "You are the household's fiduciary analyst writing the weekly 'State of the Wealth' note "
+        "to the family. Using ONLY the JSON numbers below, write PLAIN TEXT (no markdown headers, "
+        "no bullet spam): three short paragraphs — (1) where the household stands (net worth, "
+        "funded ratio, year-to-date vs its own policy); (2) what changed or needs attention this "
+        "week (concentration, alerts, tax-loss opportunities, earnings ahead); (3) end with a "
+        "single line beginning exactly 'THIS WEEK'S FOCUS:' naming the ONE most valuable action. "
+        "Cite only numbers present in the data; round sensibly; warm but direct; under 220 words. "
+        "Close with: 'Educational, not advice.'\n\nDATA:\n" + json.dumps(ctx))
+    if "qwen3" in ANALYSIS_MODEL.lower() and not ANALYSIS_THINK:
+        prompt += "\n/no_think"
+    body = {"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False,
+            "keep_alive": LLM_KEEP_ALIVE,
+            "options": {"temperature": 0.4, "num_ctx": ANALYSIS_NUM_CTX}}
+    try:
+        with _gpu_slot():
+            r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
+        letter = (r.json() or {}).get("response", "").strip() if r.status_code < 400 else ""
+    except Exception:
+        letter = ""
+    if not letter:
+        return
+    try:
+        with open(NARRATIVE_FILE, encoding="utf-8") as f:
+            store = json.load(f) or {}
+    except Exception:
+        store = {}
+    rows = (store.get("letters") or [])
+    rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx})
+    store = {"letters": rows[-NARRATIVE_KEEP:]}
+    os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
+    with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False)
+
+
+@app.get("/api/narrative")
+def get_narrative():
+    try:
+        with open(NARRATIVE_FILE, encoding="utf-8") as f:
+            store = json.load(f) or {}
+    except Exception:
+        store = {}
+    rows = store.get("letters") or []
+    return {"latest": rows[-1] if rows else None, "count": len(rows),
+            "note": ("Weekly plain-language composition of every module's cached headline — the "
+                     "cockpit as a story, with one recommended focus. Educational, not advice.")}
+
+
+@app.post("/api/run-narrative")
+def run_narrative_ep(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    jid, created = _enqueue("narrative", source="manual")
+    return {"status": "queued" if created else "duplicate", "job_id": jid}
+
+
 # ============ P1/G10: hedging analytics — covered calls & collars (options.py) ============
 # Delayed Yahoo chains + locally-computed BS deltas for the concentrated names. Network-heavy
 # only (no LLM/GPU) → risk-suite pattern: background build, cached, never blocks the UI.
@@ -4037,6 +4171,34 @@ def run_performance_ep(x_analysis_token: str = Header(default="")):
     return {"status": "started"}
 
 
+# ============ GAP-5: benefits & contribution-room optimizer (benefits.py) ============
+@app.get("/api/benefits")
+def get_benefits():
+    """401(k) match/headroom, HSA, Roth IRA eligibility, mega-backdoor capacity — from the
+    household register + retirement-config ages. Cheap; 2026 limits in the G13 registry."""
+    cfg = _read_insurance_cfg()
+    ret = _read_retire()
+    facts = {"salary": cfg.get("income_self"),
+             "age": ret.get("current_age"), "spouse_age": ret.get("spouse_age"),
+             "pretax_pct": cfg.get("k401_pretax_pct"),
+             "aftertax_pct": cfg.get("k401_aftertax_pct"),
+             "match_t1_pct": cfg.get("k401_match_t1_pct"),
+             "match_t1_rate": cfg.get("k401_match_t1_rate"),
+             "match_t2_pct": cfg.get("k401_match_t2_pct"),
+             "match_t2_rate": cfg.get("k401_match_t2_rate"),
+             "biweekly_total": cfg.get("k401_biweekly_total"),
+             "plan_aftertax": cfg.get("plan_aftertax"),
+             "inservice_rollover": cfg.get("inservice_rollover"),
+             "hsa_coverage": cfg.get("hsa_coverage"),
+             "hsa_contribution": cfg.get("hsa_contribution"),
+             "hsa_invested": cfg.get("hsa_invested"),
+             "magi": (cfg.get("income_self") or 0) + (cfg.get("income_spouse") or 0)}
+    res = benefits.run(facts)
+    res["facts"] = facts
+    res["generated_at"] = int(time.time())
+    return res
+
+
 # ============ GAP-2: cash / liquidity / debt desk (cashdebt.py) ============
 TBILL_CACHE_FILE = os.environ.get("TBILL_CACHE_FILE", "/data/tbill_yield.json")
 TBILL_SERIES = os.environ.get("TBILL_SERIES", "DTB3")
@@ -4147,7 +4309,14 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      # GAP-2 cash/debt facts (same household register, edited in PLAN→CASH·DEBT):
                      "mortgage_rate_pct": None, "mortgage_payment_monthly": None,
                      "deposit_yield_pct": None, "refi_rate_pct": None,
-                     "refi_closing_costs": None, "debt_rates": {}}
+                     "refi_closing_costs": None, "debt_rates": {},
+                     # GAP-5 benefits facts (edited in PLAN→BENEFITS):
+                     "k401_pretax_pct": None, "k401_aftertax_pct": 0.0,
+                     "k401_match_t1_pct": None, "k401_match_t1_rate": None,
+                     "k401_match_t2_pct": None, "k401_match_t2_rate": None,
+                     "k401_biweekly_total": None,
+                     "plan_aftertax": False, "inservice_rollover": "unknown",
+                     "hsa_coverage": "family", "hsa_contribution": None, "hsa_invested": True}
 _INS_POLICY_KEYS = ("kind", "owner", "name", "coverage", "premium_annual", "term_expires", "notes")
 
 
@@ -4175,7 +4344,9 @@ async def post_insurance_config(req: Request):
     cfg = _read_insurance_cfg()
     for k in ("income_self", "income_spouse", "children", "home_value_override",
               "mortgage_rate_pct", "mortgage_payment_monthly", "deposit_yield_pct",
-              "refi_rate_pct", "refi_closing_costs"):
+              "refi_rate_pct", "refi_closing_costs",
+              "k401_pretax_pct", "k401_aftertax_pct", "k401_match_t1_pct", "k401_match_t1_rate",
+              "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total", "hsa_contribution"):
         if k in body:
             try:
                 cfg[k] = None if body[k] in (None, "") else float(body[k])
@@ -4192,6 +4363,13 @@ async def post_insurance_config(req: Request):
     if "home_address" in body:
         cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
             if body["home_address"] not in (None, "") else None
+    if body.get("inservice_rollover") in ("yes", "no", "unknown"):
+        cfg["inservice_rollover"] = body["inservice_rollover"]
+    if body.get("hsa_coverage") in ("self", "family"):
+        cfg["hsa_coverage"] = body["hsa_coverage"]
+    for bk in ("plan_aftertax", "hsa_invested"):
+        if bk in body:
+            cfg[bk] = bool(body[bk])
     if isinstance(body.get("policies"), list):
         cfg["policies"] = [{k: p.get(k) for k in _INS_POLICY_KEYS}
                            for p in body["policies"] if isinstance(p, dict) and p.get("kind")][:50]

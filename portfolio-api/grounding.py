@@ -27,13 +27,15 @@ import aca
 import ss
 import estate
 import roth
+import benefits
 
 # Month precision is deliberate: the modules were authored/verified against the
 # cited primary sources in July 2026 (see each module's docstring). If you
 # re-verify a figure, bump the date here.
 VERIFIED = {"tax": "2026-07", "aca": "2026-07", "ss": "2026-07",
             "estate": "2026-07-10",   # verified vs Rev. Proc. 2025-32 coverage at build time
-            "roth": "2026-07-10"}     # IRMAA verified vs CMS 2026 Part B fact sheet (G8)
+            "roth": "2026-07-10",     # IRMAA verified vs CMS 2026 Part B fact sheet (G8)
+            "benefits": "2026-07-17"} # 401k/415c/HSA/IRA limits vs IRS Notice 2025-67 (GAP-5)
 
 # kind: "indexed" re-publishes every year (MUST re-verify annually);
 #       "statutory" is fixed in law until Congress acts (verify the law still stands);
@@ -113,6 +115,11 @@ PARAM_SPECS = [
      "year": lambda: roth.IRMAA_YEAR, "kind": "indexed", "source": lambda: roth.IRMAA_SOURCE,
      "source_url": "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
      "module": "roth"},
+    {"key": "benefits.contribution_limits", "label": "401(k)/415(c)/HSA/IRA contribution limits",
+     "value": lambda: benefits.LIMITS_2026, "year": lambda: benefits.LIMITS_YEAR, "kind": "indexed",
+     "source": lambda: "IRS Notice 2025-67 + Rev. Proc. (HSA) — verified 2026-07-17",
+     "source_url": benefits.SOURCE_URL,
+     "module": "benefits"},
 ]
 
 
