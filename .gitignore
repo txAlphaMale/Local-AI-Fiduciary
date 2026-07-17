@@ -49,6 +49,9 @@ knowledge_index.json
 # ---- Knowledge RAG folder — your own reference docs (may be personal, e.g. your IPS) ----
 knowledge/*
 !knowledge/README.md
+# committed, NON-personal reference docs (estate/QSBS/parameter snapshots) ship with the repo:
+!knowledge/reference/
+!knowledge/reference/*.md
 chat.db
 
 # ---- Local backups / scratch ----

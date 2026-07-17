@@ -89,6 +89,11 @@ services:
       # Knowledge RAG (N12): drop .md/.txt/.pdf into ./knowledge on the host → indexed via bge-m3.
       - KNOWLEDGE_DIR=/knowledge
       - EMBED_MODEL=${EMBED_MODEL:-bge-m3}
+      # P1 free-data adoptions: FINRA short interest + RentCast home AVM (both free-tier
+      # registrations; also settable in the dashboard's masked secrets editor).
+      - FINRA_CLIENT_ID=${FINRA_CLIENT_ID:-}
+      - FINRA_CLIENT_SECRET=${FINRA_CLIENT_SECRET:-}
+      - RENTCAST_API_KEY=${RENTCAST_API_KEY:-}
     volumes:
       - portfolio-data:/data
       - ./knowledge:/knowledge:ro   # user-populated Knowledge folder (host-editable; container reads)

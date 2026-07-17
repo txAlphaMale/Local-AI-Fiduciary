@@ -38,6 +38,13 @@ import sizing      # position sizing & concentration action program (G7) — CVa
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
+import backtest as backtest_mod  # decision backtest (P0-2) — fixed-horizon call scoring vs SPY
+import insurance   # protection desk (P0-3) — life/DI/umbrella/P&C/LTC gap analysis vs policy register
+import options as options_mod  # G10 (P1) — Yahoo delayed chains + local BS greeks: covered calls & collars
+import shortint    # G15 deferred half (P1) — FINRA consolidated short interest (free API-console creds)
+import cashdebt    # GAP-2 (P1) — emergency fund, idle-cash drag, payoff-vs-invest, refi, avalanche
+import performance # GAP-3 (P1) — TWR + policy-benchmark relative returns over standard periods
+import washsale    # GAP-4 (P1) — share-event ledger → wash-sale verdicts + replacement pairs for TLH
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
@@ -150,6 +157,8 @@ SETTING_SPECS = {
     "loc_min_yield": {"env": "LOC_MIN_YIELD", "default": 3.0,     "cast": float, "label": "Tax-inefficient yield at/above (%)", "group": "Tax audit"},
     "strategist_search_budget": {"env": "STRATEGIST_SEARCH_BUDGET", "default": 20, "cast": int, "label": "Strategist web-search calls per autonomous run", "group": "Strategist"},
     "tips_fallback_pct": {"env": "TIPS_FALLBACK_PCT", "default": 2.0, "cast": float, "label": "TIPS real yield fallback (%) when FRED is unreachable", "group": "Funded ratio"},
+    "tbill_fallback_pct": {"env": "TBILL_FALLBACK_PCT", "default": 4.0, "cast": float, "label": "3-mo T-bill fallback (%) when FRED is unreachable (cash/debt desk)", "group": "Cash & debt"},
+    "ef_target_months": {"env": "EF_TARGET_MONTHS", "default": 6.0, "cast": float, "label": "Emergency fund target (months of essential spend)", "group": "Cash & debt"},
     "rb_lower_band":  {"env": "RB_LOWER_BAND",  "default": 70,  "cast": float, "label": "Risk-based guardrails: cut spending when success < (%)", "group": "Monte Carlo"},
     "rb_upper_band":  {"env": "RB_UPPER_BAND",  "default": 99,  "cast": float, "label": "Risk-based guardrails: raise spending when success > (%)", "group": "Monte Carlo"},
     "rb_adjust_pct":  {"env": "RB_ADJUST_PCT",  "default": 10,  "cast": float, "label": "Risk-based guardrails: spending adjustment step (%)", "group": "Monte Carlo"},
@@ -323,6 +332,7 @@ _JOB_KINDS = {
     "strategist":    ("Strategist review",         True,  lambda: _do_strategist()),
     "rebalance":     ("Rebalance / drift refresh", False, lambda: _rebalance()),
     "retirement":    ("Retirement projection",     False, lambda: _retirement()),
+    "backtest":      ("Decision backtest vs SPY",  False, lambda: _do_backtest()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -371,13 +381,17 @@ threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
 @app.get("/api/jobs")
 def get_jobs():
     """Serial job-queue registry (Increment B): queued/running/done in order + current
-    depth. A UI badge can poll this; pairs with /api/gpu. Cheap: in-memory only."""
+    depth. A UI badge can poll this; pairs with /api/gpu.
+    `strategist_busy` reflects _strat_lock (chat / weekly strategist / advisory runs) — those share
+    a lock but DON'T go through this FIFO, so without this flag a live chat generation (or a weekly/
+    advisory run) could hold the GPU with the badge showing blank. Cheap: in-memory only."""
     with _JOBS_LOCK:
         jobs = [dict(_JOBS[j]) for j in _JOBS_ORDER if j in _JOBS]
     depth = sum(1 for j in jobs if j["status"] == "queued")
     running = next((j["kind"] for j in jobs if j["status"] == "running"), None)
     return {"queued": depth, "running": running, "scheduler": INTERNAL_SCHEDULER,
-            "jobs": list(reversed(jobs))}      # newest first
+            "jobs": list(reversed(jobs)),      # newest first
+            "strategist_busy": _strat_lock.locked()}
 
 
 # ---- internal cron scheduler (stdlib) — the built-in job timetable ----------
@@ -396,6 +410,7 @@ _SCHEDULE_DEFAULTS = {
     "rebalance":     {"label": "Rebalance / drift refresh",     "hour": 19, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
     "retirement":    {"label": "Retirement projection",         "hour":  8, "minute": 0, "dom":  1,  "dow": "*", "cadence": "monthly · 1st"},
     "strategist":    {"label": "Strategist review",             "hour": 17, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
+    "backtest":      {"label": "Decision backtest vs SPY",      "hour": 20, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
 }
 def _read_schedule():
     """Defaults with saved hour/minute overrides merged on top (validated 0-23 / 0-59)."""
@@ -835,6 +850,7 @@ def build():
     else:
         d = _build_monarch()
     _snapshot_value(d)          # record today's value for the accruing risk-metrics history
+    _snapshot_shares(d)         # record today's per-ticker shares for the wash-sale ledger (GAP-4)
     return d
 
 
@@ -870,6 +886,36 @@ def _read_value_history():
             return json.load(f) or []
     except Exception:
         return []
+
+
+SHARELOG_FILE = os.environ.get("SHARELOG_FILE", "/data/share_log.json")
+
+
+def _read_sharelog():
+    try:
+        with open(SHARELOG_FILE, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _snapshot_shares(d):
+    """Daily per-ticker total shares (ALL accounts — §1091 spans IRAs) for the wash-sale
+    ledger; buys are inferred from day-over-day increases (catches DRIP). Best-effort."""
+    try:
+        q = {}
+        for c in d.get("consolidated") or []:
+            t = c.get("ticker")
+            if t and (c.get("type") or "") != "Cash" and (c.get("quantity") or 0) > 0:
+                q[t] = q.get(t, 0.0) + float(c["quantity"])
+        if not q:
+            return
+        log = washsale.append_snapshot(_read_sharelog(), q)
+        os.makedirs(os.path.dirname(SHARELOG_FILE) or ".", exist_ok=True)
+        with open(SHARELOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(log, f)
+    except Exception:
+        pass
 
 
 def _snapshot_value(d):
@@ -2140,7 +2186,14 @@ def get_realestate():
     except Exception:
         last = None
     holdings, total = _realestate_holdings()
+    avm = None
+    try:
+        addr = _read_insurance_cfg().get("home_address")
+        avm = _rentcast_avm(addr) if addr else None
+    except Exception:
+        avm = None
     return {"last": last, "existing_holdings": holdings, "existing_total": total,
+            "home_avm": avm,
             "defaults": _re_defaults(),
             "note": "Underwrite a rental deal (income → financing → tax → after-tax IRR). Existing "
                     "real-estate accounts are surfaced here since they're excluded from the "
@@ -2221,11 +2274,58 @@ async def post_business(req: Request):
 # staleness) into one prioritized list. Reads cached outputs — cheap, read-only, no new data.
 
 
+EARNINGS_CAL_FILE = os.environ.get("EARNINGS_CAL_FILE", "/data/earnings_cal.json")
+EARNINGS_CAL_TTL = int(os.environ.get("EARNINGS_CAL_TTL", "86400"))
+
+
+def _earnings_this_week():
+    """Held tickers reporting in the next 7 days (Finnhub free earnings calendar, cached daily).
+    [] when unkeyed/unavailable — the digest simply omits the section."""
+    if not FINNHUB:
+        return []
+    try:
+        with open(EARNINGS_CAL_FILE, encoding="utf-8") as f:
+            cache = json.load(f) or {}
+        if time.time() - (cache.get("ts") or 0) < EARNINGS_CAL_TTL:
+            return cache.get("rows") or []
+    except Exception:
+        pass
+    rows = []
+    try:
+        held = {c.get("ticker") for c in (_data().get("consolidated") or []) if c.get("ticker")}
+        d0 = datetime.date.today()
+        r = requests.get("https://finnhub.io/api/v1/calendar/earnings",
+                         params={"from": d0.isoformat(),
+                                 "to": (d0 + datetime.timedelta(days=7)).isoformat(),
+                                 "token": FINNHUB}, timeout=25)
+        if r.status_code < 400:
+            for e in ((r.json() or {}).get("earningsCalendar") or []):
+                sym = (e.get("symbol") or "").upper()
+                if sym in held:
+                    rows.append({"ticker": sym, "date": e.get("date"),
+                                 "hour": e.get("hour"),
+                                 "eps_estimate": e.get("epsEstimate")})
+        rows.sort(key=lambda x: x.get("date") or "")
+        os.makedirs(os.path.dirname(EARNINGS_CAL_FILE) or ".", exist_ok=True)
+        with open(EARNINGS_CAL_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ts": int(time.time()), "rows": rows}, f)
+    except Exception:
+        pass
+    return rows
+
+
 def _alerts_digest():
     alerts = []
 
     def add(level, cat, msg, where):
         alerts.append({"level": level, "category": cat, "message": msg, "where": where})
+
+    # 0) Earnings on holdings this week (P1 adoption — event awareness beats cron-only research)
+    for e in _earnings_this_week():
+        est = f", est EPS {e['eps_estimate']}" if e.get("eps_estimate") is not None else ""
+        add("info", "Earnings",
+            f"{e['ticker']} reports {e.get('date')}{(' (' + e['hour'] + ')') if e.get('hour') else ''}{est} "
+            "— expect volatility; a post-print brief refresh is worth queuing", "RESEARCH → BRIEFS")
 
     # 1) Exit discipline — tripped thesis triggers (G14)
     for e in ((_read_theses_eval() or {}).get("evaluations") or []):
@@ -2406,6 +2506,60 @@ def _scorecard(min_age_days=None):
 @app.get("/api/scorecard")
 def get_scorecard():
     return _scorecard()
+
+
+# ============ P0-2: decision backtest — fixed-horizon call scoring vs SPY (backtest.py) ============
+# The scorecard above answers "how do old calls look TO NOW"; this answers the fiduciary question:
+# at fixed 1/3/6/12-month horizons, did Buys BEAT SPY and Sells LAG it, and is stated confidence
+# calibrated against that market-relative outcome? Heavy only in network (per-ticker history via
+# the same _stooq_daily cache G4 uses) — background thread + cache, same pattern as the risk suite.
+BACKTEST_FILE = os.environ.get("BACKTEST_FILE", "/data/backtest.json")
+BACKTEST_TTL = int(os.environ.get("BACKTEST_TTL", str(7 * 86400)))   # weekly is plenty
+_backtest_lock = threading.Lock()
+
+
+def _do_backtest():
+    if not _backtest_lock.acquire(blocking=False):
+        return
+    try:
+        try:
+            with open(RATING_LOG_FILE, encoding="utf-8") as f:
+                log = json.load(f) or []
+        except Exception:
+            log = []
+        res = backtest_mod.run(log, _read_paper(), _stooq_daily)
+        os.makedirs(os.path.dirname(BACKTEST_FILE) or ".", exist_ok=True)
+        with open(BACKTEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _backtest_lock.release()
+
+
+@app.get("/api/backtest")
+def get_backtest():
+    """Decision backtest, CACHED (first build fetches per-ticker daily history in the background)."""
+    try:
+        with open(BACKTEST_FILE, encoding="utf-8") as f:
+            cached = json.load(f)
+    except Exception:
+        cached = None
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < BACKTEST_TTL)
+    if not fresh and not _backtest_lock.locked():
+        threading.Thread(target=_do_backtest, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "note": "First decision-backtest build is running (fetching "
+            "price history per rated ticker) — refresh in a moment.", "computing": True}
+
+
+@app.post("/api/run-backtest")
+def run_backtest_ep(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_backtest, daemon=True).start()
+    return {"status": "started"}
 
 
 @app.get("/api/gpu")
@@ -2895,12 +3049,22 @@ def _insider_signal(sym):
 def get_insider(ticker: str):
     """Net open-market insider buy/sell signal for one ticker from recent SEC Form 4 filings (G15).
     CONTEXT ONLY — cluster buying is the higher-signal event; selling is noisy. Not advice.
-    13F institutional ownership + short interest are data-gated (no free per-security SEC reverse
-    lookup) and are deferred to a data-provider MCP, not shown here."""
+    P1 update: FINRA consolidated short interest rides along when API-console credentials are
+    configured (secrets FINRA_CLIENT_ID / FINRA_CLIENT_SECRET); 13F ownership stays with inst13f."""
     t = (ticker or "").upper().strip()
     if not t:
         return JSONResponse({"error": "ticker required"}, status_code=400)
-    return _insider_signal(t) or {"ticker": t, "available": False, "reason": "no data"}
+    res = _insider_signal(t) or {"ticker": t, "available": False, "reason": "no data"}
+    try:
+        if shortint.configured():
+            res["short_interest"] = shortint.short_interest(t)
+        else:
+            res["short_interest"] = {"configured": False,
+                                     "note": "Free FINRA API-console credentials unlock short "
+                                             "interest (secrets: FINRA_CLIENT_ID/SECRET)."}
+    except Exception:
+        pass
+    return res
 
 
 # ============ G15: institutional 13F forward whale-tracking (context-only) ============
@@ -3698,6 +3862,384 @@ async def post_retire_config(req: Request):
     with open(RETIRE_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     return {"ok": True, "config": cfg}
+
+
+# ============ P1/G10: hedging analytics — covered calls & collars (options.py) ============
+# Delayed Yahoo chains + locally-computed BS deltas for the concentrated names. Network-heavy
+# only (no LLM/GPU) → risk-suite pattern: background build, cached, never blocks the UI.
+HEDGING_FILE = os.environ.get("HEDGING_FILE", "/data/hedging.json")
+HEDGING_TTL = int(os.environ.get("HEDGING_TTL", "86400"))
+HEDGING_MAX_NAMES = int(os.environ.get("HEDGING_MAX_NAMES", "6"))
+_hedging_lock = threading.Lock()
+
+
+def _hedging_symbols():
+    """Concentrated names worth hedging math: sizing over-budget first, then top direct weights."""
+    syms, seen = [], set()
+    try:
+        for r in (((_read_sizing() or {}).get("loss_budget") or {}).get("positions") or []):
+            if r.get("over_budget") and r.get("ticker") and r["ticker"] not in seen:
+                syms.append(r["ticker"]); seen.add(r["ticker"])
+    except Exception:
+        pass
+    try:
+        for p in ((_read_exp() or {}).get("positions") or []):
+            t = p.get("ticker")
+            if t and t not in seen and (p.get("weight_pct") or 0) >= 3.0:
+                syms.append(t); seen.add(t)
+    except Exception:
+        pass
+    return syms[:HEDGING_MAX_NAMES]
+
+
+def _do_hedging():
+    if not _hedging_lock.acquire(blocking=False):
+        return
+    try:
+        cards, skipped = [], []
+        for s in _hedging_symbols():
+            try:
+                card = options_mod.analyze(s)
+            except Exception:
+                card = None
+            (cards.append(card) if card else skipped.append(s))
+        res = {"generated_at": int(time.time()), "cards": cards, "no_chain": skipped,
+               "note": ("Delayed chains; premiums are mid-quotes and thin markets widen fast — "
+                        "treat numbers as sizing guides, verify live quotes before any order. "
+                        "Educational; assignment/collars carry tax consequences on appreciated lots.")}
+        os.makedirs(os.path.dirname(HEDGING_FILE) or ".", exist_ok=True)
+        with open(HEDGING_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _hedging_lock.release()
+
+
+@app.get("/api/hedging")
+def get_hedging():
+    try:
+        with open(HEDGING_FILE, encoding="utf-8") as f:
+            cached = json.load(f)
+    except Exception:
+        cached = None
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < HEDGING_TTL)
+    if not fresh and not _hedging_lock.locked():
+        threading.Thread(target=_do_hedging, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First hedging build is fetching option chains — refresh in a moment."}
+
+
+@app.post("/api/run-hedging")
+def run_hedging(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_hedging, daemon=True).start()
+    return {"status": "started"}
+
+
+# ============ P1: RentCast free-tier AVM (50 calls/mo — one home = one call/mo) ============
+RENTCAST_FILE = os.environ.get("RENTCAST_FILE", "/data/rentcast.json")
+RENTCAST_TTL = int(os.environ.get("RENTCAST_TTL", str(30 * 86400)))   # monthly refresh fits the free tier
+
+
+def _rentcast_avm(address):
+    """Value + rent AVM for an address, cached ~30d. None when unkeyed/unavailable."""
+    key = (os.environ.get("RENTCAST_API_KEY") or "").strip()
+    if not key or not address:
+        return None
+    try:
+        with open(RENTCAST_FILE, encoding="utf-8") as f:
+            cache = json.load(f) or {}
+    except Exception:
+        cache = {}
+    rec = cache.get(address)
+    if rec and time.time() - (rec.get("ts") or 0) < RENTCAST_TTL:
+        return rec
+    out = {"ts": int(time.time()), "address": address}
+    try:
+        for field, path in (("value", "avm/value"), ("rent", "avm/rent/long-term")):
+            r = requests.get(f"https://api.rentcast.io/v1/{path}",
+                             params={"address": address},
+                             headers={"X-Api-Key": key, "Accept": "application/json"}, timeout=25)
+            if r.status_code >= 400:
+                continue
+            j = r.json() or {}
+            out[field] = {"estimate": j.get("price") or j.get("rent"),
+                          "low": j.get("priceRangeLow") or j.get("rentRangeLow"),
+                          "high": j.get("priceRangeHigh") or j.get("rentRangeHigh")}
+        if out.get("value") or out.get("rent"):
+            cache[address] = out
+            os.makedirs(os.path.dirname(RENTCAST_FILE) or ".", exist_ok=True)
+            with open(RENTCAST_FILE, "w", encoding="utf-8") as f:
+                json.dump(cache, f)
+            return out
+    except Exception:
+        pass
+    return rec or None    # stale cache beats nothing
+
+
+# ============ GAP-3: performance reporting — TWR + policy benchmark (performance.py) ============
+# Composite returns fetch per-ticker + 4 proxy-ETF histories (network on a cold cache) →
+# risk-suite pattern: background build, cached ~12h, POST to force.
+PERF_FILE = os.environ.get("PERF_FILE", "/data/performance.json")
+PERF_TTL = int(os.environ.get("PERF_TTL", "43200"))
+_perf_lock = threading.Lock()
+
+
+def _do_performance():
+    if not _perf_lock.acquire(blocking=False):
+        return
+    try:
+        d = _data()
+        weights = {}
+        for c in d.get("consolidated") or []:
+            t = c.get("ticker")
+            if t and (c.get("type") or "") != "Cash" and (c.get("value") or 0) > 0:
+                weights[t] = weights.get(t, 0.0) + float(c["value"])
+        res = performance.run(weights,
+                              (_read_policy() or {}).get("targets_by_sleeve") or {},
+                              _stooq_daily,
+                              _read_value_history())
+        res["generated_at"] = int(time.time())
+        os.makedirs(os.path.dirname(PERF_FILE) or ".", exist_ok=True)
+        with open(PERF_FILE, "w", encoding="utf-8") as f:
+            json.dump(res, f)
+    except Exception:
+        pass
+    finally:
+        _perf_lock.release()
+
+
+@app.get("/api/performance")
+def get_performance():
+    try:
+        with open(PERF_FILE, encoding="utf-8") as f:
+            cached = json.load(f)
+    except Exception:
+        cached = None
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < PERF_TTL)
+    if not fresh and not _perf_lock.locked():
+        threading.Thread(target=_do_performance, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True,
+            "note": "First performance build is fetching price history — refresh in a moment."}
+
+
+@app.post("/api/run-performance")
+def run_performance_ep(x_analysis_token: str = Header(default="")):
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    threading.Thread(target=_do_performance, daemon=True).start()
+    return {"status": "started"}
+
+
+# ============ GAP-2: cash / liquidity / debt desk (cashdebt.py) ============
+TBILL_CACHE_FILE = os.environ.get("TBILL_CACHE_FILE", "/data/tbill_yield.json")
+TBILL_SERIES = os.environ.get("TBILL_SERIES", "DTB3")
+
+
+def _tbill_yield():
+    """Latest 3-mo T-bill yield (%) from FRED's keyless fredgraph CSV, cached daily; falls back
+    to the `tbill_fallback_pct` knob. Same pattern as _tips_real_yield."""
+    today = datetime.date.today()
+    try:
+        with open(TBILL_CACHE_FILE, encoding="utf-8") as f:
+            c = json.load(f) or {}
+        if c.get("fetched") == today.isoformat() and c.get("yield_pct") is not None:
+            return c["yield_pct"], c.get("source") or f"FRED {TBILL_SERIES}"
+    except Exception:
+        pass
+    try:
+        r = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv",
+                         params={"id": TBILL_SERIES,
+                                 "cosd": (today - datetime.timedelta(days=45)).isoformat()},
+                         timeout=20)
+        if r.status_code < 400:
+            rows = [ln.split(",") for ln in r.text.strip().splitlines()[1:] if "," in ln]
+            vals = [(d, v) for d, v in rows if v not in (".", "", None)]
+            if vals:
+                y = round(float(vals[-1][1]), 2)
+                os.makedirs(os.path.dirname(TBILL_CACHE_FILE) or ".", exist_ok=True)
+                with open(TBILL_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"fetched": today.isoformat(), "yield_pct": y,
+                               "source": f"FRED {TBILL_SERIES}"}, f)
+                return y, f"FRED {TBILL_SERIES}"
+    except Exception:
+        pass
+    return _knob("tbill_fallback_pct"), "fallback knob"
+
+
+def _cash_total(d):
+    """Actual cash: non-investment cash accounts (checking/savings/money market) + Cash-typed
+    positions inside investment accounts."""
+    tot = 0.0
+    for a in d.get("accounts") or []:
+        if a.get("is_asset") is False:
+            continue
+        t = ((a.get("type") or "") + " " + (a.get("name") or "")).lower()
+        if (a.get("holdings_count") or 0) == 0 and any(
+                w in t for w in ("checking", "savings", "money market", "cash management", "cash ")):
+            tot += a.get("balance") or 0
+    for c in d.get("consolidated") or []:
+        if (c.get("type") or "") == "Cash":
+            tot += c.get("value") or 0
+    return round(tot, 2)
+
+
+@app.get("/api/cashdebt")
+def get_cashdebt():
+    """GAP-2 household-CFO desk: EF gauge, idle-cash drag, payoff-vs-invest, refi, avalanche.
+    Cheap (one cached FRED read; no LLM)."""
+    d = _data()
+    ret = _read_retire()
+    cfg = _read_insurance_cfg()
+    tb, tb_src = _tbill_yield()
+    exp = float(ret.get("annual_expenses_override") or 0) or None
+    if not exp:
+        try:
+            _inc, exp = _cashflow_annual()
+        except Exception:
+            exp = None
+    mort_bal = sum((a.get("balance") or 0) for a in (d.get("accounts") or [])
+                   if a.get("is_asset") is False
+                   and any(w in ((a.get("name") or "") + " " + (a.get("type") or "")).lower()
+                           for w in ("mortgage", "home loan")))
+    debts = []
+    rates = cfg.get("debt_rates") or {}
+    for a in d.get("accounts") or []:
+        if a.get("is_asset") is False:
+            nm = a.get("name") or "?"
+            low = (nm + " " + (a.get("type") or "")).lower()
+            if any(w in low for w in ("mortgage", "home loan")):
+                continue
+            debts.append({"name": nm, "balance": abs(a.get("balance") or 0),
+                          "rate_pct": rates.get(nm)})
+    inputs = {"cash_total": _cash_total(d),
+              "annual_expenses": exp,
+              "needs_pct": ret.get("needs_pct_of_expenses") or 65,
+              "tbill_pct": tb,
+              "deposit_yield_pct": cfg.get("deposit_yield_pct"),
+              "expected_real_pct": ret.get("expected_real_return_pct"),
+              "mortgage_balance": round(mort_bal, 2),
+              "mortgage_rate_pct": cfg.get("mortgage_rate_pct"),
+              "mortgage_payment_monthly": cfg.get("mortgage_payment_monthly"),
+              "refi_rate_pct": cfg.get("refi_rate_pct"),
+              "refi_closing_costs": cfg.get("refi_closing_costs"),
+              "debts": debts}
+    res = cashdebt.run(inputs, {"ef_target_months": _knob("ef_target_months")})
+    res["inputs"] = inputs
+    res["tbill_source"] = tb_src
+    res["generated_at"] = int(time.time())
+    return res
+
+
+# ============ P0-3: insurance & risk-transfer (insurance.py) ============
+# Household facts the feeds can't see (incomes, children, in-force policies) live in a
+# local JSON register; the balance-sheet side (net worth, liabilities, home, mortgage)
+# comes from the same _data() everything else uses. Read-only analysis, no products.
+INSURANCE_FILE = os.environ.get("INSURANCE_FILE", "/data/insurance.json")
+DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
+                     "home_value_override": None, "home_address": None, "policies": [],
+                     # GAP-2 cash/debt facts (same household register, edited in PLAN→CASH·DEBT):
+                     "mortgage_rate_pct": None, "mortgage_payment_monthly": None,
+                     "deposit_yield_pct": None, "refi_rate_pct": None,
+                     "refi_closing_costs": None, "debt_rates": {}}
+_INS_POLICY_KEYS = ("kind", "owner", "name", "coverage", "premium_annual", "term_expires", "notes")
+
+
+def _read_insurance_cfg():
+    try:
+        with open(INSURANCE_FILE, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        cfg = {}
+    return {**DEFAULT_INSURANCE, **{k: cfg.get(k) for k in DEFAULT_INSURANCE if k in cfg}}
+
+
+@app.get("/api/insurance-config")
+def get_insurance_config():
+    return _read_insurance_cfg()
+
+
+@app.post("/api/insurance-config")
+async def post_insurance_config(req: Request):
+    """Set household insurance facts (local config; not a money action).
+    Body keys: income_self, income_spouse, children, home_value_override, and/or
+    policies: FULL replacement list of {kind, owner, name, coverage, premium_annual,
+    term_expires, notes} (kind: life|disability|umbrella|home|auto|ltc)."""
+    body = await req.json()
+    cfg = _read_insurance_cfg()
+    for k in ("income_self", "income_spouse", "children", "home_value_override",
+              "mortgage_rate_pct", "mortgage_payment_monthly", "deposit_yield_pct",
+              "refi_rate_pct", "refi_closing_costs"):
+        if k in body:
+            try:
+                cfg[k] = None if body[k] in (None, "") else float(body[k])
+            except (TypeError, ValueError):
+                pass
+    if isinstance(body.get("debt_rates"), dict):
+        dr = {}
+        for nm, v in list(body["debt_rates"].items())[:30]:
+            try:
+                dr[str(nm)[:120]] = float(v)
+            except (TypeError, ValueError):
+                pass
+        cfg["debt_rates"] = dr
+    if "home_address" in body:
+        cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
+            if body["home_address"] not in (None, "") else None
+    if isinstance(body.get("policies"), list):
+        cfg["policies"] = [{k: p.get(k) for k in _INS_POLICY_KEYS}
+                           for p in body["policies"] if isinstance(p, dict) and p.get("kind")][:50]
+    os.makedirs(os.path.dirname(INSURANCE_FILE) or ".", exist_ok=True)
+    with open(INSURANCE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    return {"ok": True, "config": cfg}
+
+
+@app.get("/api/insurance")
+def get_insurance():
+    """Protection-desk gap analysis: needs computed from the live balance sheet + the
+    policy register. Cheap (no LLM, no network beyond the cached TIPS yield)."""
+    cfg = _read_insurance_cfg()
+    d = _data()
+    ret = _read_retire()
+    accounts = d.get("accounts") or []
+    home_val = cfg.get("home_value_override")
+    if not home_val:
+        re_accts = [a for a in accounts
+                    if (a.get("type") or "").lower().find("real estate") >= 0
+                    and a.get("is_asset") is not False and (a.get("balance") or 0) > 0]
+        home_val = max((a.get("balance") or 0 for a in re_accts), default=0)
+    mort = sum((a.get("balance") or 0) for a in accounts
+               if a.get("is_asset") is False
+               and any(w in ((a.get("name") or "") + " " + (a.get("type") or "")).lower()
+                       for w in ("mortgage", "home loan")))
+    try:
+        rr, _src, _dt = _tips_real_yield()
+    except Exception:
+        rr = _knob("tips_fallback_pct")
+    household = {"net_worth": d.get("net_worth"),
+                 "liquid_assets": d.get("invested_value"),
+                 "debts_total": d.get("total_liabilities"),
+                 "mortgage_balance": round(mort, 2),
+                 "income_self": cfg.get("income_self"),
+                 "income_spouse": cfg.get("income_spouse"),
+                 "age_self": ret.get("current_age"), "age_spouse": ret.get("spouse_age"),
+                 "retire_age": ret.get("target_age") or 60,
+                 "children": cfg.get("children") or 0,
+                 "home_value": home_val, "real_rate_pct": rr}
+    res = insurance.run(household, cfg.get("policies"))
+    res["household"] = household
+    res["policies_echo"] = cfg.get("policies") or []
+    res["generated_at"] = int(time.time())
+    if not cfg.get("income_self") and not cfg.get("income_spouse"):
+        res["setup_needed"] = True
+    return res
 
 
 # ---- Tax engine wiring (G5) --------------------------------------------------
@@ -4880,6 +5422,10 @@ SECRET_SPECS = [
     {"key": "MONARCH_MFA_SECRET",    "label": "Monarch MFA / TOTP secret",       "group": "Portfolio (Monarch)",    "scope": "mcpo"},
     {"key": "TAVILY_API_KEY",        "label": "Tavily API key (news)",           "group": "Market data",            "scope": "mcpo"},
     {"key": "MCPO_API_KEY",          "label": "mcpo API key",                    "group": "Internal",               "scope": "mcpo"},
+    # P1 free-data adoptions (final review): all three are FREE-tier registrations.
+    {"key": "FINRA_CLIENT_ID",       "label": "FINRA API client ID (short interest)",     "group": "Market data", "scope": "app"},
+    {"key": "FINRA_CLIENT_SECRET",   "label": "FINRA API client secret (short interest)", "group": "Market data", "scope": "app"},
+    {"key": "RENTCAST_API_KEY",      "label": "RentCast API key (home AVM, free 50/mo)",  "group": "Market data", "scope": "app"},
 ]
 
 
@@ -5180,6 +5726,7 @@ def _tax_audit():
                    for a in d.get("accounts", [])}
     accts_cfg = _read_accounts_cfg()
     harvest, location = [], []
+    _tlh_drip_tickers = set()   # taxable+DRIP tickers among TLH candidates (wash-sale caution)
     # Dividend INCOME accrues in EVERY account (a dividend paid inside an IRA/401k is still
     # income — it compounds — it just isn't taxed *now*), so the income estimate must span ALL
     # tax statuses. The TLH + asset-location audits below stay TAXABLE-only, because that's the
@@ -5214,6 +5761,8 @@ def _tax_audit():
                 harvest.append({"ticker": tkr, "account": name, "value": round(val, 2),
                                 "cost": h.get("cost_total"), "loss": round(gain, 2),
                                 "loss_pct": h.get("gain_pct")})
+                if drip_on:
+                    _tlh_drip_tickers.add(tkr)
             if yld is not None and yld >= _knob("loc_min_yield") and val > 0:
                 est = round(val * yld / 100, 2)
                 location.append({"ticker": tkr, "account": name, "value": round(val, 2),
@@ -5221,6 +5770,16 @@ def _tax_audit():
                                  "drip": drip_on,
                                  "est_annual_taxable_reinvestment": est if drip_on else 0.0})
     harvest.sort(key=lambda x: x["loss"])                       # most negative first
+    # ---- GAP-4: wash-sale verdicts + replacement pairs on every TLH candidate ----
+    try:
+        sectors = {p.get("ticker"): p.get("sector") for p in ((_read_exp() or {}).get("positions") or [])
+                   if p.get("ticker") and p.get("sector")}
+        wash_by = {w["ticker"]: w for w in washsale.assess(
+            harvest, _read_sharelog(), {t: True for t in _tlh_drip_tickers}, sectors)}
+        for hrow in harvest:
+            hrow["wash"] = wash_by.get(hrow["ticker"])
+    except Exception:
+        pass
     location.sort(key=lambda x: -(x.get("est_annual_income") or 0))
     # consolidate the all-accounts dividend-income view: one row per ticker, summed across
     # every account it's held in (this is the "combine holdings across accounts" the audit lacked)
@@ -7184,23 +7743,57 @@ def _trim_tool_result(nm, result):
     return _tr
 
 
-def _chat_stream(persona_key, session_id, user_msg):
+# Cooperative cancellation for /api/chat: keyed by a client-generated req_id so the Stop button
+# can reach the SPECIFIC in-flight generation. Client-side abort() only closes the browser's own
+# fetch — it does nothing to the server, which used to keep running to completion in the background
+# (still holding _strat_lock / the GPU) with no visibility. Registered only while a generation is
+# actually in flight; always popped in _chat_stream's finally.
+_CHAT_CANCEL = {}
+_CHAT_CANCEL_LOCK = threading.Lock()
+
+
+def _chat_stream(persona_key, session_id, user_msg, req_id=None):
     """SSE generator: streams assistant tokens and tool events for one user message, persisting the
     turn to SQLite. Holds _strat_lock for the duration so a chat never competes with the weekly run
-    or an advisory run for the GPUs."""
+    or an advisory run for the GPUs. Cancellable via req_id + POST /api/chat/cancel: checked while
+    queued for the lock and on every streamed line/tool-call, so Stop actually frees the GPU right
+    away instead of letting the generation finish unattended."""
     persona = PERSONAS.get(persona_key)
     if not persona:
         yield _sse("error", {"error": f"unknown persona '{persona_key}'"})
         return
+    cancel_event = threading.Event()
+    if req_id:
+        with _CHAT_CANCEL_LOCK:
+            _CHAT_CANCEL[req_id] = cancel_event
+
+    def _forget():
+        if req_id:
+            with _CHAT_CANCEL_LOCK:
+                _CHAT_CANCEL.pop(req_id, None)
+
     if not _strat_lock.acquire(blocking=False):
         # Queue behind the running strategist/advisory job instead of forcing a retry.
         # Single-flight on the GPU by design — DON'T parallelize (two big generations would
-        # contend on the Pascal cards). Tell the client we're waiting, then block until free.
+        # contend on the Pascal cards). Tell the client we're waiting, then poll for the lock
+        # (instead of one long blocking acquire) so a Stop while queued takes effect immediately
+        # rather than after the full CHAT_QUEUE_TIMEOUT.
         yield _sse("status", {"state": "waiting",
                               "message": "A strategist/advisory run is using the model — your message is "
                                          "queued and will start automatically when it finishes."})
-        if not _strat_lock.acquire(timeout=CHAT_QUEUE_TIMEOUT):
+        acquired = False
+        deadline = time.time() + CHAT_QUEUE_TIMEOUT
+        while time.time() < deadline:
+            if cancel_event.is_set():
+                yield _sse("cancelled", {"reason": "stopped while queued"})
+                _forget()
+                return
+            if _strat_lock.acquire(timeout=1):
+                acquired = True
+                break
+        if not acquired:
             yield _sse("error", {"error": "still busy after waiting a while — please try again shortly"})
+            _forget()
             return
     try:
         if not session_id:
@@ -7216,6 +7809,8 @@ def _chat_stream(persona_key, session_id, user_msg):
                 messages.append({"role": m["role"], "content": m["content"] or ""})
 
         final_content = ""
+        cancelled = False
+        content_buf = ""
         for i in range(CHAT_MAX_ITER):
             content_buf = ""
             tool_calls = []
@@ -7231,6 +7826,13 @@ def _chat_stream(persona_key, session_id, user_msg):
                         yield _sse("error", {"error": f"ollama {resp.status_code}: {resp.text[:200]}"})
                         return
                     for line in resp.iter_lines():
+                        if cancel_event.is_set():
+                            cancelled = True
+                            try:
+                                resp.close()
+                            except Exception:
+                                pass
+                            break
                         if not line:
                             continue
                         try:
@@ -7251,6 +7853,9 @@ def _chat_stream(persona_key, session_id, user_msg):
                 yield _sse("error", {"error": f"generation failed: {e}"})
                 return
 
+            if cancelled:
+                break
+
             asst = {"role": "assistant", "content": content_buf}
             if tool_calls:
                 asst["tool_calls"] = tool_calls
@@ -7261,6 +7866,9 @@ def _chat_stream(persona_key, session_id, user_msg):
                 break
 
             for tc in tool_calls:
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
                 fn = tc.get("function") or {}
                 nm = fn.get("name")
                 a = fn.get("arguments") or {}
@@ -7273,20 +7881,35 @@ def _chat_stream(persona_key, session_id, user_msg):
                 result = persona["dispatch"](nm, a)
                 messages.append({"role": "tool", "content": _trim_tool_result(nm, result)})
                 yield _sse("tool_done", {"name": nm})
+            if cancelled:
+                break
         else:
             final_content = final_content or "(reached the step limit before finishing — ask me to continue.)"
+
+        if cancelled:
+            partial = (content_buf or "").strip()
+            if partial:
+                _chat_add_message(session_id, "assistant", partial + "\n\n_(stopped)_")
+                _chat_touch_session(session_id)
+            yield _sse("cancelled", {"session_id": session_id})
+            return
 
         _chat_add_message(session_id, "assistant", final_content)
         _chat_touch_session(session_id)
         yield _sse("done", {"session_id": session_id})
     finally:
         _strat_lock.release()
+        _forget()
 
 
 @app.post("/api/chat")
 async def chat(req: Request):
-    """Streaming multi-turn chat with a persona (fiduciary|strategist). Body: {persona, message, session_id?}.
-    Returns text/event-stream: events session, token, tool, tool_done, done, error. READ-ONLY."""
+    """Streaming multi-turn chat with a persona (fiduciary|strategist).
+    Body: {persona, message, session_id?, req_id?}. req_id is a client-generated token the caller
+    can later pass to POST /api/chat/cancel to actually stop this generation server-side (not just
+    close the browser stream) — pass one if you want Stop to work.
+    Returns text/event-stream: events session, status, token, thinking, tool, tool_done, done,
+    cancelled, error. READ-ONLY."""
     try:
         body = await req.json()
     except Exception:
@@ -7294,9 +7917,29 @@ async def chat(req: Request):
     persona = str((body or {}).get("persona") or "fiduciary").strip()
     session_id = (body or {}).get("session_id")
     message = str((body or {}).get("message") or "").strip()
+    req_id = str((body or {}).get("req_id") or "").strip() or None
     if not message:
         return JSONResponse({"error": "empty message"}, status_code=400)
-    return StreamingResponse(_chat_stream(persona, session_id, message), media_type="text/event-stream")
+    return StreamingResponse(_chat_stream(persona, session_id, message, req_id), media_type="text/event-stream")
+
+
+@app.post("/api/chat/cancel")
+async def chat_cancel(req: Request):
+    """Best-effort cancel of an in-flight /api/chat generation by its req_id. Sets a threading.Event
+    that _chat_stream polls at every queue-wait tick and every streamed line/tool-call — the
+    generation stops within ~1s and releases _strat_lock immediately, rather than continuing to run
+    (and hold the GPU) after the caller has walked away. Unknown/already-finished req_id is a no-op."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    req_id = str((body or {}).get("req_id") or "").strip()
+    with _CHAT_CANCEL_LOCK:
+        ev = _CHAT_CANCEL.get(req_id)
+    if ev:
+        ev.set()
+        return {"ok": True}
+    return {"ok": False, "note": "unknown or already-finished req_id"}
 
 
 @app.get("/api/chat/sessions")
