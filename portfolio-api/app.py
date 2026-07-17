@@ -335,6 +335,7 @@ _JOB_KINDS = {
     "retirement":    ("Retirement projection",     False, lambda: _retirement()),
     "backtest":      ("Decision backtest vs SPY",  False, lambda: _do_backtest()),
     "narrative":     ("State-of-the-Wealth brief", True,  lambda: _do_narrative()),
+    "knowledge_reindex": ("Knowledge reindex",     True,  lambda: knowledge.ensure_index(force=True)),
 }
 
 def _enqueue(kind, source="manual"):
@@ -2841,11 +2842,14 @@ def get_knowledge():
 
 @app.post("/api/knowledge/reindex")
 def post_knowledge_reindex():
-    """Force a rebuild of the knowledge vector index (embeds new/changed docs via Ollama bge-m3).
-    Slow if you just added large PDFs. Read-only w.r.t. your data."""
+    """Queue a rebuild of the knowledge vector index (embeds new/changed docs via Ollama bge-m3).
+    Non-blocking — runs on the serial job queue (Increment B) so it shares GPU-serialization +
+    /api/jobs visibility with the other heavy jobs. Poll GET /api/knowledge for live chunk-level
+    progress ({reindexing, done_chunks, total_chunks, current_file}). Read-only w.r.t. your data."""
     try:
-        knowledge.ensure_index(force=True)
-        return knowledge.status()
+        jid, created = _enqueue("knowledge_reindex", source="api")
+        return {"ok": True, "status": "queued" if created else "already queued/running",
+                "job_id": jid, **knowledge.status()}
     except Exception as e:
         return JSONResponse({"error": f"reindex failed: {e}"}, status_code=500)
 

@@ -435,7 +435,7 @@ W('chat','Automation','Chat personas',
   'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show.');
 W('knowledge','Automation','Knowledge library (local RAG)',
   'A folder of reference documents (.md/.txt/.pdf) the chat personas can search: your IPS, IRS publications, investing-principles guides, plus the committed reference/ set (estate & generational transfer, business-acquisition/QSBS frameworks, and a dated snapshot of the grounded 2026 tax/ACA/SS parameters). Everything is embedded locally with bge-m3 — nothing leaves the machine.',
-  'SETTINGS → KNOWLEDGE shows the folder, document/chunk counts, embedding model, and last index time. Drop files in the host folder (or remove them) and hit REINDEX; the personas answer with citations from these documents via their search_knowledge tool.',
+  'SETTINGS → KNOWLEDGE shows the folder, document/chunk counts, embedding model, and last index time. Drop files in the host folder (or remove them) and hit REINDEX; it runs in the background on the job queue and the button shows live chunk-level progress (% and current file) instead of blocking. The personas answer with citations from these documents via their search_knowledge tool.',
   'Use it so chat answers about tax law, IRA mechanics, estate basis rules, or your own IPS quote a document instead of model memory — and refresh the parameter-snapshot doc each January so the library never contradicts the live GROUNDING registry.');
 W('benefits','Planning','Benefits & contribution room',
   'The guaranteed-return ladder for the next saved dollar: employer-match capture (instant 50-100% return), HSA headroom (the only triple-tax-advantaged account), 401(k) employee-limit headroom with age catch-ups (and the >$150k mandatory-Roth catch-up rule), direct-vs-backdoor Roth IRA eligibility against the MFJ phase-out, and mega-backdoor capacity (§415(c) limit minus everything already going in). All 2026 limits are IRS-verified and registered in the AUDITS→GROUNDING watchdog, so they re-flag themselves every January.',
@@ -1814,9 +1814,35 @@ function secretsContent(){
   wrap.appendChild(foot);
   return wrap;
 }
+// Knowledge reindex now runs on the serial job queue (non-blocking) — poll GET /api/knowledge
+// for chunk-level progress ({reindexing, done_chunks, total_chunks, current_file}) plus
+// GET /api/jobs for the "queued but not yet running" state (another heavy job ahead of it).
+let _knPollTimer=null, _knSawRunning=false;
+function _knPollTick(){
+  Promise.all([fetch('/api/knowledge').then(r=>r.json()), fetch('/api/jobs').then(r=>r.json())])
+    .then(([k,jobs])=>{
+      const btn=document.getElementById('kn-reindex');
+      const jrec=((jobs && jobs.jobs)||[]).find(j=>j.kind==='knowledge_reindex' && (j.status==='queued'||j.status==='running'));
+      if(k && k.reindexing){
+        _knSawRunning=true;
+        const tot=k.total_chunks||0, done=k.done_chunks||0;
+        const pct=tot>0?Math.round(100*done/tot):0;
+        if(btn){ btn.disabled=true; btn.textContent=`⏳ indexing… ${pct}% (${done}/${tot})`+(k.current_file?' — '+k.current_file:''); }
+      } else if(jrec){                          // enqueued but not yet started
+        if(btn){ btn.disabled=true; btn.textContent='⏳ queued…'; }
+      } else if(_knSawRunning){                 // was running, now finished
+        _knSawRunning=false;
+        clearInterval(_knPollTimer); _knPollTimer=null;
+        load(false);
+      } else {
+        clearInterval(_knPollTimer); _knPollTimer=null;   // nothing in flight
+      }
+    }).catch(()=>{});
+}
+function _knStartPoll(){ if(_knPollTimer) return; _knPollTimer=setInterval(_knPollTick, 1000); _knPollTick(); }
 function reindexKnowledge(){
-  const btn=document.getElementById('kn-reindex'); if(btn){ btn.disabled=true; btn.textContent='⏳ indexing…'; }
-  fetch('/api/knowledge/reindex',{method:'POST'}).then(r=>r.json()).then(()=>load(false))
+  const btn=document.getElementById('kn-reindex'); if(btn){ btn.disabled=true; btn.textContent='⏳ queuing…'; }
+  fetch('/api/knowledge/reindex',{method:'POST'}).then(r=>r.json()).then(()=>_knStartPoll())
     .catch(e=>{ alert('Reindex failed: '+e); if(btn){ btn.disabled=false; btn.textContent='↻ REINDEX'; } });
 }
 function performanceContent(){
@@ -1985,7 +2011,8 @@ function cashdebtContent(){
     const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>INTEREST/yr</th><th>CALL</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':(x.priority==='carry'?'pos':'muted');
-      tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${x.rate_pct!=null?x.rate_pct+'%':'<span class="muted">set ↓</span>'}</td>`+
+      const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
+      tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td>`+
         `<td>${u(x.annual_interest)}</td><td class="${pc}">${esc(x.priority)}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
@@ -1993,15 +2020,14 @@ function cashdebtContent(){
   // ---- inputs editor (facts ride the household register / insurance-config) ----
   const inp=r.inputs||{};
   const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;margin-top:12px;';
-  let debtInputs='';
-  (av.rows||[]).forEach((x,i)=>{ debtInputs+=`${esc(x.name)} APR <input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" style="width:54px;"/>% &nbsp; `; });
   ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">HOUSEHOLD FACTS · EDIT</div>`+
     `<div style="font-size:11px;line-height:2;">Mortgage rate <input id="cd-mr" type="number" step="0.125" value="${inp.mortgage_rate_pct!=null?inp.mortgage_rate_pct:''}" style="width:60px;"/>% `+
     `P&I payment <input id="cd-mp" type="number" step="10" value="${inp.mortgage_payment_monthly!=null?inp.mortgage_payment_monthly:''}" style="width:74px;"/>/mo &nbsp; `+
     `Deposit yield <input id="cd-dy" type="number" step="0.05" value="${inp.deposit_yield_pct!=null?inp.deposit_yield_pct:''}" placeholder="0.4" style="width:56px;"/>% &nbsp; `+
     `Refi rate <input id="cd-rr" type="number" step="0.125" value="${inp.refi_rate_pct!=null?inp.refi_rate_pct:''}" style="width:60px;"/>% `+
     `closing costs <input id="cd-cc" type="number" step="100" value="${inp.refi_closing_costs!=null?inp.refi_closing_costs:''}" style="width:74px;"/><br/>`+
-    debtInputs+`<button id="cd-save">SAVE</button></div>`;
+    (((av.rows||[]).length)?'<span class="muted">Per-debt APR inputs now inline in the table above.</span>':'')+
+    `<button id="cd-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
     if(g('cd-save')) g('cd-save').onclick=async()=>{
@@ -2219,6 +2245,13 @@ function knowledgeContent(){
     (k.stale?' · <span class="neg">⚠ folder changed — REINDEX</span>':'');
   wrap.appendChild(stats);
   const btn=el('button',null,'↻ REINDEX'); btn.id='kn-reindex'; btn.onclick=reindexKnowledge; wrap.appendChild(btn);
+  if(k.reindexing){                          // panel (re)opened mid-reindex — pick up live progress
+    _knSawRunning=true;
+    const tot=k.total_chunks||0, done=k.done_chunks||0;
+    const pct=tot>0?Math.round(100*done/tot):0;
+    btn.disabled=true; btn.textContent=`⏳ indexing… ${pct}% (${done}/${tot})`+(k.current_file?' — '+k.current_file:'');
+    setTimeout(_knStartPoll,0);
+  }
   if(k.docs && k.docs.length){
     const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DOCUMENT</th><th>SIZE</th><th>CHUNKS</th>'; t.appendChild(hr);
     k.docs.forEach(d=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${(d.file||'').replace(/</g,'&lt;')}</td><td>${d.size!=null?Math.round(d.size/1024)+'kb':'—'}</td><td>${d.chunks!=null?d.chunks:'<span class="muted">—</span>'}</td>`; t.appendChild(tr); });

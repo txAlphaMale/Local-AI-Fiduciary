@@ -14,6 +14,7 @@ import os
 import json
 import math
 import re
+import threading
 import time
 import urllib.request
 
@@ -25,6 +26,23 @@ CHUNK_CHARS = int(os.environ.get("KNOWLEDGE_CHUNK_CHARS", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("KNOWLEDGE_CHUNK_OVERLAP", "200"))
 EMBED_TIMEOUT = int(os.environ.get("KNOWLEDGE_EMBED_TIMEOUT", "120"))
 SUPPORTED = (".md", ".txt", ".pdf")
+
+# ---- reindex progress (module-level, lock-protected — polled by GET /api/knowledge while
+# a background job thread runs ensure_index(force=True)). Chunk-level, not a rough estimate:
+# the embed loop below already processes one chunk at a time via _embed_one().
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS = {"reindexing": False, "done_chunks": 0, "total_chunks": 0, "current_file": None}
+
+
+def progress():
+    """Snapshot of the in-flight (or last) reindex progress, for the UI to poll."""
+    with _PROGRESS_LOCK:
+        return dict(_PROGRESS)
+
+
+def _set_progress(**kw):
+    with _PROGRESS_LOCK:
+        _PROGRESS.update(kw)
 
 
 def _supported_files():
@@ -138,40 +156,64 @@ def ensure_index(force=False):
         for v in old_vecs:
             by_file.setdefault(v.get("file"), []).append(v)
 
-    vectors, files_meta, errors = [], {}, []
+    # ---- pre-scan: chunk every changed/new file up front so we know total_chunks before
+    # embedding starts (real progress, not an estimate — each chunk is one _embed_one() call).
+    to_embed = []            # (rel, ci, ch) in emit order
+    unchanged_rel = set()
+    pending_chunks = {}      # rel -> chunks (reused below so we don't re-extract/re-chunk)
     for (rel, ap, mt, sz) in files:
         unchanged = same_model and old_sig.get(rel) == [mt, sz] and by_file.get(rel)
         if unchanged:
-            vectors.extend(by_file[rel])
-            files_meta[rel] = {"mtime": mt, "size": sz, "chunks": len(by_file[rel])}
+            unchanged_rel.add(rel)
             continue
         text = _extract_text(ap)
         chunks = _chunk(text)
-        n_ok = 0
+        pending_chunks[rel] = chunks
         for ci, ch in enumerate(chunks):
-            try:
-                vec = _embed_one(ch)
-            except Exception as e:
-                errors.append(f"{rel}: {e}")
-                vec = []
-            if vec:
-                vectors.append({"file": rel, "chunk": ci, "text": ch, "vec": vec})
-                n_ok += 1
-        files_meta[rel] = {"mtime": mt, "size": sz, "chunks": n_ok,
-                           "note": ("no extractable text" if not chunks else None)}
-    idx = {"model": EMBED_MODEL, "built_at": int(time.time()), "sig": cur,
-           "files": files_meta, "vectors": vectors, "errors": errors[:20]}
-    _save_index(idx)
-    return idx
+            to_embed.append((rel, ci, ch))
+    total_chunks = len(to_embed)
+    _set_progress(reindexing=True, done_chunks=0, total_chunks=total_chunks, current_file=None)
+
+    try:
+        vectors, files_meta, errors = [], {}, []
+        for (rel, ap, mt, sz) in files:
+            if rel in unchanged_rel:
+                vectors.extend(by_file[rel])
+                files_meta[rel] = {"mtime": mt, "size": sz, "chunks": len(by_file[rel])}
+                continue
+            chunks = pending_chunks.get(rel) or []
+            n_ok = 0
+            for ci, ch in enumerate(chunks):
+                _set_progress(current_file=rel)
+                try:
+                    vec = _embed_one(ch)
+                except Exception as e:
+                    errors.append(f"{rel}: {e}")
+                    vec = []
+                if vec:
+                    vectors.append({"file": rel, "chunk": ci, "text": ch, "vec": vec})
+                    n_ok += 1
+                with _PROGRESS_LOCK:
+                    _PROGRESS["done_chunks"] += 1
+            files_meta[rel] = {"mtime": mt, "size": sz, "chunks": n_ok,
+                               "note": ("no extractable text" if not chunks else None)}
+        idx = {"model": EMBED_MODEL, "built_at": int(time.time()), "sig": cur,
+               "files": files_meta, "vectors": vectors, "errors": errors[:20]}
+        _save_index(idx)
+        return idx
+    finally:
+        _set_progress(reindexing=False, current_file=None)
 
 
 def status():
-    """Folder + index status for the UI (no vectors, no full chunk text)."""
+    """Folder + index status for the UI (no vectors, no full chunk text). Includes live
+    reindex progress ({reindexing, done_chunks, total_chunks, current_file}) so the panel
+    can poll this single endpoint while a background reindex job is running."""
     files = _supported_files()
     idx = _load_index()
     stale = idx.get("sig") != _sig(files) or idx.get("model") != EMBED_MODEL
     meta = idx.get("files") or {}
-    return {
+    out = {
         "dir": KNOWLEDGE_DIR, "model": EMBED_MODEL,
         "built_at": idx.get("built_at"), "stale": bool(stale),
         "doc_count": len(files), "chunk_count": len(idx.get("vectors") or []),
@@ -181,6 +223,8 @@ def status():
         "note": "Drop .md/.txt/.pdf files into the knowledge folder; they're indexed for the "
                 "Fiduciary's search_knowledge tool. Remove a file and it drops out on reindex.",
     }
+    out.update(progress())
+    return out
 
 
 def search(query, k=4):
