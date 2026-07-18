@@ -2469,6 +2469,19 @@ def _alerts_digest():
             add(reg["level"], "Risk regime", reg["msg"], "INSIGHTS → RISK")
     except Exception:
         pass
+    # 7) Setup completeness — state of residence unconfirmed (RESUME-TRACKER item 8, found
+    # while answering Jason's renter question). A guessed Texas presented as fact is worse
+    # than the old single-state hardcode; surface it until the user confirms or it auto-detects.
+    try:
+        sinfo = _state_of_residence_info()
+        if sinfo["source"] == "default_unconfirmed":
+            add("warn", "Setup",
+                "State of residence isn't set and no tracked real-estate account gave a state "
+                "to auto-detect — Estate, ACA, Tax, and Cash·Debt are all showing TEXAS "
+                "assumptions (community property, TOD deeds, Medicaid gap) as a GUESS, not a "
+                "confirmed fact. Set it once in ASSUMPTIONS.", "PLAN → ASSUMPTIONS")
+    except Exception:
+        pass
 
     order = {"action": 0, "warn": 1, "info": 2}
     alerts.sort(key=lambda a: order.get(a["level"], 9))
@@ -2725,7 +2738,8 @@ def get_estate():
     try:
         d = _data()
         cfg = _read_retire()
-        st = _state_of_residence(cfg, d)
+        sinfo = _state_of_residence_info(cfg, d)
+        st = sinfo["code"]
         married = tax.norm_status(cfg.get("filing_status") or "mfj") == "mfj"
         growth = cfg.get("expected_real_return_pct") or 5.0
         acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
@@ -2776,7 +2790,7 @@ def get_estate():
             a_["ticker"], a_["account"] = p["ticker"], p["account"]
             gvh.append(a_)
         return {"generated_at": int(time.time()),
-                "state_of_residence": st,
+                "state_of_residence": st, "state_of_residence_source": sinfo["source"],
                 "snapshot": snap,
                 "home_basis": home_basis,
                 "stepup": estate.stepup_ledger(accounts, state=st),
@@ -4009,16 +4023,29 @@ def _infer_state_from_accounts(d):
     return None
 
 
-def _state_of_residence(cfg=None, d=None):
-    """Resolve the household's state of residence: explicit config setting > auto-detected
-    from the home address > TX fallback (this app's original state). Threaded into
-    estate.py/aca.py/tax.py/cashdebt.py/insurance.py so none of them hardcode a state."""
+def _state_of_residence_info(cfg=None, d=None):
+    """Resolve the household's state of residence AND how confident we are in it: explicit
+    config setting ("explicit") > auto-detected from the home address ("inferred") > silent
+    TX fallback ("default_unconfirmed"). The distinction matters: a renter (or anyone whose
+    home isn't tracked) with the setting still blank gets a GUESSED Texas, not a known one —
+    RESUME-TRACKER item 8 (found while answering Jason's renter question) — so callers that
+    care about correctness (the alerts digest, the state-aware endpoints) should surface
+    `source`, not just silently use `code` as if it were always known."""
     cfg = cfg if cfg is not None else _read_retire()
     explicit = cfg.get("state_of_residence")
     if explicit:
-        return states.norm_state(explicit)
+        return {"code": states.norm_state(explicit), "source": "explicit"}
     inferred = _infer_state_from_accounts(d if d is not None else _data())
-    return states.norm_state(inferred)
+    if inferred:
+        return {"code": states.norm_state(inferred), "source": "inferred"}
+    return {"code": "TX", "source": "default_unconfirmed"}
+
+
+def _state_of_residence(cfg=None, d=None):
+    """Just the resolved 2-letter code — for callers that don't need the confidence source.
+    Prefer `_state_of_residence_info()` in anything user-facing so an unconfirmed guess isn't
+    presented as fact."""
+    return _state_of_residence_info(cfg, d)["code"]
 
 
 @app.get("/api/retirement-config")
@@ -4487,8 +4514,11 @@ def get_cashdebt():
               "mortgage_payment_monthly": cfg.get("mortgage_payment_monthly"),
               "refi_rate_pct": cfg.get("refi_rate_pct"),
               "refi_closing_costs": cfg.get("refi_closing_costs"),
-              "debts": debts, "state": _state_of_residence(ret, d)}
+              "debts": debts}
+    sinfo = _state_of_residence_info(ret, d)
+    inputs["state"] = sinfo["code"]
     res = cashdebt.run(inputs, {"ef_target_months": _knob("ef_target_months")})
+    res["state_of_residence_source"] = sinfo["source"]
     res["inputs"] = inputs
     res["tbill_source"] = tb_src
     res["generated_at"] = int(time.time())
@@ -4620,11 +4650,13 @@ def get_insurance():
                  "age_self": ret.get("current_age"), "age_spouse": ret.get("spouse_age"),
                  "retire_age": ret.get("target_age") or 60,
                  "children": cfg.get("children") or 0,
-                 "home_value": home_val, "real_rate_pct": rr,
-                 "state": _state_of_residence(ret, d)}
+                 "home_value": home_val, "real_rate_pct": rr}
+    sinfo = _state_of_residence_info(ret, d)
+    household["state"] = sinfo["code"]
     res = insurance.run(household, cfg.get("policies"))
     res["household"] = household
     res["policies_echo"] = cfg.get("policies") or []
+    res["state_of_residence_source"] = sinfo["source"]
     res["generated_at"] = int(time.time())
     if not cfg.get("income_self") and not cfg.get("income_spouse"):
         res["setup_needed"] = True
@@ -4688,7 +4720,7 @@ def get_tax(gross_ordinary: float = 0.0, ltcg: float = 0.0, magi: float = None):
     a light state-tax estimate (states.py, item 3) rides along in `state_tax`."""
     cfg = _read_retire()
     ctx = _tax_ctx(cfg)
-    st = _state_of_residence(cfg)
+    sinfo = _state_of_residence_info(cfg)
     # default the income input to the household's modeled expenses if not supplied
     if not gross_ordinary:
         try:
@@ -4696,9 +4728,11 @@ def get_tax(gross_ordinary: float = 0.0, ltcg: float = 0.0, magi: float = None):
         except Exception:
             gross_ordinary = 0.0
     try:
-        return tax.summary(gross_ordinary=gross_ordinary, ltcg=ltcg,
-                           status=ctx["status"], age=ctx["age"], spouse_age=ctx["spouse_age"],
-                           fill_to_rate=ctx["fill_to_rate"], magi=magi, state=st)
+        res = tax.summary(gross_ordinary=gross_ordinary, ltcg=ltcg,
+                          status=ctx["status"], age=ctx["age"], spouse_age=ctx["spouse_age"],
+                          fill_to_rate=ctx["fill_to_rate"], magi=magi, state=sinfo["code"])
+        res["state_of_residence_source"] = sinfo["source"]
+        return res
     except Exception as e:
         return JSONResponse({"error": f"tax engine failed: {e}"}, status_code=500)
 
@@ -4724,7 +4758,7 @@ def get_aca(magi: float = None, household_size: int = None, slcsp_annual: float 
     means — a real coverage gap (non-expansion states) vs. likely Medicaid (expansion)."""
     cfg = _read_retire()
     ctx = _aca_ctx(cfg)
-    st = _state_of_residence(cfg)
+    sinfo = _state_of_residence_info(cfg)
     hh = int(household_size or ctx["household_size"])
     slcsp = slcsp_annual if slcsp_annual is not None else ctx["slcsp_annual"]
     if magi is not None:
@@ -4742,9 +4776,11 @@ def get_aca(magi: float = None, household_size: int = None, slcsp_annual: float 
         exp = float(cfg.get("annual_expenses_override") or 0) or 0.0
         components = {"ira_401k_withdrawals": exp}
     try:
-        return aca.summary(components=components, household_size=hh, slcsp_annual=slcsp,
-                           planned_conversion=planned_conversion, planned_gains=planned_gains,
-                           state=st)
+        res = aca.summary(components=components, household_size=hh, slcsp_annual=slcsp,
+                          planned_conversion=planned_conversion, planned_gains=planned_gains,
+                          state=sinfo["code"])
+        res["state_of_residence_source"] = sinfo["source"]
+        return res
     except Exception as e:
         return JSONResponse({"error": f"aca estimator failed: {e}"}, status_code=500)
 

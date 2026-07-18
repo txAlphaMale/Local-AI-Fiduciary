@@ -161,6 +161,12 @@ running rather than double-firing.
 `setup.py` will validate your `.env` and templates and pull the required Ollama model.
 See `INSTALL.md` for the full walkthrough.
 
+**Once it's running:** `INSTALL.md` gets the containers up and Monarch/holdings connected —
+that alone gives you a real Positions/Research/Risk view. A handful of other panels
+(Estate, ACA, Social Security, Insurance, Cash·Debt, Benefits) need you to type in some
+facts about yourself first, or they stay placeholders. See `NEW-USER-SETUP-GUIDE.md` for
+what to fill in and where, ranked by how much it unlocks.
+
 ---
 
 ## Security & sharing
