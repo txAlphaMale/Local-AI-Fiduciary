@@ -24,7 +24,7 @@ import queue
 
 import requests
 from fastapi import FastAPI, Request, Header
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
@@ -8148,4 +8148,17 @@ def health():
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
+    """Serves the dashboard. Diagnosed 2026-07-17: every manual "GENERATE NOW"/"REBUILD"/
+    "REFRESH" button in the UI POSTs to a /api/run-* (or /api/knowledge/reindex) endpoint that
+    is guarded by ANALYSIS_TOKEN, but the front-end JS never sent the header — so with a token
+    configured, every one of those buttons silently 401'd while looking like it queued (the
+    scheduler's own runs were unaffected since it calls _enqueue() directly in-process, not over
+    HTTP). Fix: inject the server's own token into the page so its own buttons can authenticate
+    themselves; unrelated callers still need the real header value. Empty string when the
+    ANALYSIS_TOKEN secret isn't set, matching the "guard is off" behavior everywhere else.
+    """
+    path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    with open(path, encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("__ANALYSIS_TOKEN__", ANALYSIS_TOKEN.replace("\\", "\\\\").replace('"', '\\"'))
+    return HTMLResponse(html)

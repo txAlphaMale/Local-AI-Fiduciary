@@ -136,12 +136,21 @@ PROMPT = (
 
 
 def ask(model, question, context):
+    """Returns (val, secs, raw_or_error). val=None + raw starting "ERROR:" means the call itself
+    failed (Ollama/container down, connection reset mid-run, timeout) — distinct from the model
+    answering but missing/malformed JSON. Diagnosed 2026-07-17: an uncaught connection error here
+    (e.g. a container restart mid-run) used to crash the whole 30-question pass with a traceback,
+    losing every result collected so far instead of just failing the one in-flight question."""
     body = {"model": model, "stream": False,
             "options": {"num_ctx": NUM_CTX, "temperature": 0},
             "messages": [{"role": "user", "content": PROMPT % (question, json.dumps(context)[:60000])}]}
     t0 = time.time()
-    r = requests.post(OLLAMA + "/api/chat", json=body, timeout=TIMEOUT)
-    txt = (r.json().get("message") or {}).get("content") or ""
+    try:
+        r = requests.post(OLLAMA + "/api/chat", json=body, timeout=TIMEOUT)
+        r.raise_for_status()
+        txt = (r.json().get("message") or {}).get("content") or ""
+    except Exception as e:
+        return None, round(time.time() - t0, 1), f"ERROR: {type(e).__name__}: {e}"
     m = re.search(r'\{[^{}]*"answer"[^{}]*\}', txt.replace("\n", " "))
     val = None
     if m:
@@ -173,7 +182,7 @@ def main():
     summary = {}
     for model in MODELS:
         lines += ["## %s" % model, "", "| # | question | truth | model | verdict | s |", "|---|---|---|---|---|---|"]
-        n_pass = n_fail = n_skip = 0
+        n_pass = n_fail = n_skip = n_err = 0
         for qid, ep, question, truth_fn, tol in GOLDEN:
             data = cache.get(ep)
             truth = None
@@ -185,7 +194,14 @@ def main():
                 n_skip += 1
                 lines.append("| %s | %s | — | — | SKIP | — |" % (qid, question))
                 continue
-            got, secs, _raw = ask(model, question, data)
+            got, secs, raw = ask(model, question, data)
+            if got is None and isinstance(raw, str) and raw.startswith("ERROR:"):
+                # the call itself failed (container/Ollama down, connection reset, timeout) —
+                # not a model accuracy failure, so it's kept out of the pass/fail accuracy denominator.
+                n_err += 1
+                lines.append("| %s | %s | %s | %s | %s | %s |" % (qid, question, truth, "⚠ " + raw[:80], "ERROR", secs))
+                print("[%s] %-16s truth=%-14s %s" % (model, qid, truth, raw))
+                continue
             ok = within(float(truth), got, tol)
             n_pass += int(ok)
             n_fail += int(not ok)
@@ -193,11 +209,15 @@ def main():
                          % (qid, question, truth, got if got is not None else "∅", "PASS" if ok else "**FAIL**", secs))
             print("[%s] %-16s truth=%-14s got=%-14s %s" % (model, qid, truth, got, "PASS" if ok else "FAIL"))
         acc = round(n_pass / max(1, n_pass + n_fail) * 100, 1)
-        summary[model] = (n_pass, n_fail, n_skip, acc)
-        lines += ["", "**%s: %d pass / %d fail / %d skip → accuracy %s%% (of answerable)**" % (model, n_pass, n_fail, n_skip, acc), ""]
-    lines += ["## Summary", "", "| model | pass | fail | skip | accuracy |", "|---|---|---|---|---|"]
-    for m, (p, f, s, a) in summary.items():
-        lines.append("| %s | %d | %d | %d | %s%% |" % (m, p, f, s, a))
+        summary[model] = (n_pass, n_fail, n_skip, n_err, acc)
+        lines += ["", "**%s: %d pass / %d fail / %d skip / %d error → accuracy %s%% (of answerable, errors excluded)**"
+                  % (model, n_pass, n_fail, n_skip, n_err, acc), ""]
+        if n_err:
+            lines += ["_%d question(s) hit a call ERROR (not a model failure) — rerun once the API/Ollama are confirmed up, "
+                      "or ignore if this was a known restart mid-run._" % n_err, ""]
+    lines += ["## Summary", "", "| model | pass | fail | skip | error | accuracy |", "|---|---|---|---|---|---|"]
+    for m, (p, f, s, e, a) in summary.items():
+        lines.append("| %s | %d | %d | %d | %d | %s%% |" % (m, p, f, s, e, a))
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
