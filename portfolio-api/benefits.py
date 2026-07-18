@@ -23,6 +23,12 @@ LIMITS_2026 = {
 }
 SOURCE_URL = "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
 
+# Pay-frequency → periods/year, for the salary cross-check below. Found 2026-07-18 (Jason):
+# this used to be hardcoded to biweekly (x26) with no way to say otherwise — silently wrong
+# for weekly (52), semi-monthly/1st-15th (24), or monthly (12) payrolls. "custom" (e.g. gig
+# work with irregular pay) supplies its own periods/year rather than picking from this table.
+PAY_FREQUENCIES_PER_YEAR = {"weekly": 52, "biweekly": 26, "semimonthly": 24, "monthly": 12}
+
 
 def _f(v, d=0.0):
     try:
@@ -48,10 +54,26 @@ def match_analysis(salary, pretax_pct, tier1_pct, tier1_rate, tier2_pct, tier2_r
             "left_on_table": round(s * (max_match_pct - earned_pct) / 100.0, 2)}
 
 
+def pay_periods_per_year(pay_frequency, pay_periods_custom=None):
+    """Resolve periods/year from a pay_frequency enum ('weekly'/'biweekly'/'semimonthly'/
+    'monthly'/'custom') + an optional custom override. Unknown/blank frequency falls back to
+    biweekly — the assumption this cross-check always silently made before, so anyone who
+    already had a value saved keeps the same behavior until they pick a real frequency."""
+    pf = (pay_frequency or "biweekly").lower()
+    if pf == "custom":
+        c = _f(pay_periods_custom)
+        return c if c > 0 else 26.0
+    return PAY_FREQUENCIES_PER_YEAR.get(pf, 26)
+
+
 def run(facts, limits=None):
     """facts: {salary, age, spouse_age, pretax_pct, aftertax_pct, match_t1_pct, match_t1_rate,
     match_t2_pct, match_t2_rate, plan_aftertax(bool), inservice_rollover('yes'/'no'/'unknown'),
-    hsa_coverage('self'/'family'), hsa_contribution, hsa_invested(bool), magi, biweekly_total}."""
+    hsa_coverage('self'/'family'), hsa_contribution, hsa_invested(bool), magi, biweekly_total,
+    pay_frequency('weekly'/'biweekly'/'semimonthly'/'monthly'/'custom'), pay_periods_custom}.
+    `biweekly_total` is really "per-paycheck total (employee+match)" now — the key name is kept
+    for backward compatibility with already-saved config, but it's multiplied by whatever
+    pay_frequency resolves to, not hardcoded to 26 anymore."""
     L = {**LIMITS_2026, **(limits or {})}
     f = facts or {}
     salary, age = _f(f.get("salary")), _f(f.get("age"))
@@ -61,16 +83,21 @@ def run(facts, limits=None):
         out["note"] = "Enter salary (household register income) + plan facts to compute headroom."
         return out
 
-    # ---- salary cross-check from the bi-weekly total (employee + match), if provided ----
+    # ---- salary cross-check from the per-paycheck total (employee + match), if provided ----
     bw = _f(f.get("biweekly_total"))
     m = match_analysis(salary, f.get("pretax_pct"), f.get("match_t1_pct"), f.get("match_t1_rate"),
                        f.get("match_t2_pct"), f.get("match_t2_rate"))
     if bw:
+        periods = pay_periods_per_year(f.get("pay_frequency"), f.get("pay_periods_custom"))
         combined_pct = _f(f.get("pretax_pct")) + m["earned_match_pct"]
-        implied = round(bw * 26.0 / combined_pct * 100.0, 0) if combined_pct else None
-        out["salary_crosscheck"] = {"biweekly_total": bw, "combined_pct": combined_pct,
-                                    "implied_salary": implied,
-                                    "note": "implied = biweekly (employee+match) × 26 ÷ combined %"}
+        implied = round(bw * periods / combined_pct * 100.0, 0) if combined_pct else None
+        pf_label = (f.get("pay_frequency") or "biweekly").lower()
+        pf_label = pf_label if pf_label in PAY_FREQUENCIES_PER_YEAR or pf_label == "custom" else "biweekly"
+        out["salary_crosscheck"] = {"per_paycheck_total": bw, "biweekly_total": bw,  # dup key: back-compat
+                                    "pay_frequency": pf_label, "periods_per_year": periods,
+                                    "combined_pct": combined_pct, "implied_salary": implied,
+                                    "note": f"implied = per-paycheck total (employee+match) × "
+                                            f"{periods:g} {pf_label} paychecks/yr ÷ combined %"}
 
     # ---- 401(k) employee deferral ----
     ee_dollars = salary * _f(f.get("pretax_pct")) / 100.0

@@ -487,7 +487,7 @@ W('earnings-trigger','Automation','Post-earnings brief refresh (event-driven res
   'You don\'t need to do anything — this rides the ⚠ ATTENTION "Earnings" flags already on your dashboard. If a print seems to have landed but the brief still looks stale the next morning, check #jobs for `earnings_brief` or force it manually; known gap: a before-market report on a day the calendar hadn\'t yet surfaced (rare, free-tier data lag) can be missed until the NEXT scheduled analysis run.');
 W('benefits','Planning','Benefits & contribution room',
   'The guaranteed-return ladder for the next saved dollar: employer-match capture (instant 50-100% return), HSA headroom (the only triple-tax-advantaged account), 401(k) employee-limit headroom with age catch-ups (and the >$150k mandatory-Roth catch-up rule), direct-vs-backdoor Roth IRA eligibility against the MFJ phase-out, and mega-backdoor capacity (§415(c) limit minus everything already going in). All 2026 limits are IRS-verified and registered in the AUDITS→GROUNDING watchdog, so they re-flag themselves every January.',
-  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income.',
+  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income. The PER-PAYCHECK TOTAL field (employee+match) has its own pay-frequency selector — weekly, bi-weekly, semi-monthly (1st/15th), monthly, or a custom periods/year for irregular pay (e.g. gig work) — used to annualize it for the salary cross-check line. Pick the one that matches your actual payroll; picking the wrong one silently mis-prices the implied salary (a weekly payroll read as bi-weekly understates it by 2x).',
   'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier.');
 W('narrative','Dashboard','State of the Wealth (weekly letter)',
   'A plain-language weekly note the AI writes to the household by composing every module\'s cached headline — net worth and its week change, funded ratio, YTD vs your own policy, concentration and attention flags, harvestable losses, earnings ahead, and the AI\'s own track record — ending with a single THIS WEEK\'S FOCUS action. The family-office quarterly letter, weekly and personal.',
@@ -916,7 +916,19 @@ function dashboardContent(){
     const fi=txt.indexOf("THIS WEEK'S FOCUS:");
     if(fi>=0){ body.textContent=txt.slice(0,fi); const foc=el('div'); foc.style.cssText='font-size:12px;line-height:1.6;margin-top:6px;color:var(--amber);white-space:pre-wrap;'; foc.textContent=txt.slice(fi); nbox.appendChild(body); nbox.appendChild(foc); }
     else { body.textContent=txt; nbox.appendChild(body); }
-  } else nbox.appendChild(el('div','muted','No letter yet — it writes itself Monday mornings, or generate one now.'));
+  } else {
+    nbox.appendChild(el('div','muted','No letter yet — it writes itself Monday mornings, or generate one now.'));
+    // Surface WHY the last attempt failed instead of leaving a silent "No letter yet" forever —
+    // found 2026-07-18: every failure mode (timeout, Ollama error, empty response) used to be
+    // swallowed with zero trace anywhere. Only shown when there's genuinely no letter yet; once
+    // one exists, a past error is no longer the interesting fact.
+    if(NARR && NARR.last_error){
+      const el2=el('div'); el2.style.cssText='font-size:11px;color:var(--red);margin-top:6px;line-height:1.4;';
+      const when=NARR.last_error_at?new Date(NARR.last_error_at*1000).toLocaleString():'';
+      el2.textContent=`Last attempt failed${when?' ('+when+')':''}: ${NARR.last_error}`;
+      nbox.appendChild(el2);
+    }
+  }
   const gb=el('button',null,nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:8px;';
   gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
   nbox.appendChild(gb);
@@ -2061,7 +2073,15 @@ function benefitsContent(){
   ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:8px;padding:0;">PLAN FACTS · EDIT</div>`+
     `<div style="font-size:11px;line-height:2.2;">401k pre-tax <input id="bn-pre" type="number" step="0.5" value="${pv(f.pretax_pct)}" style="width:52px;"/>% after-tax <input id="bn-aft" type="number" step="0.5" value="${pv(f.aftertax_pct)}" style="width:52px;"/>% `+
     `match: <input id="bn-t1r" type="number" value="${pv(f.match_t1_rate)}" style="width:48px;"/>% of first <input id="bn-t1p" type="number" step="0.5" value="${pv(f.match_t1_pct)}" style="width:44px;"/>% + <input id="bn-t2r" type="number" value="${pv(f.match_t2_rate)}" style="width:48px;"/>% of next <input id="bn-t2p" type="number" step="0.5" value="${pv(f.match_t2_pct)}" style="width:44px;"/>% `+
-    `bi-weekly total <input id="bn-bw" type="number" step="0.01" value="${pv(f.biweekly_total)}" style="width:78px;" title="employee+match per paycheck — cross-checks the salary"/><br/>`+
+    `per-paycheck total <input id="bn-bw" type="number" step="0.01" value="${pv(f.biweekly_total)}" style="width:78px;" title="employee+match per paycheck — cross-checks the salary"/> `+
+    `<select id="bn-freq" title="how often you're paid — used to annualize the per-paycheck total above">`+
+      `<option value="weekly"${f.pay_frequency==='weekly'?' selected':''}>weekly</option>`+
+      `<option value="biweekly"${(!f.pay_frequency||f.pay_frequency==='biweekly')?' selected':''}>bi-weekly</option>`+
+      `<option value="semimonthly"${f.pay_frequency==='semimonthly'?' selected':''}>semi-monthly (1st/15th)</option>`+
+      `<option value="monthly"${f.pay_frequency==='monthly'?' selected':''}>monthly</option>`+
+      `<option value="custom"${f.pay_frequency==='custom'?' selected':''}>custom (e.g. gig work)</option>`+
+    `</select> `+
+    `<span id="bn-freq-custom-wrap" style="${f.pay_frequency==='custom'?'':'display:none;'}">periods/yr <input id="bn-freq-custom" type="number" step="1" min="1" value="${pv(f.pay_periods_custom)}" style="width:44px;"/></span><br/>`+
     `plan offers after-tax <select id="bn-pa"><option value="1"${f.plan_aftertax?' selected':''}>yes</option><option value="0"${!f.plan_aftertax?' selected':''}>no</option></select> `+
     `in-service rollover <select id="bn-isr"><option${f.inservice_rollover==='unknown'?' selected':''}>unknown</option><option${f.inservice_rollover==='yes'?' selected':''}>yes</option><option${f.inservice_rollover==='no'?' selected':''}>no</option></select> `+
     `HSA <select id="bn-hc"><option${f.hsa_coverage==='family'?' selected':''}>family</option><option${f.hsa_coverage==='self'?' selected':''}>self</option></select> `+
@@ -2070,6 +2090,7 @@ function benefitsContent(){
     `<button id="bn-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
+    if(g('bn-freq')) g('bn-freq').onchange=()=>{ const w=g('bn-freq-custom-wrap'); if(w) w.style.display=(g('bn-freq').value==='custom')?'':'none'; };
     if(g('bn-save')) g('bn-save').onclick=async()=>{
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({k401_pretax_pct:parseFloat(g('bn-pre').value)||null,
@@ -2077,6 +2098,7 @@ function benefitsContent(){
           k401_match_t1_rate:parseFloat(g('bn-t1r').value)||null, k401_match_t1_pct:parseFloat(g('bn-t1p').value)||null,
           k401_match_t2_rate:parseFloat(g('bn-t2r').value)||null, k401_match_t2_pct:parseFloat(g('bn-t2p').value)||null,
           k401_biweekly_total:parseFloat(g('bn-bw').value)||null,
+          k401_pay_frequency:g('bn-freq').value, k401_pay_periods_custom:parseFloat(g('bn-freq-custom').value)||null,
           plan_aftertax:g('bn-pa').value==='1', inservice_rollover:g('bn-isr').value,
           hsa_coverage:g('bn-hc').value, hsa_contribution:parseFloat(g('bn-hsa').value)||null,
           hsa_invested:g('bn-hi').value==='1'})});
@@ -2084,7 +2106,8 @@ function benefitsContent(){
   },0);
   const sc=r.salary_crosscheck;
   if(sc && sc.implied_salary){ const cx=el('div','muted'); cx.style.cssText='font-size:10px;margin-top:6px;';
-    cx.textContent=`salary cross-check: ${sc.combined_pct}% combined × 26 paychecks implies ~$${Math.round(sc.implied_salary).toLocaleString()} — if that's off, fix the income in PLAN→INSURANCE.`;
+    const freqWord=sc.pay_frequency==='semimonthly'?'semi-monthly':(sc.pay_frequency||'biweekly');
+    cx.textContent=`salary cross-check: ${sc.combined_pct}% combined × ${sc.periods_per_year} ${freqWord} paychecks/yr implies ~$${Math.round(sc.implied_salary).toLocaleString()} — if that's off, fix the income in PLAN→INSURANCE or the pay frequency above.`;
     wrap.appendChild(cx); }
   const foot=el('div','muted'); foot.style.cssText='font-size:10px;margin-top:8px;line-height:1.5;'; foot.textContent=r.note||''; wrap.appendChild(foot);
   return wrap;

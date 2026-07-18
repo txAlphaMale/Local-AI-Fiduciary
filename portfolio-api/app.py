@@ -4469,6 +4469,28 @@ def _narrative_context():
     return {k: v for k, v in ctx.items() if v not in (None, [], {})}
 
 
+def _write_narrative_error(msg):
+    """Persist the reason the LAST attempt failed so /api/narrative (and the DASHBOARD box) can
+    show something better than an eternally-empty 'No letter yet' — found 2026-07-18 while
+    diagnosing Jason's 'ran it several times, it never appears': _do_narrative() used to swallow
+    EVERY failure mode (timeout, non-2xx, empty response, any exception) into a bare `return`,
+    so the job silently finished 'done' with nothing written and no trace anywhere. Doesn't
+    touch the `letters` history — only this one status field."""
+    try:
+        with open(NARRATIVE_FILE, encoding="utf-8") as f:
+            store = json.load(f) or {}
+    except Exception:
+        store = {}
+    store["last_error"] = msg
+    store["last_error_at"] = int(time.time())
+    try:
+        os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
+        with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def _do_narrative():
     ctx = _narrative_context()
     prompt = _sys(
@@ -4485,14 +4507,30 @@ def _do_narrative():
     body = {"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False,
             "keep_alive": LLM_KEEP_ALIVE,
             "options": {"temperature": 0.4, "num_ctx": ANALYSIS_NUM_CTX}}
+    # Every failure mode below used to collapse into `letter = ""` and a silent `return` — the
+    # job queue then marked it "done" (no exception raised) with zero trace anywhere. Now each
+    # branch records WHY, then re-raises so /api/jobs shows a real "error" status + message,
+    # and /api/narrative's last_error survives even after the in-memory job history resets on
+    # the next container restart.
+    letter, err = "", None
     try:
         with _gpu_slot():
             r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
-        letter = (r.json() or {}).get("response", "").strip() if r.status_code < 400 else ""
-    except Exception:
-        letter = ""
-    if not letter:
-        return
+        if r.status_code >= 400:
+            err = f"Ollama returned HTTP {r.status_code}: {r.text[:300]}"
+        else:
+            letter = (r.json() or {}).get("response", "").strip()
+            if not letter:
+                err = "Ollama returned an empty response (model may have produced nothing usable)"
+    except requests.exceptions.Timeout:
+        err = f"timed out after {LLM_TIMEOUT}s waiting on Ollama — model may be cold-loading, GPU-starved, or the prompt/context too large"
+    except requests.exceptions.ConnectionError as e:
+        err = f"could not reach Ollama at {OLLAMA}: {e}"[:300]
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"[:300]
+    if err:
+        _write_narrative_error(err)
+        raise RuntimeError(err)   # _gpu_slot() still releases correctly on unwind
     try:
         with open(NARRATIVE_FILE, encoding="utf-8") as f:
             store = json.load(f) or {}
@@ -4500,7 +4538,7 @@ def _do_narrative():
         store = {}
     rows = (store.get("letters") or [])
     rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx})
-    store = {"letters": rows[-NARRATIVE_KEEP:]}
+    store = {"letters": rows[-NARRATIVE_KEEP:], "last_error": None, "last_error_at": None}
     os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
     with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
         json.dump(store, f, ensure_ascii=False)
@@ -4515,6 +4553,7 @@ def get_narrative():
         store = {}
     rows = store.get("letters") or []
     return {"latest": rows[-1] if rows else None, "count": len(rows),
+            "last_error": store.get("last_error"), "last_error_at": store.get("last_error_at"),
             "note": ("Weekly plain-language composition of every module's cached headline — the "
                      "cockpit as a story, with one recommended focus. Educational, not advice.")}
 
@@ -4729,6 +4768,8 @@ def get_benefits():
              "match_t2_pct": cfg.get("k401_match_t2_pct"),
              "match_t2_rate": cfg.get("k401_match_t2_rate"),
              "biweekly_total": cfg.get("k401_biweekly_total"),
+             "pay_frequency": cfg.get("k401_pay_frequency"),
+             "pay_periods_custom": cfg.get("k401_pay_periods_custom"),
              "plan_aftertax": cfg.get("plan_aftertax"),
              "inservice_rollover": cfg.get("inservice_rollover"),
              "hsa_coverage": cfg.get("hsa_coverage"),
@@ -4878,6 +4919,10 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      "k401_match_t1_pct": None, "k401_match_t1_rate": None,
                      "k401_match_t2_pct": None, "k401_match_t2_rate": None,
                      "k401_biweekly_total": None,
+                     # Pay-frequency for the salary cross-check above (Jason, 2026-07-18): used to
+                     # be hardcoded to biweekly. "biweekly" default preserves old behavior for
+                     # anyone who already saved a per-paycheck total under that assumption.
+                     "k401_pay_frequency": "biweekly", "k401_pay_periods_custom": None,
                      "plan_aftertax": False, "inservice_rollover": "unknown",
                      "hsa_coverage": "family", "hsa_contribution": None, "hsa_invested": True,
                      # OPP-5 continuity binder (PLAN→CONTINUITY): key-contacts register — attorney,
@@ -4922,7 +4967,8 @@ async def post_insurance_config(req: Request):
               "mortgage_rate_pct", "mortgage_payment_monthly", "deposit_yield_pct",
               "refi_rate_pct", "refi_closing_costs",
               "k401_pretax_pct", "k401_aftertax_pct", "k401_match_t1_pct", "k401_match_t1_rate",
-              "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total", "hsa_contribution"):
+              "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total",
+              "k401_pay_periods_custom", "hsa_contribution"):
         if k in body:
             try:
                 cfg[k] = None if body[k] in (None, "") else float(body[k])
@@ -4967,6 +5013,8 @@ async def post_insurance_config(req: Request):
         cfg["inservice_rollover"] = body["inservice_rollover"]
     if body.get("hsa_coverage") in ("self", "family"):
         cfg["hsa_coverage"] = body["hsa_coverage"]
+    if body.get("k401_pay_frequency") in ("weekly", "biweekly", "semimonthly", "monthly", "custom"):
+        cfg["k401_pay_frequency"] = body["k401_pay_frequency"]
     for bk in ("plan_aftertax", "hsa_invested"):
         if bk in body:
             cfg[bk] = bool(body[bk])
