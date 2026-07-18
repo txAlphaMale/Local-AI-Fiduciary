@@ -27,7 +27,9 @@ API = os.environ.get("PORTFOLIO_API_URL", "http://localhost:8097").rstrip("/")
 OLLAMA = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 MODELS = sys.argv[1:] or [os.environ.get("ANALYSIS_MODEL", "qwen3.6:27b")]
 NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "16384"))
-TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600"))
+TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1800"))  # 30min: dual-1080Ti split-model + possible
+# Ollama NUM_PARALLEL=1 queueing behind a concurrent scheduled job; matches/exceeds the app
+# container's own default (1200s). Still overridable via LLM_TIMEOUT like the rest of the stack.
 OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "golden_eval_results.md")
 TOKEN = os.environ.get("ANALYSIS_TOKEN", "")
 
