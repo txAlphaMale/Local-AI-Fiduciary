@@ -847,7 +847,7 @@ function dashboardContent(){
     else { body.textContent=txt; nbox.appendChild(body); }
   } else nbox.appendChild(el('div','muted','No letter yet — it writes itself Monday mornings, or generate one now.'));
   const gb=el('button',null,nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:8px;';
-  gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)');
+  gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
   nbox.appendChild(gb);
   wrap.appendChild(nbox);
   // row 1: allocation donuts + accounts list
@@ -1868,6 +1868,28 @@ function reindexKnowledge(){
     .then(()=>_knStartPoll())
     .catch(e=>{ alert('Reindex failed: '+e); if(btn){ btn.disabled=false; btn.textContent='↻ REINDEX'; } });
 }
+// Narrative (State-of-the-Wealth) completion poll — mirrors the knowledge-reindex pattern above.
+// Diagnosed 2026-07-18 (LIVE, against the running instance): the DASHBOARD GENERATE NOW/REGENERATE
+// button fired runJob('/api/run-narrative') fire-and-forget, so NARR only refreshed on the 5-minute
+// background load() — the letter box appeared frozen "when the job completes". This watches
+// /api/jobs for the narrative job and calls load(false) (which refetches /api/narrative + re-renders
+// the letter box) once it leaves queued/running. Narrative has no chunk-level progress like the
+// knowledge reindex, so this only tracks the queued→running→done transition.
+let _narrPollTimer=null, _narrSawActive=false;
+function _narrPollTick(){
+  fetch('/api/jobs').then(r=>r.json()).then(jobs=>{
+    const jrec=((jobs&&jobs.jobs)||[]).find(j=>j.kind==='narrative' && (j.status==='queued'||j.status==='running'));
+    if(jrec){ _narrSawActive=true; }
+    else if(_narrSawActive){                 // was in flight, now finished — pull the fresh letter
+      _narrSawActive=false;
+      clearInterval(_narrPollTimer); _narrPollTimer=null;
+      load(false);
+    } else {                                  // nothing in flight (e.g. finished before first tick)
+      clearInterval(_narrPollTimer); _narrPollTimer=null;
+    }
+  }).catch(()=>{});
+}
+function _narrStartPoll(){ if(_narrPollTimer) return; _narrPollTimer=setInterval(_narrPollTick, 3000); _narrPollTick(); }
 function performanceContent(){
   // GAP-3: TWR + policy-benchmark relative returns over standard periods.
   const r=PERF||{}, wrap=el('div');

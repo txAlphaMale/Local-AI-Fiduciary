@@ -5517,7 +5517,11 @@ def _income_glide():
     _other_ord = float(rcfg.get("annual_expenses_override") or 0) or 0.0
     _hb = tax.gains_harvest_budget(_other_ord, _tctx["status"],
                                    age=_tctx["age"], spouse_age=_tctx["spouse_age"])
-    gains_budget_src = "bracket-engine 0%-LTCG room (%s)" % _tctx["status"]
+    # NOTE: the literal percent MUST be escaped as %% in a %-format string — an unescaped "0%-LTCG"
+    # makes Python read "%-L…" as a (bad) conversion spec and raise "unsupported format character 'T'",
+    # which crashed the WHOLE /api/income-plan endpoint (502) on every call (found 2026-07-18 via the
+    # golden_eval annual_dividends question skipping).
+    gains_budget_src = "bracket-engine 0%%-LTCG room (%s)" % _tctx["status"]
     if os.environ.get("ANNUAL_GAINS_BUDGET"):
         gains_budget = float(os.environ["ANNUAL_GAINS_BUDGET"])
         gains_budget_src = "env ANNUAL_GAINS_BUDGET"

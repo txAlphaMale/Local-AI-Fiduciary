@@ -55,10 +55,46 @@ def dig(obj, *keys):
 # ---- the golden set -------------------------------------------------------------------
 # Each spec: (id, endpoint, question, truth_fn(json)->float|None, tolerance)
 # tolerance: ("pct", x) = within x% relative; ("abs", x) = within x absolute.
+#
+# TRUTH-PATH TRUE-UP 2026-07-18: several truth_fn dig() paths were checked live against the running
+# instance and corrected where the value existed under a different key/endpoint (they had been
+# silently SKIPping). Corrected: ss_monthly (people[] not self.*), var95/cvar95 (tail_risk[] not
+# var/var_table), ltcg_headroom (gain_harvest.gains_at_0pct_budget), roth_rung (years[].conversion
+# not .convert), aca_cliff_room (cliff.headroom_to_cliff), stepup_wiped (stepup.taxable_embedded_gain),
+# annual_dividends (income-plan.current_income), top_avenue_ret (avenues.best_recurring.after_tax_pct),
+# net_worth+invested_total (endpoint /api/holdings didn't exist → /api/portfolio; invested_value).
+# Old paths are kept as `or` fallbacks so a future endpoint reshape doesn't re-break them. Questions
+# that legitimately still SKIP (endpoint data not yet accrued, NOT a path bug): sharpe/realized_vol/
+# max_dd (risk-metrics needs more daily snapshots) and bt_hit_12m (backtest needs matured calls).
 def _top_pos_pct(exp):
     ps = (exp or {}).get("positions") or []
     ws = [p.get("weight_pct") or p.get("pct") for p in ps if (p.get("weight_pct") or p.get("pct"))]
     return max(ws) if ws else None
+
+
+def _ss_primary_monthly(j):
+    """Primary earner's monthly SS benefit at the planned claim age. /api/ss exposes a `people`
+    list (label/monthly_benefit/…), NOT a `self` object — pick the person labeled 'you'/'self'
+    else the first available person; old self.* paths kept as fallback."""
+    people = (j or {}).get("people") or []
+    if people:
+        pri = next((p for p in people if str(p.get("label", "")).lower() in ("you", "self", "primary")), None) \
+            or next((p for p in people if p.get("available")), None) or people[0]
+        v = pri.get("monthly_benefit") or pri.get("monthly_at_claim") or pri.get("pia_monthly")
+        if v is not None:
+            return v
+    return dig(j, "self", "monthly_at_claim") or dig(j, "self", "monthly") or dig(j, "pia_monthly")
+
+
+def _tail(j, level_pct, days, key):
+    """VaR/CVaR from /api/risk-suite's `tail_risk` = [{level_pct, by_horizon:[{days, var_pct,
+    cvar_pct}]}]. `key` is 'var_pct' or 'cvar_pct'. None if that level/horizon isn't present."""
+    for lvl in (j or {}).get("tail_risk") or []:
+        if abs((lvl.get("level_pct") or 0) - level_pct) < 0.01:
+            for h in lvl.get("by_horizon") or []:
+                if (h.get("days") or 0) == days:
+                    return h.get(key)
+    return None
 
 
 GOLDEN = [
@@ -72,7 +108,7 @@ GOLDEN = [
     ("mc_riskbased", "/api/retirement", "What is the Monte Carlo success probability of the RISK-BASED guardrails policy, in percent?",
      lambda j: dig(j, "monte_carlo", "risk_based", "success_pct"), ("abs", 1.0)),
     ("ss_monthly", "/api/ss", "What is the primary earner's projected Social Security monthly benefit at the planned claim age, in dollars?",
-     lambda j: dig(j, "self", "monthly_at_claim") or dig(j, "self", "monthly") or dig(j, "monthly_at_claim") or dig(j, "pia_monthly"), ("pct", 2.0)),
+     _ss_primary_monthly, ("pct", 2.0)),
     # -- exposure / risk --
     ("top_position", "/api/exposure", "What percent of the portfolio is the single largest DIRECT position (top weight_pct)?",
      _top_pos_pct, ("abs", 0.6)),
@@ -83,9 +119,9 @@ GOLDEN = [
     ("sharpe", "/api/risk-metrics", "What is the portfolio's realized Sharpe ratio?",
      lambda j: dig(j, "sharpe"), ("abs", 0.05)),
     ("var95", "/api/risk-suite", "What is the portfolio's 1-day 95% Value-at-Risk, in percent?",
-     lambda j: dig(j, "var", "var_95_1d_pct") or dig(j, "var_table", "95.0", "1"), ("pct", 5.0)),
+     lambda j: _tail(j, 95, 1, "var_pct") or dig(j, "var", "var_95_1d_pct") or dig(j, "var_table", "95.0", "1"), ("pct", 5.0)),
     ("cvar95", "/api/risk-suite", "What is the portfolio's 1-day 95% CVaR (expected shortfall), in percent?",
-     lambda j: dig(j, "var", "cvar_95_1d_pct") or dig(j, "cvar_95_1d_pct"), ("pct", 5.0)),
+     lambda j: _tail(j, 95, 1, "cvar_pct") or dig(j, "var", "cvar_95_1d_pct") or dig(j, "cvar_95_1d_pct"), ("pct", 5.0)),
     ("eff_bets", "/api/risk-suite", "How many effective independent bets does the portfolio hold?",
      lambda j: dig(j, "effective_bets") or dig(j, "diversification", "effective_bets"), ("abs", 0.3)),
     ("realized_vol", "/api/risk-metrics", "What is the portfolio's realized annualized volatility, in percent?",
@@ -95,25 +131,26 @@ GOLDEN = [
     # -- tax / roth / aca / estate --
     ("marginal_rate", "/api/tax", "What is the household's federal marginal ordinary-income tax rate, in percent (marginal_ordinary_rate_pct)?",
      lambda j: dig(j, "marginal_ordinary_rate_pct"), ("abs", 0.5)),
-    ("ltcg_headroom", "/api/tax", "How many dollars of long-term gain-harvest headroom remain (the gain_harvest headroom)?",
-     lambda j: dig(j, "gain_harvest", "headroom"), ("pct", 2.0)),
+    ("ltcg_headroom", "/api/tax", "How many dollars of long-term gain-harvest headroom remain (the gain_harvest 0%-LTCG budget)?",
+     lambda j: dig(j, "gain_harvest", "gains_at_0pct_budget") or dig(j, "gain_harvest", "headroom"), ("pct", 2.0)),
     ("roth_headroom", "/api/tax", "How many dollars of Roth-conversion headroom remain to the target bracket (roth_conversion_headroom)?",
      lambda j: dig(j, "roth_conversion_headroom", "headroom") or dig(j, "roth_conversion_headroom"), ("pct", 2.0)),
     ("roth_rung", "/api/roth", "What conversion amount does the multi-year Roth ladder recommend for the FIRST year, in dollars?",
-     lambda j: (lambda L: L[0].get("convert") if L else None)(dig(j, "ladder", "years") or dig(j, "ladder") or []), ("pct", 2.0)),
+     lambda j: (lambda L: (L[0].get("conversion") or L[0].get("convert")) if L else None)(dig(j, "ladder", "years") or dig(j, "ladder") or []), ("pct", 2.0)),
     ("aca_cliff_room", "/api/aca", "How many dollars of MAGI headroom remain below the 400% FPL ACA cliff?",
-     lambda j: dig(j, "cliff_headroom") or dig(j, "magi", "headroom_to_cliff"), ("pct", 2.0)),
+     lambda j: dig(j, "cliff", "headroom_to_cliff") or dig(j, "cliff_headroom") or dig(j, "magi", "headroom_to_cliff"), ("pct", 2.0)),
     ("estate_headroom", "/api/estate", "How many dollars of federal estate-exemption headroom does the household have?",
      lambda j: dig(j, "snapshot", "headroom") or dig(j, "headroom"), ("pct", 2.0)),
     ("stepup_wiped", "/api/estate", "How many dollars of embedded gain would the §1014 step-up wipe today (taxable + real estate)?",
-     lambda j: dig(j, "stepup", "total_gain_wiped") or dig(j, "stepup_ledger", "total_gain_wiped"), ("pct", 2.0)),
+     lambda j: dig(j, "stepup", "taxable_embedded_gain") or dig(j, "stepup", "total_gain_wiped") or dig(j, "stepup_ledger", "total_gain_wiped"), ("pct", 2.0)),
     # -- income / fees / leverage / avenues --
-    ("annual_dividends", "/api/income-plan", "What is the portfolio's projected annual dividend income across all accounts, in dollars?",
-     lambda j: dig(j, "annual_income_total") or dig(j, "total_annual_income"), ("pct", 2.0)),
+    ("annual_dividends", "/api/income-plan", "What is the portfolio's CURRENT annual dividend income across all accounts, in dollars?",
+     lambda j: dig(j, "current_income") or dig(j, "annual_income_total") or dig(j, "total_annual_income"), ("pct", 2.0)),
     ("max_ltv", "/api/leverage", "What is the maximum prudent loan-to-value the ruin model recommends, in percent?",
      lambda j: dig(j, "max_prudent_ltv_pct") or dig(j, "ruin", "max_prudent_ltv_pct"), ("abs", 1.0)),
-    ("top_avenue_ret", "/api/avenues", "What is the after-tax expected return of the top-ranked avenue for the next marginal dollar, in percent?",
-     lambda j: (lambda L: L[0].get("after_tax_return_pct") if L else None)(dig(j, "ranked") or dig(j, "avenues") or []), ("abs", 0.5)),
+    ("top_avenue_ret", "/api/avenues", "What is the after-tax expected return of the top-ranked recurring avenue for the next marginal dollar, in percent?",
+     lambda j: dig(j, "best_recurring", "after_tax_pct")
+               or (lambda L: (L[0].get("after_tax_pct") or L[0].get("after_tax_return_pct")) if L else None)(dig(j, "recurring") or dig(j, "ranked") or dig(j, "avenues") or []), ("abs", 0.5)),
     # -- ai self-knowledge --
     ("brier", "/api/scorecard", "What is the Brier score of the model's stated confidence on its directional calls?",
      lambda j: dig(j, "calibration", "brier"), ("abs", 0.02)),
@@ -123,10 +160,10 @@ GOLDEN = [
      lambda j: dig(j, "ratings", "by_horizon", "12m", "hit_rate_pct"), ("abs", 1.0)),
     ("bt_paper_excess", "/api/backtest", "What is the paper book's dollar-weighted excess return vs the SPY counterfactual, in percent?",
      lambda j: dig(j, "paper", "weighted_excess_pct"), ("abs", 0.5)),
-    ("net_worth", "/api/holdings", "What is the household's total net worth, in dollars?",
+    ("net_worth", "/api/portfolio", "What is the household's total net worth, in dollars?",
      lambda j: dig(j, "net_worth") or dig(j, "summary", "net_worth"), ("pct", 1.0)),
-    ("invested_total", "/api/holdings", "What is the total invested (securities) value across all accounts, in dollars?",
-     lambda j: dig(j, "total_value") or dig(j, "summary", "total_value"), ("pct", 1.0)),
+    ("invested_total", "/api/portfolio", "What is the total invested (securities) value across all accounts, in dollars?",
+     lambda j: dig(j, "invested_value") or dig(j, "total_value") or dig(j, "summary", "total_value"), ("pct", 1.0)),
 ]
 
 PROMPT = (
