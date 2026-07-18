@@ -343,6 +343,7 @@ _JOB_KINDS = {
     "backtest":      ("Decision backtest vs SPY",  False, lambda: _do_backtest()),
     "narrative":     ("State-of-the-Wealth brief", True,  lambda: _do_narrative()),
     "knowledge_reindex": ("Knowledge reindex",     True,  lambda: knowledge.ensure_index(force=True)),
+    "earnings_brief": ("Post-earnings brief refresh", True, lambda: _do_earnings_brief()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -489,6 +490,16 @@ def _scheduler_loop():
                         and _sched_match(s["dom"], now.day)
                         and _sched_match(s["dow"], now.weekday())):
                     _enqueue(kind, source="scheduler")
+            # OPP-6 earnings-triggered briefs: event-driven, not a fixed time-of-day a user would
+            # edit in TASK SCHEDULE (there's no "time" to set — either a print is out or it isn't),
+            # so it's checked once daily at a fixed anchor rather than added to _SCHEDULE_DEFAULTS.
+            # Only enqueues when something's actually due, unlike the generic loop above.
+            if now.hour == 8 and now.minute == 15:
+                try:
+                    if _earnings_due_tickers():
+                        _enqueue("earnings_brief", source="scheduler")
+                except Exception:
+                    pass
         time.sleep(20)
 if INTERNAL_SCHEDULER:
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
@@ -2370,9 +2381,11 @@ EARNINGS_CAL_FILE = os.environ.get("EARNINGS_CAL_FILE", "/data/earnings_cal.json
 EARNINGS_CAL_TTL = int(os.environ.get("EARNINGS_CAL_TTL", "86400"))
 
 
-def _earnings_this_week():
-    """Held tickers reporting in the next 7 days (Finnhub free earnings calendar, cached daily).
-    [] when unkeyed/unavailable — the digest simply omits the section."""
+def _earnings_calendar_rows():
+    """Raw cached calendar rows for held tickers, Finnhub free tier, refreshed daily. Window is
+    yesterday through +7 days — ONE day of lookback beyond what _earnings_this_week() shows, so
+    an after-market-close print can still be detected the next morning (OPP-6). Callers that want
+    the forward-only view should filter to date >= today themselves; see _earnings_this_week()."""
     if not FINNHUB:
         return []
     try:
@@ -2387,7 +2400,7 @@ def _earnings_this_week():
         held = {c.get("ticker") for c in (_data().get("consolidated") or []) if c.get("ticker")}
         d0 = datetime.date.today()
         r = requests.get("https://finnhub.io/api/v1/calendar/earnings",
-                         params={"from": d0.isoformat(),
+                         params={"from": (d0 - datetime.timedelta(days=1)).isoformat(),
                                  "to": (d0 + datetime.timedelta(days=7)).isoformat(),
                                  "token": FINNHUB}, timeout=25)
         if r.status_code < 400:
@@ -2404,6 +2417,66 @@ def _earnings_this_week():
     except Exception:
         pass
     return rows
+
+
+def _earnings_this_week():
+    """Held tickers reporting in the next 7 days (forward-looking view for the ATTENTION digest
+    and the narrative brief). [] when unkeyed/unavailable — the digest simply omits the section.
+    Same underlying cache as _earnings_calendar_rows(), just filtered to date >= today so this
+    function's existing behavior/callers are unaffected by the added lookback day."""
+    today_s = datetime.date.today().isoformat()
+    return [e for e in _earnings_calendar_rows() if (e.get("date") or "") >= today_s]
+
+
+EARNINGS_TRIGGERED_FILE = os.environ.get("EARNINGS_TRIGGERED_FILE", "/data/earnings_triggered.json")
+
+
+def _read_earnings_triggered():
+    try:
+        with open(EARNINGS_TRIGGERED_FILE, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _mark_earnings_triggered(tickers):
+    """Record that these tickers' CURRENT earnings print already fired a brief refresh, so the
+    same report date doesn't re-trigger the job every day it's checked. Pruned to the last 30
+    days so the file doesn't grow forever."""
+    trig = _read_earnings_triggered()
+    today_s = datetime.date.today().isoformat()
+    for t in tickers:
+        trig[t] = today_s
+    cutoff = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    trig = {k: v for k, v in trig.items() if v >= cutoff}
+    try:
+        os.makedirs(os.path.dirname(EARNINGS_TRIGGERED_FILE) or ".", exist_ok=True)
+        with open(EARNINGS_TRIGGERED_FILE, "w", encoding="utf-8") as f:
+            json.dump(trig, f)
+    except Exception:
+        pass
+
+
+def _earnings_due_tickers():
+    """OPP-6 event-driven research: held tickers whose earnings print is FRESHLY OUT — today's
+    before-market/during-market report, or YESTERDAY's after-close report (the one case
+    _earnings_this_week()'s forward-only view can't see) — and that haven't already triggered a
+    refresh for that exact report date. Known limitation: Finnhub's free calendar doesn't always
+    populate `hour` (bmo/amc/dmt); a blank hour is treated as bmo/dmt (same-day), which is the
+    common case and errs toward refreshing a day early rather than missing the print entirely."""
+    today = datetime.date.today()
+    today_s = today.isoformat()
+    yday_s = (today - datetime.timedelta(days=1)).isoformat()
+    trig = _read_earnings_triggered()
+    due = []
+    for e in _earnings_calendar_rows():
+        t, d, hr = e.get("ticker"), e.get("date"), (e.get("hour") or "").lower()
+        if not t or not d:
+            continue
+        is_out = (d == today_s and hr in ("bmo", "dmt", "")) or (d == yday_s and hr == "amc")
+        if is_out and trig.get(t) != d:
+            due.append(t)
+    return due
 
 
 ALERTS_SEEN_FILE = os.environ.get("ALERTS_SEEN_FILE", "/data/alerts_seen.json")
@@ -3967,15 +4040,25 @@ def _verify_and_apply(sym, name, llm, grounded, news, fundamentals=None, valuati
     return llm
 
 
-def _do_analysis(limit):
+def _do_analysis(limit, tickers=None):
+    """`tickers`, if given, scopes this run to just that ticker subset (OPP-6 post-earnings
+    refresh) instead of the whole book / a `limit`-count slice. IMPORTANT: the stale-brief prune
+    below must still be based on ALL currently-held tickers, not just this run's scope — otherwise
+    a 2-ticker earnings-triggered run would wipe out every other ticker's cached brief on write."""
     if not _run_lock.acquire(blocking=False):
         return
     try:
-        secs = [c for c in _data()["consolidated"] if c["ticker"]]
-        if limit:
+        all_secs = [c for c in _data()["consolidated"] if c["ticker"]]
+        secs = all_secs
+        if tickers:
+            wanted = set(tickers)
+            secs = [c for c in all_secs if c["ticker"] in wanted]
+        elif limit:
             secs = secs[:limit]
         _run_state.update(status="running", analyzed=0, total=len(secs), started=int(time.time()))
-        current = {c["ticker"] for c in secs}   # drop briefs for tickers no longer held (e.g. sold)
+        current = {c["ticker"] for c in all_secs}   # ALL held tickers — only drops briefs for
+                                                      # tickers no longer held at all (e.g. sold),
+                                                      # never for ones merely outside this run's scope
         briefs = {k: v for k, v in (_read_analysis().get("briefs") or {}).items() if k in current}
         for c in secs:
             g = _grounded(c["ticker"])
@@ -3995,6 +4078,29 @@ def _do_analysis(limit):
         _run_state["status"] = "idle"
     finally:
         _run_lock.release()
+
+
+def _do_earnings_brief():
+    """OPP-6 event-driven research: refresh ONLY the briefs for tickers whose earnings print is
+    freshly out (see _earnings_due_tickers), instead of waiting for the next 18:00 daily cron —
+    the desk reacts to the tape instead of the clock. No-ops if nothing's actually due, so a
+    manual trigger (POST /api/run-earnings-brief) is always safe to call."""
+    due = _earnings_due_tickers()
+    if not due:
+        return
+    _do_analysis(0, tickers=due)
+    _mark_earnings_triggered(due)
+
+
+@app.post("/api/run-earnings-brief")
+def run_earnings_brief(x_analysis_token: str = Header(default="")):
+    """Manually force the post-earnings brief check (normally event-driven — the scheduler checks
+    once daily at 08:15 local and only enqueues when something's actually due)."""
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    jid, created = _enqueue("earnings_brief", source="api")
+    return {"ok": True, "status": "queued" if created else "already queued/running",
+            "job_id": jid, "due_now": _earnings_due_tickers()}
 
 
 @app.post("/api/run-analysis")
