@@ -104,6 +104,18 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
 <script>
 const PIE = ['#f0a823','#2ec27e','#4a9eff','#a07bff','#ff7ab8','#5fd0c4','#888780','#e0623a'];
+// Mirrors states.py STATE_NAMES (RESUME-TRACKER item 3) — for the ASSUMPTIONS "State of
+// residence" dropdown only; every actual state-fact lookup (community property, TOD deeds,
+// Medicaid expansion, tax type) happens server-side in states.py, not here.
+const STATE_NAMES = {AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",CO:"Colorado",
+  CT:"Connecticut",DE:"Delaware",DC:"District of Columbia",FL:"Florida",GA:"Georgia",HI:"Hawaii",
+  ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",ME:"Maine",
+  MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",MO:"Missouri",
+  MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",NM:"New Mexico",
+  NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",OR:"Oregon",
+  PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",TN:"Tennessee",
+  TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",WV:"West Virginia",
+  WI:"Wisconsin",WY:"Wyoming"};
 const usd = n => (n==null?'—':'$'+Math.round(n).toLocaleString());
 const sgn = n => n==null?'—':(n<0?'-':'+')+'$'+Math.abs(Math.round(n)).toLocaleString();
 const pct = n => n==null?'—':(n>0?'+':'')+n.toFixed(2)+'%';
@@ -138,6 +150,17 @@ function reorderSubtab(panel, orderedKeys, fromKey, toKey){
   const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return;
   ks.splice(fi,1); const ti=ks.indexOf(toKey); ks.splice(ti<0?ks.length:ti,0,fromKey);
   SUBORDER[panel]=ks; try{ localStorage.setItem('fidSubOrder',JSON.stringify(SUBORDER)); }catch(_){}
+  render();
+}
+// Top-level tab bar drag-reorder (mirrors the sub-tab pattern above — was never wired for the
+// TOP row, so dragging a top tab just highlighted its text instead of moving it). Persisted
+// separately from SUBORDER since this reorders a flat list, not one list per panel.
+let TABORDER=[]; try{ TABORDER=JSON.parse(localStorage.getItem('fidTabOrder')||'[]')||[]; }catch(_){ TABORDER=[]; }
+function reorderTopTab(orderedKeys, fromKey, toKey){
+  if(fromKey===toKey) return;
+  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return;
+  ks.splice(fi,1); const ti=ks.indexOf(toKey); ks.splice(ti<0?ks.length:ti,0,fromKey);
+  TABORDER=ks; try{ localStorage.setItem('fidTabOrder',JSON.stringify(TABORDER)); }catch(_){}
   render();
 }
 // Render a 2nd-row sub-tab bar for `panel` and ONLY the active section's node.
@@ -385,9 +408,9 @@ W('social-security','Planning','Social Security',
   'The PLAN to SS sub-tab shows the benefit at different claim ages; the plan uses it as a real income floor.',
   'Use it to see the claiming-age tradeoff and how much guaranteed income lowers the portfolio burden — some plans deliberately assume it is unavailable as a stress test.');
 W('aca','Planning','ACA / MAGI bridge',
-  'For early retirement before Medicare, models your marketplace subsidy: a MAGI ledger, the premium tax credit, and the 400%-of-poverty subsidy cliff (back for 2026, with a Texas gap below 100%).',
-  'It flags when planned income puts you over the cliff (0 subsidy) or into the sub-100% gap, and estimates the credit when you set your local benchmark Silver premium.',
-  'Use it to manage retirement-year income (Roth conversions, gains) so you do not accidentally blow past the subsidy cliff.');
+  'For early retirement before Medicare, models your marketplace subsidy: a MAGI ledger, the premium tax credit, and the 400%-of-poverty subsidy cliff (back for 2026). What a MAGI below 100% FPL means now depends on your state of residence (ASSUMPTIONS): a real coverage gap in a non-expansion state (Texas, Georgia, and 8 others), or likely Medicaid eligibility in an expansion state (most states, incl. North Carolina, Colorado).',
+  'It flags when planned income puts you over the cliff (0 subsidy) or into the sub-100% band, and estimates the credit when you set your local benchmark Silver premium. The subsidy JSON now echoes your state and its Medicaid-expansion status so you can see which interpretation applies.',
+  'Use it to manage retirement-year income (Roth conversions, gains) so you do not accidentally blow past the subsidy cliff — and set State of residence in ASSUMPTIONS first, since it changes what the low-MAGI band actually means.');
 W('roth','Planning','Roth ladder and marginal-rate curve',
   'Composes your true marginal rate on the next dollar — ordinary brackets, the capital-gains bump zone, NIIT, the ACA subsidy slope, and IRMAA steps — into one curve, then plans multi-year Roth conversions that fill low-rate room while respecting 5-year clocks and the pre-65 ACA cap.',
   'The curve shows where the next dollar is cheap versus punitive; the ladder shows a year-by-year conversion amount. Texas has no state income tax, making conversions relatively cheap.',
@@ -406,12 +429,12 @@ W('business','Planning','Business-acquisition underwriter',
   'Use it to evaluate an acquisition or search-fund idea on the same after-tax IRR basis as your market and real-estate options.');
 W('estate-snapshot','Planning','Estate snapshot vs exemption',
   'Your net estate against the federal exemption (15M per person, ~30M married with portability for 2026), the headroom left, the tax if you died today, and the year your estate would cross the exemption at your assumed growth.',
-  'Texas has no state estate tax, so this is federal-only. The years until crossed figure is the trust-planning tripwire.',
-  'Under the exemption there is no estate tax to plan around — the action is basis (see step-up and gift-vs-hold). Near the exemption, irrevocable strategies need lead time.');
+  'The federal exemption math is identical in every state. state_tax_note flags whether your state of residence (ASSUMPTIONS) ALSO levies its own estate or inheritance tax — 12 states + DC do, typically with a much lower exemption than the federal one; Texas, Colorado, North Carolina and Georgia do not. The years until crossed figure is the trust-planning tripwire.',
+  'Under the exemption there is no FEDERAL estate tax to plan around — the action is basis (see step-up and gift-vs-hold) — but check state_tax_note if you\'re in one of the 12+DC states, since state exposure can bite well below the federal exemption. Near the exemption, irrevocable strategies need lead time.');
 W('stepup','Planning','Step-up ledger',
   'Per-account view of what a death-basis step-up (IRC 1014) is worth: taxable accounts and the home get their embedded gain wiped; traditional IRA/401k is income in respect of a decedent (heirs pay ordinary tax); Roth passes tax-free; an HSA is the worst asset to die with.',
-  'The embedded gain a step-up would wipe totals taxable plus real estate. For the home, set its cost basis so the wiped gain is quantified; the section 121 exclusion already shelters 250k/500k on a lifetime sale, and Texas community property gets a full double step-up.',
-  'Use it to reverse the usual drawdown order late in life — spend IRA/HSA first and hold heavily-appreciated taxable positions and the home for the step-up.');
+  'The embedded gain a step-up would wipe totals taxable plus real estate. For the home, set its cost basis so the wiped gain is quantified; the section 121 exclusion already shelters 250k/500k on a lifetime sale. The DOUBLE step-up on jointly-held property only applies in a community-property state (9 of them, incl. Texas) — a common-law state (incl. North Carolina, Georgia, Colorado) only steps up the decedent\'s half by default; community_property_note in the response says which applies to your state of residence.',
+  'Use it to reverse the usual drawdown order late in life — spend IRA/HSA first and hold heavily-appreciated taxable positions and the home for the step-up. In a common-law state the benefit is smaller than the Texas-flavored intuition suggests — read community_property_note before assuming the full double step-up.');
 W('gift-vs-hold','Planning','Gift vs hold',
   'For an appreciated position, compares gifting now (the donee carries your basis and eventually pays capital-gains tax on the full gain) versus holding to death (the step-up erases the gain).',
   'For an estate under the exemption, holding almost always wins on tax — gift cash or high-basis assets instead. Over the exemption, gifting future growth out of the 40% estate base can flip it.',
@@ -626,23 +649,34 @@ function render(){
   const _gear=document.getElementById('gear'); if(_gear) _gear.style.color=(TAB==='settings')?'var(--amber)':'';
   const p=el('div','panel'); p.style.marginTop='10px';
   const tabBar=el('div'); tabBar.style.cssText='display:flex;align-items:center;gap:13px;border-bottom:1px solid var(--bd);padding-bottom:7px;margin-bottom:10px;flex-wrap:wrap;';
+  const tabSpecsRaw=[['dashboard','DASHBOARD'],['positions',`OVERVIEW · ${d.unique_securities}`]];
+  if(haveResearch) tabSpecsRaw.push(['research','RESEARCH · IDEAS']);
+  if(haveInsights) tabSpecsRaw.push(['insights','RISK · EXPOSURE']);
+  if(havePlan) tabSpecsRaw.push(['plan','PLAN · FI']);
+  if(haveAudits) tabSpecsRaw.push(['audits','AUDITS · TAX·FEES']);
+  if(haveStrat) tabSpecsRaw.push(['strategist','STRATEGIST']);
+  tabSpecsRaw.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
+  tabSpecsRaw.push(['wiki','WIKI']);   // in-app help — always available (rightmost)
+  // SETTINGS is NOT a top tab — it opens from the ⚙ gear in the top-right (N11).
+  // Apply the user-dragged order (TABORDER, persisted); unknown/new keys (e.g. a tab that only
+  // appears once data loads) fall to the end rather than disappearing.
+  const tabSpecs = TABORDER.length
+    ? tabSpecsRaw.slice().sort((a,b)=>{ const ix=k=>{ const i=TABORDER.indexOf(k); return i<0?999:i; }; return ix(a[0])-ix(b[0]); })
+    : tabSpecsRaw;
+  const topTabKeys = tabSpecs.map(ts=>ts[0]);
   const mkTab=(key,label)=>{
     const active=TAB===key;
     const t=el('span',null,label);
-    t.style.cssText=`cursor:pointer;letter-spacing:2px;font-size:11px;padding-bottom:7px;margin-bottom:-8px;`+
+    t.title='drag to reorder';
+    t.style.cssText=`cursor:pointer;letter-spacing:2px;font-size:11px;padding-bottom:7px;margin-bottom:-8px;user-select:none;`+
       `border-bottom:2px solid ${active?'var(--amber)':'transparent'};color:${active?'var(--amber)':'var(--mut)'};`;
     t.onclick=()=>{ TAB=key; render(); };
+    t.draggable=true;
+    t.ondragstart=e=>{ try{ e.dataTransfer.setData('text/plain', key); e.dataTransfer.effectAllowed='move'; }catch(_){} };
+    t.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} };
+    t.ondrop=e=>{ e.preventDefault(); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){} if(from) reorderTopTab(topTabKeys, from, key); };
     return t;
   };
-  const tabSpecs=[['dashboard','DASHBOARD'],['positions',`OVERVIEW · ${d.unique_securities}`]];
-  if(haveResearch) tabSpecs.push(['research','RESEARCH · IDEAS']);
-  if(haveInsights) tabSpecs.push(['insights','RISK · EXPOSURE']);
-  if(havePlan) tabSpecs.push(['plan','PLAN · FI']);
-  if(haveAudits) tabSpecs.push(['audits','AUDITS · TAX·FEES']);
-  if(haveStrat) tabSpecs.push(['strategist','STRATEGIST']);
-  tabSpecs.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
-  tabSpecs.push(['wiki','WIKI']);   // in-app help — always available (rightmost)
-  // SETTINGS is NOT a top tab — it opens from the ⚙ gear in the top-right (N11).
   tabSpecs.forEach((ts,i)=>{
     if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--bd2);opacity:0.7;font-size:12px;user-select:none;'; tabBar.appendChild(sep); }
     tabBar.appendChild(mkTab(ts[0],ts[1]));
@@ -1443,6 +1477,7 @@ function saveRetire(){
   // Tax / ACA / SS — only send keys the user actually filled, so a blank never
   // clobbers a stored value. filing_status is a select (always present).
   const fs=val('ret-fs'); if(fs) body.filing_status=fs;
+  const stEl=document.getElementById('ret-state'); if(stEl) body.state_of_residence=stEl.value||null;
   const opt=(id,key,xf)=>{const v=num(id); if(v!=null) body[key]=xf?xf(v):v;};
   opt('ret-fill','convert_fill_to_rate',v=>v/100);   // UI shows % ; config stores a decimal rate
   opt('ret-needs','needs_pct_of_expenses');          // funded-ratio needs/wants split (G1)
@@ -1510,6 +1545,10 @@ function planContent(r){
       `<div style="margin-bottom:7px;">Filing status <select id="ret-fs" style="width:150px;">`+
         ['mfj','single','hoh'].map(o=>`<option value="${o}"${(a.filing_status||'mfj')===o?' selected':''}>${({mfj:'Married filing jointly',single:'Single',hoh:'Head of household'})[o]}</option>`).join('')+
         `</select> &nbsp; Roth-conversion fill-to bracket <input id="ret-fill" type="number" step="1" value="${a.convert_fill_to_rate!=null?Math.round(a.convert_fill_to_rate*100):''}" placeholder="12" style="width:54px;"/>% <span class="muted" style="font-size:10px;">(fill low-income years to this bracket)</span></div>`+
+      `<div style="margin-bottom:7px;">State of residence <select id="ret-state" style="width:170px;">`+
+        `<option value=""${!a.state_of_residence?' selected':''}>Auto-detect (falls back to TX)</option>`+
+        Object.keys(STATE_NAMES).sort((x,y)=>STATE_NAMES[x]<STATE_NAMES[y]?-1:1).map(o=>`<option value="${o}"${a.state_of_residence===o?' selected':''}>${STATE_NAMES[o]}</option>`).join('')+
+        `</select> <span class="muted" style="font-size:10px;">(drives estate community-property/TOD-deed rules, ACA Medicaid-expansion status, and the state-tax note — see the Glossary/Wiki for what changes per state)</span></div>`+
       `<div style="margin-bottom:7px;">Household size <input id="ret-hh" type="number" step="1" value="${pv(a.household_size)}" placeholder="2" style="width:54px;"/> <span class="muted" style="font-size:10px;">(people on the return — drives ACA FPL)</span> &nbsp; Benchmark Silver premium <input id="ret-slcsp" type="number" step="1" value="${pv(a.aca_slcsp_annual)}" placeholder="SLCSP $/yr" style="width:110px;"/> <span class="muted" style="font-size:10px;">($/yr, for a $ PTC estimate)</span></div>`+
       `<div style="margin-bottom:7px;">You — Birth year <input id="ret-by" type="number" step="1" value="${pv(a.birth_year)}" placeholder="1975" style="width:64px;"/> &nbsp; SS claim age <input id="ret-ca" type="number" step="1" value="${pv(a.ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-ssb" type="number" step="1" value="${pv(a.ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
       `<div style="margin-bottom:9px;">Spouse — Birth year <input id="ret-sby" type="number" step="1" value="${pv(a.spouse_birth_year)}" placeholder="1977" style="width:64px;"/> &nbsp; SS claim age <input id="ret-sca" type="number" step="1" value="${pv(a.spouse_ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-sssb" type="number" step="1" value="${pv(a.spouse_ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+

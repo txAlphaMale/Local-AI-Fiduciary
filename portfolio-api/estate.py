@@ -2,30 +2,46 @@
 estate.py — estate & generational-wealth engine for the Fiduciary (Fable G2).
 
 The Grand-Design review's literal mission gap: the app knew how to GROW wealth but
-had zero awareness of how it TRANSFERS. This module adds the four decision-support
-lenses that matter for a sub-exemption Texas household:
+had zero awareness of how it TRANSFERS. This module adds four decision-support
+lenses, all now RESIDENCE-STATE-AWARE (RESUME-TRACKER item 3 — was hardcoded to
+Texas throughout, wrong the moment a user is anywhere else):
 
-  1. Estate snapshot — net estate vs the federal exemption(s), headroom, and the
-     trajectory year the estate would CROSS the exemption at an assumed real growth
-     rate (the trust-planning tripwire).
+  1. Estate snapshot — net estate vs the federal exemption(s) (federal, same in
+     every state) plus the household's STATE estate/inheritance tax exposure, if
+     any (Texas has none; 12 states + DC do — see states.py).
   2. Step-up ledger — per-account embedded capital gain and the tax that basis
-     step-up at death would WIPE (IRC §1014). Texas is a community-property state:
-     §1014(b)(6) gives community property a FULL (double) step-up at the FIRST
-     spouse's death — both halves reset, not just the decedent's.
-  3. Gift-vs-hold analyzer — post-OBBBA the dominant question for estates UNDER the
-     exemption is NOT estate tax (there is none) but BASIS: a lifetime gift carries
-     the donor's basis over to the donee (heir pays LTCG on the full gain when sold);
-     holding until death steps the basis up (that gain is never taxed). Gifting only
-     wins on the estate-tax side once the estate is projected ABOVE the exemption,
-     where moving future APPRECIATION out saves ~40 cents on the growth dollar.
-  4. Gifting capacity — annual-exclusion math ($/donee/yr, doubled with gift-splitting)
-     plus the 529 5-year superfund election.
+     step-up at death would WIPE (IRC §1014). In a COMMUNITY-PROPERTY state (9 of
+     them, incl. Texas), §1014(b)(6) gives community property a FULL (double)
+     step-up at the FIRST spouse's death — both halves reset. In a common-law
+     state (the other 41 + DC), only the decedent's HALF steps up unless titled
+     JTWROS with its own (partial) step-up rules — a materially different, smaller
+     benefit that the old TX-only text used to overstate for every other state.
+  3. Gift-vs-hold analyzer — federal-only math (post-OBBBA the dominant question
+     for estates UNDER the exemption is NOT estate tax but BASIS); unaffected by
+     state of residence.
+  4. Gifting capacity — annual-exclusion math; federal-only, unaffected by state.
+
+Plus titling/probate-avoidance guidance (Transfer-on-Death deeds are NOT available
+in every state — 34 of 51 jurisdictions have them, Texas among them; North
+Carolina, notably, does NOT) and trust triggers (intestacy defaults to state law).
 
 Pure arithmetic, zero network/GPU. Decision-support only — NOT legal or tax advice;
-estate documents (wills, trusts, beneficiary designations) need a licensed attorney.
-All dated constants below are registered in grounding.py (G13) so they trip the
-January re-verification alarm like every other tax figure.
+estate documents (wills, trusts, beneficiary designations) need a licensed attorney
+IN THE RELEVANT STATE. All dated constants below are registered in grounding.py
+(G13) so they trip the January re-verification alarm like every other tax figure.
 """
+
+import states
+
+_VOWEL_STATES = ("Alabama", "Alaska", "Arizona", "Arkansas", "Idaho", "Illinois", "Indiana",
+                  "Iowa", "Ohio", "Oklahoma", "Oregon")
+
+
+def _a_an(name):
+    """'a' or 'an' for a state name — small enough list to hardcode rather than sniff the
+    first letter (avoids mishandling e.g. a hypothetical 'Utah' as vowel-leading)."""
+    return "an" if name in _VOWEL_STATES else "a"
+
 
 TAX_YEAR = 2026
 SOURCE = ("OBBBA (P.L. 119-21, July 2025) §70106: $15M basic exclusion per person from 2026, "
@@ -43,15 +59,15 @@ TOP_RATE = 0.40                     # top federal estate/gift rate (statutory)
 ANNUAL_EXCLUSION = 19_000
 SUPERFUND_YEARS = 5                 # §529(c)(2)(B): elect 5 years of exclusions up front
 
-# Texas: community-property state, and levies NO state estate or inheritance tax.
-COMMUNITY_PROPERTY_STATE = True
-STATE_ESTATE_TAX = 0.0
 
-
-def snapshot(net_estate, married=True, growth_real_pct=5.0, horizon_years=40):
+def snapshot(net_estate, married=True, growth_real_pct=5.0, horizon_years=40, state=None):
     """Estate vs exemption: headroom, estimated tax if death today, and the year the
     estate would cross the exemption at `growth_real_pct` (real, vs the inflation-indexed
-    exemption held constant in real terms — a fair apples-to-apples approximation)."""
+    exemption held constant in real terms — a fair apples-to-apples approximation).
+    Federal exemption math is identical in every state; STATE estate/inheritance tax
+    (state.py) is layered on separately since it has its own, much lower, exemption
+    in the ~18 states that levy one at all."""
+    sf = states.facts(state)
     ne = max(0.0, float(net_estate or 0))
     shield = ESTATE_EXEMPTION * (2 if married else 1)
     taxable = max(0.0, ne - shield)
@@ -65,30 +81,54 @@ def snapshot(net_estate, married=True, growth_real_pct=5.0, horizon_years=40):
             bal *= (1 + g)
             yrs += 1
         cross_year = yrs if bal >= shield else None
+    has_state_tax = sf["state_estate_tax"] or sf["state_inheritance_tax"]
+    if has_state_tax:
+        state_tax_note = (f"{sf['name']} ALSO levies its own "
+                          + " and ".join([n for n, has in
+                              (("estate tax", sf["state_estate_tax"]),
+                               ("inheritance tax", sf["state_inheritance_tax"])) if has])
+                          + " — typically with a MUCH lower exemption than the federal $15M "
+                            "(some as low as ~$1M), so a household comfortably under the "
+                            "federal exemption can still owe state tax. Not modeled numerically "
+                            "here (each state's rate schedule and exemption differ) — get "
+                            f"{_a_an(sf['name'])} {sf['name']}-licensed estate attorney's read "
+                            "on the exposure.")
+    else:
+        state_tax_note = f"{sf['name']} has no state estate or inheritance tax."
     return {"net_estate": round(ne, 2), "married": bool(married),
+            "state": sf["name"], "state_code": sf["code"],
             "exemption_per_person": ESTATE_EXEMPTION, "household_shield": shield,
             "headroom": round(headroom, 2),
             "pct_of_shield_used": round(ne / shield * 100, 1) if shield else None,
             "taxable_estate_if_today": round(taxable, 2), "est_federal_tax_if_today": est_tax,
             "years_until_exemption_crossed": cross_year,
-            "state_estate_tax": STATE_ESTATE_TAX,
+            "state_estate_tax": sf["state_estate_tax"], "state_inheritance_tax": sf["state_inheritance_tax"],
+            "state_tax_note": state_tax_note,
             "portability_note": ("Married: the couple shields ~$%s with portability, but the DSUE "
                                  "is NOT automatic — the survivor must file Form 706 within 5 years "
                                  "of the first death to claim it, even with no tax due."
                                  % f"{shield:,.0f}") if married else None,
-            "note": ("Federal only — Texas has no estate or inheritance tax. Net estate here is "
-                     "portfolio net worth; life insurance you own, business interests, and personal "
-                     "property are NOT in Monarch and belong in the real number. Exemption is the "
-                     "2026 OBBBA $15M/person (indexed after 2026); trajectory compares REAL growth "
-                     "against the exemption held constant in real terms.")}
+            "note": (f"Federal exemption math is the same nationwide — {state_tax_note} Net estate "
+                     "here is portfolio net worth; life insurance you own, business interests, and "
+                     "personal property are NOT in Monarch and belong in the real number. Exemption "
+                     "is the 2026 OBBBA $15M/person (indexed after 2026); trajectory compares REAL "
+                     "growth against the exemption held constant in real terms.")}
 
 
-def stepup_ledger(accounts):
+def stepup_ledger(accounts, state=None):
     """Per-account step-up view. `accounts` = [{name, tax_status, value, basis_total, gain_total}].
     Only TAXABLE accounts get a basis step-up at death; Traditional IRA/401k is IRD (income in
     respect of a decedent — heirs pay ordinary income tax, SECURE Act 10-year drain for most
-    non-spouse heirs); Roth passes income-tax-free (also 10-year, but growth stays tax-free)."""
+    non-spouse heirs); Roth passes income-tax-free (also 10-year, but growth stays tax-free).
+    The step-up's SIZE on taxable/real-estate positions depends on whether the state of
+    residence is a community-property state (full double step-up) or common-law (half only,
+    unless titled JTWROS with its own partial rules) — see states.py, item 3."""
+    sf = states.facts(state)
     rows, wiped = [], 0.0
+    cp_phrase = (f"{sf['name']} is a community-property state" if sf["community_property"] else
+                 (f"{sf['name']} allows OPT-IN community-property trusts (not the default)"
+                  if sf["opt_in_community_property"] else
+                  f"{sf['name']} is a common-law (not community-property) state"))
     for a in accounts or []:
         status = a.get("tax_status")
         val = a.get("value") or 0.0
@@ -98,11 +138,22 @@ def stepup_ledger(accounts):
             if gain and gain > 0:
                 wiped += gain
         elif status == "real_estate":
+            if sf["community_property"]:
+                titling_line = (f"{sf['name']}'s COMMUNITY PROPERTY gets the FULL double "
+                                 "step-up if titled as community property.")
+            elif sf["opt_in_community_property"]:
+                titling_line = (f"{sf['name']} only gets the full double step-up if the couple "
+                                 "affirmatively elected a community-property trust — otherwise "
+                                 "(the default) only the decedent's HALF steps up.")
+            else:
+                titling_line = (f"{sf['name']} is common-law: only the decedent's HALF steps up "
+                                 "by default (JTWROS titling has its own partial-step-up rules) — "
+                                 "a materially SMALLER benefit than a community-property state.")
             treatment = ("step-up at death (IRC §1014) wipes the home's embedded gain. Note: a "
                          "primary residence already gets the §121 exclusion ($250k single / $500k MFJ) "
                          "on a LIFETIME sale, so the step-up's EXTRA benefit is the gain ABOVE that "
-                         "exclusion. TX community property gets the FULL double step-up if titled as "
-                         "community property. Set the residence cost basis to quantify the wiped gain.")
+                         f"exclusion. {titling_line} Set the residence cost basis to quantify the "
+                         "wiped gain.")
             if gain and gain > 0:
                 wiped += gain
         elif status == "deferred":
@@ -120,12 +171,23 @@ def stepup_ledger(accounts):
                      "embedded_gain": (round(gain, 2) if gain is not None else None),
                      "treatment": treatment})
     rows.sort(key=lambda x: -(x.get("value") or 0))
+    if sf["community_property"]:
+        community_property_note = (f"DOUBLE STEP-UP: {cp_phrase}, so community property gets a "
+                                   "FULL basis reset at the FIRST spouse's death (§1014(b)(6)) — "
+                                   "both halves, not just the decedent's. Confirm brokerage accounts "
+                                   "are titled as community property (not JTWROS, which steps up "
+                                   "only half) — a titling detail worth real money on appreciated positions.")
+    else:
+        community_property_note = (f"HALF STEP-UP ONLY: {cp_phrase} — by default only the "
+                                   "decedent's half of a jointly-held account steps up at the first "
+                                   "death (JTWROS has its own partial rules), a smaller benefit than "
+                                   "a community-property state. " +
+                                   ("An OPT-IN community-property trust could recover the full "
+                                    "double step-up — worth discussing with an estate attorney."
+                                    if sf["opt_in_community_property"] else
+                                    "There is no opt-in path to the double step-up here."))
     return {"accounts": rows, "taxable_embedded_gain": round(wiped, 2),
-            "community_property_note": ("TEXAS DOUBLE STEP-UP: community property gets a FULL basis "
-                                        "reset at the FIRST spouse's death (§1014(b)(6)) — both halves, "
-                                        "not just the decedent's. Confirm brokerage accounts are titled "
-                                        "as community property (not JTWROS, which steps up only half) — "
-                                        "a titling detail worth real money on appreciated positions."),
+            "state": sf["name"], "community_property_note": community_property_note,
             "note": ("Embedded gain in taxable accounts is the capital-gains tax a step-up would wipe. "
                      "This reverses the usual drawdown order late in life: heavily-appreciated taxable "
                      "positions can be worth HOLDING for the step-up while spending from IRA/HSA first.")}
@@ -198,10 +260,13 @@ def gifting_capacity(donees=0, married=True, years=10, growth_pct=5.0):
             }
 
 
-def titling_audit(accounts):
+def titling_audit(accounts, state=None):
     """How each account actually TRANSFERS — beneficiary designation vs probate — plus the
     action checklist. Beneficiary designations OVERRIDE the will; stale ones are the most
-    common (and most litigated) estate failure."""
+    common (and most litigated) estate failure. TOD-deed availability for real estate is
+    STATE-SPECIFIC (34 of 51 jurisdictions have it; Texas among them, North Carolina does
+    NOT) — see states.py, item 3."""
+    sf = states.facts(state)
     rows = []
     for a in accounts or []:
         status = a.get("tax_status")
@@ -211,11 +276,27 @@ def titling_audit(accounts):
         elif status == "taxable":
             passes = "TOD registration if set; otherwise PROBATE via the will"
             action = ("add Transfer-on-Death registration (free at most brokerages) to skip probate; "
-                      "confirm community-property titling for the double step-up")
+                      + ("confirm community-property titling for the double step-up"
+                         if sf["community_property"] else
+                         "note only the decedent's half steps up here (not a community-property state)"))
         elif status == "real_estate":
-            passes = "Transfer-on-Death deed if recorded; otherwise PROBATE via the will"
-            action = ("Texas allows a Transfer-on-Death Deed — record one to pass the home outside "
-                      "probate; confirm community-property titling (not JTWROS) for the double step-up")
+            if sf["tod_deed_available"]:
+                passes = "Transfer-on-Death deed if recorded; otherwise PROBATE via the will"
+                action = (f"{sf['name']} allows a Transfer-on-Death Deed — record one to pass the "
+                          "home outside probate; " +
+                          ("confirm community-property titling (not JTWROS) for the double step-up"
+                           if sf["community_property"] else
+                           "note only the decedent's half steps up by default here"))
+            elif sf["lady_bird_deed_available"]:
+                passes = "Lady Bird (enhanced life estate) deed if recorded; otherwise PROBATE via the will"
+                action = (f"{sf['name']} does not have a standard TOD deed but DOES allow a Lady "
+                          "Bird / enhanced life estate deed — a similar probate-avoidance tool that "
+                          "keeps full control (sell/revoke) during life; record one with an attorney.")
+            else:
+                passes = "PROBATE via the will (no TOD/Lady Bird deed available here)"
+                action = (f"{sf['name']} does not currently offer a TOD or Lady Bird deed for real "
+                          "estate — a revocable living trust is the usual probate-avoidance route "
+                          "for the home in this state; discuss with a local estate attorney.")
         else:
             passes = "check registration"
             action = "review with counsel"
@@ -223,19 +304,21 @@ def titling_audit(accounts):
                      "value": round(a.get("value") or 0, 2),
                      "passes_by": passes, "action": action})
     rows.sort(key=lambda x: -(x.get("value") or 0))
-    return {"accounts": rows,
+    return {"accounts": rows, "state": sf["name"], "tod_deed_available": sf["tod_deed_available"],
             "note": ("Beneficiary designations and TOD registrations move assets OUTSIDE the will — "
                      "they win even when the will says otherwise, so they must be audited like code. "
-                     "Texas probate is relatively cheap (independent administration) but still public "
-                     "and slow; TOD/beneficiary routing avoids it entirely.")}
+                     f"{sf['name']} probate procedures and typical cost/timeline vary by state — "
+                     "confirm with local counsel; TOD/beneficiary routing avoids probate entirely "
+                     "wherever it's available.")}
 
 
-def trust_triggers(net_estate, married=True, minor_heirs=None, cross_year=None):
+def trust_triggers(net_estate, married=True, minor_heirs=None, cross_year=None, state=None):
     """Decision-SUPPORT (not drafting): which trust conversations the trajectory justifies."""
+    sf = states.facts(state)
     out = []
     shield = ESTATE_EXEMPTION * (2 if married else 1)
     out.append({"trigger": "always", "vehicle": "Will + durable POA + medical directives",
-                "why": "the floor for any estate; without a will Texas intestacy rules decide"})
+                "why": f"the floor for any estate; without a will {sf['name']}'s intestacy rules decide"})
     out.append({"trigger": "beneficiaries who are minors or spend-vulnerable",
                 "vehicle": "testamentary or revocable-living-trust provisions",
                 "why": "direct inheritances to minors force a court-supervised guardianship; "
@@ -243,13 +326,25 @@ def trust_triggers(net_estate, married=True, minor_heirs=None, cross_year=None):
     out.append({"trigger": "probate avoidance / privacy / incapacity planning",
                 "vehicle": "revocable living trust",
                 "why": "no tax benefit (grantor trust, assets still in the estate, still stepped up) "
-                       "— its value is avoiding probate, staying private, and seamless incapacity handoff"})
+                       "— its value is avoiding probate, staying private, and seamless incapacity handoff"
+                       + ("" if sf["tod_deed_available"] else
+                          f" — carries relatively MORE weight in {sf['name']}, which has no TOD/Lady "
+                          "Bird deed alternative for the home")})
     if net_estate and net_estate > 0.5 * shield or (cross_year is not None and cross_year <= 20):
         out.append({"trigger": "trajectory approaching the exemption"
                                + (f" (crosses in ~{cross_year}y at assumed growth)" if cross_year else ""),
                     "vehicle": "irrevocable strategies (SLAT, ILIT, GRAT, gifting program)",
                     "why": "these need YEARS of lead time and are cheapest while the estate is still "
                            "under the exemption — the planning window is before the crossing, not after"})
-    return {"triggers": out,
-            "note": "Education only. Trust drafting, funding and Texas community-property nuances "
-                    "require a licensed estate attorney — bring this trajectory to that meeting."}
+    if sf["state_estate_tax"] or sf["state_inheritance_tax"]:
+        out.append({"trigger": f"{sf['name']} levies its own state estate/inheritance tax",
+                    "vehicle": "state-specific planning (state QTIP election, state-only credit-shelter "
+                               "trust, or a change of domicile) — not a federal-exemption question",
+                    "why": ("state exemptions are typically far below the federal $15M, so a household "
+                            "comfortably under the federal exemption can still face real state tax — "
+                            f"this needs {_a_an(sf['name'])} {sf['name']}-licensed estate attorney, "
+                            "not federal-only planning")})
+    return {"triggers": out, "state": sf["name"],
+            "note": f"Education only. Trust drafting, funding, and {sf['name']}'s specific marital-"
+                    "property and probate rules require a licensed estate attorney — bring this "
+                    "trajectory to that meeting."}

@@ -13,8 +13,13 @@ the 400%-FPL cliff.
 credits EXPIRED January 1, 2026. For plan year 2026 the pre-ARPA rules are back:
 - PTC eligibility is 100%–400% FPL, with a HARD CLIFF at 400% (above it, $0 PTC).
 - Applicable ("expected contribution") percentages reverted upward and are indexed.
-Texas did NOT expand Medicaid, so below 100% FPL is a COVERAGE GAP (no Medicaid,
-no PTC) — the planning band is a narrow 100%–400% FPL. ***
+This 100-400% FPL federal band is the same in every state. What DIFFERS by state is
+what happens BELOW 100% FPL: Texas (this app's original home state) did NOT expand
+Medicaid, so below 100% FPL is a true COVERAGE GAP (no Medicaid, no PTC — the
+planning band is a narrow 100%-400% FPL). States that DID expand Medicaid (most of
+them, including North Carolina as of Dec 2023) instead cover that population up to
+~138% FPL via Medicaid — not a gap, but also not PTC/marketplace territory; see
+`states.py` (RESUME-TRACKER item 3) for the current per-state expansion status. ***
 
 Data sources:
 - 2026-coverage FPL (based on 2025 HHS poverty guidelines, applied with a one-year
@@ -27,8 +32,11 @@ NOT tax, legal, or insurance advice. The exact subsidy also depends on your loca
 Second-Lowest-Cost Silver Plan (SLCSP) benchmark and ages, which you supply.
 """
 
+import states
+
 COVERAGE_YEAR = 2026
 SOURCE = "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA §36B applicable %"
+MEDICAID_EXPANSION_CEILING_PCT = 138.0   # expansion states cover up to ~this % FPL via Medicaid
 
 # FPL for 2026 COVERAGE (48 contiguous states + DC). Household 1..8; +increment above 8.
 FPL_2026 = {1: 15_650, 2: 21_150, 3: 26_650, 4: 32_150,
@@ -111,7 +119,7 @@ def cliff(magi_value, household_size):
     headroom = round(cliff_magi - float(magi_value), 2)
     return {
         "fpl_base": base,
-        "ptc_floor_magi": floor_magi,          # below this: coverage gap (TX)
+        "ptc_floor_magi": floor_magi,          # below this: coverage gap (non-expansion states) or Medicaid (expansion states)
         "cliff_magi": cliff_magi,              # at/above this: $0 subsidy
         "headroom_to_cliff": headroom,         # + = room left; - = already over
         "over_cliff": float(magi_value) >= cliff_magi,
@@ -119,26 +127,41 @@ def cliff(magi_value, household_size):
     }
 
 
-def ptc_estimate(magi_value, household_size, slcsp_annual=None):
+def ptc_estimate(magi_value, household_size, slcsp_annual=None, state=None):
     """Estimate the annual premium tax credit. Contribution = MAGI * applicable%;
     PTC = benchmark(SLCSP) - contribution, floored at 0. SLCSP (the local
     Second-Lowest-Cost Silver Plan annual premium) is location/age specific and
     must be supplied for a dollar estimate; without it we still return the
-    expected-contribution figure and the eligibility band."""
+    expected-contribution figure and the eligibility band.
+
+    The 100-400% FPL PTC band itself is federal and identical in every state; what
+    differs is what MAGI below 100% FPL means (see `states.py`, item 3): a true
+    coverage gap in a non-expansion state (TX, GA, and 8 others) vs. Medicaid
+    eligibility (not a gap) in an expansion state (most states, incl. NC, CO)."""
+    sf = states.facts(state)
     fplp = fpl_pct(magi_value, household_size)
     ap = applicable_pct(fplp)
     out = {"magi": round(float(magi_value), 2), "household_size": int(household_size),
-           "fpl_base": fpl(household_size), "fpl_pct": fplp, "applicable_pct": ap}
+           "fpl_base": fpl(household_size), "fpl_pct": fplp, "applicable_pct": ap,
+           "state": sf["name"], "state_medicaid_expanded": sf["medicaid_expanded"]}
     if fplp is None:
         out["eligible"] = False
         out["band"] = "unknown"
         return out
     if fplp < PTC_FLOOR_PCT:
-        out.update(eligible=False, band="coverage_gap",
-                   note=("MAGI below 100% FPL. In Texas (no Medicaid expansion) this is the "
-                         "COVERAGE GAP: too low for a marketplace subsidy, ineligible for "
-                         "Medicaid. Raising MAGI into 100–150% FPL (e.g. a small Roth "
-                         "conversion) can restore subsidy eligibility."))
+        if sf["medicaid_expanded"]:
+            out.update(eligible=False, band="medicaid_likely",
+                       note=(f"MAGI below 100% FPL. {sf['name']} expanded Medicaid, so this is "
+                             "NOT a coverage gap — you're likely Medicaid-eligible (usually free "
+                             "or near-free, better than any marketplace plan), just not "
+                             "marketplace-PTC-eligible. Not a problem to solve with a Roth "
+                             "conversion the way it would be in a non-expansion state."))
+        else:
+            out.update(eligible=False, band="coverage_gap",
+                       note=(f"MAGI below 100% FPL. {sf['name']} has NOT expanded Medicaid, so "
+                             "this is a real COVERAGE GAP: too low for a marketplace subsidy, "
+                             "ineligible for Medicaid. Raising MAGI into 100-150% FPL (e.g. a "
+                             "small Roth conversion) can restore subsidy eligibility."))
         return out
     if fplp >= PTC_CLIFF_PCT:
         out.update(eligible=False, band="over_cliff",
@@ -151,6 +174,11 @@ def ptc_estimate(magi_value, household_size, slcsp_annual=None):
     out.update(eligible=True, band="subsidized",
                expected_annual_contribution=contribution,
                expected_monthly_contribution=round(contribution / 12.0, 2))
+    if sf["medicaid_expanded"] and fplp < MEDICAID_EXPANSION_CEILING_PCT:
+        out["medicaid_likely_note"] = (f"{sf['name']} expanded Medicaid up to ~138% FPL — at "
+                                       f"{fplp}% FPL you're technically PTC-eligible on paper, "
+                                       "but Medicaid is usually free/cheaper and the more likely "
+                                       "actual path here; confirm on your state's Medicaid site.")
     if slcsp_annual:
         ptc = round(max(0.0, float(slcsp_annual) - contribution), 2)
         out.update(slcsp_annual=round(float(slcsp_annual), 2),
@@ -160,12 +188,13 @@ def ptc_estimate(magi_value, household_size, slcsp_annual=None):
 
 
 def summary(components=None, household_size=1, slcsp_annual=None,
-            planned_conversion=0.0, planned_gains=0.0):
+            planned_conversion=0.0, planned_gains=0.0, state=None):
     """One-call rollup for /api/aca: MAGI ledger, %-FPL, subsidy band + estimate,
     and the cliff picture — including what a PLANNED conversion/harvest would do."""
     components = dict(components or {})
+    sf = states.facts(state)
     magi_now, ledger = magi(components)
-    est = ptc_estimate(magi_now, household_size, slcsp_annual)
+    est = ptc_estimate(magi_now, household_size, slcsp_annual, state)
     cl = cliff(magi_now, household_size)
 
     planned = None
@@ -175,7 +204,7 @@ def summary(components=None, household_size=1, slcsp_annual=None,
         comp2["roth_conversions"] = float(comp2.get("roth_conversions", 0) or 0) + float(planned_conversion or 0)
         comp2["capital_gains"] = float(comp2.get("capital_gains", 0) or 0) + float(planned_gains or 0)
         magi2, _ = magi(comp2)
-        est2 = ptc_estimate(magi2, household_size, slcsp_annual)
+        est2 = ptc_estimate(magi2, household_size, slcsp_annual, state)
         cl2 = cliff(magi2, household_size)
         crosses = (not cl["over_cliff"]) and cl2["over_cliff"]
         planned = {
@@ -192,12 +221,16 @@ def summary(components=None, household_size=1, slcsp_annual=None,
     flags = {
         "on_cliff_edge": est.get("band") == "subsidized" and cl["headroom_to_cliff"] < (0.15 * cl["cliff_magi"]),
         "over_cliff": cl["over_cliff"],
-        "below_floor_gap": cl["below_floor"],
+        # A real coverage GAP only exists below the floor in a non-expansion state; in an
+        # expansion state that same MAGI band is (likely) Medicaid, not a gap — see est["band"].
+        "below_floor_gap": cl["below_floor"] and not sf["medicaid_expanded"],
+        "below_floor_medicaid_likely": cl["below_floor"] and sf["medicaid_expanded"],
         "planned_crosses_cliff": bool(planned and planned.get("crosses_cliff")),
     }
     return {
         "coverage_year": COVERAGE_YEAR,
         "household_size": int(household_size),
+        "state": sf["name"], "state_code": sf["code"], "state_medicaid_expanded": sf["medicaid_expanded"],
         "magi": magi_now,
         "magi_ledger": ledger,
         "subsidy": est,
@@ -206,8 +239,11 @@ def summary(components=None, household_size=1, slcsp_annual=None,
         "flags": flags,
         "source": SOURCE,
         "note": ("ACA MAGI = AGI + tax-exempt interest + 100% of Social Security. For 2026 the "
-                 "enhanced subsidies expired: PTC runs 100–400% FPL with a HARD CLIFF at 400%; "
-                 "TX has no Medicaid expansion so <100% FPL is a coverage gap. Educational, not "
-                 "tax/insurance advice — confirm your SLCSP benchmark and enrollment on the "
-                 "marketplace. Only relevant pre-Medicare (before 65)."),
+                 "enhanced subsidies expired: PTC runs 100-400% FPL with a HARD CLIFF at 400% in "
+                 f"every state. Below 100% FPL: {sf['name']} " +
+                 ("has expanded Medicaid, so that band is Medicaid coverage, not a gap."
+                  if sf["medicaid_expanded"] else
+                  "has NOT expanded Medicaid, so that band is a real coverage gap.") +
+                 " Educational, not tax/insurance advice — confirm your SLCSP benchmark and "
+                 "enrollment on the marketplace. Only relevant pre-Medicare (before 65)."),
     }

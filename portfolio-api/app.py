@@ -27,6 +27,7 @@ from fastapi import FastAPI, Request, Header
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 
 import edgar   # SEC EDGAR / GAAP fundamentals
+import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
@@ -115,7 +116,13 @@ DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   # PRIMARY residence, so the step-up ledger can quantify the gain §1014 wipes.
                   # Applied to the largest real-estate account. None = show value, gain unknown.
                   "estate_home_basis": None,
-                  # Tax engine (G5): federal-only (TX has no state income tax).
+                  # State of residence (RESUME-TRACKER item 3): drives estate.py (community
+                  # property / TOD deeds / state estate tax), aca.py (Medicaid expansion), and
+                  # the tax.py/cashdebt.py state-tax notes. None = auto-detect from the largest
+                  # real-estate account's address, falling back to TX — see _state_of_residence().
+                  "state_of_residence": None,
+                  # Tax engine (G5): federal brackets are the same everywhere; state estimate
+                  # layered on top via states.py (item 3) — see tax.state_tax_estimate().
                   "filing_status": "mfj", "spouse_age": None,
                   # Ordinary bracket to "fill" with Roth conversions in low years.
                   "convert_fill_to_rate": 0.12,
@@ -2718,6 +2725,7 @@ def get_estate():
     try:
         d = _data()
         cfg = _read_retire()
+        st = _state_of_residence(cfg, d)
         married = tax.norm_status(cfg.get("filing_status") or "mfj") == "mfj"
         growth = cfg.get("expected_real_return_pct") or 5.0
         acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
@@ -2757,7 +2765,7 @@ def get_estate():
             gain = (max(0.0, val - basis) if basis is not None else None)
             accounts.append({"name": a.get("name"), "tax_status": "real_estate", "value": val,
                              "gain_total": gain, "basis_total": basis})
-        snap = estate.snapshot(d.get("net_worth"), married, growth)
+        snap = estate.snapshot(d.get("net_worth"), married, growth, state=st)
         over = (snap.get("taxable_estate_if_today") or 0) > 0
         taxable_positions.sort(key=lambda x: -x["gain"])
         gvh = []
@@ -2768,17 +2776,19 @@ def get_estate():
             a_["ticker"], a_["account"] = p["ticker"], p["account"]
             gvh.append(a_)
         return {"generated_at": int(time.time()),
+                "state_of_residence": st,
                 "snapshot": snap,
                 "home_basis": home_basis,
-                "stepup": estate.stepup_ledger(accounts),
+                "stepup": estate.stepup_ledger(accounts, state=st),
                 "gift_vs_hold": {"positions": gvh,
                                  "note": "Top embedded-gain TAXABLE positions, modeled gift-now vs "
                                          "hold-for-step-up over 20 years at your assumed real return."},
                 "gifting": estate.gifting_capacity(cfg.get("estate_donees") or 0, married,
                                                    years=10, growth_pct=growth),
-                "titling": estate.titling_audit(accounts),
+                "titling": estate.titling_audit(accounts, state=st),
                 "trusts": estate.trust_triggers(d.get("net_worth"), married,
-                                                cross_year=snap.get("years_until_exemption_crossed")),
+                                                cross_year=snap.get("years_until_exemption_crossed"),
+                                                state=st),
                 "note": "Educational decision-support, not legal/tax advice — estate documents need "
                         "a licensed attorney; confirm figures with a CPA."}
     except Exception as e:
@@ -3976,6 +3986,41 @@ def _read_retire():
         return dict(DEFAULT_RETIRE)
 
 
+_STATE_ADDR_RE = re.compile(r"\b([A-Z]{2})\s+\d{5}(?:-\d{4})?\b")
+
+
+def _infer_state_from_accounts(d):
+    """Best-effort auto-detect (RESUME-TRACKER item 3c): scan real-estate account NAMES for a
+    trailing '<City> <ST> <ZIP>' pattern (Monarch's Zillow-valued home account is named this
+    way, e.g. '8660 7th St Frisco TX 75034') and take the largest such account's state as the
+    default residence. Silent no-op (returns None) on anything unexpected — this is a
+    convenience default, never the only path; state_of_residence in the config always wins."""
+    try:
+        re_accts = [a for a in (d or {}).get("accounts", [])
+                    if (a.get("type") or "").strip().lower() in ("real estate", "real_estate", "realestate")
+                    and (a.get("balance") or 0) > 0]
+        re_accts.sort(key=lambda a: -(a.get("balance") or 0))
+        for a in re_accts:
+            m = _STATE_ADDR_RE.search(a.get("name") or "")
+            if m and m.group(1) in states.STATE_NAMES:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _state_of_residence(cfg=None, d=None):
+    """Resolve the household's state of residence: explicit config setting > auto-detected
+    from the home address > TX fallback (this app's original state). Threaded into
+    estate.py/aca.py/tax.py/cashdebt.py/insurance.py so none of them hardcode a state."""
+    cfg = cfg if cfg is not None else _read_retire()
+    explicit = cfg.get("state_of_residence")
+    if explicit:
+        return states.norm_state(explicit)
+    inferred = _infer_state_from_accounts(d if d is not None else _data())
+    return states.norm_state(inferred)
+
+
 @app.get("/api/retirement-config")
 def get_retire_config():
     return _read_retire()
@@ -4442,7 +4487,7 @@ def get_cashdebt():
               "mortgage_payment_monthly": cfg.get("mortgage_payment_monthly"),
               "refi_rate_pct": cfg.get("refi_rate_pct"),
               "refi_closing_costs": cfg.get("refi_closing_costs"),
-              "debts": debts}
+              "debts": debts, "state": _state_of_residence(ret, d)}
     res = cashdebt.run(inputs, {"ef_target_months": _knob("ef_target_months")})
     res["inputs"] = inputs
     res["tbill_source"] = tb_src
@@ -4575,7 +4620,8 @@ def get_insurance():
                  "age_self": ret.get("current_age"), "age_spouse": ret.get("spouse_age"),
                  "retire_age": ret.get("target_age") or 60,
                  "children": cfg.get("children") or 0,
-                 "home_value": home_val, "real_rate_pct": rr}
+                 "home_value": home_val, "real_rate_pct": rr,
+                 "state": _state_of_residence(ret, d)}
     res = insurance.run(household, cfg.get("policies"))
     res["household"] = household
     res["policies_echo"] = cfg.get("policies") or []
@@ -4638,18 +4684,21 @@ def _withdrawal_gross_with_ss(net, gross_ss, status="mfj", age=None, spouse_age=
 def get_tax(gross_ordinary: float = 0.0, ltcg: float = 0.0, magi: float = None):
     """Bracket-aware federal tax picture (2026): effective rate, Roth-conversion
     'fill-the-bracket' headroom, 0%-LTCG gain-harvest budget, and low-year flags.
-    Read-only / educational — not tax advice. Federal only (TX = no state tax)."""
-    ctx = _tax_ctx()
+    Read-only / educational — not tax advice. Federal brackets are the same everywhere;
+    a light state-tax estimate (states.py, item 3) rides along in `state_tax`."""
+    cfg = _read_retire()
+    ctx = _tax_ctx(cfg)
+    st = _state_of_residence(cfg)
     # default the income input to the household's modeled expenses if not supplied
     if not gross_ordinary:
         try:
-            gross_ordinary = float(_read_retire().get("annual_expenses_override") or 0) or 0.0
+            gross_ordinary = float(cfg.get("annual_expenses_override") or 0) or 0.0
         except Exception:
             gross_ordinary = 0.0
     try:
         return tax.summary(gross_ordinary=gross_ordinary, ltcg=ltcg,
                            status=ctx["status"], age=ctx["age"], spouse_age=ctx["spouse_age"],
-                           fill_to_rate=ctx["fill_to_rate"], magi=magi)
+                           fill_to_rate=ctx["fill_to_rate"], magi=magi, state=st)
     except Exception as e:
         return JSONResponse({"error": f"tax engine failed: {e}"}, status_code=500)
 
@@ -4670,8 +4719,12 @@ def get_aca(magi: float = None, household_size: int = None, slcsp_annual: float 
             taxable_interest: float = 0.0, tax_exempt_interest: float = 0.0):
     """ACA MAGI ledger + 2026 premium-subsidy estimate + 400%-FPL cliff picture.
     Pass MAGI components (or a single `magi=`) and a planned conversion/harvest to
-    see whether it crosses the cliff. Only relevant pre-Medicare. Educational."""
-    ctx = _aca_ctx()
+    see whether it crosses the cliff. Only relevant pre-Medicare. Educational.
+    Medicaid-expansion status (states.py, item 3) changes what a MAGI below 100% FPL
+    means — a real coverage gap (non-expansion states) vs. likely Medicaid (expansion)."""
+    cfg = _read_retire()
+    ctx = _aca_ctx(cfg)
+    st = _state_of_residence(cfg)
     hh = int(household_size or ctx["household_size"])
     slcsp = slcsp_annual if slcsp_annual is not None else ctx["slcsp_annual"]
     if magi is not None:
@@ -4686,11 +4739,12 @@ def get_aca(magi: float = None, household_size: int = None, slcsp_annual: float 
     else:
         # default: model a bridge-year MAGI as ~one year of expenses funded by a Roth
         # conversion / pre-tax withdrawal (the dominant MAGI source in early retirement)
-        exp = float(_read_retire().get("annual_expenses_override") or 0) or 0.0
+        exp = float(cfg.get("annual_expenses_override") or 0) or 0.0
         components = {"ira_401k_withdrawals": exp}
     try:
         return aca.summary(components=components, household_size=hh, slcsp_annual=slcsp,
-                           planned_conversion=planned_conversion, planned_gains=planned_gains)
+                           planned_conversion=planned_conversion, planned_gains=planned_gains,
+                           state=st)
     except Exception as e:
         return JSONResponse({"error": f"aca estimator failed: {e}"}, status_code=500)
 

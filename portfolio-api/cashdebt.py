@@ -13,7 +13,11 @@ Four recurring real-dollar questions no panel answered until now:
 
 Pure logic, injected inputs (balance sheet from the feed, rates from FRED, household facts
 from the insurance/household register) — unit-tests offline. Decision-support, not advice.
+State-of-residence-aware (RESUME-TRACKER item 3) for the mortgage-interest and Treasury-
+interest notes below; the core math is federal-only and doesn't otherwise change by state.
 """
+
+import states
 
 DEFAULT_KNOBS = {
     "ef_target_months": 6.0,
@@ -54,29 +58,34 @@ def emergency_fund(cash_total, essential_monthly, target_months):
                      "the target is strategic dry powder or investable — see idle-cash drag.")}
 
 
-def idle_cash(cash_total, tbill_pct, deposit_yield_pct, ef_target_dollars):
+def idle_cash(cash_total, tbill_pct, deposit_yield_pct, ef_target_dollars, state=None):
+    sf = states.facts(state)
     c = _f(cash_total, 0.0)
     tb, dep = _f(tbill_pct, 0.0), _f(deposit_yield_pct, 0.0)
     spread = max(0.0, tb - dep)
     drag = round(c * spread / 100.0, 2)
     excess = max(0.0, c - _f(ef_target_dollars, 0.0))
+    treasury_note = ("Treasury interest is exempt from state income tax in every state (moot in "
+                     f"{sf['name']}, which has none anyway)." if sf["no_income_tax"] else
+                     f"Treasury interest is exempt from {sf['name']} state income tax too — a real "
+                     "edge over an in-state HYSA/money-market at the same headline yield.")
     return {"cash_total": round(c, 2), "tbill_pct": tb, "deposit_yield_pct": dep,
             "spread_pct": round(spread, 2), "drag_annual": drag,
             "excess_over_ef": round(excess, 2),
             "note": ("Drag assumes parked cash earns the deposit knob; T-bills/HYSA/money-market "
-                     "capture the spread with T+1 liquidity (Treasuries are also TX-friendly: no "
-                     "state tax anyway, but exempt where it matters for others). The excess-over-EF "
+                     f"capture the spread with T+1 liquidity. {treasury_note} The excess-over-EF "
                      "slice is the first candidate.")}
 
 
-def payoff_vs_invest(balance, rate_pct, tbill_pct, expected_real_pct, inflation_pct):
+def payoff_vs_invest(balance, rate_pct, tbill_pct, expected_real_pct, inflation_pct, state=None):
     b, r = _f(balance, 0.0), _f(rate_pct)
     if b <= 0 or r is None:
         return {"available": False,
                 "note": "Set the mortgage rate in the household register to run payoff-vs-invest."}
+    sf = states.facts(state)
     tb = _f(tbill_pct, 0.0)
     exp_nom = round(_f(expected_real_pct, 5.0) + _f(inflation_pct, 2.5), 2)
-    after_tax = r   # TX + standard deduction: interest typically NOT effectively deductible
+    after_tax = r   # post-2017 standard deduction: interest typically NOT effectively deductible
     if after_tax > exp_nom:
         verdict = "payoff-favored"
         msg = (f"After-tax mortgage cost {after_tax:.2f}% exceeds even the risky expected return "
@@ -90,12 +99,22 @@ def payoff_vs_invest(balance, rate_pct, tbill_pct, expected_real_pct, inflation_
         verdict = "keep-mortgage"
         msg = (f"Rate {after_tax:.2f}% is at/below the T-bill {tb:.2f}% — the mortgage is cheap "
                "leverage; even riskless cash out-earns prepayment. Don't prepay.")
+    if sf["no_income_tax"]:
+        tax_note = (f"After-tax ≈ nominal because {sf['name']} has no state income tax and the "
+                    "post-2017 federal standard deduction usually swallows itemized interest — if "
+                    "you itemize FEDERALLY, the true after-tax rate is lower and the case for "
+                    "prepaying weakens.")
+    else:
+        tax_note = (f"After-tax ≈ nominal shown here is FEDERAL-only. {sf['name']} does levy state "
+                    f"income tax ({sf['income_tax_type']}"
+                    + (f" {sf['income_tax_rate_pct']}%" if sf['income_tax_rate_pct'] else "")
+                    + "), so if the state also allows an itemized mortgage-interest deduction and you "
+                      "itemize (federally or at the state level, depending on the state's rules), the "
+                      "true after-tax rate is lower than shown — not modeled here, since state "
+                      "itemization conformity varies; check your state return.")
     return {"available": True, "balance": round(b, 2), "rate_pct": r, "after_tax_rate_pct": after_tax,
             "tbill_pct": tb, "expected_nominal_pct": exp_nom, "verdict": verdict, "msg": msg,
-            "note": ("After-tax ≈ nominal because TX has no state tax and the post-2017 standard "
-                     "deduction usually swallows itemized interest — if you itemize, the true "
-                     "after-tax rate is lower and the case for prepaying weakens. Liquidity is "
-                     "one-way: principal paid in is hard to get back out.")}
+            "note": tax_note + " Liquidity is one-way: principal paid in is hard to get back out."}
 
 
 def refi_break_even(balance, current_payment, refi_rate_pct, closing_costs, term_years):
@@ -142,10 +161,11 @@ def run(inputs, knobs=None):
     ef = emergency_fund(i.get("cash_total"), essential_mo, k["ef_target_months"])
     ef_target = (ef["essential_monthly"] or 0) * k["ef_target_months"]
     dep = _f(i.get("deposit_yield_pct"), k["deposit_yield_pct"])
-    ic = idle_cash(i.get("cash_total"), i.get("tbill_pct"), dep, ef_target)
+    ic = idle_cash(i.get("cash_total"), i.get("tbill_pct"), dep, ef_target, i.get("state"))
     exp_nom = round(_f(i.get("expected_real_pct"), 5.0) + k["inflation_pct"], 2)
     mort = payoff_vs_invest(i.get("mortgage_balance"), i.get("mortgage_rate_pct"),
-                            i.get("tbill_pct"), i.get("expected_real_pct"), k["inflation_pct"])
+                            i.get("tbill_pct"), i.get("expected_real_pct"), k["inflation_pct"],
+                            i.get("state"))
     refi = refi_break_even(i.get("mortgage_balance"), i.get("mortgage_payment_monthly"),
                            i.get("refi_rate_pct"), i.get("refi_closing_costs"),
                            _f(i.get("refi_term_years"), k["refi_term_years"]))

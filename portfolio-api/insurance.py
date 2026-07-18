@@ -20,6 +20,8 @@ Decision-support only — quotes and suitability come from licensed agents; this
 sells or recommends a specific product.
 """
 
+import states
+
 DEFAULT_KNOBS = {
     "disability_replace_pct": 60.0,   # % of gross income DI should replace
     "self_consumption_pct": 30.0,     # HLV: share of own income the earner consumes
@@ -130,6 +132,7 @@ def run(household, policies, knobs=None):
     income_spouse, age_self, age_spouse, retire_age, children, home_value, real_rate_pct}."""
     k = {**DEFAULT_KNOBS, **(knobs or {})}
     h = household or {}
+    sf = states.facts(h.get("state"))
     rr = _f(h.get("real_rate_pct"), 2.0)
     retire = _f(h.get("retire_age"), 60)
     gap_rows, alerts = [], []
@@ -214,10 +217,13 @@ def run(household, policies, knobs=None):
                         "Enter per-occurrence liability. ") +
                        "With a positive net worth, 250/500 (or a 500k CSL) is the working floor — "
                        "and the umbrella requires it."})
-    pnc.append({"item": "Flood (TX)", "status": "review",
-                "msg": "Homeowners policies EXCLUDE flood; TX losses are frequently flood/wind. "
-                       "Check FEMA zone; NFIP or private flood is a separate policy. Wind/hail "
-                       "deductibles in TX are often %-of-dwelling — know the dollar number."})
+    pnc.append({"item": f"Flood ({sf['code']})", "status": "review",
+                "msg": (f"Homeowners policies EXCLUDE flood everywhere, not just {sf['name']} — "
+                        "check your FEMA flood zone regardless of state; NFIP or private flood is "
+                        "a separate policy. Regional perils (flood, wind/hail, wildfire, earthquake) "
+                        "and their typical deductible structure (often %-of-dwelling for wind/hail in "
+                        "coastal/high-wind states) vary by state — confirm what's relevant for "
+                        f"{sf['name']} specifically with your agent, since this isn't modeled by state here.")})
 
     # ---- LTC ----
     oldest = max(_f(h.get("age_self")), _f(h.get("age_spouse")))

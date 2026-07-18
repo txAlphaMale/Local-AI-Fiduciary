@@ -11,8 +11,13 @@ approximate tax —
 — with ONE model: the 2026 federal ordinary brackets + long-term-capital-gains
 (LTCG) stacking. From that model we *derive* the numbers those knobs used to
 guess: an effective withdrawal rate, the Roth-conversion tax and "fill-the-bracket"
-headroom, and the 0%-LTCG gain-harvesting budget. Texas has no state income tax,
-which is why this is federal-only (see PROJECT: user is TX-resident).
+headroom, and the 0%-LTCG gain-harvesting budget. The FEDERAL model here is
+state-independent and always applies as-is. Texas (this app's original home state)
+happens to have no state income tax, which is why this was originally federal-only;
+`states.py` (RESUME-TRACKER item 3) now supplies a light STATE estimate on top —
+exact for no-tax/flat-tax states, an explicit "not modeled" flag for progressive
+ones (a full 50-state bracket engine is out of scope; use your state's own
+calculator for a progressive state).
 
 Everything here is pure arithmetic (zero GPU, zero network) and read-only /
 educational — NOT tax advice. Confirm sizing with a CPA before acting.
@@ -22,6 +27,8 @@ Foundation, "2026 Tax Brackets" (https://taxfoundation.org/data/all/federal/2026
 OBBBA (July 2025) made the TCJA rate structure permanent and reset the standard
 deduction; 2026 figures already reflect it.
 """
+
+import states
 
 TAX_YEAR = 2026
 SOURCE = "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation"
@@ -231,8 +238,35 @@ def effective_rate(gross_ordinary, ltcg=0.0, status="mfj", deduction=None,
     }
 
 
+def state_tax_estimate(taxable_ordinary, ltcg, state=None):
+    """A DELIBERATELY simple state income-tax estimate — not a second bracket engine.
+    No-tax and flat-tax states get an exact-shaped (rate x federal-taxable-income)
+    estimate, which is close for states that largely conform to the federal base;
+    progressive states are explicitly flagged as NOT modeled rather than guessed."""
+    sf = states.facts(state)
+    base = max(0.0, float(taxable_ordinary)) + max(0.0, float(ltcg))
+    if sf["income_tax_type"] == "none":
+        return {"state": sf["name"], "state_code": sf["code"], "type": "none",
+                "estimated_state_tax": 0.0,
+                "note": f"{sf['name']} levies no state income tax."}
+    if sf["income_tax_type"] == "flat" and sf["income_tax_rate_pct"] is not None:
+        est = round(base * sf["income_tax_rate_pct"] / 100.0, 2)
+        return {"state": sf["name"], "state_code": sf["code"], "type": "flat",
+                "rate_pct": sf["income_tax_rate_pct"], "estimated_state_tax": est,
+                "note": (f"Rough estimate only: {sf['income_tax_rate_pct']}% x approximate "
+                         "federal taxable income. Real state returns have their own "
+                         "deductions/credits that differ from the federal ones used here — "
+                         "confirm with your state's own calculator.") + ("".join(
+                             " " + n for n in sf["notes"]))}
+    return {"state": sf["name"], "state_code": sf["code"], "type": sf["income_tax_type"],
+            "estimated_state_tax": None,
+            "note": (f"{sf['name']} uses progressive brackets, which this app does not "
+                     "model (a full 50-state bracket engine is out of scope) — use your "
+                     "state's own tax calculator for a real number.")}
+
+
 def summary(gross_ordinary=0.0, ltcg=0.0, status="mfj", age=None, spouse_age=None,
-            fill_to_rate=0.12, magi=None):
+            fill_to_rate=0.12, magi=None, state=None):
     """One-call rollup for the /api/tax endpoint: the model, plus every derived
     knob (effective rate, conversion headroom, 0%-gain budget, harvest flag)."""
     st = norm_status(status)
@@ -244,11 +278,13 @@ def summary(gross_ordinary=0.0, ltcg=0.0, status="mfj", age=None, spouse_age=Non
     harvest = gains_harvest_budget(gross_ordinary, st, ded, age, spouse_age)
     taxable_ord = max(0.0, float(gross_ordinary) - ded)
     marg = marginal_ordinary_rate(taxable_ord, st)
+    state_tax = state_tax_estimate(taxable_ord, ltcg, state)
     # Harvest flag: a "low year" is one where you're still inside the 12% ordinary
     # bracket AND have 0%-LTCG room — the window to convert and/or harvest gains.
     low_year = marg <= 0.12 and harvest["gains_at_0pct_budget"] > 0
     notes = [
-        "Federal-only (TX has no state income tax). 2026 brackets per %s." % SOURCE,
+        "Federal brackets per %s always apply as modeled; the state figure below is a "
+        "simplification (see state_tax.note), not a second bracket engine." % SOURCE,
         "Educational, not tax advice — size conversions/harvests with a CPA.",
     ]
     if unsupported:
@@ -265,6 +301,7 @@ def summary(gross_ordinary=0.0, ltcg=0.0, status="mfj", age=None, spouse_age=Non
         "effective": eff,
         "roth_conversion_headroom": conv,
         "gain_harvest": harvest,
+        "state_tax": state_tax,
         "flags": {
             "low_bracket_year": low_year,
             "convert_or_harvest_window": low_year,
