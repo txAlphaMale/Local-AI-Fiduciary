@@ -388,18 +388,54 @@ def _job_worker():
 threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
 
 
+def _job_typical_seconds(kind, jobs, exclude_id=None, n=5):
+    """Median duration of the last N 'done' runs of this kind (excluding the in-flight job
+    itself), from the SAME in-memory `_JOBS` history /api/jobs already carries — no new data
+    source, no per-kind instrumentation. Returns None until at least one prior run exists
+    (a job's very first run has nothing to compare against yet). RESUME-TRACKER item 5's
+    cheapest option ("elapsed-time-vs-typical-duration as a rough ETA"), generalized across
+    every job kind at once rather than the bespoke per-kind approach knowledge_reindex uses."""
+    durs = sorted(
+        (j["finished"] - j["started"]) for j in jobs
+        if j["kind"] == kind and j["id"] != exclude_id and j["status"] == "done"
+        and j.get("started") and j.get("finished")
+    )
+    if not durs:
+        return None
+    durs = durs[-n:]
+    mid = len(durs) // 2
+    return durs[mid] if len(durs) % 2 else (durs[mid - 1] + durs[mid]) / 2.0
+
+
 @app.get("/api/jobs")
 def get_jobs():
     """Serial job-queue registry (Increment B): queued/running/done in order + current
     depth. A UI badge can poll this; pairs with /api/gpu.
     `strategist_busy` reflects _strat_lock (chat / weekly strategist / advisory runs) — those share
     a lock but DON'T go through this FIFO, so without this flag a live chat generation (or a weekly/
-    advisory run) could hold the GPU with the badge showing blank. Cheap: in-memory only."""
+    advisory run) could hold the GPU with the badge showing blank. Cheap: in-memory only.
+
+    `progress` on the RUNNING job (RESUME-TRACKER item 5): elapsed seconds vs. the median of
+    its last 5 completed runs, plus a rough percent. None/None until history exists (fresh
+    install, or a job kind's very first run) or the kind has no completed run yet — shown
+    as "no history yet" rather than a fake 0%. This is a RUNTIME signal only; it does not
+    diagnose WHY a run is slow (see item 6) — it just makes "this is taking way longer than
+    usual" visible instead of an opaque spinner."""
     with _JOBS_LOCK:
         jobs = [dict(_JOBS[j]) for j in _JOBS_ORDER if j in _JOBS]
     depth = sum(1 for j in jobs if j["status"] == "queued")
-    running = next((j["kind"] for j in jobs if j["status"] == "running"), None)
-    return {"queued": depth, "running": running, "scheduler": INTERNAL_SCHEDULER,
+    running_job = next((j for j in jobs if j["status"] == "running"), None)
+    running = running_job["kind"] if running_job else None
+    progress = None
+    if running_job and running_job.get("started"):
+        typical = _job_typical_seconds(running_job["kind"], jobs, exclude_id=running_job["id"])
+        elapsed = int(time.time()) - running_job["started"]
+        progress = {"kind": running_job["kind"], "elapsed_seconds": elapsed,
+                    "typical_seconds": (round(typical) if typical is not None else None),
+                    "pct_of_typical": (round(elapsed / typical * 100) if typical else None),
+                    "over_typical": bool(typical and elapsed > typical * 1.5)}
+    return {"queued": depth, "running": running, "progress": progress,
+            "scheduler": INTERNAL_SCHEDULER,
             "jobs": list(reversed(jobs)),      # newest first
             "strategist_busy": _strat_lock.locked()}
 
@@ -2809,6 +2845,131 @@ def get_estate():
         return JSONResponse({"error": f"estate view unavailable: {e}"}, status_code=502)
 
 
+@app.get("/api/continuity")
+def get_continuity():
+    """OPP-5 continuity binder: an always-current, auto-generated estate-OPERATIONS doc for
+    whoever has to handle things if you can't — account map (what passes how), the step-up
+    ledger, key contacts, and an action checklist. Composes estate.py's existing
+    titling_audit()/stepup_ledger() outputs plus the contacts register; computes nothing new
+    — this is a document view, not an analysis engine. Regenerates fresh on every load, so
+    unlike a printed binder it can't go stale (though the PRINTED version, once you print it,
+    obviously can — reprint after any major account change)."""
+    try:
+        d = _data()
+        cfg = _read_retire()
+        icfg = _read_insurance_cfg()
+        sinfo = _state_of_residence_info(cfg, d)
+        st = sinfo["code"]
+        married = tax.norm_status(cfg.get("filing_status") or "mfj") == "mfj"
+        # Same account-list construction as /api/estate (kept as a second copy deliberately —
+        # this endpoint's shape is a document, not an analysis, and shouldn't couple to any
+        # future change in estate's own response shape).
+        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+                       for a in d.get("accounts", [])}
+        accounts = []
+        for acct in d.get("by_account", []):
+            name = acct.get("account")
+            status = acct_status.get(name) or _account_tax_status(name, "Investments")
+            if status == "na":
+                continue
+            hs = acct.get("holdings", [])
+            val = sum(h.get("value") or 0 for h in hs)
+            gains = [h.get("gain") for h in hs if h.get("gain") is not None]
+            costs = [h.get("cost_total") for h in hs if h.get("cost_total") is not None]
+            accounts.append({"name": name, "tax_status": status, "value": val,
+                             "gain_total": sum(gains) if gains else None,
+                             "basis_total": sum(costs) if costs else None})
+        home_basis = cfg.get("estate_home_basis")
+        re_accts = [a for a in d.get("accounts", [])
+                    if (a.get("type") or "").strip().lower() in ("real estate", "real_estate", "realestate")
+                    and a.get("is_asset") is not False and (a.get("balance") or 0) > 0]
+        re_accts.sort(key=lambda a: -(a.get("balance") or 0))
+        for i, a in enumerate(re_accts):
+            val = a.get("balance") or 0.0
+            basis = (float(home_basis) if (i == 0 and home_basis not in (None, "", 0)) else None)
+            gain = (max(0.0, val - basis) if basis is not None else None)
+            accounts.append({"name": a.get("name"), "tax_status": "real_estate", "value": val,
+                             "gain_total": gain, "basis_total": basis})
+        # The survivor needs what's OWED too, not just what's owned — titling/step-up don't
+        # cover liabilities, so pull them separately.
+        liabilities = [{"name": a.get("name"), "balance": round(a.get("balance") or 0, 2),
+                        "type": a.get("type")}
+                       for a in d.get("accounts", [])
+                       if a.get("is_asset") is False and (a.get("balance") or 0) > 0]
+        liabilities.sort(key=lambda x: -x["balance"])
+
+        titling = estate.titling_audit(accounts, state=st)
+        stepup = estate.stepup_ledger(accounts, state=st)
+        # Merge the two per-account views by name into one row for the binder — presentation
+        # only, both sides come straight from estate.py's already-computed output.
+        stepup_by_name = {r["account"]: r for r in stepup.get("accounts", [])}
+        account_map = []
+        for row in titling.get("accounts", []):
+            sr = stepup_by_name.get(row["account"], {})
+            account_map.append({"account": row["account"], "tax_status": row["tax_status"],
+                                "value": row["value"], "passes_by": row["passes_by"],
+                                "action": row["action"], "embedded_gain": sr.get("embedded_gain")})
+
+        contacts = icfg.get("contacts") or []
+        executor = icfg.get("executor_name")
+        will_loc = icfg.get("will_location")
+        u = lambda v: "—" if v is None else f"${v:,.0f}"
+
+        checklist = [
+            {"step": "Locate the estate documents",
+             "detail": ("Will" + (f" (kept: {will_loc})" if will_loc else
+                                   " — location not on file, add it in PLAN→CONTINUITY") +
+                        ", durable power of attorney, medical directive, and any trust documents. "
+                        "This app doesn't store or draft them — only where they are and how "
+                        "accounts transfer.")},
+            {"step": "Notify Social Security (if applicable)",
+             "detail": "Report the death to the SSA — a surviving spouse/dependent may be "
+                       "eligible for a survivor benefit; claiming timing affects the amount."},
+            {"step": "Confirm every beneficiary-designated account below is current",
+             "detail": "Beneficiary designations and TOD/POD registrations pay out DIRECTLY and "
+                       "OVERRIDE the will — verify each one before assuming the will controls it."},
+        ]
+        if executor:
+            checklist.append({"step": "Contact the executor", "detail": f"Named executor: {executor}."})
+        for row in account_map:
+            checklist.append({"step": f"{row['account']} ({u(row['value'])})",
+                              "detail": f"Passes by: {row['passes_by']}. {row['action']}"})
+        if liabilities:
+            checklist.append({"step": "Debts to settle or assume",
+                              "detail": "; ".join(f"{l['name']} ({u(l['balance'])})" for l in liabilities)})
+        if stepup.get("taxable_embedded_gain"):
+            checklist.append({"step": "Do not sell appreciated taxable positions before the step-up posts",
+                              "detail": f"~{u(stepup['taxable_embedded_gain'])} of embedded gain gets "
+                                        "wiped by basis step-up at death (IRC §1014) — selling first "
+                                        f"forfeits it. {stepup.get('community_property_note', '')}"})
+        if contacts:
+            checklist.append({"step": "Call the professional team",
+                              "detail": "; ".join(f"{c.get('role')}: {c.get('name') or '—'}"
+                                                   + (f" {c.get('phone')}" if c.get('phone') else "")
+                                                   for c in contacts)})
+        else:
+            checklist.append({"step": "No professional contacts on file",
+                              "detail": "Add your estate attorney / CPA / financial advisor / "
+                                        "insurance agent in PLAN→CONTINUITY so this isn't empty "
+                                        "when it matters."})
+
+        return {"generated_at": int(time.time()),
+                "state_of_residence": st, "state_of_residence_source": sinfo["source"],
+                "net_worth": d.get("net_worth"),
+                "household": {"married": married, "filing_status": cfg.get("filing_status") or "mfj"},
+                "executor_name": executor, "will_location": will_loc,
+                "account_map": account_map, "liabilities": liabilities,
+                "taxable_embedded_gain": stepup.get("taxable_embedded_gain"),
+                "community_property_note": stepup.get("community_property_note"),
+                "contacts": contacts, "checklist": checklist,
+                "note": "Auto-generated from your live balance sheet + the titling/step-up engine "
+                        "every time this page loads — unlike a printed binder it can't silently go "
+                        "stale. Educational decision-support, not legal advice; the will/POA/trust "
+                        "documents themselves still need a licensed attorney."}
+    except Exception as e:
+        return JSONResponse({"error": f"continuity binder unavailable: {e}"}, status_code=502)
+
+
 # --- Calibration memory (N13 candidate 2): feed the model its OWN scored track record into the brief
 #     prompt so it self-calibrates confidence against reality — Reflexion-style self-critique via
 #     CONTEXT, deliberately NOT an extra LLM generation (near-zero cost on Pascal). Cached so a nightly
@@ -4548,8 +4709,13 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      "k401_match_t2_pct": None, "k401_match_t2_rate": None,
                      "k401_biweekly_total": None,
                      "plan_aftertax": False, "inservice_rollover": "unknown",
-                     "hsa_coverage": "family", "hsa_contribution": None, "hsa_invested": True}
+                     "hsa_coverage": "family", "hsa_contribution": None, "hsa_invested": True,
+                     # OPP-5 continuity binder (PLAN→CONTINUITY): key-contacts register — attorney,
+                     # CPA, financial advisor, insurance agent, executor, guardian, etc. Nothing here
+                     # is computed; it's just surfaced verbatim into the binder for the survivor.
+                     "contacts": [], "executor_name": None, "will_location": None}
 _INS_POLICY_KEYS = ("kind", "owner", "name", "coverage", "premium_annual", "term_expires", "notes")
+_CONTACT_KEYS = ("role", "name", "phone", "email", "notes")
 
 
 def _read_insurance_cfg():
@@ -4603,6 +4769,13 @@ async def post_insurance_config(req: Request):
     if "home_address" in body:
         cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
             if body["home_address"] not in (None, "") else None
+    for k in ("executor_name", "will_location"):
+        if k in body:
+            cfg[k] = (str(body[k]).strip()[:200] or None) if body[k] not in (None, "") else None
+    if isinstance(body.get("contacts"), list):
+        cfg["contacts"] = [{k: (str(c.get(k))[:200] if c.get(k) not in (None, "") else None)
+                            for k in _CONTACT_KEYS}
+                           for c in body["contacts"] if isinstance(c, dict) and c.get("role")][:20]
     if body.get("inservice_rollover") in ("yes", "no", "unknown"):
         cfg["inservice_rollover"] = body["inservice_rollover"]
     if body.get("hsa_coverage") in ("self", "family"):

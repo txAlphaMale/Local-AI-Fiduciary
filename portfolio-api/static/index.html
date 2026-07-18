@@ -139,7 +139,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
 let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0, CHAT_REQ_ID=null;
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -219,10 +219,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     render();   // re-render with research / insights / plan / ideas / strategist panels
@@ -501,6 +501,10 @@ W('cashdebt','Planning','Cash, liquidity & debt desk',
   'The household-CFO hygiene panel: emergency-fund months (actual cash ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, and an avalanche ranking of non-mortgage debts against the invest hurdle.',
   'PLAN → CASH · DEBT. Red alerts = underfunded EF or debts beating the hurdle; the drag line prices what parked cash forfeits per year. Enter mortgage rate/payment, deposit yield, refi candidates, and per-debt APRs in the editor — balances come from the live feed, the T-bill from FRED daily.',
   'Use it monthly and on rate moves: it catches the quiet losses (idle cash, expensive debt) and answers the perennial "extra $1k: mortgage or market?" with the guaranteed-vs-expected framing instead of vibes. EF sizing judgment (job security, one vs two incomes) still overrides the spreadsheet.');
+W('continuity','Planning','Continuity binder',
+  'An always-current, auto-generated estate-OPERATIONS doc for whoever has to handle things if you can\'t: an action checklist, an account-by-account map of how each one actually transfers (beneficiary vs TOD deed vs probate — pulled straight from the ESTATE titling audit), embedded gain the step-up would wipe, any debts to settle, and a key-contacts register (attorney, CPA, advisor, executor, where the will is kept). Composes numbers already computed elsewhere — it adds no new modeling, just assembles the document view of it.',
+  'PLAN → CONTINUITY. The checklist up top is meant to be read first under stress; the account map and debts below it are the backup detail. Because it regenerates from the live balance sheet on every load, it can\'t silently drift out of date the way a one-time printed binder would — though a PRINTED copy (🖶 PRINT button) obviously freezes at print time, so reprint after any major account change.',
+  'Fill in the contacts and executor/will-location fields once — that\'s the part the app can\'t infer from your accounts. Print a copy and put it somewhere a survivor or co-executor would actually find it; this is decision-support, not a substitute for the actual will/POA/trust documents, which still need a licensed attorney.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
   'Options math on the concentrated names: a COVERED CALL sells the upside above a strike for cash now (income + assignment probability shown); a COLLAR buys a ~10% protective put funded by selling a call (floor and cap shown, often near zero net cost). Chains are delayed Yahoo data; deltas are computed locally from each contract\'s implied volatility.',
   'INSIGHTS → HEDGING. Cards build for names over the sizing loss-budget plus top direct weights (≥3%), at the ~30-45 day expiration. Yield %/yr on calls, floor/cap on collars; premiums are mid-quotes — verify live before any order. Rebuilds daily or via REFRESH CHAINS.',
@@ -1757,6 +1761,7 @@ function planContent(r){
     (INS && !INS.error) && {key:'insurance',label:'INSURANCE',build:()=>insuranceContent()},
     (CASHDEBT && !CASHDEBT.error) && {key:'cashdebt',label:'CASH · DEBT',build:()=>cashdebtContent()},
     (BEN && !BEN.error) && {key:'benefits',label:'BENEFITS',build:()=>benefitsContent()},
+    (CONTIN && !CONTIN.error) && {key:'continuity',label:'CONTINUITY',build:()=>continuityContent()},
     (ROTH && !ROTH.error) && {key:'roth',label:'ROTH · RATE CURVE',build:()=>rothContent()},
     (REALESTATE && !REALESTATE.error) && {key:'realestate',label:'REAL ESTATE',build:()=>realEstateContent()},
     (BUSINESS && !BUSINESS.error) && {key:'business',label:'BUSINESS',build:()=>businessContent()},
@@ -2154,6 +2159,75 @@ function cashdebtContent(){
   },0);
   const foot=el('div','muted'); foot.style.cssText='font-size:10px;margin-top:8px;line-height:1.5;';
   foot.textContent=(r.note||'')+(r.tbill_source?` · T-bill: ${r.tbill_source}`:''); wrap.appendChild(foot);
+  return wrap;
+}
+
+function continuityContent(){
+  // OPP-5 continuity binder: always-current estate-operations doc for whoever handles things
+  // if you can't — account map (how each account transfers), step-up ledger callout, key
+  // contacts, and a survivor action checklist. Pure presentation of estate.py's own outputs
+  // (titling_audit/stepup_ledger) plus the contacts register — nothing computed here.
+  const r=CONTIN||{}, wrap=el('div');
+  const _ch=el('div','ph','CONTINUITY BINDER · IF SOMETHING HAPPENS TO YOU'); _ch.appendChild(wikiLink('continuity')); wrap.appendChild(_ch);
+  if(r.error){ wrap.appendChild(el('div','muted','Continuity binder unavailable.')); return wrap; }
+  const u=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const sub=el('div','muted'); sub.style.cssText='font-size:10px;line-height:1.5;margin-bottom:10px;';
+  sub.textContent=(r.note||'')+` State of residence: ${esc(r.state_of_residence||'—')}`+
+    (r.state_of_residence_source==='default_unconfirmed'?' (UNCONFIRMED — set it in PLAN→ASSUMPTIONS)':'');
+  wrap.appendChild(sub);
+  const pr=el('button',null,'🖶 PRINT'); pr.style.marginBottom='10px'; pr.onclick=()=>window.print();
+  wrap.appendChild(pr);
+  // ---- action checklist (the part meant to be read first, under stress) ----
+  wrap.appendChild(el('div','ph','ACTION CHECKLIST'));
+  (r.checklist||[]).forEach(c=>{ const w=el('div'); w.style.cssText='font-size:11px;padding:3px 0;line-height:1.5;border-bottom:1px solid var(--bd2);';
+    w.innerHTML=`<b>${esc(c.step)}</b><br/><span class="muted">${esc(c.detail)}</span>`; wrap.appendChild(w); });
+  // ---- account map (titling + step-up merged) ----
+  wrap.appendChild(el('div','ph','ACCOUNT MAP · HOW EACH ACCOUNT TRANSFERS'));
+  const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">ACCOUNT</th><th>VALUE</th><th class="l">PASSES BY</th><th>EMBEDDED GAIN</th>'; t.appendChild(hr);
+  (r.account_map||[]).forEach(a2=>{ const tr=el('tr');
+    tr.innerHTML=`<td class="l sym">${esc(a2.account)}</td><td>${u(a2.value)}</td>`+
+      `<td class="l" style="font-size:10px;">${esc(a2.passes_by)}</td><td>${a2.embedded_gain?u(a2.embedded_gain):'—'}</td>`;
+    t.appendChild(tr); });
+  wrap.appendChild(t);
+  if((r.liabilities||[]).length){
+    wrap.appendChild(el('div','ph','DEBTS'));
+    const t2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">DEBT</th><th>BALANCE</th>'; t2.appendChild(hr2);
+    r.liabilities.forEach(l=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${esc(l.name)}</td><td>${u(l.balance)}</td>`; t2.appendChild(tr); });
+    wrap.appendChild(t2);
+  }
+  // ---- key contacts + executor/will editor ----
+  wrap.appendChild(el('div','ph','KEY CONTACTS · EDIT'));
+  const ed=el('div'); ed.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:8px 10px;';
+  ed.innerHTML=`<div style="margin-bottom:7px;font-size:11px;">Executor <input id="ct-exec" value="${esc(r.executor_name||'')}" style="width:150px;"/> `+
+    `Will kept at <input id="ct-will" value="${esc(r.will_location||'')}" placeholder="e.g. attorney's office, home safe" style="width:220px;"/></div>`;
+  const cl=el('div'); cl.id='ct-contacts'; ed.appendChild(cl);
+  wrap._contacts = (CONTIN_CONTACTS!=null?CONTIN_CONTACTS:(r.contacts||[])).slice();
+  function renderContacts(){
+    cl.innerHTML='';
+    (wrap._contacts||[]).forEach((c,i)=>{ const row=document.createElement('div'); row.style.cssText='font-size:11px;padding:2px 0;';
+      row.innerHTML=`· <b>${esc(c.role)}</b> ${esc(c.name||'')}${c.phone?' · '+esc(c.phone):''}${c.email?' · '+esc(c.email):''}${c.notes?' — '+esc(c.notes):''} <a href="#" data-i="${i}" class="ct-del" style="color:var(--red);">✕</a>`;
+      cl.appendChild(row); });
+    cl.querySelectorAll('.ct-del').forEach(a2=>{ a2.onclick=(ev)=>{ ev.preventDefault(); wrap._contacts.splice(+a2.dataset.i,1); renderContacts(); }; });
+  }
+  const add=document.createElement('div'); add.style.cssText='margin-top:7px;font-size:11px;';
+  add.innerHTML=`Add: role <input id="ct-role" placeholder="estate attorney" style="width:110px;"/> `+
+    `name <input id="ct-name" style="width:110px;"/> phone <input id="ct-phone" style="width:100px;"/> `+
+    `email <input id="ct-email" style="width:140px;"/> notes <input id="ct-notes" style="width:120px;"/> `+
+    `<button id="ct-add">ADD</button> <button id="ct-save">SAVE ALL</button>`;
+  ed.appendChild(add); wrap.appendChild(ed);
+  setTimeout(()=>{ renderContacts();
+    const g=id=>document.getElementById(id);
+    if(g('ct-add')) g('ct-add').onclick=()=>{ if(!g('ct-role').value) return;
+      wrap._contacts.push({role:g('ct-role').value, name:g('ct-name').value||null, phone:g('ct-phone').value||null,
+        email:g('ct-email').value||null, notes:g('ct-notes').value||null});
+      g('ct-role').value=''; g('ct-name').value=''; g('ct-phone').value=''; g('ct-email').value=''; g('ct-notes').value=''; renderContacts(); };
+    if(g('ct-save')) g('ct-save').onclick=async()=>{ CONTIN_CONTACTS=wrap._contacts;
+      await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({executor_name:g('ct-exec').value||null, will_location:g('ct-will').value||null,
+                             contacts:wrap._contacts})});
+      load(false); };
+  },0);
   return wrap;
 }
 
@@ -3681,13 +3755,27 @@ setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-p
 
 // Serial job-queue badge (Increment B): poll /api/jobs and show running/queued depth
 // in the header. Independent of the 5-min load so it updates live during a run. Idle = blank.
+// Rough job-duration ETA (RESUME-TRACKER item 5): elapsed vs. the median of that job kind's
+// last 5 completed runs, from /api/jobs' `progress` field — no per-kind wiring needed here,
+// the server already generalized it across every job kind. "No history yet" (not a fake 0%)
+// until a kind has completed at least once. over_typical (>1.5x) flips the badge red-ish —
+// this doesn't explain WHY a run is slow (item 6), just makes it visible instead of a silent spinner.
+const fmtMin=s=>{ s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60; return m>0?`${m}m${r?(' '+r+'s'):''}`:`${r}s`; };
 function pollJobs(){
   fetch('/api/jobs').then(r=>r.json()).then(j=>{
     const b=document.getElementById('jobs'); if(!b) return;
     if(j && (j.running || j.queued)){
       const run=j.running?('▶ '+j.running):'';
       const q=j.queued?(' · '+j.queued+' queued'):'';
-      b.innerHTML=`<span style="color:var(--amber)">⚙ ${run}${q}</span>`;
+      let eta='';
+      if(j.progress && j.progress.kind===j.running){
+        const p=j.progress;
+        eta = p.typical_seconds!=null
+          ? ` (${fmtMin(p.elapsed_seconds)} of ~${fmtMin(p.typical_seconds)} typical${p.pct_of_typical!=null?', '+p.pct_of_typical+'%':''})`
+          : ` (${fmtMin(p.elapsed_seconds)}, no history yet)`;
+      }
+      const color = (j.progress && j.progress.over_typical) ? 'var(--red)' : 'var(--amber)';
+      b.innerHTML=`<span style="color:${color}" title="Rough ETA from this job's own history, not a real progress bar">⚙ ${run}${eta}${q}</span>`;
     } else if(j && j.strategist_busy){
       // Chat / weekly strategist / advisory runs share one lock but don't go through the FIFO
       // above, so without this branch the badge would go blank while one of them holds the GPU.
