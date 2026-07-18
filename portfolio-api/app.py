@@ -1036,6 +1036,51 @@ def _risk_metrics():
                     + os.environ.get("RISK_FREE_PCT", "4.0") + "%); max drawdown is robust. Informational."}
 
 
+def _vol_regime_signal(short_days=21, baseline_days=45, hot_ratio=1.5, cool_ratio=0.5):
+    """Alerting layer (2026-07-18): realized volatility over the last `short_days` trading days
+    vs a trailing `baseline_days` window immediately before it — from the SAME daily
+    invested_value/net_worth snapshot series _risk_metrics() already uses, so no new data source.
+    A materially hotter or calmer regime than THIS BOOK'S OWN recent normal is itself a signal,
+    independent of any absolute VaR/vol threshold (which needs a peer/history baseline this
+    single-book history doesn't have). None if there isn't enough history yet (needs
+    short_days+baseline_days+1 recorded days, i.e. ~66 days at the defaults)."""
+    hist = _read_value_history()
+    vals = [h.get("invested_value") or h.get("net_worth") for h in hist
+            if (h.get("invested_value") or h.get("net_worth"))]
+    need = short_days + baseline_days + 1
+    if len(vals) < need:
+        return None
+    rets = [vals[i] / vals[i - 1] - 1 for i in range(1, len(vals)) if vals[i - 1]]
+    if len(rets) < short_days + baseline_days:
+        return None
+    recent, baseline = rets[-short_days:], rets[-(short_days + baseline_days):-short_days]
+
+    def ann_vol(xs):
+        if not xs:
+            return None
+        m = sum(xs) / len(xs)
+        var = sum((x - m) ** 2 for x in xs) / len(xs)
+        return (var ** 0.5) * (252 ** 0.5)
+
+    sv, bv = ann_vol(recent), ann_vol(baseline)
+    if not sv or not bv:
+        return None
+    ratio = round(sv / bv, 2)
+    if ratio >= hot_ratio:
+        return {"flag": True, "level": "warn", "ratio": ratio,
+                "msg": (f"Realized volatility over the last {short_days} trading days "
+                        f"({sv * 100:.1f}% annualized) is {ratio}x its own {baseline_days}-day "
+                        f"trailing baseline ({bv * 100:.1f}%) — a materially hotter regime than "
+                        "normal for this book.")}
+    if ratio <= cool_ratio:
+        return {"flag": True, "level": "info", "ratio": ratio,
+                "msg": (f"Realized volatility over the last {short_days} trading days "
+                        f"({sv * 100:.1f}% annualized) has fallen to {ratio}x its own "
+                        f"{baseline_days}-day trailing baseline ({bv * 100:.1f}%) — a materially "
+                        "calmer regime than normal.")}
+    return {"flag": False, "ratio": ratio}
+
+
 @app.get("/api/risk-metrics")
 def get_risk_metrics():
     return _risk_metrics()
@@ -2318,7 +2363,35 @@ def _earnings_this_week():
     return rows
 
 
+ALERTS_SEEN_FILE = os.environ.get("ALERTS_SEEN_FILE", "/data/alerts_seen.json")
+
+
+def _alert_key(a):
+    """Stable-enough identity for one alert condition (category + message) so the digest can
+    tell a genuinely NEW condition from one you've already seen and left open. Imperfect by
+    design (a message with a dollar figure that ticks daily reads as 'new' again each time) —
+    deliberately simple over exact-match hysteresis; still correctly distinguishes a brand-new
+    category of problem from a stale, already-acknowledged one, which is the case that matters."""
+    return f"{a.get('category', '')}::{a.get('message', '')}"[:300]
+
+
+def _read_alerts_seen():
+    try:
+        with open(ALERTS_SEEN_FILE, encoding="utf-8") as f:
+            return set(json.load(f).get("keys") or [])
+    except Exception:
+        return set()
+
+
 def _alerts_digest():
+    """Alerting/monitoring layer (Tier 4 roadmap item, built 2026-07-18 — was explicitly deferred
+    pending the G4 risk suite, which is now live). Materiality-filtered, not a raw dump: only
+    conditions that already cross an established threshold elsewhere (drift bands, loss budgets,
+    concentration caps, thesis triggers, grounding staleness) or a newly-added realized-vol
+    regime-shift check make it in. `new` per-alert (+ `counts.new`) distinguishes a condition that
+    appeared since your last visit to ⚠ ATTENTION from one you've already seen and left open —
+    POST /api/alerts/ack (fired when the panel is opened) marks the current set as seen. The
+    header badge polls this so it's visible from any tab, not just when you remember to check."""
     alerts = []
 
     def add(level, cat, msg, where):
@@ -2363,14 +2436,45 @@ def _alerts_digest():
                 add("action", "Data grounding", a.get("msg"), "AUDITS → GROUNDING")
     except Exception:
         pass
+    # 5) Drift-band breach — policy allocation (by type) + IPS sleeve, vs the drift_threshold_pct
+    # knob. _rebalance() is cheap (CPU + already-cached feed/lookthrough, no network) so it's
+    # safe to call live here rather than reading a separate cache.
+    try:
+        rb = _rebalance()
+        for a in (rb.get("allocation") or []):
+            if a.get("flag"):
+                verb = "over" if (a.get("drift_pct") or 0) > 0 else "under"
+                add("warn", "Drift", f"{a['type']} is {abs(a['drift_pct'])}pts {verb} target "
+                    f"({a['actual_pct']}% vs {a['target_pct']}%, ~${abs(a.get('drift_usd') or 0):,.0f})",
+                    "INSIGHTS → POLICY · DRIFT")
+        for a in (rb.get("ips_allocation") or []):
+            if a.get("flag"):
+                verb = "over" if (a.get("drift_pct") or 0) > 0 else "under"
+                add("warn", "Drift", f"IPS sleeve {a['sleeve']} is {abs(a['drift_pct'])}pts {verb} "
+                    f"target ({a['actual_pct']}% vs {a['target_pct']}%, ~${abs(a.get('drift_usd') or 0):,.0f})",
+                    "INSIGHTS → POLICY · DRIFT")
+    except Exception:
+        pass
+    # 6) Risk-regime change — realized vol vs the book's own trailing baseline (new 2026-07-18).
+    try:
+        reg = _vol_regime_signal()
+        if reg and reg.get("flag"):
+            add(reg["level"], "Risk regime", reg["msg"], "INSIGHTS → RISK")
+    except Exception:
+        pass
 
     order = {"action": 0, "warn": 1, "info": 2}
     alerts.sort(key=lambda a: order.get(a["level"], 9))
+    seen = _read_alerts_seen()
+    for a in alerts:
+        a["new"] = _alert_key(a) not in seen
     return {"generated_at": int(time.time()), "alerts": alerts,
-            "counts": {lvl: sum(1 for a in alerts if a["level"] == lvl) for lvl in ("action", "warn", "info")},
+            "counts": {**{lvl: sum(1 for a in alerts if a["level"] == lvl) for lvl in ("action", "warn", "info")},
+                       "new": sum(1 for a in alerts if a["new"])},
             "note": "Materiality-filtered digest of what needs attention, aggregated from the exit-trigger "
-                    "registry, the sizing loss budget, concentration/stress, and the grounding watchdog. "
-                    "Reads cached results (build the RISK/SIZING/THESES panels to populate). Read-only, not advice."}
+                    "registry, the sizing loss budget, concentration/stress, policy/IPS drift bands, a "
+                    "realized-vol regime-shift check, and the grounding watchdog. Reads cached results "
+                    "(build the RISK/SIZING/THESES panels to populate). Read-only, not advice."}
 
 
 def usd_neg(n):
@@ -2382,8 +2486,26 @@ def usd_neg(n):
 
 @app.get("/api/alerts")
 def get_alerts():
-    """Attention digest — prioritized action/warn/info items aggregated across the modules."""
+    """Attention digest — prioritized action/warn/info items aggregated across the modules.
+    Each alert carries `new` (unseen since the last ack); `counts.new` is what the header badge
+    polls from every tab."""
     return _alerts_digest()
+
+
+@app.post("/api/alerts/ack")
+def ack_alerts():
+    """Mark the CURRENT digest as seen — call when the ⚠ ATTENTION panel is opened. Not
+    token-guarded (it's a local read-state marker, not a GPU job trigger). Recomputes the digest
+    (cheap, no LLM/network beyond already-cached readers) rather than trusting a client-supplied
+    list, so a stale client can't accidentally mark something unseen as seen."""
+    keys = [_alert_key(a) for a in (_alerts_digest().get("alerts") or [])]
+    try:
+        os.makedirs(os.path.dirname(ALERTS_SEEN_FILE) or ".", exist_ok=True)
+        with open(ALERTS_SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump({"keys": keys, "acked_at": int(time.time())}, f)
+    except Exception:
+        return JSONResponse({"error": "could not persist ack"}, status_code=500)
+    return {"ok": True, "acked": len(keys)}
 
 
 # ---------------- AI scorekeeping: track how the model's Buy/Hold/Sell calls actually perform ----------------
@@ -4030,6 +4152,19 @@ def _hedging_symbols():
     return syms[:HEDGING_MAX_NAMES]
 
 
+def _spot_hint(sym):
+    """Last cached daily close (the risk-suite price cache, `_stooq_daily`) as a same-day-ish
+    spot price for options_mod.analyze() — CBOE's chain response has no underlying-price field
+    at all (verified 2026-07-18), so this avoids either an inference-from-strike approximation
+    or a redundant Yahoo quote call. None (analyze() falls back to its own inference) on any
+    miss — never raises."""
+    try:
+        series = _stooq_daily(sym)
+        return series[-1][1] if series else None
+    except Exception:
+        return None
+
+
 def _do_hedging():
     if not _hedging_lock.acquire(blocking=False):
         return
@@ -4037,7 +4172,7 @@ def _do_hedging():
         cards, skipped = [], []
         for s in _hedging_symbols():
             try:
-                card = options_mod.analyze(s)
+                card = options_mod.analyze(s, spot_hint=_spot_hint(s))
             except Exception:
                 card = None
             (cards.append(card) if card else skipped.append(s))
@@ -4256,6 +4391,20 @@ def _cash_total(d):
     return round(tot, 2)
 
 
+def _is_mortgage_account(a, overrides):
+    """Name-substring heuristic ("mortgage"/"home loan" in the account name or type), with an
+    explicit per-account override taking precedence — added 2026-07-18 because a Rocket-branded
+    loan (~$4.2k, nearly paid off) has neither word in its Monarch name and was silently landing
+    in the non-mortgage avalanche + leaving payoff-vs-invest unavailable. `overrides` is
+    insurance.json's `is_mortgage_overrides` dict, keyed by account name."""
+    nm = a.get("name") or "?"
+    ov = (overrides or {}).get(nm)
+    if ov is not None:
+        return bool(ov)
+    low = (nm + " " + (a.get("type") or "")).lower()
+    return any(w in low for w in ("mortgage", "home loan"))
+
+
 @app.get("/api/cashdebt")
 def get_cashdebt():
     """GAP-2 household-CFO desk: EF gauge, idle-cash drag, payoff-vs-invest, refi, avalanche.
@@ -4270,18 +4419,16 @@ def get_cashdebt():
             _inc, exp = _cashflow_annual()
         except Exception:
             exp = None
+    mort_overrides = cfg.get("is_mortgage_overrides") or {}
     mort_bal = sum((a.get("balance") or 0) for a in (d.get("accounts") or [])
-                   if a.get("is_asset") is False
-                   and any(w in ((a.get("name") or "") + " " + (a.get("type") or "")).lower()
-                           for w in ("mortgage", "home loan")))
+                   if a.get("is_asset") is False and _is_mortgage_account(a, mort_overrides))
     debts = []
     rates = cfg.get("debt_rates") or {}
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
-            nm = a.get("name") or "?"
-            low = (nm + " " + (a.get("type") or "")).lower()
-            if any(w in low for w in ("mortgage", "home loan")):
+            if _is_mortgage_account(a, mort_overrides):
                 continue
+            nm = a.get("name") or "?"
             debts.append({"name": nm, "balance": abs(a.get("balance") or 0),
                           "rate_pct": rates.get(nm)})
     inputs = {"cash_total": _cash_total(d),
@@ -4314,6 +4461,12 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      "mortgage_rate_pct": None, "mortgage_payment_monthly": None,
                      "deposit_yield_pct": None, "refi_rate_pct": None,
                      "refi_closing_costs": None, "debt_rates": {},
+                     # is_mortgage_overrides{name: bool}: the "mortgage"/"home loan" name-substring
+                     # heuristic below misses accounts like a Rocket-branded loan that never says
+                     # "mortgage" in its Monarch name — a per-account override, checked in the
+                     # PLAN→CASH·DEBT avalanche table, forces correct classification (diagnosed
+                     # 2026-07-18; see _is_mortgage_account()).
+                     "is_mortgage_overrides": {},
                      # GAP-5 benefits facts (edited in PLAN→BENEFITS):
                      "k401_pretax_pct": None, "k401_aftertax_pct": 0.0,
                      "k401_match_t1_pct": None, "k401_match_t1_rate": None,
@@ -4364,6 +4517,14 @@ async def post_insurance_config(req: Request):
             except (TypeError, ValueError):
                 pass
         cfg["debt_rates"] = dr
+    if isinstance(body.get("is_mortgage_overrides"), dict):
+        # MERGE (not replace) — an account correctly flagged mortgage no longer appears in the
+        # avalanche table, so it can't be re-sent by a later save; a full-replace would silently
+        # drop the flag and regress the very bug this fixes. Cap prevents unbounded growth.
+        mo = dict(cfg.get("is_mortgage_overrides") or {})
+        for nm, v in list(body["is_mortgage_overrides"].items())[:30]:
+            mo[str(nm)[:120]] = bool(v)
+        cfg["is_mortgage_overrides"] = mo
     if "home_address" in body:
         cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
             if body["home_address"] not in (None, "") else None

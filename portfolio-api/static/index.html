@@ -90,6 +90,7 @@
     <div class="brand">PORTFOLIO TERMINAL<small id="meta">loading…</small></div>
     <div class="topstats" id="stats"></div>
     <div class="controls">
+      <span id="attn" style="font-size:11px;cursor:pointer;" title="materiality-filtered alerts — click to open"></span>
       <span id="jobs" style="font-size:11px;" title="serial job queue"></span>
       <span id="updated"></span>
       <button id="refresh">↻ REFRESH</button>
@@ -263,6 +264,10 @@ W('cockpit','Dashboard','Cockpit — what needs attention',
   'A persistent strip of chips summarizing everything outside a threshold: concentration, drift, tax-loss opportunities, high fees, illiquid names, ACA cliffs, FIRE success, hidden fund exposure.',
   'Chip color encodes severity — amber is watch, green is opportunity/ok, grey is info. Each chip names the issue and a count.',
   'Click a chip to jump to the tab with the full detail. Treat the cockpit as your daily triage list.');
+W('attention','Insights & risk','⚠ Attention digest + header badge (alerting layer)',
+  'A materiality-filtered digest, aggregated server-side: tripped thesis exit-triggers, single-name loss-budget breaches, concentration/macro-stress flags, policy and IPS sleeve drift-band breaches, a realized-volatility regime-shift check (last 21 trading days vs this book\'s own 45-day trailing baseline — not a generic threshold), earnings-this-week on your holdings, and data-grounding staleness. Distinct from the older COCKPIT strip (client-side, dashboard-only) — this one has a header badge so it is visible from every tab, not just when you remember to look.',
+  'The ⚑ badge next to the job-queue indicator shows total action+watch count and, in parentheses, how many are NEW since you last opened this panel (e.g. "2 action · 1 watch (1 new)"). Red-tinted = at least one ACTION item; amber = watch-only. Blank badge = nothing flagged. Inside the panel, each card is labeled ACTION (red, do something), WATCH (amber, monitor), or INFO (grey, awareness only); a card marked ● NEW hasn\'t been seen yet this cycle.',
+  'Click the badge from anywhere to jump straight to this panel — opening it marks the current set as seen (POST /api/alerts/ack), so the "new" count resets and only genuinely fresh conditions light up next time. This is the closest thing to a push notification the app has (fully local, no external service) — check the badge instead of clicking into every tab looking for problems.');
 
 W('consolidated','Positions','Consolidated vs by-account',
   'Consolidated merges the same security held in multiple accounts into one row; by-account shows each lot where it sits.',
@@ -2026,12 +2031,13 @@ function cashdebtContent(){
   const av=r.avalanche||{};
   if((av.rows||[]).length){
     wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · AVALANCHE (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>INTEREST/yr</th><th>CALL</th>'; t.appendChild(hr);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>INTEREST/yr</th><th>CALL</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':(x.priority==='carry'?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
+      const mortCell=`<input class="cd-mort" data-nm="${esc(x.name)}" type="checkbox" title="This IS actually the mortgage (name detection missed it) — check + SAVE to move it out of this table and into the MORTGAGE line above."/>`;
       tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td>`+
-        `<td>${u(x.annual_interest)}</td><td class="${pc}">${esc(x.priority)}</td>`;
+        `<td>${u(x.annual_interest)}</td><td class="${pc}">${esc(x.priority)}</td><td>${mortCell}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
   }
@@ -2050,13 +2056,14 @@ function cashdebtContent(){
   setTimeout(()=>{ const g=id=>document.getElementById(id);
     if(g('cd-save')) g('cd-save').onclick=async()=>{
       const dr={}; document.querySelectorAll('.cd-dr').forEach(x=>{ if(x.value!=='') dr[x.dataset.nm]=parseFloat(x.value); });
+      const mo={}; document.querySelectorAll('.cd-mort').forEach(x=>{ if(x.checked) mo[x.dataset.nm]=true; });
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({mortgage_rate_pct:parseFloat(g('cd-mr').value)||null,
                              mortgage_payment_monthly:parseFloat(g('cd-mp').value)||null,
                              deposit_yield_pct:g('cd-dy').value===''?null:parseFloat(g('cd-dy').value),
                              refi_rate_pct:parseFloat(g('cd-rr').value)||null,
                              refi_closing_costs:parseFloat(g('cd-cc').value)||null,
-                             debt_rates:dr})});
+                             debt_rates:dr, is_mortgage_overrides:mo})});
       load(false); };
   },0);
   const foot=el('div','muted'); foot.style.cssText='font-size:10px;margin-top:8px;line-height:1.5;';
@@ -3028,7 +3035,10 @@ function attentionContent(){
   const wrap=el('div'); const A=ATTENTION;
   if(!A || A.error){ const e=el('div','muted'); e.textContent='Attention digest not available.'; wrap.appendChild(e); return wrap; }
   const c=A.counts||{}; const list=A.alerts||[];
-  const h=el('div','ph','ATTENTION · WHAT NEEDS ACTION (materiality-filtered)'); wrap.appendChild(h);
+  // Mark the current set as seen — the header badge's "N new" count resets after this. Fire-and-
+  // forget; not token-guarded (read-state marker, not a job trigger — see /api/alerts/ack).
+  fetch('/api/alerts/ack',{method:'POST'}).catch(()=>{});
+  const h=el('div','ph','ATTENTION · WHAT NEEDS ACTION (materiality-filtered)'); h.appendChild(wikiLink('attention')); wrap.appendChild(h);
   const sum=el('div'); sum.style.cssText='font-size:12px;margin:4px 0 10px;';
   if(!list.length){ sum.innerHTML='<span class="pos">✓ Nothing flagged right now.</span>'; wrap.appendChild(sum); const nn=el('div','muted'); nn.style.cssText='font-size:10px;margin-top:6px;'; nn.textContent=A.note||''; wrap.appendChild(nn); return wrap; }
   sum.innerHTML=`<span class="neg">${c.action||0} action</span> · <span style="color:var(--amber)">${c.warn||0} watch</span> · <span class="muted">${c.info||0} info</span>`;
@@ -3037,7 +3047,8 @@ function attentionContent(){
   const lab={action:'ACTION',warn:'WATCH',info:'INFO'};
   list.forEach(a=>{
     const card=el('div'); card.style.cssText='border-left:3px solid '+(col[a.level]||'var(--bd2)')+';padding:5px 10px;margin:5px 0;background:rgba(255,255,255,0.02);';
-    card.innerHTML=`<div style="font-size:11px;"><span style="color:${col[a.level]||'var(--muted)'};font-weight:bold;font-size:9px;letter-spacing:1px;">${lab[a.level]||(a.level||'').toUpperCase()}</span> <span class="muted" style="font-size:9px;">· ${a.category}</span></div>`+
+    const newTag=a.new?' <span style="color:var(--amber);font-size:9px;font-weight:bold;">● NEW</span>':'';
+    card.innerHTML=`<div style="font-size:11px;"><span style="color:${col[a.level]||'var(--muted)'};font-weight:bold;font-size:9px;letter-spacing:1px;">${lab[a.level]||(a.level||'').toUpperCase()}</span> <span class="muted" style="font-size:9px;">· ${a.category}</span>${newTag}</div>`+
       `<div style="font-size:12px;margin:2px 0;">${a.message}</div>`+
       `<div class="muted" style="font-size:9px;">→ ${a.where}</div>`;
     wrap.appendChild(card);
@@ -3599,6 +3610,26 @@ function pollJobs(){
   }).catch(()=>{});
 }
 pollJobs(); setInterval(pollJobs, 15000);
+
+// Alerting/monitoring push layer (built 2026-07-18): poll /api/alerts and show a materiality-
+// filtered action/warn count in the header, visible from ANY tab — not just when you remember to
+// open INSIGHTS → ⚠ ATTENTION. `new` (unseen since the last time the panel was opened, see
+// attentionContent()'s ack call) gets its own count so a genuinely fresh condition stands out
+// from one you've already seen and left open. Slower cadence than the job badge (this is a
+// point-in-time read of cached analysis, not something that changes second-to-second).
+function pollAttn(){
+  fetch('/api/alerts').then(r=>r.json()).then(a=>{
+    const b=document.getElementById('attn'); if(!b) return;
+    const c=(a&&a.counts)||{};
+    const total=(c.action||0)+(c.warn||0);
+    if(!total){ b.textContent=''; return; }
+    const color=c.action?'var(--red,var(--amber))':'var(--amber)';
+    const newTag=c.new?` <span style="opacity:0.85">(${c.new} new)</span>`:'';
+    b.innerHTML=`<span style="color:${color}">⚑ ${c.action||0} action · ${c.warn||0} watch${newTag}</span>`;
+  }).catch(()=>{});
+}
+document.getElementById('attn').onclick=()=>{ TAB='insights'; SUBTAB['insights']='attention'; render(); };
+pollAttn(); setInterval(pollAttn, 60000);
 </script>
 </body>
 </html>
