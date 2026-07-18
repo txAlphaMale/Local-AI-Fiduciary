@@ -1,0 +1,27 @@
+# Options & Hedging Mechanics — Frameworks Reference (2026)
+
+_Corpus doc for the Fiduciary knowledge RAG. Concepts behind the numbers `options.py` computes and INSIGHTS → HEDGING displays (covered calls, collars on concentrated names). Not investment or tax advice._
+
+## Contract basics
+- A **call** is the right (not obligation) to BUY 100 shares at the **strike** price on/before **expiration**; a **put** is the right to SELL. The buyer pays a **premium** to the seller ("writer") for that right; the app shows premiums as **mid-quotes** (midpoint of the delayed bid/ask), not a live tradeable price — always re-quote before an order.
+- **DTE** = days to expiration. **ITM/OTM/ATM** = in/out/at the money — whether exercising today would be profitable, at a loss, or breakeven relative to the strike.
+- **Delta (Δ)** = the option's price sensitivity to a $1 move in the underlying, and a rough proxy for the market-implied probability of finishing ITM (a 0.25-delta call is priced as if there's roughly a 25% chance it gets exercised). **Implied volatility (IV)** is the market's annualized expected-swing estimate embedded in the premium — higher IV inflates premiums on both calls and puts symmetrically, which is why IV (not direction) is the main driver of how much income a covered call or collar generates.
+- **Assignment** = the option is exercised against the writer. On a covered call, assignment means the shares are called away (sold) at the strike, realizing whatever gain/loss sits in that lot.
+
+## Covered calls
+- **Mechanics:** sell (write) a call against shares you already own. You collect the premium immediately; in exchange you cap the position's upside above the strike. If the stock stays below the strike, the call expires worthless and you keep the shares plus the premium (repeatable). If it finishes above the strike, the shares are called away at the strike — you keep the premium AND the gain up to the strike, but forgo everything above it.
+- **Selection tradeoff:** a lower-delta (more OTM) call sells for less premium but has a lower assignment probability and keeps more upside room; a higher-delta call pays more now but is more likely to cap you. `options.py`'s default target band (0.15–0.35 delta) is a middle ground between meaningful income and a tolerable assignment rate.
+- **Tax note — the "qualified covered call" rule:** IRC §1092/§1258 straddle rules can suspend a stock's holding period (turning an otherwise-LTCG lot into STCG) if the written call is a "deep in-the-money" or very short-dated call that doesn't meet the IRS's qualified-covered-call exception (roughly: more than 30 days to expiration and not deep ITM by IRS Pub 550's strike/time table). Writing calls against a highly appreciated, near-LTCG lot is the highest-risk case — verify the specific contract against IRS Pub 550's qualified-covered-call table (or a CPA) before writing it, rather than assuming any covered call is automatically safe for the holding period.
+
+## Collars
+- **Mechanics:** buy a protective put (a floor) and simultaneously sell a call (a cap) whose premium funds some or all of the put's cost. A **zero-cost collar** (net premium ≈ $0) trades away ALL upside beyond the call strike in exchange for a floor at the put strike, for no net cash outlay — it's a pure risk-transfer trade, not an income trade.
+- **When it's used:** for a position that's "too big to hold naked but too appreciated to sell outright" — the collar caps the downside without triggering a taxable sale, at the cost of capping the upside too.
+- **Tax note — constructive sale (§1259):** a collar tight enough (put and call strikes both very close to the current price, for a long enough duration) can be treated by the IRS as a **constructive sale** of the underlying stock, meaning the appreciated gain is taxed as if sold on the day the collar was entered — even though no shares actually changed hands. The risk scales with how tight (narrow between floor and cap) and how long-dated the collar is; a wider collar with more time value in both legs is safer. This is a bright-line-adjacent area of the tax code — always confirm a specific collar's strikes/duration with a CPA before using it on a highly appreciated lot, rather than relying on a rule of thumb.
+
+## Data & sizing caveats specific to this app
+- Chains are **delayed** (CBOE primary feed, Yahoo fallback) — greeks and IV shown are either the exchange's own native values (CBOE path) or locally computed via Black-Scholes from the delayed IV (Yahoo fallback path); treat every number as a sizing guide, not an executable quote.
+- `options.py` selects contracts by target delta band, not by absolute dollar richness — a "good" premium in the UI reflects where the contract sits in that band, not necessarily the best risk-adjusted trade available on the chain.
+- None of this module places or recommends actual trades; it's read-only analysis over your current concentrated positions.
+
+## Sources
+IRS Publication 550, "Investment Income and Expenses" (qualified covered call / straddle rules, §1092); IRC §1259 (constructive sales of appreciated financial positions); Cboe Options Institute, options fundamentals (calls/puts/strike/premium/greeks definitions); OCC, "Characteristics and Risks of Standardized Options." Definitional/mechanical content is standardized and long-stable; dollar thresholds or table specifics should still be cross-checked against the current-year IRS publication before relying on them for a real trade.
