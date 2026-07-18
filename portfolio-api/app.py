@@ -2426,6 +2426,44 @@ def _read_alerts_seen():
         return set()
 
 
+def _estate_doc_staleness(icfg=None):
+    """GAP-8 estate hygiene audit: per-document currency check against the review-cadence
+    knob (default 3 years — a hygiene reminder, NOT a legal requirement; the real trigger for
+    re-reviewing any estate document is a major life event — marriage, divorce, birth, death,
+    home purchase/sale, or a move to a new state — regardless of how recently it was reviewed).
+    `last_reviewed` is stored as a 4-digit year (same convention as a policy's term_expires),
+    not a full date — good enough for an annual-cadence tripwire, avoids date-parsing edge cases.
+    Returns one row per doc_type in ESTATE_DOC_TYPES (even if never recorded) plus any custom
+    doc_type the user added beyond the standard set."""
+    icfg = icfg if icfg is not None else _read_insurance_cfg()
+    cadence = icfg.get("estate_doc_review_years") or 3
+    by_type = {}
+    for d in (icfg.get("estate_docs") or []):
+        t = d.get("doc_type")
+        if t:
+            by_type[t] = d
+    this_year = datetime.datetime.now().year
+    types = list(ESTATE_DOC_TYPES) + [t for t in by_type if t not in ESTATE_DOC_TYPES]
+    rows = []
+    for t in types:
+        d = by_type.get(t) or {}
+        yr = None
+        try:
+            yr = int(str(d.get("last_reviewed"))[:4]) if d.get("last_reviewed") else None
+        except (TypeError, ValueError):
+            yr = None
+        years_since = (this_year - yr) if yr else None
+        if yr is None:
+            status = "missing"
+        elif years_since >= cadence:
+            status = "stale"
+        else:
+            status = "ok"
+        rows.append({"doc_type": t, "last_reviewed": yr, "years_since": years_since,
+                     "status": status, "notes": d.get("notes"), "cadence_years": cadence})
+    return rows
+
+
 def _alerts_digest():
     """Alerting/monitoring layer (Tier 4 roadmap item, built 2026-07-18 — was explicitly deferred
     pending the G4 risk suite, which is now live). Materiality-filtered, not a raw dump: only
@@ -2516,6 +2554,23 @@ def _alerts_digest():
                 "to auto-detect — Estate, ACA, Tax, and Cash·Debt are all showing TEXAS "
                 "assumptions (community property, TOD deeds, Medicaid gap) as a GUESS, not a "
                 "confirmed fact. Set it once in ASSUMPTIONS.", "PLAN → ASSUMPTIONS")
+    except Exception:
+        pass
+    # 8) Estate document currency (GAP-8) — G13-style recurring staleness tripwire, not a
+    # one-time report: a will/POA/beneficiary review that's never recorded or overdue per the
+    # cadence knob surfaces here every time, the same way a stale tax constant does.
+    try:
+        for row in _estate_doc_staleness():
+            label = row["doc_type"].replace("_", " ")
+            if row["status"] == "missing":
+                add("info", "Estate hygiene",
+                    f"{label}: no review date on file — record when it was last reviewed "
+                    "(or confirm it doesn't apply) in PLAN → CONTINUITY.", "PLAN → CONTINUITY")
+            elif row["status"] == "stale":
+                add("warn", "Estate hygiene",
+                    f"{label}: last reviewed {row['last_reviewed']} ({row['years_since']}y ago, "
+                    f"cadence is {row['cadence_years']}y) — due for a look, sooner if a life "
+                    "event happened since (marriage, divorce, birth, death, move).", "PLAN → CONTINUITY")
     except Exception:
         pass
 
@@ -2913,6 +2968,7 @@ def get_continuity():
         contacts = icfg.get("contacts") or []
         executor = icfg.get("executor_name")
         will_loc = icfg.get("will_location")
+        doc_currency = _estate_doc_staleness(icfg)
         u = lambda v: "—" if v is None else f"${v:,.0f}"
 
         checklist = [
@@ -2931,6 +2987,14 @@ def get_continuity():
         ]
         if executor:
             checklist.append({"step": "Contact the executor", "detail": f"Named executor: {executor}."})
+        stale_or_missing = [r for r in doc_currency if r["status"] in ("stale", "missing")]
+        if stale_or_missing:
+            checklist.append({"step": "Estate document currency needs attention",
+                              "detail": "; ".join(
+                                  f"{r['doc_type'].replace('_', ' ')} "
+                                  + ("never recorded" if r["status"] == "missing"
+                                     else f"last reviewed {r['last_reviewed']} ({r['years_since']}y ago)")
+                                  for r in stale_or_missing)})
         for row in account_map:
             checklist.append({"step": f"{row['account']} ({u(row['value'])})",
                               "detail": f"Passes by: {row['passes_by']}. {row['action']}"})
@@ -2961,7 +3025,7 @@ def get_continuity():
                 "account_map": account_map, "liabilities": liabilities,
                 "taxable_embedded_gain": stepup.get("taxable_embedded_gain"),
                 "community_property_note": stepup.get("community_property_note"),
-                "contacts": contacts, "checklist": checklist,
+                "contacts": contacts, "doc_currency": doc_currency, "checklist": checklist,
                 "note": "Auto-generated from your live balance sheet + the titling/step-up engine "
                         "every time this page loads — unlike a printed binder it can't silently go "
                         "stale. Educational decision-support, not legal advice; the will/POA/trust "
@@ -4713,9 +4777,17 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      # OPP-5 continuity binder (PLAN→CONTINUITY): key-contacts register — attorney,
                      # CPA, financial advisor, insurance agent, executor, guardian, etc. Nothing here
                      # is computed; it's just surfaced verbatim into the binder for the survivor.
-                     "contacts": [], "executor_name": None, "will_location": None}
+                     "contacts": [], "executor_name": None, "will_location": None,
+                     # GAP-8 estate hygiene audit (PLAN→CONTINUITY, DOCUMENT CURRENCY): per-document
+                     # last-reviewed dates + a review-cadence knob, feeding a G13-style staleness
+                     # tripwire in _alerts_digest() (section 8) rather than a one-time report.
+                     "estate_docs": [], "estate_doc_review_years": 3}
 _INS_POLICY_KEYS = ("kind", "owner", "name", "coverage", "premium_annual", "term_expires", "notes")
 _CONTACT_KEYS = ("role", "name", "phone", "email", "notes")
+_ESTATE_DOC_KEYS = ("doc_type", "last_reviewed", "notes")
+# Common estate-hygiene documents to track currency on (GAP-8). Not exhaustive — "notes" lets a
+# user track anything else (a trust, a specific beneficiary designation) under an open doc_type.
+ESTATE_DOC_TYPES = ("will", "durable_poa", "healthcare_directive", "trust", "beneficiary_review")
 
 
 def _read_insurance_cfg():
@@ -4776,6 +4848,15 @@ async def post_insurance_config(req: Request):
         cfg["contacts"] = [{k: (str(c.get(k))[:200] if c.get(k) not in (None, "") else None)
                             for k in _CONTACT_KEYS}
                            for c in body["contacts"] if isinstance(c, dict) and c.get("role")][:20]
+    if isinstance(body.get("estate_docs"), list):
+        cfg["estate_docs"] = [{k: (str(d.get(k))[:200] if d.get(k) not in (None, "") else None)
+                               for k in _ESTATE_DOC_KEYS}
+                              for d in body["estate_docs"] if isinstance(d, dict) and d.get("doc_type")][:20]
+    if "estate_doc_review_years" in body:
+        try:
+            cfg["estate_doc_review_years"] = max(1, float(body["estate_doc_review_years"]))
+        except (TypeError, ValueError):
+            pass
     if body.get("inservice_rollover") in ("yes", "no", "unknown"):
         cfg["inservice_rollover"] = body["inservice_rollover"]
     if body.get("hsa_coverage") in ("self", "family"):
