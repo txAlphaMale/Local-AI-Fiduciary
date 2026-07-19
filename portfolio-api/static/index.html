@@ -147,6 +147,11 @@ function _newChatState(){ return {msgs:[], sid:null, streaming:false, abort:null
 let CHAT_STATE={fiduciary:_newChatState(), strategist:_newChatState()};
 let CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_SESS_LOADING=false;
 function CS(p){ p=p||CHAT_PERSONA; return CHAT_STATE[p]||(CHAT_STATE[p]=_newChatState()); }
+// Pending image attachment(s) for the NEXT send (RESUME-TRACKER 2026-07-18j chat image input) —
+// compose-time state like the textarea's own draft, so (like the draft) it does not survive an
+// explicit persona/session switch (chatClearImages() is called alongside those), but is NOT
+// per-persona keyed since only one message is ever being composed at a time.
+let CHAT_PENDING_IMAGES = [];   // array of base64 strings (data-URL prefix kept; stripped server-side too)
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
@@ -312,9 +317,9 @@ W('analyst-rating','Positions','Analyst consensus rating',
   'Use it as one external data point; where it disagrees with your grounded brief, understand the gap before acting.');
 
 W('briefs','Research','Buy / Sell / Hold briefs',
-  'For each holding the local LLM writes a short thesis grounded in SEC fundamentals, valuation multiples, analyst consensus and news, ending in a Buy/Sell/Hold call with a confidence level.',
-  'Each brief carries a rating, a confidence (high/med/low), the sources it used, and a freshness stamp. Briefs sort actionable-first.',
-  'Read a brief as a starting analyst opinion to challenge, not a directive. Low confidence or few sources means dig further.');
+  'For each holding the local LLM writes a short thesis grounded in SEC fundamentals, valuation multiples, analyst consensus and news, ending in a Buy/Sell/Hold call with a confidence level. One exception: a holding detected as a Collective Investment Trust (CIT — a bank/trust-company-managed pooled vehicle used inside some 401k plans, e.g. a target-date "Retirement Trust" or a CIT share class of a mutual fund strategy) skips this pipeline entirely, since a CIT is not publicly traded, has no ticker/CUSIP, and files nothing with the SEC — there is no market data or GAAP filing to base a Buy/Sell call on.',
+  'Each brief carries a rating, a confidence (high/med/low), the sources it used, and a freshness stamp. Briefs sort actionable-first. A CIT shows "CIT · not publicly traded" instead of a rating, with a note explaining that decision-support is limited to what your plan provider itself reports (expense ratio, glidepath if target-date, category) — this is by design, not a data gap or an error. Its dollar value still counts fully toward net worth and asset-type allocation; it is only excluded from ticker-dependent analytics (the brief itself, risk/factor/VaR modeling, N-PORT look-through) since none of those have anything to attach to.',
+  'Read a brief as a starting analyst opinion to challenge, not a directive. Low confidence or few sources means dig further. If a 401k holding shows "no brief available"/CIT instead of a rating, that is expected — verify it against your plan provider\'s own fund factsheet instead, not this terminal.');
 W('confidence','Research','Brief confidence and calibration',
   'Confidence is the model stated conviction; calibration (in AUDITS to Grounding) tracks whether that confidence has matched reality via a Brier score.',
   'A Brier score near 0.25 is coin-flip; lower is better. The per-tier table shows whether high-confidence briefs actually hit more than low.',
@@ -480,9 +485,9 @@ W('strategist','Automation','Strategist (paper trading)',
   'It runs weekly or on demand through the serial job queue; the STRATEGIST tab shows its book, report, and activity log. No real orders are ever placed.',
   'Use it as a transparent second opinion whose reasoning and paper P&L you can audit over time — never as an execution system.');
 W('chat','Automation','Chat personas',
-  'An in-app chat with a Fiduciary persona (planning/analysis) and a Strategist persona, both read-only, with tools to query your book and the research data. It has your knowledge documents in a local RAG.',
-  'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU.',
-  'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show.');
+  'An in-app chat with a Fiduciary persona (planning/analysis) and a Strategist persona, both read-only, with tools to query your book and the research data. It has your knowledge documents in a local RAG. You can also attach an image (paste a screenshot or click 📎) — e.g. a watchlist, a brokerage screenshot, or a headline — and a separate small vision model reads it for ticker symbols, then hands them to the SAME persona/tools to research, before the persona answers. Both personas can see your REAL fund expense ratios and 401k/HSA/Roth contribution room (get_fees_liquidity / get_benefits) as context — you should not need to type balances, expense ratios, or match/headroom figures into chat yourself; ask directly and it looks them up.',
+  'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU. An attached image shows a small 👁 chip naming what tickers it found (or that none were found) before the answer streams — that step itself briefly queues for the GPU too if something else is using it, same as everything else here.',
+  'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show. Pasting a screenshot is a shortcut for "look these up" — verify the tickers the 👁 chip identified are actually what you meant before trusting the follow-up research, especially on a blurry or cropped image. Strategist keeps a narrower deep-planning toolset than Fiduciary by design (no IPS/tax/retirement/estate tools) — for retirement-account or tax-planning questions specifically, ask the Fiduciary persona instead of Strategist.');
 W('knowledge','Automation','Knowledge library (local RAG)',
   'A folder of reference documents (.md/.txt/.pdf) the chat personas can search: your IPS, IRS publications, investing-principles guides, plus the committed reference/ set (estate & generational transfer, business-acquisition/QSBS frameworks, and a dated snapshot of the grounded 2026 tax/ACA/SS parameters). Everything is embedded locally with bge-m3 — nothing leaves the machine.',
   'SETTINGS → KNOWLEDGE shows the folder, document/chunk counts, embedding model, and last index time. Drop files in the host folder (or remove them) and hit REINDEX; it runs in the background on the job queue and the button shows live chunk-level progress (% and current file) instead of blocking. The personas answer with citations from these documents via their search_knowledge tool.',
@@ -497,8 +502,8 @@ W('benefits','Planning','Benefits & contribution room',
   'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier.');
 W('narrative','Dashboard','State of the Wealth (weekly letter)',
   'A plain-language weekly note the AI writes to the household by composing every module\'s cached headline — net worth and its week change, funded ratio, YTD vs your own policy, concentration and attention flags, harvestable losses, earnings ahead, and the AI\'s own track record — ending with a single THIS WEEK\'S FOCUS action. The family-office quarterly letter, weekly and personal.',
-  'Top of the DASHBOARD tab. Writes itself Monday mornings through the job queue (SETTINGS → TASK SCHEDULE), or GENERATE NOW any time (watch the #jobs badge). It cites only numbers the modules actually computed — nothing is invented.',
-  'Read it Monday with coffee: it turns seventeen panels into one story and one action. If the focus line ever surprises you, the detail lives one click away in the named tab. Educational, not advice.');
+  'Top of the DASHBOARD tab. Writes itself Monday mornings through the job queue (SETTINGS → TASK SCHEDULE), or GENERATE NOW any time (watch the #jobs badge). It cites only numbers the modules actually computed — nothing is invented. It is a single one-shot generation (not a per-ticker loop like the research briefs), so on this hardware it can legitimately take several minutes; it has its own timeout (NARR_LLM_TIMEOUT, separate from the research pipeline\'s) sized for that.',
+  'Read it Monday with coffee: it turns seventeen panels into one story and one action. If the focus line ever surprises you, the detail lives one click away in the named tab. Educational, not advice. A small "queued Ns for GPU" note next to the timestamp shows how long this run waited for the GPU before it even started generating — if a run ever times out, that same figure appears in the error message so you can tell GPU contention (something else was busy) apart from the generation itself just being slow.');
 W('washsale','Taxes & audits','Wash-sale guard (TLH)',
   'A §1091 enforcement layer on the tax-loss-harvest list: the app snapshots every ticker\'s total share count daily across ALL accounts (IRAs included), infers buys from day-over-day increases (which catches silent DRIP reinvestments), and stamps each TLH candidate CLEAR, DRIP-caution, or BLOCKED — with the date the 31-day window reopens and a not-substantially-identical replacement (different-index fund; same-index clones are flagged as risky).',
   'AUDITS → TAX·TLH, the WASH-SALE column. ✗ BLOCKED = shares were bought within 31 days, selling now disallows the loss on those shares; ⚠ DRIP = turn off reinvestment (or confirm no dividend lands ±30 days) before harvesting; ? = the ledger needs ≥2 daily snapshots to judge. Hover the verdict for the full reasoning.',
@@ -916,7 +921,12 @@ function dashboardContent(){
   const nbox=el('div'); nbox.style.cssText='border:1px solid var(--bd2);border-radius:4px;padding:10px 12px;margin-bottom:12px;';
   const nh=el('div','ph','STATE OF THE WEALTH · WEEKLY LETTER'); nh.style.cssText+='border:none;padding:0;margin-bottom:6px;'; nh.appendChild(wikiLink('narrative')); nbox.appendChild(nh);
   if(nl){
-    const dt=el('div','muted'); dt.style.cssText='font-size:10px;margin-bottom:6px;'; dt.textContent=new Date(nl.generated_at*1000).toLocaleString(); nbox.appendChild(dt);
+    const dt=el('div','muted'); dt.style.cssText='font-size:10px;margin-bottom:6px;';
+    // gpu_wait_s (2026-07-19): how long this run sat queued for the GPU before generation even
+    // started — visible on every run, not just a failed one, so a slow queue is easy to spot
+    // over time without having to reproduce a timeout.
+    dt.textContent=new Date(nl.generated_at*1000).toLocaleString()+(nl.gpu_wait_s!=null?` · queued ${nl.gpu_wait_s}s for GPU`:'');
+    nbox.appendChild(dt);
     const body=el('div'); body.style.cssText='font-size:12px;line-height:1.65;white-space:pre-wrap;';
     const txt=(nl.letter||'');
     const fi=txt.indexOf("THIS WEEK'S FOCUS:");
@@ -1107,8 +1117,13 @@ function analysisContent(a){
     const tgt=g.target_mean?` <span class="muted" style="font-size:11px">$${Math.round(g.target_mean)}</span>`:'';
     const conf=m.confidence?` <span class="muted" style="font-size:10px">(${m.confidence})</span>`:'';
     const row=el('div'); row.id='brief-'+t; row.style.cssText='display:grid;grid-template-columns:70px 150px 1fr;gap:8px;padding:7px 0;border-bottom:1px solid #191c20;font-size:12px;align-items:start;transition:background 0.4s;';
+    // CIT (RESUME-TRACKER 2026-07-18k): no Buy/Sell/Hold badge to show (rating is intentionally
+    // null) — label it plainly instead of letting it read as "no signal yet".
+    const ratingCell = b.is_cit
+      ? '<span class="muted" style="font-size:10px">CIT · not publicly traded</span>'
+      : `${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}`;
     row.innerHTML=`<span style="color:var(--amber)">${t}</span>`+
-      `<span>${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}</span>`+
+      `<span>${ratingCell}</span>`+
       `<span style="line-height:1.45"><span class="muted">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
     wrap.appendChild(row);
   });
@@ -3656,17 +3671,19 @@ function chatInterrupt(persona){
   const last=cs.msgs[cs.msgs.length-1];
   if(last && last.streaming) last.streaming=false;   // freeze the partial answer in place
 }
+function chatClearImages(){ CHAT_PENDING_IMAGES=[]; }
 function chatStop(){ chatInterrupt(CHAT_PERSONA); render(); }
-function chatNew(){ chatInterrupt(CHAT_PERSONA); const cs=CS(CHAT_PERSONA); cs.sid=null; cs.msgs=[]; render(); }
+function chatNew(){ chatInterrupt(CHAT_PERSONA); const cs=CS(CHAT_PERSONA); cs.sid=null; cs.msgs=[]; chatClearImages(); render(); }
 // Switching persona ONLY changes what's displayed — no interrupt of either side. This is the
 // actual fix for bug #1: previously this unconditionally called chatInterrupt() first, which
 // cancelled the OTHER persona's generation server-side and threw away its partial answer.
 function chatSetPersona(p){
-  if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; render(); }
+  if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; chatClearImages(); render(); }
 }
 function chatOpen(sid,persona){
   const p = persona || CHAT_PERSONA;
   chatInterrupt(p);   // opening a specific past session within persona p supersedes whatever p was running
+  chatClearImages();
   fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{
     const cs=CS(p);
     cs.sid=sid; if(persona) CHAT_PERSONA=persona;
@@ -3685,6 +3702,42 @@ function chatDelete(sid,ev){
   }).catch(e=>alert('Delete failed: '+e));
 }
 function chatKey(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); chatSend(); } }
+// ---- Chat image input (RESUME-TRACKER 2026-07-18j): paste/attach a screenshot, base64-encode,
+// hold it in CHAT_PENDING_IMAGES until the next chatSend(). ----
+function chatAddImageFile(file){
+  if(!file || !/^image\//.test(file.type||'')) return;
+  if(CHAT_PENDING_IMAGES.length >= 3){ alert('Up to 3 images per message.'); return; }
+  const reader=new FileReader();
+  reader.onload=()=>{ CHAT_PENDING_IMAGES.push(reader.result); render(); };
+  reader.readAsDataURL(file);   // data:image/...;base64,... — server strips the prefix
+}
+function chatHandlePaste(e){
+  const items=(e.clipboardData && e.clipboardData.items)||[];
+  let gotImage=false;
+  for(const it of items){
+    if(/^image\//.test(it.type||'')){ gotImage=true; chatAddImageFile(it.getAsFile()); }
+  }
+  if(gotImage) e.preventDefault();   // don't also paste garbage image-object text into the box
+}
+function chatHandleFileInput(e){
+  const files=(e.target && e.target.files)||[];
+  for(const f of files) chatAddImageFile(f);
+  if(e.target) e.target.value='';   // allow re-selecting the same file later
+}
+function chatRemoveImage(i){ CHAT_PENDING_IMAGES.splice(i,1); render(); }
+function chatImagePreview(){
+  if(!CHAT_PENDING_IMAGES.length) return null;
+  const row=el('div'); row.style.cssText='display:flex;gap:6px;padding:4px 0 8px;flex-wrap:wrap;';
+  CHAT_PENDING_IMAGES.forEach((b64,i)=>{
+    const wrap=el('div'); wrap.style.cssText='position:relative;display:inline-block;';
+    const img=el('img'); img.src=b64; img.style.cssText='height:48px;width:48px;object-fit:cover;border-radius:3px;border:1px solid var(--bd2);display:block;';
+    const x=el('span',null,'✕'); x.title='Remove'; x.style.cssText='position:absolute;top:-6px;right:-6px;background:var(--panel);border:1px solid var(--bd2);border-radius:50%;width:15px;height:15px;line-height:14px;text-align:center;font-size:9px;cursor:pointer;color:var(--mut);';
+    x.onclick=()=>chatRemoveImage(i);
+    wrap.appendChild(img); wrap.appendChild(x);
+    row.appendChild(wrap);
+  });
+  return row;
+}
 function chatTools(asst){
   const t=document.getElementById('chat-live-tools'); if(!t) return;
   t.innerHTML=asst.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
@@ -3707,6 +3760,13 @@ function chatFrame(frame,asst,persona){
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
   else if(ev==='status'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); chatScroll(); }
+  else if(ev==='vision'){   // RESUME-TRACKER 2026-07-18j: reuse the existing tool-chip UI, no new rendering path needed
+    const tickers=o.tickers||[];
+    const label = o.error ? ('👁 image analysis failed: '+(o.note||'error'))
+                : tickers.length ? ('👁 image: '+tickers.join(', ')) : ('👁 image: '+(o.note||'no tickers found'));
+    asst.tools.push({name:label, done:true});
+    chatTools(asst);
+  }
   else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
   else if(ev==='done'){ cs.sid=o.session_id||cs.sid; }
   else if(ev==='cancelled'){ cs.sid=o.session_id||cs.sid; if(!asst.content) asst.content='_(stopped)_'; }
@@ -3714,13 +3774,16 @@ function chatFrame(frame,asst,persona){
 }
 async function chatSend(){
   const ta=document.getElementById('chat-input'); if(!ta) return;
-  const msg=(ta.value||'').trim(); if(!msg) return;
+  const msg=(ta.value||'').trim();
+  const images=CHAT_PENDING_IMAGES.slice();   // RESUME-TRACKER 2026-07-18j: snapshot before clearing
+  if(!msg && !images.length) return;          // a screenshot alone is a valid send; text alone still requires text
   const persona=CHAT_PERSONA;    // this send belongs to whichever persona is displayed right now —
                                   // captured so a later persona switch can't redirect it mid-flight
   const cs=CS(persona);
   chatInterrupt(persona);        // if a previous answer for THIS persona is still streaming, stop it and start fresh
   ta.value='';
-  cs.msgs.push({role:'user',content:msg});
+  chatClearImages();
+  cs.msgs.push({role:'user',content:msg||'(image)',images:images});
   cs.msgs.push({role:'assistant',content:'',tools:[],streaming:true});
   cs.streaming=true;
   const myId=++cs.streamId;      // this send's generation; a newer send/nav (for THIS persona) supersedes it
@@ -3735,7 +3798,7 @@ async function chatSend(){
   try{
     const resp=await fetch('/api/chat',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({persona:persona, message:msg, session_id:cs.sid, req_id:reqId}),
+      body:JSON.stringify({persona:persona, message:msg, session_id:cs.sid, req_id:reqId, images:images}),
       signal:ctl.signal});
     if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
     const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
@@ -3811,16 +3874,28 @@ function chatContent(){
       else c.innerHTML=mdToHtml(m.content);
       row.appendChild(c);
     } else {
+      if(m.images && m.images.length){   // RESUME-TRACKER 2026-07-18j: show what was attached, transcript-side
+        const ir=el('div'); ir.style.cssText='display:flex;gap:6px;margin-bottom:4px;';
+        m.images.forEach(b64=>{ const img=el('img'); img.src=b64; img.style.cssText='height:60px;width:60px;object-fit:cover;border-radius:3px;border:1px solid var(--bd2);'; ir.appendChild(img); });
+        row.appendChild(ir);
+      }
       const c=el('div','msg-body'); c.textContent=m.content; row.appendChild(c);
     }
     scroll.appendChild(row);
   });
   main.appendChild(scroll);
+  const preview=chatImagePreview(); if(preview){ preview.style.padding='4px 0 0'; main.appendChild(preview); }
   const bar=el('div','chat-bar');
   const ta=el('textarea'); ta.id='chat-input'; ta.className='chat-input'; ta.rows=1;
-  ta.placeholder='Message the '+(CHAT_PERSONA==='fiduciary'?'Fiduciary':'Strategist')+'…  (Enter to send · Shift+Enter = newline)';
+  ta.placeholder='Message the '+(CHAT_PERSONA==='fiduciary'?'Fiduciary':'Strategist')+'…  (Enter to send · Shift+Enter = newline · paste a screenshot to attach it)';
   ta.onkeydown=chatKey;   // typing stays enabled while a previous answer streams (Enter sends a new one, interrupting)
+  ta.onpaste=chatHandlePaste;   // RESUME-TRACKER 2026-07-18j: paste-from-clipboard is the natural UX for "screenshot"
   bar.appendChild(ta);
+  // 📎 attach button — a fallback for users who'd rather pick a file than paste one
+  const fileInput=el('input'); fileInput.type='file'; fileInput.accept='image/*'; fileInput.multiple=true;
+  fileInput.style.display='none'; fileInput.onchange=chatHandleFileInput;
+  const attach=el('button',null,'📎'); attach.title='Attach an image'; attach.onclick=()=>fileInput.click();
+  bar.appendChild(attach); bar.appendChild(fileInput);
   if(cs.streaming){ const stop=el('button',null,'■ STOP'); stop.onclick=chatStop; bar.appendChild(stop); }
   else { const send=el('button',null,'SEND ▸'); send.onclick=chatSend; bar.appendChild(send); }
   main.appendChild(bar);

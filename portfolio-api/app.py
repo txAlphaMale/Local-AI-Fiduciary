@@ -271,6 +271,13 @@ LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pas
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
 ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "16384"))   # fit full fundamentals+valuation+news without truncation
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
+# Chat image input (RESUME-TRACKER 2026-07-18j): a SEPARATE small multimodal model, not a
+# replacement for ANALYSIS_MODEL (text-only, no vision support). qwen2.5vl:7b is confirmed to fit
+# even an 8GB test-user card at 4-bit and comfortably fits Jason's dual 1080 Tis; pull it once via
+# `ollama pull qwen2.5vl:7b` before this feature works (a missing model surfaces as a normal Ollama
+# 404 from _vision_identify_tickers, not a crash).
+VISION_MODEL = os.environ.get("VISION_MODEL", "qwen2.5vl:7b")
+VISION_LLM_TIMEOUT = int(os.environ.get("VISION_LLM_TIMEOUT", "180"))   # single non-streaming call, bounded
 
 _run_lock = threading.Lock()
 _run_state = {"status": "idle", "analyzed": 0, "total": 0, "started": 0}
@@ -676,6 +683,39 @@ def _basis_convention(raw):
     return "total" if votes_total > votes_ps else "per_share"
 
 
+_CIT_NAME_RE = re.compile(
+    r'\b(collective (investment )?trust|common trust fund|commingled (investment )?fund|\bCIT\b)\b',
+    re.I)
+
+
+def _is_cit(s):
+    """Heuristic Collective Investment Trust / non-traded-fund detector (RESUME-TRACKER
+    2026-07-18k). A CIT (bank/trust-company-managed pooled vehicle for tax-exempt retirement
+    plans — e.g. T. Rowe Price Retirement series, PGIM Jennison CIT share classes) has no real
+    ticker/CUSIP; Monarch tracks it only via the recordkeeper's internal platform ID. `_hold()`'s
+    existing fallback (`ticker or name`) quietly substitutes the fund NAME as a fake ticker,
+    which is exactly what let a CIT slip into the stock-analytics pipeline (Buy/Sell briefs,
+    EDGAR CIK lookups, Tavily news search) undetected until this fix.
+    Primary signal (per the fix plan): no real ticker AND no CUSIP. CUSIP is checked via .get()
+    in case Monarch's payload exposes one — unconfirmed as of this build (would need a live
+    raw-holdings dump to verify); if absent it simply contributes nothing, degrading safely to
+    the ticker-only check. `type == 'Cash'` is excluded (also lacks a ticker, but a different,
+    already-understood case — out of scope here). Name-pattern match on "Collective (Investment)
+    Trust" / "CIT" / "commingled" / "common trust fund" is a SUPPLEMENT (per the fix plan, NOT the
+    primary signal — a REIT with "Trust" in its legal name that DOES have a real ticker must not
+    be flagged), catching an explicitly-named CIT even in the case Monarch surfaces some other
+    platform-style string in the ticker field."""
+    ticker = (s.get("ticker") or "").strip()
+    cusip = (s.get("cusip") or s.get("CUSIP") or "").strip()
+    name = (s.get("name") or "").strip()
+    typ = s.get("typeDisplay") or s.get("type") or ""
+    if typ == "Cash":
+        return False
+    no_real_id = not ticker and not cusip
+    name_hit = bool(_CIT_NAME_RE.search(name)) if name else False
+    return no_real_id or name_hit
+
+
 def _hold(h, conv="per_share"):
     s = h.get("security") or {}
     qty = h.get("quantity")
@@ -705,6 +745,7 @@ def _hold(h, conv="per_share"):
         "gain_pct": gain_pct,
         "day_pct": s.get("oneDayChangePercent"),
         "suspect": suspect,
+        "is_cit": _is_cit(s),
     }
 
 
@@ -722,13 +763,15 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         c = cons.setdefault(key, {"ticker": p["ticker"], "name": p["name"], "type": p["type"],
                                   "quantity": 0.0, "value": 0.0, "cost_total": 0.0,
                                   "price": p["price"], "day_pct": p["day_pct"],
-                                  "accounts": [], "suspect": False})
+                                  "accounts": [], "suspect": False, "is_cit": False})
         c["quantity"] = round(c["quantity"] + (p["quantity"] or 0), 4)
         c["value"] = round(c["value"] + (p["value"] or 0), 2)
         if p.get("suspect") or p["cost_total"] is None:
             c["suspect"] = True   # any unreliable leg -> the merged cost is incomplete
         else:
             c["cost_total"] = round(c["cost_total"] + p["cost_total"], 2)
+        if p.get("is_cit"):
+            c["is_cit"] = True   # any leg flagged CIT -> treat the consolidated row as CIT (RESUME-TRACKER 2026-07-18k)
         c["accounts"].append(p["account"])
     consolidated = []
     for c in cons.values():
@@ -1451,14 +1494,20 @@ def _risk_suite():
     cons = [c for c in d.get("consolidated", [])
             if c.get("ticker") and (c.get("type") or "") != "Cash"]
     weights = {}
+    cit_tickers = set()   # RESUME-TRACKER 2026-07-18k: never resolvable (fake ticker = fund name),
+                           # already surfaces via `unresolved`/coverage_pct below — skip the wasted Stooq call
     for c in cons:
         weights[c["ticker"]] = weights.get(c["ticker"], 0.0) + (c.get("value") or 0.0)
+        if c.get("is_cit"):
+            cit_tickers.add(c["ticker"])
     invested = round(sum(weights.values()), 2)
     if not weights or invested <= 0:
         return {"status": "unavailable", "generated_at": int(time.time()),
                 "note": "No non-cash holdings to analyze."}
     series = {}
     for t in weights:
+        if t in cit_tickers:
+            continue
         s = _stooq_daily(t)
         if len(s) >= 30:
             series[t] = s
@@ -4104,6 +4153,29 @@ def _verify_and_apply(sym, name, llm, grounded, news, fundamentals=None, valuati
     return llm
 
 
+def _cit_brief(c):
+    """Static honest brief for a detected CIT (RESUME-TRACKER 2026-07-18k) — replaces the
+    stock-style Buy/Sell/Hold pipeline entirely: no Finnhub grounded-rating/valuation calls, no
+    EDGAR fundamentals lookup (would always fail — CITs aren't SEC filers), no Tavily news search
+    (would just waste a call on a garbage "TICKER NAME stock" query). Reuses the EXACT same
+    grounded/fundamentals/valuation/llm shapes the real pipeline produces, so the existing frontend
+    rendering (badge() -> '—' on a None rating, fundLine() skipping when fundamentals.available is
+    False) already displays it correctly; only a small CIT label was added to the brief row."""
+    note = ("Collective Investment Trust — not publicly traded, no ticker/CUSIP, no SEC filings; "
+            "NAV and performance are recordkeeper-reported only. Decision-support here is limited "
+            "to what your plan provider reports (expense ratio, glidepath if target-date, category).")
+    return {
+        "name": c["name"],
+        "grounded": {"rating": None, "analyst_total": 0, "counts": {}, "target_mean": None,
+                     "target_high": None, "target_low": None, "period": None},
+        "fundamentals": {"available": False, "cit": True},
+        "valuation": None,
+        "llm": {"rating": None, "confidence": None, "thesis": note, "cit": True},
+        "is_cit": True,
+        "updated_at": int(time.time()),
+    }
+
+
 def _do_analysis(limit, tickers=None):
     """`tickers`, if given, scopes this run to just that ticker subset (OPP-6 post-earnings
     refresh) instead of the whole book / a `limit`-count slice. IMPORTANT: the stale-brief prune
@@ -4125,6 +4197,18 @@ def _do_analysis(limit, tickers=None):
                                                       # never for ones merely outside this run's scope
         briefs = {k: v for k, v in (_read_analysis().get("briefs") or {}).items() if k in current}
         for c in secs:
+            if c.get("is_cit"):
+                # Detected CIT (RESUME-TRACKER 2026-07-18k): skip the entire stock-analytics
+                # pipeline (Finnhub/EDGAR/Tavily calls that would either fail or mislead) and
+                # write a static honest note instead. Not counted in _log_rating's AI scorecard —
+                # there is no rating to score.
+                briefs[c["ticker"]] = _cit_brief(c)
+                _run_state["analyzed"] += 1
+                out = {"updated_at": int(time.time()), "briefs": briefs}
+                os.makedirs(os.path.dirname(ANALYSIS_FILE) or ".", exist_ok=True)
+                with open(ANALYSIS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(out, f, ensure_ascii=False, indent=2)
+                continue
             g = _grounded(c["ticker"])
             news = _news(c["ticker"], c["name"])
             fund = edgar.fundamentals(c["ticker"])
@@ -4466,6 +4550,12 @@ async def post_retire_config(req: Request):
 # comes from caches only (cheap); the single LLM pass rides the serial GPU queue.
 NARRATIVE_FILE = os.environ.get("NARRATIVE_FILE", "/data/narrative.json")
 NARRATIVE_KEEP = int(os.environ.get("NARRATIVE_KEEP", "26"))
+# Separate from LLM_TIMEOUT (2026-07-19, Jason hit a 1200s timeout on a real run): narrative is a
+# single one-shot generate call (not the per-ticker loop LLM_TIMEOUT was sized for), and on this
+# hardware (dual Pascal 1080 Ti, no tensor cores, qwen3.6:27b spread across both cards) a cold
+# model load + generation genuinely may need more headroom — mirrors STRAT_LLM_TIMEOUT's same
+# reasoning ("reasoning ON is slow on Pascal", app.py ~8079). The owner's own estimate was ~40min.
+NARR_LLM_TIMEOUT = int(os.environ.get("NARR_LLM_TIMEOUT", "2400"))
 
 
 def _narrative_context():
@@ -4577,9 +4667,17 @@ def _do_narrative():
     # and /api/narrative's last_error survives even after the in-memory job history resets on
     # the next container restart.
     letter, err = "", None
+    # RESUME-TRACKER 2026-07-19: LLM_TIMEOUT (now NARR_LLM_TIMEOUT here) only ever bounded the
+    # requests.post() call itself — time spent BLOCKED waiting for _gpu_slot() (behind a live chat
+    # generation or another job) was invisible, so a reported "timed out after Ns" could silently
+    # include an unknown amount of queue-wait on top, making it impossible to tell GPU contention
+    # apart from genuinely slow generation on this hardware. gpu_wait_s below closes that gap.
+    t_submit = time.time()
+    gpu_wait_s = None
     try:
         with _gpu_slot():
-            r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
+            gpu_wait_s = round(time.time() - t_submit, 1)
+            r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=NARR_LLM_TIMEOUT)
         if r.status_code >= 400:
             err = f"Ollama returned HTTP {r.status_code}: {r.text[:300]}"
         else:
@@ -4587,7 +4685,10 @@ def _do_narrative():
             if not letter:
                 err = "Ollama returned an empty response (model may have produced nothing usable)"
     except requests.exceptions.Timeout:
-        err = f"timed out after {LLM_TIMEOUT}s waiting on Ollama — model may be cold-loading, GPU-starved, or the prompt/context too large"
+        wait_note = (f" (waited {gpu_wait_s}s for the GPU lock before generation even started)"
+                     if gpu_wait_s is not None else "")
+        err = (f"timed out after {NARR_LLM_TIMEOUT}s of generation{wait_note} — model may be "
+               "cold-loading, GPU-starved, or the prompt/context too large")
     except requests.exceptions.ConnectionError as e:
         err = f"could not reach Ollama at {OLLAMA}: {e}"[:300]
     except Exception as e:
@@ -4601,7 +4702,10 @@ def _do_narrative():
     except Exception:
         store = {}
     rows = (store.get("letters") or [])
-    rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx})
+    # gpu_wait_s persists on SUCCESSFUL runs too (not just the error path above) so Jason can see
+    # typical GPU-queue delay over time in /api/narrative's history — useful for judging whether
+    # NARR_LLM_TIMEOUT is comfortably sized without needing to reproduce an actual failure.
+    rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx, "gpu_wait_s": gpu_wait_s})
     store = {"letters": rows[-NARRATIVE_KEEP:], "last_error": None, "last_error_at": None}
     os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
     with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
@@ -7980,6 +8084,16 @@ STRATEGIST_TOOLS = [
     {"type": "function", "function": {"name": "get_holdings",
         "description": "The user's REAL portfolio (net worth + consolidated holdings) — context only.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_fees_liquidity",
+        "description": "Fee drag (fund/ETF expense ratios) and liquidity flags on The user's REAL holdings — "
+                       "context only, e.g. when weighing a paper idea against what he already pays elsewhere.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_benefits",
+        "description": "The user's REAL 401(k) employer match/headroom, HSA room, Roth IRA eligibility, and "
+                       "mega-backdoor Roth capacity — context only (RESUME-TRACKER 2026-07-19: added so a "
+                       "401k/HSA/contribution-room question doesn't require Jason to type figures the app "
+                       "already tracks).",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "web_search",
         "description": "Live web/news search via Tavily — use it to UNCOVER fresh opportunities (themes, "
                        "sector catalysts, analyst moves, names not already in get_discovery) and to check "
@@ -8058,6 +8172,10 @@ def _strategist_dispatch(name, args):
                     "holdings": [{"ticker": c.get("ticker"), "name": c.get("name"),
                                   "weight_pct": c.get("weight_pct"), "gain_pct": c.get("gain_pct")}
                                  for c in top[:25] if c.get("ticker")]}
+        if name == "get_fees_liquidity":
+            return get_fees_liquidity()
+        if name == "get_benefits":
+            return get_benefits()
         if name == "web_search":
             return {"results": _tavily_results(str(args.get("query") or ""),
                                                days=int(args.get("days") or 14),
@@ -8252,6 +8370,9 @@ STRATEGIST_ADVICE_PROMPT = (
     "record nothing — no buy, sell, or report tools exist in this mode. Jason is asking what you would do "
     "with a specific amount of NEW cash. Reason it through with your research and data tools.\n"
     "TOOLS: get_holdings (The user's REAL portfolio — the positions your plan MUST consider); "
+    "get_fees_liquidity and get_benefits (The user's REAL fund expense ratios and 401k/HSA/Roth "
+    "contribution room — use these for any question involving fees or contribution/match headroom "
+    "instead of asking Jason to supply figures the app already tracks); "
     "get_paper_portfolio (the hypothetical book, extra context only); get_opportunities and get_discovery "
     "(idea sources); get_fundamentals(ticker), get_valuation(ticker), get_research(ticker).\n"
     "Prefer `ttm` (trailing-twelve-month) margins over any single annual figure, and check the multi-year "
@@ -8521,6 +8642,13 @@ FIDUCIARY_TOOLS = [
     {"type": "function", "function": {"name": "get_fees_liquidity",
         "description": "Fee drag (fund/ETF expense ratios) and liquidity flags on thinly-traded holdings.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_benefits",
+        "description": "401(k) employer match and headroom, HSA contribution room, Roth IRA eligibility, "
+                       "and mega-backdoor Roth capacity — from the user's actual plan/salary configuration and "
+                       "the 2026 IRS contribution limits. Use this for any 401k/HSA/Roth contribution-room or "
+                       "match-optimization question (RESUME-TRACKER 2026-07-19: this data existed only on a "
+                       "plain REST endpoint before, invisible to chat).",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_lookthrough",
         "description": "Fund/ETF look-through: the underlying holdings your funds actually hold.",
         "parameters": {"type": "object", "properties": {}}}},
@@ -8587,6 +8715,7 @@ def _fiduciary_dispatch(name, args):
         if name == "get_aca":             return get_aca()
         if name == "get_social_security": return get_ss()
         if name == "get_fees_liquidity":  return get_fees_liquidity()
+        if name == "get_benefits":        return get_benefits()
         if name == "get_lookthrough":     return get_lookthrough()
         if name == "get_scorecard":       return get_scorecard()
         if name == "get_opportunities":   return _opportunities()
@@ -8616,12 +8745,15 @@ def _fiduciary_dispatch(name, args):
 STRATEGIST_CHAT_PROMPT = (
     "You are the Strategist in conversational ADVISORY mode. You discuss ideas, opportunities and "
     "portfolio moves, but you place NO trades and record nothing — no buy/sell/report tools exist here. "
-    "Use get_holdings for The user's REAL positions (context), get_paper_portfolio for the hypothetical "
-    "book, get_opportunities and get_discovery for ideas, get_fundamentals / get_valuation / "
-    "get_research to dig into a name, and web_search(query) for LIVE web/news via Tavily — use it to "
-    "uncover fresh opportunities and to answer 'what's driving this stock right now / why is it up or "
-    "down today' questions. Prefer trailing-twelve-month figures; weigh fees and liquidity on "
-    "small orders. Give specific, reasoned takes and acknowledge uncertainty.\n"
+    "Use get_holdings for The user's REAL positions (context), get_fees_liquidity for his REAL fund "
+    "expense ratios/liquidity flags and get_benefits for his REAL 401k/HSA/Roth contribution room "
+    "(use these instead of asking Jason to type figures the app already tracks), get_paper_portfolio "
+    "for the hypothetical book, get_opportunities and get_discovery for ideas, get_fundamentals / "
+    "get_valuation / get_research to dig into a name, and web_search(query) for LIVE web/news via "
+    "Tavily — use it to uncover fresh opportunities and to answer 'what's driving this stock right "
+    "now / why is it up or down today' questions. Prefer trailing-twelve-month figures; weigh fees "
+    "and liquidity on small orders using get_fees_liquidity's real numbers, not a guess. Give "
+    "specific, reasoned takes and acknowledge uncertainty.\n"
     "TOOL HONESTY: your capabilities are exactly the tools listed above. If asked to do something no "
     "tool supports, say so plainly in ONE turn and offer the closest thing you CAN do — do NOT loop or "
     "deliberate at length about a capability you lack. Hypothetical and educational — NOT financial advice."
@@ -8652,6 +8784,49 @@ def _trim_tool_result(nm, result):
     return _tr
 
 
+def _vision_identify_tickers(images, user_msg):
+    """RESUME-TRACKER 2026-07-18j: a single non-streaming multimodal call against VISION_MODEL
+    (a distinct small vision-capable model — ANALYSIS_MODEL/persona models are text-only) that
+    reads a pasted screenshot and extracts ticker symbols. This function's ONLY job is OCR-style
+    ticker extraction, not analysis — the actual RESEARCH still goes through the persona's own
+    existing tool-calling loop (get_fundamentals/get_news/etc, already implemented in _chat_stream)
+    once tickers are identified. That's the reuse win: this is a new front door onto machinery
+    that already exists, not a second research pipeline.
+    `images` is a list of base64-encoded image strings (data-URL prefix, if any, stripped by the
+    caller). Returns {"tickers": [...], "note": str, "error": bool}, or None if `images` is falsy.
+    Best-effort: any Ollama/parse failure degrades to an empty-tickers result with the failure
+    reason in `note`, never raises — a bad screenshot shouldn't break the chat turn."""
+    if not images:
+        return None
+    prompt = (
+        "Look at the attached image(s) carefully. Identify any stock/fund ticker symbols visible "
+        "(e.g. in a screenshot of a brokerage app, watchlist, portfolio, or news headline). "
+        "Reply with ONLY a JSON object, no other text: "
+        '{"tickers": ["AAPL", ...], "note": "short description of what you saw"}. '
+        "If no tickers are clearly identifiable, return an empty tickers list and use `note` to "
+        "describe what you saw instead so the user can clarify."
+    )
+    try:
+        r = requests.post(f"{OLLAMA}/api/chat",
+                           json={"model": VISION_MODEL,
+                                 "messages": [{"role": "user", "content": prompt, "images": images}],
+                                 "stream": False, "keep_alive": LLM_KEEP_ALIVE,
+                                 "options": {"temperature": 0.1}},
+                           timeout=VISION_LLM_TIMEOUT)
+        if r.status_code >= 400:
+            return {"tickers": [], "note": f"vision model error {r.status_code}: {r.text[:200]}", "error": True}
+        content = ((r.json() or {}).get("message") or {}).get("content") or ""
+        parsed = _parse_json_obj(content) or {}
+        # `t and str(t).strip()` — checking truthiness of `t` FIRST matters: a JSON `null` in the
+        # list parses to Python None, and str(None)=="None" is non-empty, so filtering on the
+        # stringified form alone (a bug caught by a reconstructed-function test during this build)
+        # would let a null slip through as the literal ticker "NONE".
+        tickers = [str(t).upper().strip() for t in (parsed.get("tickers") or []) if t and str(t).strip()][:10]
+        return {"tickers": tickers, "note": (parsed.get("note") or "").strip(), "error": False}
+    except Exception as e:
+        return {"tickers": [], "note": f"vision call failed: {e}", "error": True}
+
+
 # Cooperative cancellation for /api/chat: keyed by a client-generated req_id so the Stop button
 # can reach the SPECIFIC in-flight generation. Client-side abort() only closes the browser's own
 # fetch — it does nothing to the server, which used to keep running to completion in the background
@@ -8661,14 +8836,17 @@ _CHAT_CANCEL = {}
 _CHAT_CANCEL_LOCK = threading.Lock()
 
 
-def _chat_stream(persona_key, session_id, user_msg, req_id=None):
+def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
     """SSE generator: streams assistant tokens and tool events for one user message, persisting the
     turn to SQLite. Holds _strat_lock for the duration so a chat never competes with the weekly run
     or an advisory run for the GPUs. Cancellable via req_id + POST /api/chat/cancel: checked while
     queued for _strat_lock, while queued for _GPU (RESUME-TRACKER 2026-07-18l bug #2 — a job-queue
     run holding _GPU used to block here with zero visibility; now yields a `status` SSE event naming
     the job + ETA, same as the _strat_lock wait), and on every streamed line/tool-call, so Stop
-    actually frees the GPU right away instead of letting the generation finish unattended."""
+    actually frees the GPU right away instead of letting the generation finish unattended.
+    `images` (RESUME-TRACKER 2026-07-18j), if given, runs a VISION_MODEL pre-pass to identify
+    ticker symbols in the attached screenshot(s) before the normal turn — see
+    _vision_identify_tickers's docstring for why this is a pre-pass, not a separate pipeline."""
     persona = PERSONAS.get(persona_key)
     if not persona:
         yield _sse("error", {"error": f"unknown persona '{persona_key}'"})
@@ -8707,6 +8885,38 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
             _forget()
             return
     try:
+        # Image pre-pass (RESUME-TRACKER 2026-07-18j): identify tickers via VISION_MODEL BEFORE
+        # the normal turn, under the same visible/cancellable GPU-wait treatment bug #2 added
+        # above (a vision call is still a GPU op and must serialize with everything else, and a
+        # job-queue run holding _GPU shouldn't leave THIS wait silent either). The note gets
+        # appended only to what the LLM SEES this turn (below, after `messages` is built) — the
+        # chat history stored to SQLite keeps the user's original message text, so re-opening this
+        # conversation later doesn't show a synthetic "[Image analysis...]" tag baked in.
+        vision_note = None
+        if images:
+            yield _sse("status", {"state": "vision", "message": "reading the attached image…"})
+            if _GPU.locked():
+                yield _sse("status", {"state": "waiting", "message": _gpu_wait_message()})
+            v_deadline = time.time() + CHAT_QUEUE_TIMEOUT
+            if not _gpu_acquire_visible(cancel_event, v_deadline):
+                if cancel_event.is_set():
+                    yield _sse("cancelled", {"reason": "stopped while queued for image analysis"})
+                else:
+                    yield _sse("error", {"error": "GPU still busy after waiting a while — please try again shortly"})
+                return
+            try:
+                vres = _vision_identify_tickers(images, user_msg)
+            finally:
+                _gpu_release_visible()
+            if vres and vres.get("tickers"):
+                vision_note = (f"[Image analysis identified possible ticker(s): {', '.join(vres['tickers'])}."
+                                + (f" {vres['note']}" if vres.get("note") else "")
+                                + " Use your research tools to look these up before answering.]")
+            elif vres:
+                vision_note = f"[Image analysis: {vres.get('note') or 'no tickers clearly identified in the image.'}]"
+            yield _sse("vision", {"tickers": (vres or {}).get("tickers") or [], "note": (vres or {}).get("note"),
+                                  "error": bool((vres or {}).get("error"))})
+
         if not session_id:
             title = (user_msg or "New chat").strip().replace("\n", " ")[:60] or "New chat"
             session_id = _chat_create_session(persona_key, title)
@@ -8718,6 +8928,8 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
         for m in history:
             if m["role"] in ("user", "assistant"):
                 messages.append({"role": m["role"], "content": m["content"] or ""})
+        if vision_note and messages and messages[-1]["role"] == "user":
+            messages[-1]["content"] = (messages[-1]["content"] or "") + "\n\n" + vision_note
 
         final_content = ""
         cancelled = False
@@ -8831,14 +9043,53 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
         _forget()
 
 
+CHAT_IMAGE_MAX = int(os.environ.get("CHAT_IMAGE_MAX", "3"))            # cap images per message
+CHAT_IMAGE_MAX_BYTES = int(os.environ.get("CHAT_IMAGE_MAX_BYTES", "8000000"))  # ~8MB base64/image, before Ollama sees it
+
+
+def _sanitize_chat_images(raw):
+    """Validate + normalize the optional `images` field (RESUME-TRACKER 2026-07-18j): accepts a
+    list of base64 strings, stripping a `data:image/...;base64,` prefix if the browser's
+    FileReader/clipboard API included one (Ollama's multimodal `images` field wants raw base64,
+    no data-URL wrapper). Caps count and per-image size so a pasted image can't balloon the
+    request or the eventual Ollama call unbounded. Silently drops anything that isn't a
+    non-empty string (before OR after prefix-stripping — an empty `data:image/jpeg;base64,` with
+    nothing after the comma must not become an empty-string "image" sent to Ollama) rather than
+    erroring the whole chat turn over one bad image.
+    IMPORTANT: filters junk BEFORE capping to CHAT_IMAGE_MAX, not after — capping the raw list
+    first would let a few leading junk entries (empty strings, wrong types) silently push a real
+    trailing image out of the slice even though far fewer than CHAT_IMAGE_MAX valid images were
+    actually sent (caught by a reconstructed-function test during this build)."""
+    if not raw or not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        s = item.strip()
+        if s.startswith("data:"):
+            comma = s.find(",")
+            if comma != -1:
+                s = s[comma + 1:]
+        if not s or len(s) > CHAT_IMAGE_MAX_BYTES:
+            continue
+        out.append(s)
+        if len(out) >= CHAT_IMAGE_MAX:
+            break
+    return out
+
+
 @app.post("/api/chat")
 async def chat(req: Request):
     """Streaming multi-turn chat with a persona (fiduciary|strategist).
-    Body: {persona, message, session_id?, req_id?}. req_id is a client-generated token the caller
-    can later pass to POST /api/chat/cancel to actually stop this generation server-side (not just
-    close the browser stream) — pass one if you want Stop to work.
-    Returns text/event-stream: events session, status, token, thinking, tool, tool_done, done,
-    cancelled, error. READ-ONLY."""
+    Body: {persona, message, session_id?, req_id?, images?}. req_id is a client-generated token
+    the caller can later pass to POST /api/chat/cancel to actually stop this generation
+    server-side (not just close the browser stream) — pass one if you want Stop to work.
+    `images` (RESUME-TRACKER 2026-07-18j), if given, is a list of up to CHAT_IMAGE_MAX base64
+    image strings (data-URL prefix optional) — e.g. a pasted screenshot of a watchlist. Message
+    may be empty when images are attached (defaults to a generic "identify tickers" prompt).
+    Returns text/event-stream: events session, status, vision, token, thinking, tool, tool_done,
+    done, cancelled, error. READ-ONLY."""
     try:
         body = await req.json()
     except Exception:
@@ -8847,9 +9098,13 @@ async def chat(req: Request):
     session_id = (body or {}).get("session_id")
     message = str((body or {}).get("message") or "").strip()
     req_id = str((body or {}).get("req_id") or "").strip() or None
+    images = _sanitize_chat_images((body or {}).get("images"))
+    if not message and images:
+        message = "Identify any ticker symbols in the attached image and research them."
     if not message:
         return JSONResponse({"error": "empty message"}, status_code=400)
-    return StreamingResponse(_chat_stream(persona, session_id, message, req_id), media_type="text/event-stream")
+    return StreamingResponse(_chat_stream(persona, session_id, message, req_id, images=images),
+                              media_type="text/event-stream")
 
 
 @app.post("/api/chat/cancel")
