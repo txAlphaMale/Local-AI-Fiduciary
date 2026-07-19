@@ -74,6 +74,25 @@
     --radius-md: 3px;
     --radius-lg: 4px;
   }
+
+  /* ---- Step 3 (2026-07-19): alternate themes — the acceptance test for the whole token
+     migration. Each overrides ONLY Tier-1 primitives (never Tier 2/3), which is sufficient:
+     every Tier-2 semantic var (e.g. --color-accent: var(--amber)) resolves --amber lazily at
+     used-value time per the CSS cascade, so redefining --amber here automatically re-colors
+     every one of the ~700 call sites that reference var(--color-accent) — zero JS/HTML touched,
+     proving the "swap style via centralized config" goal from the original proposal doc. Applied
+     via a data-theme attribute on <html>, set from THEME_LIST / localStorage — see themeContent()
+     and the early-init block near SUBTAB/SUBORDER. ---- */
+  :root[data-theme="cobalt"]{
+    --bg:#080b12; --panel:#0d1420; --panel2:#0a0f18; --bd:#1a2536; --bd2:#243349;
+    --amber:#4d9bff; --txt:#d7e2f0; --mut:#7c8ba3; --dim:#4d5b70;
+    --grn:#2ec27e; --red:#ff5d5d; --blu:#4ad4ff;
+  }
+  :root[data-theme="highcontrast"]{
+    --bg:#050505; --panel:#0d0d0d; --panel2:#000000; --bd:#3a3a3a; --bd2:#555555;
+    --amber:#ffb020; --txt:#f5f5f5; --mut:#b8b8b8; --dim:#868686;
+    --grn:#3ddb8f; --red:#ff6b6b; --blu:#5eb3ff;
+  }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--color-bg);color:var(--color-text);
     font-family:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
@@ -217,6 +236,18 @@ function CS(p){ p=p||CHAT_PERSONA; return CHAT_STATE[p]||(CHAT_STATE[p]=_newChat
 // per-persona keyed since only one message is ever being composed at a time.
 let CHAT_PENDING_IMAGES = [];   // array of base64 strings (data-URL prefix kept; stripped server-side too)
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
+// Theme (step 3, 2026-07-19 — UI-THEMING-DESIGN-TOKEN-PROPOSAL.md): swaps ONLY the Tier-1 color
+// primitives (see :root[data-theme] blocks in <style>) via an attribute on <html>. Applied here,
+// as early in the script as possible, so there's no visible flash of the default theme on load.
+const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'}];
+let THEME='amber'; try{ THEME=localStorage.getItem('fidTheme')||'amber'; }catch(_){ THEME='amber'; }
+function applyTheme(key){
+  THEME=key||'amber';
+  if(THEME==='amber') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', THEME);
+  try{ localStorage.setItem('fidTheme', THEME); }catch(_){}
+}
+applyTheme(THEME);
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
@@ -584,6 +615,10 @@ W('continuity','Planning','Continuity binder + document currency',
   'An always-current, auto-generated estate-OPERATIONS doc for whoever has to handle things if you can\'t: an action checklist, an account-by-account map of how each one actually transfers (beneficiary vs TOD deed vs probate — pulled straight from the ESTATE titling audit), embedded gain the step-up would wipe, any debts to settle, and a key-contacts register (attorney, CPA, advisor, executor, where the will is kept). Composes numbers already computed elsewhere — it adds no new modeling, just assembles the document view of it. Paired with a DOCUMENT CURRENCY tracker (GAP-8): a recurring staleness check on your will, durable POA, healthcare directive, trust, and beneficiary-designation review — each shows the year you last reviewed it and flags ✓ current / ⚠ stale / — not recorded against an editable review-cadence knob (default 3 years).',
   'PLAN → CONTINUITY. The checklist up top is meant to be read first under stress; the document-currency table, account map, and debts below it are the supporting detail. Both sections regenerate from live data/config on every load, so neither can silently drift the way a one-time printed binder or a "I\'ll remember when I last updated my will" mental note would — though a PRINTED copy (🖶 PRINT button) obviously freezes at print time, so reprint after any major change. A stale or never-recorded document also surfaces on the ⚠ ATTENTION header badge (Estate hygiene category) so it doesn\'t require remembering to check this tab.',
   'Fill in the contacts, executor/will-location fields, and each document\'s last-reviewed year once — that\'s the part the app can\'t infer from your accounts. The 3-year cadence is a hygiene reminder, not a legal deadline: the real trigger to re-review any of these is a life event (marriage, divorce, birth, death, home purchase/sale, move to a new state) whenever it happens, cadence or not. Print a copy and put it somewhere a survivor or co-executor would actually find it; this is decision-support, not a substitute for the actual will/POA/trust documents, which still need a licensed attorney.');
+W('theme','Automation','Theme (color palette)',
+  'Three color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders) — swapped by overriding a handful of CSS color variables. Nothing else changes: layout, spacing, and type sizes are identical across all three, because every one of the app\'s ~700 styled elements reads its color through a shared token instead of a hardcoded value.',
+  'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices).',
+  'Purely cosmetic — pick whichever is easiest on your eyes/lighting. This also doubles as proof the color system is centralized: if a future palette ever looks wrong somewhere, that\'s a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
   'Options math on the concentrated names: a COVERED CALL sells the upside above a strike for cash now (income + assignment probability shown); a COLLAR buys a ~10% protective put funded by selling a call (floor and cap shown, often near zero net cost). Chains are delayed Yahoo data; deltas are computed locally from each contract\'s implied volatility.',
   'INSIGHTS → HEDGING. Cards build for names over the sizing loss-budget plus top direct weights (≥3%), at the ~30-45 day expiration. Yield %/yr on calls, floor/cap on collars; premiums are mid-quotes — verify live before any order. Rebuilds daily or via REFRESH CHAINS.',
@@ -823,6 +858,7 @@ function render(){
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
     tc.appendChild(panelSubtabs('settings',[
+      {key:'theme',label:'THEME',build:()=>themeContent()},
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
       {key:'schedule',label:'TASK SCHEDULE',build:()=>scheduleContent()},
@@ -1930,6 +1966,36 @@ function saveSettings(){
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{ if(d && d.restart_required && d.restart_required.length){ alert('Saved. Model config applies on the next portfolio-api restart.'); } load(false); })
     .catch(e=>alert('Save failed: '+e));
+}
+function themeContent(){
+  const wrap=el('div');
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:14px;';
+  sub.textContent='Swaps the color palette only (layout/spacing/type unchanged) — proves the design tokens are centralized: nothing but these three CSS rules changes to produce each look. Picks up immediately, persists locally, no reload needed.';
+  wrap.appendChild(sub);
+  const row=el('div'); row.style.cssText='display:flex;gap:10px;flex-wrap:wrap;';
+  THEME_LIST.forEach(t=>{
+    const active=THEME===t.key;
+    const card=el('div'); card.style.cssText=`cursor:pointer;padding:var(--space-3) var(--space-4);border:1px solid ${active?'var(--color-accent)':'var(--color-border)'};`+
+      `border-radius:var(--radius-md);min-width:150px;`;
+    const dots=el('div'); dots.style.cssText='display:flex;gap:6px;margin-bottom:8px;';
+    ['--bg','--panel','--amber','--grn','--red','--blu'].forEach(varname=>{
+      // Preview swatches read each theme's OWN values directly (not the live cascade), since this
+      // card may not be the active theme — so it can't just read var(varname) off itself.
+      const swatchColors={amber:{'--bg':'#0a0b0d','--panel':'#121417','--amber':'#f0a823','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4a9eff'},
+        cobalt:{'--bg':'#080b12','--panel':'#0d1420','--amber':'#4d9bff','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4ad4ff'},
+        highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'}}[t.key];
+      const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${swatchColors[varname]};border:1px solid var(--color-border-strong);`;
+      dots.appendChild(sw);
+    });
+    card.appendChild(dots);
+    const lab=el('div',null,t.label); lab.style.cssText=`font-size:var(--font-size-md);letter-spacing:1px;color:${active?'var(--color-accent)':'var(--color-text)'};`;
+    card.appendChild(lab);
+    if(active){ const chk=el('div','muted','· active'); chk.style.cssText='font-size:var(--font-size-sm);margin-top:2px;'; card.appendChild(chk); }
+    card.onclick=()=>{ applyTheme(t.key); render(); };
+    row.appendChild(card);
+  });
+  wrap.appendChild(row);
+  return wrap;
 }
 function settingsContent(){
   const wrap=el('div'); const s=SETTINGS_CFG;
