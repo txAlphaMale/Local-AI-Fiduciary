@@ -140,7 +140,13 @@ function runJob(url, btn, queuedLabel){
 }
 
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
-let CHAT_MSGS=[], CHAT_SID=null, CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_STREAMING=false, CHAT_ABORT=null, CHAT_SESS_LOADING=false, CHAT_STREAM_ID=0, CHAT_REQ_ID=null;
+// Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
+// must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
+// generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
+function _newChatState(){ return {msgs:[], sid:null, streaming:false, abort:null, reqId:null, streamId:0}; }
+let CHAT_STATE={fiduciary:_newChatState(), strategist:_newChatState()};
+let CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_SESS_LOADING=false;
+function CS(p){ p=p||CHAT_PERSONA; return CHAT_STATE[p]||(CHAT_STATE[p]=_newChatState()); }
 // Second-level sub-tabs: SUBTAB[panelKey] = active section key (persisted).
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
@@ -205,7 +211,7 @@ const analystRating = t => (ANALYSIS&&ANALYSIS.briefs&&ANALYSIS.briefs[t]&&ANALY
   ? ANALYSIS.briefs[t].grounded.rating : null;
 
 async function load(refresh, bg){
-  if(CHAT_STREAMING) return;   // never wipe the page (and the live chat) mid-stream
+  if(CS(CHAT_PERSONA).streaming) return;   // never wipe the page (and the live chat) mid-stream for the persona being VIEWED — a background persona's own stream is untouched by this (its DOM isn't rendered while hidden)
   const _bgScrollY = bg ? window.scrollY : null;   // preserve the user's place across a background poll
   document.getElementById('refresh').textContent='…';
   try{
@@ -251,9 +257,9 @@ W('not-advice','Getting started','Not advice — how to trust the numbers',
   'Where a number depends on a live source that could be stale, the UI shows a freshness stamp or a grounding note. The AUDITS to GROUNDING tab lists every dated tax constant with its source and a re-verification date.',
   'Treat briefs as a research analyst take to pressure-test, and confirm any tax, estate, or legal move with a CPA or attorney before acting.');
 W('job-queue','Getting started','Serial job queue and the gear badge',
-  'Heavy jobs (analysis, discovery, opportunity scan, strategist) run one at a time through a single serial queue so they never contend for the GPU. Chat, the weekly Strategist run, and advisory "what would you do with $X" runs share a separate lock on the same GPU rather than going through that queue. The badge in the header reflects both.',
-  'A badge like running strategist, 2 queued means the strategist is running with two jobs behind it. "chat/strategist busy" means a chat conversation, the weekly run, or an advisory run is using the model right now (queue depth for those is not shown, since only one can hold the lock at a time). Blank means idle. GET /api/jobs is the same data as a raw list.',
-  'If you fire several heavy jobs at once, expect them to line up rather than run together — that is by design. A duplicate of a job already queued or running is merged, not run twice. Pressing Stop in Chat cancels your own generation (POST /api/chat/cancel) and frees the badge within about a second — it used to only close your browser connection and leave the badge blank while the reply kept generating unseen.');
+  'Heavy jobs (analysis, discovery, opportunity scan, strategist) run one at a time through a single serial queue so they never contend for the GPU. Chat, the weekly Strategist run, and advisory "what would you do with $X" runs share a separate lock on the same GPU rather than going through that queue. The badge in the header reflects both. Chat itself queues in two places: behind the shared chat/strategist/advisory lock, and (separately) behind whichever job-queue run currently holds the GPU — both waits now show a live status line in the chat transcript naming what is running and roughly how much longer, instead of an unexplained pause.',
+  'A badge like running strategist, 2 queued means the strategist is running with two jobs behind it. "chat/strategist busy" means a chat conversation, the weekly run, or an advisory run is using the model right now (queue depth for those is not shown, since only one can hold the lock at a time). Blank means idle. GET /api/jobs is the same data as a raw list. In Chat, a message like waiting: "Daily analysis (briefs)" is using the model (4m 12s so far, ~6m 30s typical) means a job-queue run is holding the GPU and your reply is queued behind it — it will start automatically once that job finishes, no action needed.',
+  'If you fire several heavy jobs at once, expect them to line up rather than run together — that is by design. A duplicate of a job already queued or running is merged, not run twice. Pressing Stop in Chat cancels your own generation (POST /api/chat/cancel) and frees the badge within about a second, whether it was waiting on the chat lock or on the GPU behind a job. Switching between the Fiduciary and Strategist chat tabs, opening a different saved conversation, or starting a new chat no longer cancels whatever the OTHER persona was still generating — it keeps running in the background (a ⏳ appears on its tab) and you will see the finished answer when you switch back. Only an explicit Stop, or sending a new message in the SAME persona/session, actually stops a generation early.');
 W('scheduler','Getting started','Automated jobs (Task Schedule)',
   'The recurring agents run on a built-in scheduler inside the app (no external service). Each job fires at a set time and is enqueued into the serial job queue.',
   'Settings to Task Schedule lists every automated job, its cadence (daily, weekly on a given day, or monthly), and its time in 24-hour clock. Times run in the app timezone shown at the top of that panel.',
@@ -3626,35 +3632,45 @@ function chatLoadSessions(){
   fetch('/api/chat/sessions').then(r=>r.json())
     .then(d=>{ CHAT_SESSIONS=(d&&d.sessions)||[]; })
     .catch(()=>{ CHAT_SESSIONS=CHAT_SESSIONS||[]; })
-    .finally(()=>{ CHAT_SESS_LOADING=false; if(TAB==='chat' && !CHAT_STREAMING) render(); });
+    .finally(()=>{ CHAT_SESS_LOADING=false; if(TAB==='chat' && !CS(CHAT_PERSONA).streaming) render(); });
 }
-// Stop the in-flight stream (if any) and supersede its finally handler so a new
-// action (new chat, switch persona/session, new message) can start immediately.
-// IMPORTANT: aborting the fetch only closes OUR OWN connection to the server — it does not, by
-// itself, stop the server from continuing to generate (and hold the shared GPU lock) in the
-// background. So we also tell the server to actually stop via /api/chat/cancel (req_id), which
-// _chat_stream polls and exits on within ~1s. Fire-and-forget: we don't wait on it before
-// resetting local UI state, since the client-side abort is what makes the UI feel instant.
-function chatInterrupt(){
-  if(!CHAT_STREAMING) return;
-  CHAT_STREAM_ID++;                       // supersede the running send's generation
-  if(CHAT_REQ_ID){
+// Stop the in-flight stream for `persona` (default: the one being viewed) and supersede its
+// finally handler. IMPORTANT: aborting the fetch only closes OUR OWN connection to the server —
+// it does not, by itself, stop the server from continuing to generate (and hold the shared GPU
+// lock) in the background. So we also tell the server to actually stop via /api/chat/cancel
+// (req_id), which _chat_stream polls and exits on within ~1s. Fire-and-forget: we don't wait on
+// it before resetting local UI state, since the client-side abort is what makes the UI feel instant.
+// Callers: explicit Stop click, a new SEND/new-chat/open-a-different-session WITHIN THE SAME
+// persona (those legitimately supersede). Switching to VIEW another persona must NOT call this —
+// that was bug #1 (RESUME-TRACKER 2026-07-18l): it silently cancelled + wiped the other chat.
+function chatInterrupt(persona){
+  const p = persona || CHAT_PERSONA, cs=CS(p);
+  if(!cs.streaming) return;
+  cs.streamId++;                       // supersede the running send's generation
+  if(cs.reqId){
     fetch('/api/chat/cancel',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({req_id:CHAT_REQ_ID})}).catch(()=>{});
+      body:JSON.stringify({req_id:cs.reqId})}).catch(()=>{});
   }
-  if(CHAT_ABORT){ try{ CHAT_ABORT.abort(); }catch(_){} }
-  CHAT_ABORT=null; CHAT_STREAMING=false; CHAT_REQ_ID=null;
-  const last=CHAT_MSGS[CHAT_MSGS.length-1];
+  if(cs.abort){ try{ cs.abort.abort(); }catch(_){} }
+  cs.abort=null; cs.streaming=false; cs.reqId=null;
+  const last=cs.msgs[cs.msgs.length-1];
   if(last && last.streaming) last.streaming=false;   // freeze the partial answer in place
 }
-function chatStop(){ chatInterrupt(); render(); }
-function chatNew(){ chatInterrupt(); CHAT_SID=null; CHAT_MSGS=[]; render(); }
-function chatSetPersona(p){ chatInterrupt(); if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; CHAT_SID=null; CHAT_MSGS=[]; render(); } }
+function chatStop(){ chatInterrupt(CHAT_PERSONA); render(); }
+function chatNew(){ chatInterrupt(CHAT_PERSONA); const cs=CS(CHAT_PERSONA); cs.sid=null; cs.msgs=[]; render(); }
+// Switching persona ONLY changes what's displayed — no interrupt of either side. This is the
+// actual fix for bug #1: previously this unconditionally called chatInterrupt() first, which
+// cancelled the OTHER persona's generation server-side and threw away its partial answer.
+function chatSetPersona(p){
+  if(CHAT_PERSONA!==p){ CHAT_PERSONA=p; render(); }
+}
 function chatOpen(sid,persona){
-  chatInterrupt();
+  const p = persona || CHAT_PERSONA;
+  chatInterrupt(p);   // opening a specific past session within persona p supersedes whatever p was running
   fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{
-    CHAT_SID=sid; if(persona) CHAT_PERSONA=persona;
-    CHAT_MSGS=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
+    const cs=CS(p);
+    cs.sid=sid; if(persona) CHAT_PERSONA=persona;
+    cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
       .map(m=>({role:m.role,content:m.content||'',tools:[]}));
     render(); chatScroll();
   }).catch(e=>alert('Could not open chat: '+e));
@@ -3662,9 +3678,9 @@ function chatOpen(sid,persona){
 function chatDelete(sid,ev){
   if(ev) ev.stopPropagation();
   if(!confirm('Delete this conversation?')) return;
-  if(!confirm('Delete this conversation?')) return;
   fetch('/api/chat/session/'+sid,{method:'DELETE'}).then(r=>r.json()).then(()=>{
-    if(CHAT_SID===sid){ CHAT_SID=null; CHAT_MSGS=[]; }
+    const cs=CS(CHAT_PERSONA);
+    if(cs.sid===sid){ cs.sid=null; cs.msgs=[]; }
     chatLoadSessions();
   }).catch(e=>alert('Delete failed: '+e));
 }
@@ -3673,73 +3689,88 @@ function chatTools(asst){
   const t=document.getElementById('chat-live-tools'); if(!t) return;
   t.innerHTML=asst.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
 }
-function chatFrame(frame,asst){
+// `persona` says which persona's state this frame belongs to (may not be the one currently
+// VIEWED, if the user has switched away to look at the other one). DOM writes below
+// (chat-live-content/chat-live-tools/chat-scroll) naturally no-op when persona isn't the one
+// displayed, since those element ids only exist in the DOM for whichever persona render() last
+// drew — the underlying `asst`/`cs` objects still accumulate correctly in the background either way.
+function chatFrame(frame,asst,persona){
   let ev='message', data='';
   frame.split('\n').forEach(line=>{
     if(line.indexOf('event:')===0) ev=line.slice(6).trim();
     else if(line.indexOf('data:')===0) data+=line.slice(5).trim();
   });
   let o={}; if(data){ try{ o=JSON.parse(data); }catch(_){} }
-  if(ev==='session'){ CHAT_SID=o.session_id||CHAT_SID; }
+  const cs=CS(persona);
+  if(ev==='session'){ cs.sid=o.session_id||cs.sid; }
   else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
   else if(ev==='status'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); chatScroll(); }
   else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
-  else if(ev==='done'){ CHAT_SID=o.session_id||CHAT_SID; }
-  else if(ev==='cancelled'){ CHAT_SID=o.session_id||CHAT_SID; if(!asst.content) asst.content='_(stopped)_'; }
+  else if(ev==='done'){ cs.sid=o.session_id||cs.sid; }
+  else if(ev==='cancelled'){ cs.sid=o.session_id||cs.sid; if(!asst.content) asst.content='_(stopped)_'; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }
 async function chatSend(){
   const ta=document.getElementById('chat-input'); if(!ta) return;
   const msg=(ta.value||'').trim(); if(!msg) return;
-  chatInterrupt();             // if a previous answer is still streaming, stop it and start fresh
+  const persona=CHAT_PERSONA;    // this send belongs to whichever persona is displayed right now —
+                                  // captured so a later persona switch can't redirect it mid-flight
+  const cs=CS(persona);
+  chatInterrupt(persona);        // if a previous answer for THIS persona is still streaming, stop it and start fresh
   ta.value='';
-  CHAT_MSGS.push({role:'user',content:msg});
-  CHAT_MSGS.push({role:'assistant',content:'',tools:[],streaming:true});
-  CHAT_STREAMING=true;
-  const myId=++CHAT_STREAM_ID;  // this send's generation; a newer send/nav supersedes it
+  cs.msgs.push({role:'user',content:msg});
+  cs.msgs.push({role:'assistant',content:'',tools:[],streaming:true});
+  cs.streaming=true;
+  const myId=++cs.streamId;      // this send's generation; a newer send/nav (for THIS persona) supersedes it
   // req_id lets Stop actually cancel THIS generation server-side (see chatInterrupt / /api/chat/cancel)
   // rather than merely closing our own connection and leaving it to run unattended.
   const reqId='c'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
-  CHAT_REQ_ID=reqId;
+  cs.reqId=reqId;
   render();                    // shows the user turn + an empty streaming bubble (ids: chat-live-*)
   chatScroll();
-  const asst=CHAT_MSGS[CHAT_MSGS.length-1];
-  const ctl=new AbortController(); CHAT_ABORT=ctl;
+  const asst=cs.msgs[cs.msgs.length-1];
+  const ctl=new AbortController(); cs.abort=ctl;
   try{
     const resp=await fetch('/api/chat',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({persona:CHAT_PERSONA, message:msg, session_id:CHAT_SID, req_id:reqId}),
+      body:JSON.stringify({persona:persona, message:msg, session_id:cs.sid, req_id:reqId}),
       signal:ctl.signal});
     if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
     const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
     for(;;){
       const {done,value}=await reader.read(); if(done) break;
-      if(myId!==CHAT_STREAM_ID) return;   // superseded mid-stream — stop consuming, leave state to the newer action
+      if(myId!==cs.streamId) return;   // superseded mid-stream — stop consuming, leave state to the newer action
       buf+=dec.decode(value,{stream:true});
       let i;
-      while((i=buf.indexOf('\n\n'))>=0){ const frame=buf.slice(0,i); buf=buf.slice(i+2); chatFrame(frame,asst); }
+      while((i=buf.indexOf('\n\n'))>=0){ const frame=buf.slice(0,i); buf=buf.slice(i+2); chatFrame(frame,asst,persona); }
     }
   }catch(e){
-    if(myId===CHAT_STREAM_ID && e.name!=='AbortError') asst.content+=(asst.content?'\n\n':'')+'⚠ '+e.message;
+    if(myId===cs.streamId && e.name!=='AbortError') asst.content+=(asst.content?'\n\n':'')+'⚠ '+e.message;
   }finally{
-    if(myId===CHAT_STREAM_ID){   // only the current generation resets shared state / re-renders
-      CHAT_STREAMING=false; CHAT_ABORT=null; CHAT_REQ_ID=null; asst.streaming=false;
-      render();                  // final pass: render markdown + refresh the session list
-      chatScroll();
-      chatLoadSessions();
+    if(myId===cs.streamId){   // only the current generation resets shared state
+      cs.streaming=false; cs.abort=null; cs.reqId=null; asst.streaming=false;
+      // Only touch the DOM if this persona is still the one being VIEWED — a background persona
+      // finishing must never re-render over whatever the user is actively looking at/typing
+      // (e.g. a draft in the OTHER persona's input box). Switching back to view it later shows
+      // the finished message straight from cs.msgs, no re-fetch needed.
+      if(persona===CHAT_PERSONA){ render(); chatScroll(); }
+      chatLoadSessions();       // refreshes session titles; itself guarded the same way (see above)
     }
   }
 }
 function chatContent(){
   if(CHAT_SESSIONS===null) chatLoadSessions();
+  const cs=CS(CHAT_PERSONA);
   const wrap=el('div','chat-wrap');
   // ---- sidebar: new + persona toggle + session history ----
   const side=el('div','chat-side');
   const nb=el('button',null,'＋ NEW CHAT'); nb.style.cssText='width:100%;margin-bottom:8px;'; nb.onclick=chatNew; side.appendChild(nb);
   const ptg=el('div','chat-persona');
-  const mkP=(k,lab)=>{ const s=el('span',null,lab); s.className='chat-ptab'+(CHAT_PERSONA===k?' on':''); s.onclick=()=>chatSetPersona(k); return s; };
+  // ⏳ marks a persona that's still generating in the background while you're viewing the other
+  // one — the direct fix for "no way to tell if it was dead or just needed resubmitting."
+  const mkP=(k,lab)=>{ const busy=CS(k).streaming; const s=el('span',null,lab+(busy?' ⏳':'')); s.className='chat-ptab'+(CHAT_PERSONA===k?' on':''); s.title=busy?'still generating in the background':''; s.onclick=()=>chatSetPersona(k); return s; };
   ptg.appendChild(mkP('fiduciary','FIDUCIARY')); ptg.appendChild(mkP('strategist','STRATEGIST'));
   side.appendChild(ptg);
   const list=el('div','chat-list');
@@ -3748,7 +3779,7 @@ function chatContent(){
     const sess=CHAT_SESSIONS.filter(s=>s.persona===CHAT_PERSONA);
     if(!sess.length){ const m=el('div','muted'); m.style.cssText='font-size:11px;padding:6px 2px;'; m.textContent='No conversations yet.'; list.appendChild(m); }
     else sess.forEach(s=>{
-      const it=el('div','chat-sess'+(s.id===CHAT_SID?' on':''));
+      const it=el('div','chat-sess'+(s.id===cs.sid?' on':''));
       const tt=el('span','chat-sess-t'); tt.textContent=s.title||'(untitled)'; tt.title=s.title||'';
       const x=el('span','chat-sess-x'); x.textContent='✕'; x.title='Delete'; x.onclick=(e)=>chatDelete(s.id,e);
       it.appendChild(tt); it.appendChild(x);
@@ -3761,7 +3792,7 @@ function chatContent(){
   // ---- main: transcript + input ----
   const main=el('div','chat-main');
   const scroll=el('div','chat-scroll'); scroll.id='chat-scroll';
-  if(!CHAT_MSGS.length){
+  if(!cs.msgs.length){
     const hint=el('div','muted'); hint.style.cssText='padding:24px 12px;text-align:center;font-size:12px;line-height:1.7;';
     hint.innerHTML=(CHAT_PERSONA==='fiduciary'
       ? 'Ask the <span style="color:var(--amber)">Fiduciary</span> about your holdings, concentration, drift, tax, the ACA bridge, or your FIRE plan.'
@@ -3769,7 +3800,7 @@ function chatContent(){
       +'<br><span style="font-size:10px">read-only · no orders · informational, not advice</span>';
     scroll.appendChild(hint);
   }
-  CHAT_MSGS.forEach(m=>{
+  cs.msgs.forEach(m=>{
     const row=el('div','msg '+(m.role==='user'?'user':'asst'));
     if(m.role==='assistant'){
       const tools=el('div','msg-tools'); if(m.streaming) tools.id='chat-live-tools';
@@ -3790,7 +3821,7 @@ function chatContent(){
   ta.placeholder='Message the '+(CHAT_PERSONA==='fiduciary'?'Fiduciary':'Strategist')+'…  (Enter to send · Shift+Enter = newline)';
   ta.onkeydown=chatKey;   // typing stays enabled while a previous answer streams (Enter sends a new one, interrupting)
   bar.appendChild(ta);
-  if(CHAT_STREAMING){ const stop=el('button',null,'■ STOP'); stop.onclick=chatStop; bar.appendChild(stop); }
+  if(cs.streaming){ const stop=el('button',null,'■ STOP'); stop.onclick=chatStop; bar.appendChild(stop); }
   else { const send=el('button',null,'SEND ▸'); send.onclick=chatSend; bar.appendChild(send); }
   main.appendChild(bar);
   wrap.appendChild(main);
@@ -3803,7 +3834,7 @@ function chatContent(){
 // edit (chat draft, PLAN/policy/scanner fields, what-if inputs) or a live chat stream.
 // Manual REFRESH always works. (A true per-panel self-refresh is the larger N2b refactor.)
 function userBusy(){
-  if(CHAT_STREAMING) return true;                          // a chat is streaming
+  if(CS(CHAT_PERSONA).streaming) return true;              // the VIEWED persona's chat is streaming (a background persona doesn't block this — its DOM isn't on screen)
   const ae=document.activeElement;                         // focused in any editable control
   if(ae && (ae.tagName==='INPUT' || ae.tagName==='TEXTAREA' || ae.tagName==='SELECT')) return true;
   const ta=document.getElementById('chat-input');          // an unsent chat draft on the CHAT tab

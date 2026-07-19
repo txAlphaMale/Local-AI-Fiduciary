@@ -307,6 +307,44 @@ class _gpu_slot:
             _gpu_waiters -= 1
         return False
 
+
+def _gpu_acquire_visible(cancel_event, deadline):
+    """Poll-acquire the same _GPU lock _gpu_slot() uses, instead of its plain blocking acquire() —
+    for call sites (currently only /api/chat's _chat_stream, RESUME-TRACKER 2026-07-18l bug #2)
+    that need the wait itself to be visible/cancellable rather than a silent hang. A job-queue run
+    (analysis/discovery/narrative/etc, some observed at 19-29+ minutes) holds _GPU for a long time;
+    _gpu_slot()'s bare `_GPU.acquire()` inside a `with` block just blocks the generator with zero
+    SSE events for the whole remaining duration — indistinguishable from a dead connection.
+    Polls every 1s so `cancel_event` (Stop, wired the same way the _strat_lock wait above already
+    is) or `deadline` can interrupt the wait. Keeps the same `_gpu_waiters` bookkeeping /api/gpu
+    already reports, so this doesn't change what that endpoint shows. Returns True if acquired
+    (caller MUST call _gpu_release_visible() when done — NOT the `with _gpu_slot()` form, since
+    this bypasses its __enter__), False if cancelled or the deadline passed (waiters already
+    decremented in that case; nothing to release)."""
+    global _gpu_waiters
+    with _gpu_waiters_lock:
+        _gpu_waiters += 1
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            with _gpu_waiters_lock:
+                _gpu_waiters -= 1
+            return False
+        if _GPU.acquire(timeout=1):
+            return True
+        if time.time() >= deadline:
+            with _gpu_waiters_lock:
+                _gpu_waiters -= 1
+            return False
+
+
+def _gpu_release_visible():
+    """Release a lock taken via _gpu_acquire_visible() — mirrors _gpu_slot.__exit__ exactly so
+    /api/gpu's waiter count stays correct."""
+    global _gpu_waiters
+    _GPU.release()
+    with _gpu_waiters_lock:
+        _gpu_waiters -= 1
+
 app = FastAPI(title="portfolio-terminal", version="0.1.0")
 _cache = {"ts": 0.0, "data": None}
 
@@ -406,6 +444,32 @@ def _job_typical_seconds(kind, jobs, exclude_id=None, n=5):
     durs = durs[-n:]
     mid = len(durs) // 2
     return durs[mid] if len(durs) % 2 else (durs[mid - 1] + durs[mid]) / 2.0
+
+
+def _fmt_secs(s):
+    s = max(0, int(round(s)))
+    m, r = divmod(s, 60)
+    return f"{m}m {r}s" if m else f"{r}s"
+
+
+def _gpu_wait_message():
+    """Describe what's currently holding _GPU, for the `status` SSE event /api/chat yields while
+    polling for it (RESUME-TRACKER 2026-07-18l bug #2). By the time _chat_stream reaches its GPU
+    wait it already holds `_strat_lock` itself (see that gate earlier in the function), so the only
+    other thing that can be holding `_GPU` is a job-queue run (analysis/discovery/narrative/etc,
+    gated by `_gpu_slot()` directly, not `_strat_lock`) — reads the SAME in-memory `_JOBS` history
+    `/api/jobs` already exposes, no new data source. Falls back to a generic message if `_GPU` is
+    locked but nothing shows as `running` (a narrow race right at a job's start/finish)."""
+    with _JOBS_LOCK:
+        jobs = [dict(_JOBS[j]) for j in _JOBS_ORDER if j in _JOBS]
+    running_job = next((j for j in jobs if j["status"] == "running"), None)
+    if not running_job:
+        return "the model is busy with another request — your message is queued and will start automatically"
+    label = running_job.get("label") or running_job["kind"]
+    elapsed = int(time.time()) - (running_job.get("started") or int(time.time()))
+    typical = _job_typical_seconds(running_job["kind"], jobs, exclude_id=running_job["id"])
+    eta = f"~{_fmt_secs(typical)} typical" if typical else "no history yet"
+    return f'"{label}" is using the model ({_fmt_secs(elapsed)} so far, {eta}) — your message is queued and will start automatically when it finishes'
 
 
 @app.get("/api/jobs")
@@ -8601,8 +8665,10 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
     """SSE generator: streams assistant tokens and tool events for one user message, persisting the
     turn to SQLite. Holds _strat_lock for the duration so a chat never competes with the weekly run
     or an advisory run for the GPUs. Cancellable via req_id + POST /api/chat/cancel: checked while
-    queued for the lock and on every streamed line/tool-call, so Stop actually frees the GPU right
-    away instead of letting the generation finish unattended."""
+    queued for _strat_lock, while queued for _GPU (RESUME-TRACKER 2026-07-18l bug #2 — a job-queue
+    run holding _GPU used to block here with zero visibility; now yields a `status` SSE event naming
+    the job + ETA, same as the _strat_lock wait), and on every streamed line/tool-call, so Stop
+    actually frees the GPU right away instead of letting the generation finish unattended."""
     persona = PERSONAS.get(persona_key)
     if not persona:
         yield _sse("error", {"error": f"unknown persona '{persona_key}'"})
@@ -8659,8 +8725,24 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
         for i in range(CHAT_MAX_ITER):
             content_buf = ""
             tool_calls = []
+            # Serialize on the GPU — but make the WAIT itself visible + cancellable (RESUME-TRACKER
+            # 2026-07-18l bug #2): a job-queue run (analysis/discovery/narrative/etc, some observed
+            # at 19-29+ minutes) can hold _GPU here, and _gpu_slot()'s plain blocking acquire() used
+            # to sit inside this generator with ZERO SSE events for the whole remaining duration —
+            # indistinguishable from a dead connection to the client. Same wait-then-poll pattern as
+            # the _strat_lock queue above, so Stop works while queued for the GPU too, not just for
+            # _strat_lock.
+            if _GPU.locked():
+                yield _sse("status", {"state": "waiting", "message": _gpu_wait_message()})
+            gpu_deadline = time.time() + CHAT_QUEUE_TIMEOUT
+            if not _gpu_acquire_visible(cancel_event, gpu_deadline):
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+                yield _sse("error", {"error": "GPU still busy after waiting a while — please try again shortly"})
+                return
             try:
-                with _gpu_slot(), requests.post(f"{OLLAMA}/api/chat",
+                with requests.post(f"{OLLAMA}/api/chat",
                                    json={"model": persona["model"], "messages": messages,
                                          "tools": persona["tools"], "stream": True,
                                          "keep_alive": LLM_KEEP_ALIVE,
@@ -8697,6 +8779,8 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None):
             except Exception as e:
                 yield _sse("error", {"error": f"generation failed: {e}"})
                 return
+            finally:
+                _gpu_release_visible()
 
             if cancelled:
                 break
