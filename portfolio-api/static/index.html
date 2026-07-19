@@ -265,6 +265,30 @@ function applyTheme(key){
   try{ localStorage.setItem('fidTheme', THEME); }catch(_){}
 }
 applyTheme(THEME);
+// First-run onboarding spotlights (2026-07-19, RESUME-TRACKER item 10, option (b) — Jason wanted
+// the actual pop-up version, not just a WIKI-link pointer). Dismiss state is per-spotlight-id,
+// persisted so a dismissed spotlight stays dismissed across reloads; it degrades to the existing
+// small amber warning + "?" wikiLink (already built) rather than disappearing entirely.
+let SETUP_DISMISSED={}; try{ SETUP_DISMISSED=JSON.parse(localStorage.getItem('fidSetupDismissed')||'{}')||{}; }catch(_){ SETUP_DISMISSED={}; }
+function dismissSetup(id){ SETUP_DISMISSED[id]=true; try{ localStorage.setItem('fidSetupDismissed',JSON.stringify(SETUP_DISMISSED)); }catch(_){} render(); }
+// Builds a dismissible, prominent callout — `actionLabel`/`actionFn` render an optional button
+// (e.g. "jump to the field" or "go to the panel that has it"). Returns null once dismissed, so
+// callers can just `if(sp) wrap.appendChild(sp)`.
+function setupSpotlight(id, msg, actionLabel, actionFn){
+  if(SETUP_DISMISSED[id]) return null;
+  const box=el('div'); box.style.cssText='display:flex;align-items:center;gap:var(--space-3);'+
+    'border:1px solid var(--color-accent);background:var(--overlay-accent-weaker);border-radius:var(--radius-lg);'+
+    'padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);';
+  const txt=el('div'); txt.style.cssText='flex:1;font-size:var(--font-size-base);color:var(--color-text);'; txt.textContent='⚑ '+msg;
+  box.appendChild(txt);
+  if(actionLabel && actionFn){
+    const btn=el('button',null,actionLabel); btn.style.cssText='white-space:nowrap;'; btn.onclick=actionFn; box.appendChild(btn);
+  }
+  const x=el('span',null,'✕'); x.title='Dismiss (won\'t ask again)';
+  x.style.cssText='cursor:pointer;color:var(--color-text-muted);padding:0 var(--space-1);'; x.onclick=()=>dismissSetup(id);
+  box.appendChild(x);
+  return box;
+}
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
@@ -365,6 +389,10 @@ const WIKI = [];
 let WIKI_FOCUS=null, WIKI_OPEN={}, WIKI_Q='';
 function W(id,cat,title,def,read,use){ WIKI.push({id,cat,title,def,read,use}); }
 
+W('setup-guide','Getting started','First-time setup checklist',
+  'A ranked checklist of the optional forms — scattered across a few panels — that unlock the rest of the app beyond what your connected holdings alone already produce (Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting, and the Dashboard all work with zero setup). Ranked by biggest unlock for the least typing, not a hard dependency chain — skip anything you don\'t want to enter and that module just stays a placeholder.',
+  '**Tier 1 (PLAN → ASSUMPTIONS, do this one first)**: state of residence (biggest single lever — Estate/ACA/Tax/Cash·Debt all read it; left blank, the app silently assumes Texas and flags it in ⚠ ATTENTION until set), filing status, ages, target retirement age, annual expenses/savings, household size, birth year + SS estimate, estate donee count, home cost basis. **Tier 2**: PLAN → INSURANCE (household income — nothing on that page computes without it; children; policies in force; home value override), PLAN → CASH·DEBT (mortgage rate/payment, refi rate, deposit yield, per-debt APRs, the mortgage checkbox for oddly-named loans), PLAN → BENEFITS (401(k) %/match formula, per-paycheck total, after-tax/ISR status for mega-backdoor Roth, HSA facts). **Tier 3**: ACA benchmark premium, IPS policy targets/position caps, Finnhub/Tavily API keys (`.env`, unlocks Research/news/scanning).',
+  'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist.');
 W('overview','Getting started','What this terminal is',
   'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
   'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
@@ -2198,8 +2226,12 @@ function benefitsContent(){
   const u=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
   const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const f=r.facts||{}, S=r.sections||{};
-  if(r.setup_needed){ const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
-    w.textContent='⚠ Enter salary (PLAN→INSURANCE income) + the plan facts below to compute headroom.'; wrap.appendChild(w); }
+  if(r.setup_needed){
+    const sp=setupSpotlight('ben-income','No income on file yet — BENEFITS reads salary from the same PLAN→INSURANCE household register, so nothing here can compute headroom until it\'s set.','GO TO PLAN → INSURANCE',()=>{ TAB='plan'; setSubtab('plan','insurance'); });
+    if(sp) wrap.appendChild(sp);
+    const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
+    w.appendChild(document.createTextNode('⚠ Enter salary (PLAN→INSURANCE income) + the plan facts below to compute headroom. '));
+    w.appendChild(wikiLink('setup-guide')); wrap.appendChild(w); }
   (r.actions||[]).forEach(a2=>{ const w=el('div');
     w.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-1);color:'+(a2.level==='action'?'var(--color-accent)':'var(--muted)');
     w.textContent=(a2.level==='action'?'▸ ':'• ')+a2.msg; wrap.appendChild(w); });
@@ -2499,8 +2531,13 @@ function insuranceContent(){
   if(r.error){ wrap.appendChild(el('div','muted','Insurance analysis unavailable.')); return wrap; }
   const u=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
   const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-  if(r.setup_needed){ const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
-    w.textContent='⚠ Enter household incomes below — the NEED column is income-driven; without it this page can only size the umbrella and P&C lines.'; wrap.appendChild(w); }
+  if(r.setup_needed){
+    const sp=setupSpotlight('ins-income','No household income on file — the NEED column below is income-driven; without it this page can only size the umbrella and P&C lines.','JUMP TO THE FIELD ↓',()=>{
+      const f2=document.getElementById('ins-inc-s'); if(f2){ f2.scrollIntoView({block:'center',behavior:'smooth'}); f2.focus(); } });
+    if(sp) wrap.appendChild(sp);
+    const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
+    w.appendChild(document.createTextNode('⚠ Enter household incomes below — the NEED column is income-driven; without it this page can only size the umbrella and P&C lines. '));
+    w.appendChild(wikiLink('setup-guide')); wrap.appendChild(w); }
   // ---- alerts ----
   (r.alerts||[]).forEach(a2=>{ const w=el('div');
     w.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-1);color:'+(a2.level==='gap'?'var(--color-accent)':'var(--muted)');
@@ -2534,8 +2571,9 @@ function insuranceContent(){
   const cfgH=el('div','ph','HOUSEHOLD INPUTS & POLICY REGISTER · EDIT'); cfgH.style.marginTop='14px'; wrap.appendChild(cfgH);
   const h=r.household||{};
   const ed=el('div'); ed.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);';
-  ed.innerHTML=`<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Gross income — self <input id="ins-inc-s" type="number" step="1000" value="${h.income_self!=null?h.income_self:''}" style="width:90px;"/> `+
-    `spouse <input id="ins-inc-sp" type="number" step="1000" value="${h.income_spouse!=null?h.income_spouse:''}" style="width:90px;"/> `+
+  const incHi=r.setup_needed?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-sm);':'';
+  ed.innerHTML=`<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Gross income — self <input id="ins-inc-s" type="number" step="1000" value="${h.income_self!=null?h.income_self:''}" style="width:90px;${incHi}"/> `+
+    `spouse <input id="ins-inc-sp" type="number" step="1000" value="${h.income_spouse!=null?h.income_spouse:''}" style="width:90px;${incHi}"/> `+
     `children <input id="ins-kids" type="number" step="1" min="0" value="${h.children!=null?h.children:0}" style="width:44px;"/> `+
     `home address <input id="ins-addr" value="${esc(h.home_address||'')}" placeholder="street, city, ST zip" style="width:200px;" title="optional — enables the RentCast AVM second opinion in PLAN→REAL ESTATE (free tier, needs RENTCAST_API_KEY in secrets)"/> `+
     `<span class="muted" style="font-size:var(--font-size-sm);">(ages come from PLAN→ASSUMPTIONS; balance sheet from the live feed)</span></div>`;
