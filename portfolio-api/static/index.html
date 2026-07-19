@@ -189,6 +189,21 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
 <script>
 const PIE = ['var(--color-accent)','var(--color-positive)','var(--color-info)','#a07bff','#ff7ab8','#5fd0c4','#888780','#e0623a'];
+// Canvas (Chart.js) can't resolve CSS custom properties — a raw 'var(--x)' string handed to a
+// canvas fillStyle/strokeStyle is invalid and silently falls back to black (2026-07-19 bug: the
+// step-2 token migration swept PIE's hex literals into var() refs, which is correct for the CSS
+// legend swatches that also read PIE, but broke the donut wedges themselves, canvas-only). This
+// resolves any 'var(--token)' string to its live computed value before Chart.js touches it —
+// raw hex/rgba strings pass through unchanged — and doing it at draw time means charts also
+// correctly re-color on a theme switch (drawCharts/drawStrat re-run on every render()).
+function resolveColor(c){
+  if(typeof c==='string' && c.slice(0,4)==='var('){
+    const name=c.slice(4,-1).trim();
+    const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || c;
+  }
+  return c;
+}
 // Mirrors states.py STATE_NAMES (RESUME-TRACKER item 3) — for the ASSUMPTIONS "State of
 // residence" dropdown only; every actual state-fact lookup (community property, TOD deeds,
 // Medicaid expansion, tax type) happens server-side in states.py, not here.
@@ -3716,9 +3731,9 @@ function drawStrat(){
   const c=document.getElementById('c-strat'); if(!c || !STRAT_SERIES || STRAT_SERIES.length<2) return;
   charts.push(new Chart(c,{type:'line',
     data:{labels:STRAT_SERIES.map(x=>new Date(x.t*1000).toLocaleDateString()),
-      datasets:[{data:STRAT_SERIES.map(x=>x.v),borderColor:'var(--color-positive)',backgroundColor:'rgba(46,194,126,0.12)',fill:true,tension:0.2,pointRadius:2}]},
+      datasets:[{data:STRAT_SERIES.map(x=>x.v),borderColor:resolveColor('var(--color-positive)'),backgroundColor:'rgba(46,194,126,0.12)',fill:true,tension:0.2,pointRadius:2}]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-      scales:{y:{ticks:{color:'var(--color-text-muted)'},grid:{color:'#191c20'}},x:{ticks:{color:'var(--color-text-muted)'},grid:{display:false}}}}}));
+      scales:{y:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{color:'#191c20'}},x:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{display:false}}}}}));
 }
 
 function drawCharts(d){
@@ -3726,7 +3741,7 @@ function drawCharts(d){
     const c=document.getElementById(id); if(!c)return;
     charts.push(new Chart(c,{type:'doughnut',
       data:{labels:items.map(i=>i.label),datasets:[{data:items.map(i=>i.value),
-        backgroundColor:items.map((_,i)=>PIE[i%PIE.length]),borderWidth:0}]},
+        backgroundColor:items.map((_,i)=>resolveColor(PIE[i%PIE.length])),borderWidth:0}]},
       options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}}));
   };
   mk('c-inst', d.by_institution.slice(0,8));
@@ -3740,8 +3755,8 @@ function drawCharts(d){
       const norm=(v,b)=>Math.round(v/b*1000)/10;
       charts.push(new Chart(c,{type:'line',
         data:{labels:pts.map(p=>p.date),datasets:[
-          {label:'Portfolio',data:pts.map(p=>norm(p.invested_value||p.net_worth,pv0)),borderColor:'var(--color-accent)',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
-          {label:'SPY',data:pts.map(p=>norm(p.spy,sp0)),borderColor:'var(--color-info)',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
+          {label:'Portfolio',data:pts.map(p=>norm(p.invested_value||p.net_worth,pv0)),borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
+          {label:'SPY',data:pts.map(p=>norm(p.spy,sp0)),borderColor:resolveColor('var(--color-info)'),backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
         options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:true,position:'top',labels:{color:'#888780',boxWidth:10,font:{size:10}}}},
           scales:{x:{display:false},y:{ticks:{color:'#888780',font:{size:9}},grid:{color:'#191c20'}}}}}));
