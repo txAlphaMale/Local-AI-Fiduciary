@@ -132,6 +132,12 @@
   td{padding:var(--space-1) var(--space-2);text-align:right;border-bottom:1px solid #191c20;white-space:nowrap;}
   td.sym{color:var(--color-accent);text-align:left;}
   td.name{color:var(--color-text-muted);text-align:left;max-width:230px;overflow:hidden;text-overflow:ellipsis;}
+  /* Free-text description/note/rationale cells (step-up "treatment", avenue "why", gap "note", etc.)
+     opt into wrapping instead of the table default nowrap — they're marked by the existing
+     class="l ..." + inline font-size pattern already used at every such call site, so this one
+     rule covers all of them without a class added at each site. Numeric/ticker cells that happen to
+     share the pattern are unaffected: no spaces to break on, so nowrap vs normal looks identical. */
+  td.l[style*="font-size"]{white-space:normal;word-break:break-word;max-width:360px;}
   .legend{display:flex;flex-wrap:wrap;gap:var(--space-3);margin-top:var(--space-2);font-size:var(--font-size-base);color:var(--color-text-muted);}
   .legend span{display:flex;align-items:center;gap:var(--space-1);}
   .sw{width:9px;height:9px;border-radius:var(--radius-sm);display:inline-block;}
