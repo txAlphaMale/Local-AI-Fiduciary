@@ -1955,6 +1955,25 @@ function planContent(r){
   return outer;
 }
 
+// Categories in each group are mutually-exclusive shares of the SAME whole portfolio (every
+// holding has exactly one Monarch type / one IPS sleeve), so their targets can legitimately sum
+// to LESS than 100% (categories you haven't set a target for absorb the rest) but never MORE —
+// that would be targeting >100% of your money. Live sum + save-time guard catch entry mistakes.
+function _polSumOf(cls){
+  let s=0; document.querySelectorAll(cls).forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) s+=v; });
+  return Math.round(s*100)/100;
+}
+function _updatePolSums(){
+  const ts=_polSumOf('.pol-type'), ss=_polSumOf('.pol-sleeve');
+  const fmt=(sum,el)=>{
+    if(!el) return;
+    if(sum>100.5){ el.className='neg'; el.textContent=`Σ ${sum}% — exceeds 100%, fix before saving`; }
+    else if(sum<99.5){ el.className='muted'; el.textContent=`Σ ${sum}% (remaining ${Math.round((100-sum)*100)/100}% has no explicit target)`; }
+    else { el.className='pos'; el.textContent=`Σ ${sum}%`; }
+  };
+  fmt(ts, document.getElementById('pol-type-sum'));
+  fmt(ss, document.getElementById('pol-sleeve-sum'));
+}
 function savePolicy(){
   const targets={};
   document.querySelectorAll('.pol-type').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) targets[i.dataset.type]=v; });
@@ -1965,6 +1984,9 @@ function savePolicy(){
     const m=p.split(':'); const t=(m[0]||'').trim().toUpperCase(); const v=parseFloat((m[1]||'').trim());
     if(t && !isNaN(v)) caps[t]=v;
   });
+  const ts=_polSumOf('.pol-type'), ss=_polSumOf('.pol-sleeve');
+  const over=[]; if(ts>100.5) over.push(`Targets by type sum to ${ts}%`); if(ss>100.5) over.push(`IPS sleeves sum to ${ss}%`);
+  if(over.length && !confirm(over.join('; ')+' — that targets more than 100% of the portfolio. Save anyway?')) return;
   const body={ targets_by_type:targets, targets_by_sleeve:sleeves,
     max_position_pct: parseFloat(document.getElementById('pol-maxcap').value)||10,
     drift_threshold_pct: parseFloat(document.getElementById('pol-drift').value)||5,
@@ -2735,13 +2757,15 @@ function driftContent(){
   let sleeveInputs='';
   sleeveKeys.forEach(k=>{ sleeveInputs+=`<span style="margin-right:var(--space-4);white-space:nowrap;">${k} <input class="pol-sleeve" data-sleeve="${k}" type="number" value="${sleeves[k]==null?'':sleeves[k]}" style="width:46px;"/>%</span>`; });
   ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">POLICY · EDIT (saved locally; suggestions only)</div>`+
-    `<div style="margin-bottom:var(--space-2);">IPS sleeves <span class="muted" style="font-size:var(--font-size-sm);">(asset-CLASS targets the drift monitor measures)</span>: ${sleeveInputs}</div>`+
-    `<div style="margin-bottom:var(--space-2);">Targets by type <span class="muted" style="font-size:var(--font-size-sm);">(Monarch asset type)</span>: ${typeInputs||'<span class="muted">—</span>'}</div>`+
+    `<div style="margin-bottom:var(--space-2);">IPS sleeves <span class="muted" style="font-size:var(--font-size-sm);">(asset-CLASS targets the drift monitor measures)</span>: ${sleeveInputs} <span id="pol-sleeve-sum" class="muted" style="font-size:var(--font-size-sm);"></span></div>`+
+    `<div style="margin-bottom:var(--space-2);">Targets by type <span class="muted" style="font-size:var(--font-size-sm);">(Monarch asset type)</span>: ${typeInputs||'<span class="muted">—</span>'} <span id="pol-type-sum" class="muted" style="font-size:var(--font-size-sm);"></span></div>`+
     `<div style="margin-bottom:var(--space-2);">Max single-name cap <input id="pol-maxcap" type="number" value="${pol.max_position_pct||10}" style="width:46px;"/>%`+
     ` &nbsp; Drift band <input id="pol-drift" type="number" value="${pol.drift_threshold_pct||5}" style="width:46px;"/>%</div>`+
     `<div style="margin-bottom:var(--space-2);">Per-ticker caps (conviction holdings) <input id="pol-caps" type="text" value="${capsStr}" placeholder="PLTR:40, RKLB:40" style="width:260px;"/></div>`+
     `<button onclick="savePolicy()">↳ SAVE POLICY</button>`;
   wrap.appendChild(ed);
+  ed.addEventListener('input', _updatePolSums);
+  _updatePolSums();
   // allocation vs target
   if(r.allocation && r.allocation.length){
     wrap.appendChild(el('div','ph','ALLOCATION vs TARGET'));
