@@ -99,7 +99,11 @@ DEFAULT_POLICY = {"targets_by_type": {}, "max_position_pct": 10.0, "drift_thresh
                   "position_caps": {},   # per-ticker overrides, e.g. {"PLTR": 40, "RKLB": 40}
                   # IPS §5 asset-CLASS sleeves (the policy the drift monitor should measure, not Monarch
                   # "asset type"). Shipped defaults = the IPS draft; edit via POST /api/policy.
-                  "targets_by_sleeve": {"US Equity": 70, "Intl Equity": 10, "Bond": 15, "Cash": 5}}
+                  "targets_by_sleeve": {"US Equity": 70, "Intl Equity": 10, "Bond": 15, "Cash": 5},
+                  # Manual Intl-Equity override for direct foreign stocks Finnhub's country field
+                  # doesn't cover well (thin-float OTC/ADR names) — e.g. {"FGPHF": true}. The
+                  # _sleeve() heuristic checks this before falling back to the Finnhub profile lookup.
+                  "intl_tickers": {}}
 RETIRE_FILE = os.environ.get("RETIRE_FILE", "/data/retirement.json")
 DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   "annual_expenses_override": None, "annual_savings_override": None,
@@ -4308,8 +4312,15 @@ _INTL_TK = {"VXUS", "VEU", "VEA", "VWO", "IXUS", "EFA", "EEM", "SCHF", "SCHE", "
 
 def _sleeve(c):
     """Classify a holding into an IPS asset-CLASS sleeve (US Equity / Intl Equity / Bond / Cash / Other).
-    Heuristic (type + ticker map + name keywords) — a US-listed equity/fund defaults to US Equity unless
-    flagged bond/international. Fund look-through could refine this later; direct-stock country is not fetched."""
+    Heuristic (type + ticker map + name keywords + HQ country) — a US-listed equity/fund defaults to
+    US Equity unless flagged bond/international. Direct foreign stocks (e.g. FGPHF / First Graphene,
+    an ASX-listed Australian company trading OTC in the US) don't match the fund-oriented ticker/name
+    lists above, since a US OTC ticker and an English company name give no textual signal of the
+    issuer's home country. Two additional checks catch those: (1) policy.intl_tickers, a manual
+    override for names Finnhub covers poorly (thin-float OTC/ADR), and (2) the Finnhub company
+    profile's `country` field (HQ country, reused from the /api/exposure sector lookup and cached
+    ~1 day) — any direct stock whose HQ isn't the US is Intl Equity. Fund look-through could refine
+    this further for fund-of-fund international exposure."""
     typ = c.get("type") or ""
     if typ == "Cash":
         return "Cash"
@@ -4319,6 +4330,13 @@ def _sleeve(c):
         return "Bond"
     if tkr in _INTL_TK or any(k in nm for k in _INTL_KW):
         return "Intl Equity"
+    if typ == "Stock":
+        manual_intl = (_read_policy() or {}).get("intl_tickers") or {}
+        if manual_intl.get(tkr):
+            return "Intl Equity"
+        country = (_profile(tkr).get("country") or "").upper()
+        if country and country != "US":
+            return "Intl Equity"
     if typ in ("Stock", "Mutual Fund", "ETF"):
         return "US Equity"
     return "Other"
