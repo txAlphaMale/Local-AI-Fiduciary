@@ -1100,20 +1100,22 @@ function dashboardContent(){
   gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
   nbox.appendChild(gb);
   wrap.appendChild(nbox);
-  // row 1: allocation donuts + accounts list
-  const r1=el('div','grid cols');
+  // row 1 (moved here 2026-07-21, Jason): portfolio value vs SPY (growth-of-100 line; accrues
+  // from the daily snapshot) — its own full-width row, first of the panel rows (was row 3,
+  // below the movers). No margin-top: follows nbox, which already carries margin-bottom.
+  const r3=el('div'); r3.appendChild(valuePanel()); wrap.appendChild(r3);
+  // row 2: allocation donuts + accounts list
+  const r1=el('div','grid cols'); r1.style.marginTop='10px';
   r1.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.invested_value));
   r1.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
   r1.appendChild(accountsPanel(d));
   wrap.appendChild(r1);
-  // row 2: gainers / losers / day movers
+  // row 3: gainers / losers / day movers
   const r2=el('div','grid cols'); r2.style.marginTop='10px';
   r2.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
   r2.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
   r2.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
   wrap.appendChild(r2);
-  // row 3: portfolio value vs SPY (growth-of-100 line; accrues from the daily snapshot)
-  const r3=el('div'); r3.style.marginTop='10px'; r3.appendChild(valuePanel()); wrap.appendChild(r3);
   return wrap;
 }
 
