@@ -1482,24 +1482,39 @@ function saveHomeBasis(){
 }
 
 // Task Schedule (SETTINGS sub-tab): the built-in scheduler's automated jobs with editable 24h times.
+// RUN NOW (added 2026-07-20, Jason): maps each schedule kind to its manual-trigger endpoint. Two
+// kinds (rebalance/retirement) had NO manual endpoint before this — only the internal cron
+// scheduler could enqueue them; run_rebalance_ep/run_retirement_ep in app.py fill that gap so
+// every row here has a real button behind it (the panel's own copy already claimed "every job
+// can also be run on demand" — this makes that true instead of aspirational).
+const SCHEDULE_RUN_ENDPOINTS = {
+  analysis: '/api/run-analysis', discovery: '/api/run-discovery',
+  opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
+  retirement: '/api/run-retirement', strategist: '/api/run-strategist'};
+function runScheduleNow(kind, btn){
+  const url=SCHEDULE_RUN_ENDPOINTS[kind];
+  if(!url){ alert('No manual trigger wired for "'+kind+'" yet.'); return; }
+  runJob(url, btn, 'queued…').then(()=>load(false));
+}
 function scheduleContent(){
   const s=SCHEDULE||{}, wrap=el('div');
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const p2=n=>String(n==null?0:n).padStart(2,'0');
   wrap.appendChild(el('div','ph','TASK SCHEDULE · AUTOMATED JOBS'));
   const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
-  info.innerHTML=`Times are 24-hour, in the app timezone (<b>${esc(s.tz||'server local')}</b>). Each job is enqueued into the serial job queue at its time; edits apply within a minute (no restart needed). Every job can also be run on demand.`+
+  info.innerHTML=`Times are 24-hour, in the app timezone (<b>${esc(s.tz||'server local')}</b>). Each job is enqueued into the serial job queue at its time; edits apply within a minute (no restart needed). Every job can also be run on demand — ▸ RUN NOW below.`+
     (s.scheduler_enabled===false?' <span class="neg">⚠ The scheduler is currently DISABLED (INTERNAL_SCHEDULER=0) — these times won\'t fire until it\'s re-enabled.</span>':'');
   wrap.appendChild(info);
   const t=el('table'); const h=el('tr');
-  h.innerHTML='<th class="l">JOB</th><th class="l">CADENCE</th><th>TIME (24h)</th><th></th>'; t.appendChild(h);
+  h.innerHTML='<th class="l">JOB</th><th class="l">CADENCE</th><th>TIME (24h)</th><th></th><th></th>'; t.appendChild(h);
   (s.jobs||[]).forEach(j=>{ const tr=el('tr');
     const reset=j.is_default?`<span class="muted" style="font-size:var(--font-size-sm);">default</span>`
       :`<button onclick="resetSchedule('${j.kind}')" style="font-size:var(--font-size-sm);" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
     tr.innerHTML=`<td class="l sym">${esc(j.label)}</td><td class="l muted">${esc(j.cadence)}</td>`+
       `<td style="white-space:nowrap;"><input id="sch-h-${j.kind}" type="number" min="0" max="23" value="${j.hour}" style="width:44px;"/> <span class="muted">:</span> `+
       `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
-      `<td style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> ${reset}</td>`;
+      `<td style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> ${reset}</td>`+
+      `<td style="white-space:nowrap;"><button onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></td>`;
     t.appendChild(tr); });
   wrap.appendChild(t);
   return wrap;

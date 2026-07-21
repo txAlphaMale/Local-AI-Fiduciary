@@ -4488,6 +4488,19 @@ def get_rebalance():
         return JSONResponse({"error": f"could not compute (portfolio unavailable?): {e}"}, status_code=502)
 
 
+@app.post("/api/run-rebalance")
+def run_rebalance_ep(x_analysis_token: str = Header(default="")):
+    """Manual trigger for the 'Rebalance / drift refresh' scheduled job (RESUME-TRACKER: Task
+    Schedule RUN NOW buttons — this kind previously had no manual endpoint, only the internal
+    cron scheduler could enqueue it via _enqueue(); GET /api/rebalance already recomputes fresh
+    on every call, so this mainly gives it job-queue visibility (/api/jobs) + dedup parity with
+    the other 5 scheduled kinds. Token-guarded like every other /api/run-* endpoint."""
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    jid, created = _enqueue("rebalance", source="api")
+    return {"ok": True, "job_id": jid, "created": created}
+
+
 # ---------------- Retirement / FIRE Planner (proactive, read-only, informational) ----------------
 def _read_retire():
     try:
@@ -6181,6 +6194,16 @@ def get_retirement():
         return _retirement()
     except Exception as e:
         return JSONResponse({"error": f"could not compute (portfolio/cashflow unavailable?): {e}"}, status_code=502)
+
+
+@app.post("/api/run-retirement")
+def run_retirement_ep(x_analysis_token: str = Header(default="")):
+    """Manual trigger for the 'Retirement projection' scheduled job — see run_rebalance_ep's
+    docstring above for why this endpoint was missing and what it's for (Task Schedule RUN NOW)."""
+    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    jid, created = _enqueue("retirement", source="api")
+    return {"ok": True, "job_id": jid, "created": created}
 
 
 def _income_glide():
