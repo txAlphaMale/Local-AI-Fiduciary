@@ -6844,12 +6844,14 @@ SETUP_FIELDS = [
     # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
     {"id": "income_self", "tier": 2, "group": "Your income", "cfg": "insurance",
      "key": "income_self", "kind": "income", "jump": ("plan", "insurance"), "severity": "critical",
-     "note": "Nothing on the INSURANCE page computes without at least one income entered. "
-             "$0/blank counts once you tick \"no income (unemployed/retired)\" next to the income fields."},
+     "note": "Nothing on the INSURANCE page computes without at least one income entered. $0/blank "
+             "counts on its own if the other income is a real number -- tick \"no income "
+             "(unemployed/retired)\" only if BOTH incomes are $0."},
     {"id": "income_spouse", "tier": 2, "group": "Spouse income", "cfg": "insurance",
      "key": "income_spouse", "kind": "income", "required_if": "mfj", "jump": ("plan", "insurance"),
      "severity": "critical",
-     "note": "$0/blank counts once you tick \"no income (unemployed/retired)\" next to the income fields."},
+     "note": "$0/blank counts on its own if the other income is a real number -- tick \"no income "
+             "(unemployed/retired)\" only if BOTH incomes are $0."},
     {"id": "policies", "tier": 2, "group": "Policies in force", "cfg": "insurance",
      "key": "policies", "kind": "list", "jump": ("plan", "insurance"),
      "note": "One row per policy -- life, disability, umbrella, home, auto, LTC."},
@@ -6912,12 +6914,19 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set):
     if kind == "sentinel":
         return val is not None and val != spec.get("sentinel")
     if kind == "income":
-        # A literal 0 -- or a still-blank field -- is only a legitimate "answered" state once the
-        # household has said so explicitly via the "no income" checkbox; otherwise an untouched
-        # field or an accidental 0 would silently read as "answered" with no signal it was ever
-        # looked at. Any nonzero value is unambiguous and always counts on its own, same as the
-        # generic scalar case below.
+        # A literal 0 (or still-blank field) is unambiguous on its own once the OTHER earner
+        # already has a real nonzero income on file -- entering 0 for yourself when your spouse's
+        # $85k is already sitting there is clearly deliberate, no extra confirmation needed. It's
+        # only ambiguous when BOTH sides read as zero/blank at once (could be two untouched fields,
+        # or a genuinely no-income household) -- that combination requires the explicit "no income"
+        # checkbox before either side counts as answered. Jason, 2026-07-23: "I expect to be able to
+        # enter 0 for either ONE. I only need to tick retired/unemployed if I'm going to put 0 for
+        # both."
         if val in (None, "", 0):
+            other_key = "income_spouse" if spec["key"] == "income_self" else "income_self"
+            other_val = insurance.get(other_key)
+            if other_val not in (None, "", 0):
+                return True
             return bool(insurance.get("no_income"))
         return True
     return val not in (None, "")
