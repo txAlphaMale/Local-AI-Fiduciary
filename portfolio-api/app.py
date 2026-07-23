@@ -526,12 +526,12 @@ INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", 
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
 _SCHEDULE_ORDER = ["analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist"]
 _SCHEDULE_DEFAULTS = {
-    "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 18, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
+    "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 21, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
-    "opportunities": {"label": "Opportunity scan",              "hour": 18, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
-    "rebalance":     {"label": "Rebalance / drift refresh",     "hour": 19, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
+    "opportunities": {"label": "Opportunity scan",              "hour": 20, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
+    "rebalance":     {"label": "Rebalance / drift refresh",     "hour": 22, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
     "retirement":    {"label": "Retirement projection",         "hour":  8, "minute": 0, "dom":  1,  "dow": "*", "cadence": "monthly · 1st"},
-    "strategist":    {"label": "Strategist review",             "hour": 17, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
+    "strategist":    {"label": "Strategist review",             "hour": 19, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
     "backtest":      {"label": "Decision backtest vs SPY",      "hour": 20, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
     "narrative":     {"label": "State-of-the-Wealth brief",     "hour":  7, "minute": 30, "dom": "*", "dow": "0", "cadence": "weekly · Monday"},
 }
@@ -3361,11 +3361,71 @@ def get_valuation(ticker: str):
     return _valuation(ticker) or {"ticker": ticker, "available": False, "reason": "no valuation data"}
 
 
+# --- On-demand research persistence (2026-07-22) -------------------------------------------
+# GET /api/research is a one-shot synchronous call with (previously) zero server-side persistence:
+# an analysis that finished after the user navigated away from the RESEARCH→IDEAS sub-tab left no
+# trace anywhere, and the only client cache (LAST_SCAN_ANALYSIS) was populated AFTER a live-DOM
+# bail-out check, so it too was lost off-tab. This cache stores every completed on-demand brief on
+# disk keyed by ticker, so the frontend can retrieve whatever finished (even after a reload) and a
+# short history of past on-demand tickers exists instead of only the single most-recent one.
+RESEARCH_CACHE_FILE = os.environ.get("RESEARCH_CACHE_FILE", "/data/research_ondemand.json")
+_RESEARCH_CACHE_MAX = 20   # keep the last N on-demand tickers
+
+def _read_research_cache():
+    try:
+        with open(RESEARCH_CACHE_FILE, encoding="utf-8") as f:
+            d = json.load(f) or {}
+    except Exception:
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
+    d.setdefault("items", {})   # ticker -> {ticker, generated_at, data}
+    d.setdefault("order", [])   # recent tickers, newest first
+    return d
+
+def _save_research_result(t, result):
+    """Persist a completed on-demand brief; trim to the most-recent _RESEARCH_CACHE_MAX tickers."""
+    try:
+        d = _read_research_cache()
+        d["items"][t] = {"ticker": t,
+                         "generated_at": (result or {}).get("generated_at") or int(time.time()),
+                         "data": result}
+        d["order"] = [t] + [x for x in d.get("order", []) if x != t]
+        keep = d["order"][:_RESEARCH_CACHE_MAX]
+        d["order"] = keep
+        d["items"] = {k: v for k, v in d["items"].items() if k in keep}
+        os.makedirs(os.path.dirname(RESEARCH_CACHE_FILE) or ".", exist_ok=True)
+        with open(RESEARCH_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass   # cache is best-effort; never fail the request over it
+
+
+@app.get("/api/research-cache")
+def get_research_cache(ticker: str = "", history: int = 0):
+    """Retrieve persisted on-demand research. With ?ticker=SYM returns that ticker's cached brief
+    (so a page that navigated away/reloaded can recover a run that finished off-tab). With no ticker
+    returns the recent-ticker order (newest first); ?history=1 additionally returns the full cached
+    items so the IDEAS sub-tab can render past analyses without re-running the model."""
+    d = _read_research_cache()
+    if ticker:
+        t = (ticker or "").upper().strip()
+        it = d["items"].get(t)
+        return {"ticker": t, "found": bool(it), "item": it}
+    recent = [{"ticker": t, "generated_at": (d["items"].get(t) or {}).get("generated_at")}
+              for t in d.get("order", [])]
+    out = {"recent": recent}
+    if history:
+        out["items"] = d["items"]
+    return out
+
+
 @app.get("/api/research")
 def get_research(ticker: str):
     """On-demand B/S/H research brief for ANY ticker (not just holdings): analyst consensus +
     SEC/GAAP fundamentals + valuation + recent news -> LLM rating/thesis/bull/bear/risks. SLOW
-    (one model call, minutes on Pascal). Read-only, educational — NOT advice."""
+    (one model call, minutes on Pascal). Read-only, educational — NOT advice. Result is persisted
+    to RESEARCH_CACHE_FILE (see _save_research_result) so it survives navigation/reload."""
     t = (ticker or "").upper().strip()
     if not t:
         return JSONResponse({"error": "ticker required"}, status_code=400)
@@ -3385,9 +3445,11 @@ def get_research(ticker: str):
             inst = _inst_for(t)        # G15 forward-13F watched-holders slice (from cached build)
         except Exception:
             inst = None
-        return {"ticker": t, "generated_at": int(time.time()), "grounded": g,
-                "valuation": val, "fundamentals": fund, "llm": llm,
-                "insider": ins, "institutional": inst}
+        result = {"ticker": t, "generated_at": int(time.time()), "grounded": g,
+                  "valuation": val, "fundamentals": fund, "llm": llm,
+                  "insider": ins, "institutional": inst}
+        _save_research_result(t, result)   # persist so navigating away/reloading can recover it
+        return result
     except Exception as e:
         return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
 
@@ -9127,6 +9189,85 @@ def _sanitize_chat_images(raw):
     return out
 
 
+# --- Resumable chat generation (2026-07-22) -----------------------------------------------------
+# Previously /api/chat was a single StreamingResponse tied 1:1 to one HTTP connection: the open
+# reader, the partial tokens, and the "thinking" state lived only in that page load's JS + that one
+# request. A refresh or navigation destroyed the display, and (because generation ran inside the
+# request generator) could tear down the generation itself. Fix, mirroring the job-queue pattern
+# already proven for narrative/strategist/reindex: run _chat_stream in a BACKGROUND THREAD that
+# appends every SSE frame it yields to an in-memory buffer keyed by session_id; both the initial
+# POST and a resume GET (/api/chat/stream) simply TAIL that buffer. So generation no longer depends
+# on any single connection — a reload reconnects from the buffer and continues live, and the final
+# message still persists to SQLite exactly as before. Buffers linger briefly after completion so a
+# late reconnect can still replay the finished answer, then are reaped.
+_CHAT_ACTIVE = {}                      # session_id -> _ChatGen (most-recent generation for that session)
+_CHAT_ACTIVE_LOCK = threading.Lock()
+CHAT_BUFFER_LINGER = int(os.environ.get("CHAT_BUFFER_LINGER", "180"))   # keep a finished buffer this long (s) for late reconnects
+
+
+class _ChatGen:
+    """Holds the live SSE-frame buffer for one background chat generation. tail(cursor) yields
+    frames from `cursor` onward, blocking (with a heartbeat) until new frames arrive or the
+    generation completes — usable by many concurrent readers (the original POST + any reconnects)."""
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.chunks = []               # raw SSE strings exactly as _chat_stream yielded them
+        self.done = False
+        self.finished_at = None
+        self.cond = threading.Condition()
+
+    def emit(self, s):
+        with self.cond:
+            self.chunks.append(s)
+            self.cond.notify_all()
+
+    def finish(self):
+        with self.cond:
+            self.done = True
+            self.finished_at = time.time()
+            self.cond.notify_all()
+
+    def tail(self, cursor):
+        cursor = max(0, int(cursor or 0))
+        while True:
+            batch = []
+            with self.cond:
+                if cursor >= len(self.chunks) and not self.done:
+                    self.cond.wait(timeout=15)   # wake on new frame, completion, or heartbeat tick
+                while cursor < len(self.chunks):
+                    batch.append(self.chunks[cursor]); cursor += 1
+                done_now = self.done and cursor >= len(self.chunks)
+            for s in batch:
+                yield s
+            if not batch and not done_now:
+                yield ": ping\n\n"               # SSE comment heartbeat — keeps idle proxies/clients from closing
+            if done_now:
+                return
+
+
+def _chat_run_bg(gen, persona, session_id, message, req_id, images):
+    """Drive _chat_stream to completion in a background thread, buffering every yielded SSE frame.
+    Generation lifetime is now independent of any client connection."""
+    try:
+        for chunk in _chat_stream(persona, session_id, message, req_id, images=images):
+            gen.emit(chunk)
+    except Exception as e:
+        try:
+            gen.emit(_sse("error", {"error": f"generation failed: {e}"}))
+        except Exception:
+            pass
+    finally:
+        gen.finish()
+
+        def _reap():
+            time.sleep(CHAT_BUFFER_LINGER)
+            with _CHAT_ACTIVE_LOCK:
+                cur = _CHAT_ACTIVE.get(session_id)
+                if cur is gen and cur.done:
+                    _CHAT_ACTIVE.pop(session_id, None)
+        threading.Thread(target=_reap, daemon=True).start()
+
+
 @app.post("/api/chat")
 async def chat(req: Request):
     """Streaming multi-turn chat with a persona (fiduciary|strategist).
@@ -9136,6 +9277,8 @@ async def chat(req: Request):
     `images` (RESUME-TRACKER 2026-07-18j), if given, is a list of up to CHAT_IMAGE_MAX base64
     image strings (data-URL prefix optional) — e.g. a pasted screenshot of a watchlist. Message
     may be empty when images are attached (defaults to a generic "identify tickers" prompt).
+    Generation runs in a background thread (see _chat_run_bg) so it survives a client refresh /
+    navigation; reconnect with GET /api/chat/stream?session_id=…&cursor=N.
     Returns text/event-stream: events session, status, vision, token, thinking, tool, tool_done,
     done, cancelled, error. READ-ONLY."""
     try:
@@ -9151,8 +9294,42 @@ async def chat(req: Request):
         message = "Identify any ticker symbols in the attached image and research them."
     if not message:
         return JSONResponse({"error": "empty message"}, status_code=400)
-    return StreamingResponse(_chat_stream(persona, session_id, message, req_id, images=images),
-                              media_type="text/event-stream")
+    # Resolve the session id up front so the buffer is keyed by a real id the client can reconnect
+    # to (previously _chat_stream created it internally, invisible until the first frame arrived).
+    if not session_id:
+        title = (message or "New chat").strip().replace("\n", " ")[:60] or "New chat"
+        session_id = _chat_create_session(persona, title)
+    gen = _ChatGen(session_id)
+    with _CHAT_ACTIVE_LOCK:
+        _CHAT_ACTIVE[session_id] = gen   # a new send supersedes any prior buffer for this session
+    threading.Thread(target=_chat_run_bg, args=(gen, persona, session_id, message, req_id, images),
+                     daemon=True).start()
+    return StreamingResponse(gen.tail(0), media_type="text/event-stream")
+
+
+@app.get("/api/chat/stream")
+def chat_stream_resume(session_id: str, cursor: int = 0):
+    """Reconnect to an in-progress (or just-finished, within CHAT_BUFFER_LINGER) generation and tail
+    its buffer from `cursor`. If nothing is buffered for this session, emits a single `idle` event so
+    the client knows to fall back to loading the saved transcript instead."""
+    with _CHAT_ACTIVE_LOCK:
+        gen = _CHAT_ACTIVE.get(session_id)
+    if not gen:
+        return StreamingResponse(iter([_sse("idle", {"session_id": session_id})]),
+                                  media_type="text/event-stream")
+    return StreamingResponse(gen.tail(cursor), media_type="text/event-stream")
+
+
+@app.get("/api/chat/active")
+def chat_active(session_id: str = ""):
+    """Which chat sessions currently have a live (or lingering-but-recent) background generation.
+    With ?session_id=… returns {active:bool} for that one; otherwise the list of active session ids —
+    used by the UI to mark generating conversations and offer to reconnect after a reload."""
+    with _CHAT_ACTIVE_LOCK:
+        if session_id:
+            g = _CHAT_ACTIVE.get(session_id)
+            return {"session_id": session_id, "active": bool(g and not g.done)}
+        return {"active_sessions": [sid for sid, g in _CHAT_ACTIVE.items() if not g.done]}
 
 
 @app.post("/api/chat/cancel")

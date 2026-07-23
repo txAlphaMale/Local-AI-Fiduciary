@@ -245,13 +245,13 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, TAB='dashboard', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
 function _newChatState(){ return {msgs:[], sid:null, streaming:false, abort:null, reqId:null, streamId:0}; }
 let CHAT_STATE={fiduciary:_newChatState(), strategist:_newChatState()};
-let CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_SESS_LOADING=false;
+let CHAT_PERSONA='fiduciary', CHAT_SESSIONS=null, CHAT_SESS_LOADING=false, CHAT_ACTIVE_SIDS=[];
 function CS(p){ p=p||CHAT_PERSONA; return CHAT_STATE[p]||(CHAT_STATE[p]=_newChatState()); }
 // Pending image attachment(s) for the NEXT send (RESUME-TRACKER 2026-07-18j chat image input) —
 // compose-time state like the textarea's own draft, so (like the draft) it does not survive an
@@ -378,6 +378,8 @@ async function load(refresh, bg){
     ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
+    try{ const rc=await gj('/api/research-cache?history=1'); if(rc && !rc.error){ RESEARCH_CACHE={recent:rc.recent||[], items:rc.items||{}}; } }catch(_){}
+    _resumeResearchPolls();   // re-attach pollers for any on-demand analysis still running after a reload/navigation
     render();   // re-render with research / insights / plan / ideas / strategist panels
     if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
   }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
@@ -476,7 +478,7 @@ W('reverse-dcf','Research','Reverse-DCF (implied growth)',
   'Use it to sanity-check valuation: implied growth far above what the business has ever done means priced for perfection.');
 W('scanner','Research','Opportunity scanner',
   'Screens a universe against your criteria (valuation, quality, momentum, optional minimum Piotroski) and ranks survivors by a forward expected-return opportunity score.',
-  'Each hit shows which checks it passed and its score; you edit criteria and limits in the panel. Higher score is more attractive on the heuristic.',
+  'Each hit shows which checks it passed and its score; you edit criteria and limits in the panel. Higher score is more attractive on the heuristic. The "▸ analyze" on-demand brief (any ticker, or a scanner hit) now runs and saves server-side, so leaving the sub-tab or reloading no longer loses it — a "recent on-demand (saved)" row keeps the last several analyses; click a ticker there to re-show one instantly without re-running the model.',
   'Use it to generate a shortlist of ideas to then run a full B/S/H analysis on, not as a buy list on its own.');
 W('piotroski','Research','Piotroski F-score',
   'A 0 to 9 accounting-quality score: nine pass/fail checks on profitability, leverage/liquidity and operating efficiency. Higher is healthier.',
@@ -632,7 +634,7 @@ W('strategist','Automation','Strategist (paper trading)',
   'Use it as a transparent second opinion whose reasoning and paper P&L you can audit over time — never as an execution system.');
 W('chat','Automation','Chat personas',
   'An in-app chat with a Fiduciary persona (planning/analysis) and a Strategist persona, both read-only, with tools to query your book and the research data. It has your knowledge documents in a local RAG. You can also attach an image (paste a screenshot or click 📎) — e.g. a watchlist, a brokerage screenshot, or a headline — and a separate small vision model reads it for ticker symbols, then hands them to the SAME persona/tools to research, before the persona answers. Both personas can see your REAL fund expense ratios and 401k/HSA/Roth contribution room (get_fees_liquidity / get_benefits) as context — you should not need to type balances, expense ratios, or match/headroom figures into chat yourself; ask directly and it looks them up.',
-  'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU. An attached image shows a small 👁 chip naming what tickers it found (or that none were found) before the answer streams — that step itself briefly queues for the GPU too if something else is using it, same as everything else here.',
+  'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU. An attached image shows a small 👁 chip naming what tickers it found (or that none were found) before the answer streams — that step itself briefly queues for the GPU too if something else is using it, same as everything else here. Generation runs on the server independent of your browser, so you can switch tabs, navigate away, or even reload mid-answer without losing it — a still-generating conversation shows a ⏳ in the session list; re-open it to reconnect to the live stream and it will finish on screen.',
   'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show. Pasting a screenshot is a shortcut for "look these up" — verify the tickers the 👁 chip identified are actually what you meant before trusting the follow-up research, especially on a blurry or cropped image. Strategist keeps a narrower deep-planning toolset than Fiduciary by design (no IPS/tax/retirement/estate tools) — for retirement-account or tax-planning questions specifically, ask the Fiduciary persona instead of Strategist.');
 W('knowledge','Automation','Knowledge library (local RAG)',
   'A folder of reference documents (.md/.txt/.pdf) the chat personas can search: your IPS, IRS publications, investing-principles guides, plus the committed reference/ set (estate & generational transfer, business-acquisition/QSBS frameworks, and a dated snapshot of the grounded 2026 tax/ACA/SS parameters). Everything is embedded locally with bge-m3 — nothing leaves the machine.',
@@ -969,13 +971,13 @@ function cockpitPanel(){
   }
   if(RETIRE && !RETIRE.error && RETIRE.monte_carlo && RETIRE.monte_carlo.success_pct!=null){
     const sp=RETIRE.monte_carlo.success_pct;
-    A.push({sev: sp>=80?'ok':(sp>=60?'info':'warn'), cat:'FIRE', msg:sp+'% success', tab:'plan'});
+    A.push({sev: sp>=80?'ok':(sp>=60?'info':'warn'), cat:'FIRE', msg:sp+'% success', tab:'plan', subtab:'fi'});
   }
   if(RETIRE && !RETIRE.error && RETIRE.bridge && RETIRE.bridge.aca){
     const ac=RETIRE.bridge.aca, fl=ac.flags||{}, sub=ac.subsidy||{}, fp=sub.fpl_pct;
-    if(fl.over_cliff) A.push({sev:'warn',cat:'ACA CLIFF',msg:'bridge MAGI '+(fp||'?')+'% FPL — over 400%, $0 subsidy',tab:'plan'});
-    else if(fl.below_floor_gap) A.push({sev:'warn',cat:'ACA GAP',msg:'MAGI <100% FPL — TX coverage gap',tab:'plan'});
-    else if(fl.on_cliff_edge) A.push({sev:'info',cat:'ACA',msg:(fp||'?')+'% FPL — near 400% cliff',tab:'plan'});
+    if(fl.over_cliff) A.push({sev:'warn',cat:'ACA CLIFF',msg:'bridge MAGI '+(fp||'?')+'% FPL — over 400%, $0 subsidy',tab:'plan',subtab:'bridge'});
+    else if(fl.below_floor_gap) A.push({sev:'warn',cat:'ACA GAP',msg:'MAGI <100% FPL — TX coverage gap',tab:'plan',subtab:'bridge'});
+    else if(fl.on_cliff_edge) A.push({sev:'info',cat:'ACA',msg:(fp||'?')+'% FPL — near 400% cliff',tab:'plan',subtab:'bridge'});
   }
   if(LT && !LT.error && LT.hidden_exposure){
     LT.hidden_exposure.filter(h=>h.ticker && (h.weight_pct||0)>20).slice(0,3).forEach(h=>{
@@ -991,8 +993,8 @@ function cockpitPanel(){
     chip.style.cssText=`cursor:pointer;border:1px solid ${c};border-left:3px solid ${c};border-radius:var(--radius-md);`+
       `padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);color:var(--color-text);white-space:nowrap;`;
     chip.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
-    chip.title='Go to '+a.tab.toUpperCase()+' tab';
-    chip.onclick=()=>{ TAB=a.tab; render(); };
+    chip.title='Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
+    chip.onclick=()=>{ TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
     strip.appendChild(chip);
   });
   p.appendChild(strip);
@@ -1104,18 +1106,24 @@ function dashboardContent(){
   // from the daily snapshot) — its own full-width row, first of the panel rows (was row 3,
   // below the movers). No margin-top: follows nbox, which already carries margin-bottom.
   const r3=el('div'); r3.appendChild(valuePanel()); wrap.appendChild(r3);
-  // row 2: allocation donuts + accounts list
-  const r1=el('div','grid cols'); r1.style.marginTop='10px';
-  r1.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.invested_value));
-  r1.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
-  r1.appendChild(accountsPanel(d));
-  wrap.appendChild(r1);
-  // row 3: gainers / losers / day movers
-  const r2=el('div','grid cols'); r2.style.marginTop='10px';
-  r2.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
-  r2.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
-  r2.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
-  wrap.appendChild(r2);
+  // row 2 (restructured 2026-07-22, Jason): the two donut panels finished rendering early and,
+  // because ACCOUNTS shared the same CSS-grid row and Grid stretches every cell to the tallest
+  // sibling, a long ACCOUNTS list stretched the short donuts and left dead space above the movers
+  // row below. Fix: dock ACCOUNTS as a single tall pane on the right, and tile the 5 small panels
+  // (2 donuts + 3 movers) together in the remaining width as their own nested auto-fit grid, so
+  // they fill height with more small tiles instead of one short row followed by a mostly-empty one.
+  // align-items:start keeps each column its own natural height (no cross-stretch); minmax(0,1fr)
+  // on the wide column prevents the nested grid from overflowing on narrow viewports.
+  const body=el('div'); body.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:10px;margin-top:10px;align-items:start;';
+  const small=el('div','grid cols');
+  small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.invested_value));
+  small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
+  small.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
+  small.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
+  small.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
+  body.appendChild(small);
+  const acctCol=el('div'); acctCol.appendChild(accountsPanel(d)); body.appendChild(acctCol);
+  wrap.appendChild(body);
   return wrap;
 }
 
@@ -1328,7 +1336,7 @@ function scannerContent(){
   wrap.appendChild(ed);
   // on-demand analysis target (always present, even with no screened ideas — so 'analyze any ticker' works)
   const abox=el('div'); abox.id='scan-analysis'; abox.style.marginTop='14px'; wrap.appendChild(abox);
-  if(LAST_SCAN_ANALYSIS && LAST_SCAN_ANALYSIS.data){ abox.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+LAST_SCAN_ANALYSIS.ticker)); abox.appendChild(researchBrief(LAST_SCAN_ANALYSIS.data)); }
+  _renderScanAnalysis(abox);   // pending + saved history + most-recent brief (survives navigation/reload)
   if(!r.ideas || !r.ideas.length){ wrap.appendChild(el('div','muted','No watchlist ideas from the screen — use “Analyze any ticker” above for holdings the growth screen filters out, or see the DISCOVERED / NEWS ALERTS sub-tabs.')); return wrap; }
   const t=el('table'); const h=el('tr');
   h.innerHTML='<th class="l">SYM</th><th>PX</th><th>FIT</th><th title="analyst-target-implied 12mo upside — noisy, not a promise">EXP RET</th><th>REV g</th><th>FCF m</th><th>NET m</th><th>FWD P/E</th><th class="l">ANALYST</th><th class="l"></th>';
@@ -1413,25 +1421,69 @@ function researchBrief(d){
   html+=`<div class="muted" style="font-size:var(--font-size-sm);margin-top:var(--space-2)">Educational, not advice.</div>`;
   wrap.innerHTML=html; return wrap;
 }
+// On-demand ticker research (2026-07-22 resilience rework). The run now persists server-side
+// (RESEARCH_CACHE_FILE via /api/research), so leaving the sub-tab, switching tabs, or reloading no
+// longer loses a completed brief: a background poller on /api/research-cache recovers whatever
+// finished even if this page's own fetch callback is gone, and a short history of past on-demand
+// tickers is kept (RESEARCH_CACHE.recent) instead of only the single most-recent result.
+function _researchPending(){ try{ return JSON.parse(localStorage.getItem('fidResearchPending')||'[]')||[]; }catch(_){ return []; } }
+function _setResearchPending(a){ try{ localStorage.setItem('fidResearchPending', JSON.stringify(a||[])); }catch(_){} }
+function _addPending(t){ const a=_researchPending(); if(a.indexOf(t)<0){ a.push(t); _setResearchPending(a); } }
+function _clearPending(t){ _setResearchPending(_researchPending().filter(x=>x!==t)); }
+function _onResearchDone(t, d){
+  _clearPending(t);
+  if(RESEARCH_POLLS[t]){ clearInterval(RESEARCH_POLLS[t]); delete RESEARCH_POLLS[t]; }
+  if(d && !d.error){
+    const ga=d.generated_at||Math.floor(Date.now()/1000);
+    RESEARCH_CACHE.items[t]={ticker:t, generated_at:ga, data:d};
+    RESEARCH_CACHE.recent=[{ticker:t, generated_at:ga}].concat((RESEARCH_CACHE.recent||[]).filter(x=>x.ticker!==t));
+    LAST_SCAN_ANALYSIS={ticker:t, data:d};
+    RESEARCH_ERR=null;
+  } else if(d && d.error){ RESEARCH_ERR={ticker:t, error:d.error}; }
+  if(TAB==='research' && (SUBTAB.research==='scanner' || !SUBTAB.research)){ render(); }   // refresh the IDEAS view in place if it's open
+}
+function _startResearchPoll(t, startedAt){
+  if(RESEARCH_POLLS[t]) return;
+  let tries=0;
+  RESEARCH_POLLS[t]=setInterval(()=>{
+    tries++;
+    if(tries>90){ clearInterval(RESEARCH_POLLS[t]); delete RESEARCH_POLLS[t]; _clearPending(t); return; }   // ~9 min safety cap
+    fetch('/api/research-cache?ticker='+encodeURIComponent(t)).then(r=>r.json()).then(rc=>{
+      if(rc && rc.found && rc.item && rc.item.data && (rc.item.generated_at||0) >= (startedAt-2)){ _onResearchDone(t, rc.item.data); }
+    }).catch(_=>{});
+  }, 6000);
+}
+function _resumeResearchPolls(){ _researchPending().forEach(t=>{ if(!RESEARCH_POLLS[t]) _startResearchPoll(t, 0); }); }
+function _showCachedAnalysis(t){ const it=RESEARCH_CACHE.items[t]; if(it && it.data){ LAST_SCAN_ANALYSIS={ticker:t, data:it.data}; RESEARCH_ERR=null; render(); } }
+function _renderScanAnalysis(box){
+  _researchPending().forEach(t=>{ const w=el('div','muted'); w.style.cssText='font-size:var(--font-size-base);padding:4px 0;';
+    w.textContent='⏳ Analyzing '+t+'… (runs server-side — safe to leave this tab or reload; it will appear here when done)'; box.appendChild(w); });
+  if(RESEARCH_ERR){ const e=el('div','muted'); e.style.cssText='font-size:var(--font-size-base);color:var(--color-negative);padding:4px 0;'; e.textContent='⚠ '+RESEARCH_ERR.ticker+': '+RESEARCH_ERR.error; box.appendChild(e); }
+  const recent=RESEARCH_CACHE.recent||[];
+  if(recent.length){
+    const hist=el('div'); hist.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;margin:6px 0;';
+    const lbl=el('span','muted'); lbl.style.cssText='font-size:var(--font-size-sm);'; lbl.textContent='recent on-demand (saved): '; hist.appendChild(lbl);
+    recent.slice(0,12).forEach(r=>{ const chip=el('span'); chip.style.cssText='cursor:pointer;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1) var(--space-2);font-size:var(--font-size-sm);';
+      chip.textContent=r.ticker; chip.title='show saved analysis'; chip.onclick=()=>_showCachedAnalysis(r.ticker); hist.appendChild(chip); });
+    box.appendChild(hist);
+  }
+  let shown=LAST_SCAN_ANALYSIS;
+  if((!shown || !shown.data) && recent.length){ const t0=recent[0].ticker, it=RESEARCH_CACHE.items[t0]; if(it && it.data) shown={ticker:t0, data:it.data}; }
+  if(shown && shown.data){ box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+shown.ticker)); box.appendChild(researchBrief(shown.data)); }
+}
 function researchIdea(t){
-  const box=document.getElementById('scan-analysis'); if(!box) return;
-  box.innerHTML='';
-  box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
-  const wait=el('div','muted'); wait.style.cssText='font-size:var(--font-size-base);padding:6px 0;';
-  wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM), then a second 🔍 groundedness pass fact-checks the brief against that data. Leaving this sub-tab cancels the view but not the run.';
-  box.appendChild(wait);
-  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+  if(!t) return;
+  const startedAt=Math.floor(Date.now()/1000);
+  _addPending(t); RESEARCH_ERR=null;
+  const box=document.getElementById('scan-analysis');
+  if(box){ box.innerHTML=''; box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
+    const wait=el('div','muted'); wait.style.cssText='font-size:var(--font-size-base);padding:6px 0;';
+    wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM), then a second 🔍 groundedness pass fact-checks the brief. The result is saved server-side — you can leave this sub-tab or reload and it will appear here when it finishes.';
+    box.appendChild(wait); box.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+  _startResearchPoll(t, startedAt);   // safety net: recovers the result even if this fetch's callback is lost to a navigation/reload
   const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), 300000);
-  fetch('/api/research?ticker='+encodeURIComponent(t),{signal:ctl.signal}).then(r=>r.json()).then(d=>{
-    clearTimeout(to);
-    const b=document.getElementById('scan-analysis'); if(!b) return;
-    b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
-    if(!d || d.error){ b.appendChild(el('div','muted',(d&&d.error)||'analysis failed')); return; }
-    LAST_SCAN_ANALYSIS={ticker:t, data:d};   // cache so a refresh / tab-switch doesn't wipe it
-    b.appendChild(researchBrief(d));
-  }).catch(e=>{ clearTimeout(to); const b=document.getElementById('scan-analysis'); if(!b) return;
-    b.innerHTML=''; b.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
-    b.appendChild(el('div','muted', e.name==='AbortError'?'timed out (model too slow) — try again':('error: '+e))); });
+  fetch('/api/research?ticker='+encodeURIComponent(t),{signal:ctl.signal}).then(r=>r.json()).then(d=>{ clearTimeout(to); _onResearchDone(t, d); })
+    .catch(e=>{ clearTimeout(to); /* leave the poll running: an aborted/failed direct fetch may still be completing + persisting server-side */ });
 }
 
 function discoveredContent(){
@@ -1515,7 +1567,7 @@ function scheduleContent(){
     tr.innerHTML=`<td class="l sym">${esc(j.label)}</td><td class="l muted">${esc(j.cadence)}</td>`+
       `<td style="white-space:nowrap;"><input id="sch-h-${j.kind}" type="number" min="0" max="23" value="${j.hour}" style="width:44px;"/> <span class="muted">:</span> `+
       `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
-      `<td style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> ${reset}</td>`+
+      `<td class="l" style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> <span style="display:inline-block;min-width:70px;">${reset}</span></td>`+
       `<td style="white-space:nowrap;"><button onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></td>`;
     t.appendChild(tr); });
   wrap.appendChild(t);
@@ -3873,13 +3925,51 @@ function mdToHtml(t){
   return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
 }
 function chatScroll(){ const s=document.getElementById('chat-scroll'); if(s) s.scrollTop=s.scrollHeight; }
+function _isChatActive(sid){ return !!(sid && CHAT_ACTIVE_SIDS && CHAT_ACTIVE_SIDS.indexOf(sid)>=0); }
 function chatLoadSessions(){
   if(CHAT_SESS_LOADING) return;
   CHAT_SESS_LOADING=true;
-  fetch('/api/chat/sessions').then(r=>r.json())
-    .then(d=>{ CHAT_SESSIONS=(d&&d.sessions)||[]; })
+  Promise.all([ fetch('/api/chat/sessions').then(r=>r.json()).catch(()=>null),
+                fetch('/api/chat/active').then(r=>r.json()).catch(()=>null) ])
+    .then(([d,a])=>{ CHAT_SESSIONS=(d&&d.sessions)||CHAT_SESSIONS||[]; CHAT_ACTIVE_SIDS=(a&&a.active_sessions)||[]; })
     .catch(()=>{ CHAT_SESSIONS=CHAT_SESSIONS||[]; })
     .finally(()=>{ CHAT_SESS_LOADING=false; if(TAB==='chat' && !CS(CHAT_PERSONA).streaming) render(); });
+}
+// Reconnect to a background generation that's still running (or just finished, within the server's
+// linger window) for `sid` — used after a refresh/navigation. Tails /api/chat/stream from cursor 0,
+// rebuilding the streaming bubble from the replayed frames; if the server reports `idle` (nothing
+// buffered) or the replay yields nothing, falls back to reloading the saved transcript.
+async function chatReattach(persona, sid){
+  const p=persona||CHAT_PERSONA, cs=CS(p);
+  cs.sid=sid; cs.streaming=true;
+  const myId=++cs.streamId;
+  let asst=cs.msgs[cs.msgs.length-1];
+  if(!asst || asst.role!=='assistant'){ asst={role:'assistant',content:'',tools:[],streaming:true}; cs.msgs.push(asst); }
+  else { asst.streaming=true; asst.content=''; asst.tools=[]; asst.think=''; }   // will be re-filled from the cursor-0 replay
+  if(p===CHAT_PERSONA){ render(); chatScroll(); }
+  let gotIdle=false;
+  try{
+    const resp=await fetch('/api/chat/stream?session_id='+encodeURIComponent(sid)+'&cursor=0');
+    if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
+    const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){ const {done,value}=await reader.read(); if(done) break;
+      if(myId!==cs.streamId) return;   // superseded by a newer send/open for this persona
+      buf+=dec.decode(value,{stream:true});
+      let i; while((i=buf.indexOf('\n\n'))>=0){ const frame=buf.slice(0,i); buf=buf.slice(i+2);
+        if(frame.indexOf('event: idle')>=0) gotIdle=true; else chatFrame(frame,asst,persona); }
+    }
+  }catch(e){ /* fall through to reconcile from the saved transcript */ }
+  finally{
+    if(myId===cs.streamId){
+      cs.streaming=false; asst.streaming=false;
+      if(gotIdle || (!asst.content && (!asst.tools||!asst.tools.length))){
+        fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{ if(myId!==cs.streamId) return;
+          cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role,content:m.content||'',tools:[]}));
+          if(p===CHAT_PERSONA){ render(); chatScroll(); } }).catch(()=>{});
+      } else if(p===CHAT_PERSONA){ render(); chatScroll(); }
+      chatLoadSessions();
+    }
+  }
 }
 // Stop the in-flight stream for `persona` (default: the one being viewed) and supersede its
 // finally handler. IMPORTANT: aborting the fetch only closes OUR OWN connection to the server —
@@ -3922,6 +4012,10 @@ function chatOpen(sid,persona){
     cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
       .map(m=>({role:m.role,content:m.content||'',tools:[]}));
     render(); chatScroll();
+    // If this conversation is still generating in the background (e.g. after a page refresh), reconnect
+    // to the live stream instead of showing only the last-saved turn.
+    fetch('/api/chat/active?session_id='+encodeURIComponent(sid)).then(r=>r.json())
+      .then(a=>{ if(a && a.active && cs.sid===sid && !cs.streaming) chatReattach(p, sid); }).catch(()=>{});
   }).catch(e=>alert('Could not open chat: '+e));
 }
 function chatDelete(sid,ev){
@@ -4075,7 +4169,8 @@ function chatContent(){
     if(!sess.length){ const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-base);padding:var(--space-2) var(--space-1);'; m.textContent='No conversations yet.'; list.appendChild(m); }
     else sess.forEach(s=>{
       const it=el('div','chat-sess'+(s.id===cs.sid?' on':''));
-      const tt=el('span','chat-sess-t'); tt.textContent=s.title||'(untitled)'; tt.title=s.title||'';
+      const act=_isChatActive(s.id);
+      const tt=el('span','chat-sess-t'); tt.textContent=(s.title||'(untitled)')+(act?' ⏳':''); tt.title=(s.title||'')+(act?' · generating…':'');
       const x=el('span','chat-sess-x'); x.textContent='✕'; x.title='Delete'; x.onclick=(e)=>chatDelete(s.id,e);
       it.appendChild(tt); it.appendChild(x);
       it.onclick=()=>chatOpen(s.id,s.persona);
