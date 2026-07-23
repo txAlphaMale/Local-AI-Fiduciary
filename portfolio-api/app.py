@@ -5231,13 +5231,15 @@ def get_cashdebt():
     debts = []
     rates = cfg.get("debt_rates") or {}
     min_payments = cfg.get("debt_min_payments") or {}
+    pay_in_full = cfg.get("pay_in_full_overrides") or {}
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             if _is_mortgage_account(a, mort_overrides):
                 continue
             nm = a.get("name") or "?"
             debts.append({"name": nm, "balance": abs(a.get("balance") or 0),
-                          "rate_pct": rates.get(nm), "min_payment": min_payments.get(nm)})
+                          "rate_pct": rates.get(nm), "min_payment": min_payments.get(nm),
+                          "pay_in_full": bool(pay_in_full.get(nm))})
     inputs = {"cash_total": _cash_total(d),
               "annual_expenses": exp,
               "needs_pct": ret.get("needs_pct_of_expenses") or 65,
@@ -5292,6 +5294,16 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      # PLAN→CASH·DEBT avalanche table, forces correct classification (diagnosed
                      # 2026-07-18; see _is_mortgage_account()).
                      "is_mortgage_overrides": {},
+                     # pay_in_full_overrides{name: bool}: 2026-07-23, Jason -- "my credit cards with
+                     # small balances that get paid every month will always be on top because this
+                     # seems to still be factoring APR only." The avalanche method IS correctly
+                     # rate-based (see cashdebt.avalanche()'s docstring), but a card you pay off in
+                     # full every statement isn't real revolving debt -- its point-in-time balance
+                     # can't tell the app that. This per-account flag (same MERGE-not-replace shape as
+                     # is_mortgage_overrides, checked in the same PLAN→CASH·DEBT table) excludes an
+                     # account from 'pay-first' classification, avalanche alerts, and the payoff
+                     # simulator regardless of its snapshot balance/APR.
+                     "pay_in_full_overrides": {},
                      # GAP-5 benefits facts (edited in PLAN→BENEFITS):
                      "k401_pretax_pct": None, "k401_aftertax_pct": 0.0,
                      "k401_match_t1_pct": None, "k401_match_t1_rate": None,
@@ -5382,6 +5394,12 @@ async def post_insurance_config(req: Request):
         for nm, v in list(body["is_mortgage_overrides"].items())[:30]:
             mo[str(nm)[:120]] = bool(v)
         cfg["is_mortgage_overrides"] = mo
+    if isinstance(body.get("pay_in_full_overrides"), dict):
+        # MERGE, same reasoning as is_mortgage_overrides just above.
+        pf = dict(cfg.get("pay_in_full_overrides") or {})
+        for nm, v in list(body["pay_in_full_overrides"].items())[:30]:
+            pf[str(nm)[:120]] = bool(v)
+        cfg["pay_in_full_overrides"] = pf
     if "home_address" in body:
         cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
             if body["home_address"] not in (None, "") else None

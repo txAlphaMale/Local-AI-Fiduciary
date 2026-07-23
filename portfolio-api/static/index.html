@@ -2843,14 +2843,20 @@ function cashdebtContent(){
       dn.textContent=`⚑ Highest real dollar cost is ${av.top_dollar_cost.name} (${u(av.top_dollar_cost.annual_interest)}/yr) — not the top-APR row below.`;
       wrap.appendChild(dn);
     }
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>MORTGAGE?</th>'; t.appendChild(hr);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
-      const pc=x.priority==='pay-first'?'neg':(x.priority==='carry'?'pos':'muted');
+      const pc=x.priority==='pay-first'?'neg':((x.priority==='carry'||x.priority==='paid-in-full')?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
       const minCell=`<input class="cd-minp" data-nm="${esc(x.name)}" type="number" step="5" value="${x.min_payment!=null?x.min_payment:''}" placeholder="min $" style="width:60px;"/>`;
+      // 2026-07-23, Jason: small-balance transactor cards (paid off every statement) kept showing
+      // pay-first purely because of a high APR on a balance that isn't really being revolved. The
+      // balance snapshot alone can't tell the app that — this per-card override does, and takes it
+      // out of pay-first/avalanche-alerts/the payoff simulator regardless of its point-in-time APR
+      // or balance.
+      const paidFullCell=`<input class="cd-paidfull" data-nm="${esc(x.name)}" type="checkbox" ${x.pay_in_full?'checked':''} title="This card is always paid off in full — its balance isn't real revolving debt. Check + SAVE to pull it out of pay-first/alerts/the payoff simulator regardless of APR or snapshot balance."/>`;
       const mortCell=`<input class="cd-mort" data-nm="${esc(x.name)}" type="checkbox" title="This IS actually the mortgage (name detection missed it) — check + SAVE to move it out of this table and into the MORTGAGE line above."/>`;
       tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td><td>${minCell}</td>`+
-        `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${mortCell}</td>`;
+        `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${paidFullCell}</td><td>${mortCell}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
   }
@@ -2900,6 +2906,11 @@ function cashdebtContent(){
       const dr={}; document.querySelectorAll('.cd-dr').forEach(x=>{ if(x.value!=='') dr[x.dataset.nm]=parseFloat(x.value); });
       const dmp={}; document.querySelectorAll('.cd-minp').forEach(x=>{ if(x.value!=='') dmp[x.dataset.nm]=parseFloat(x.value); });
       const mo={}; document.querySelectorAll('.cd-mort').forEach(x=>{ if(x.checked) mo[x.dataset.nm]=true; });
+      // Always send every row's current state (not just checked ones) so unchecking "paid in full"
+      // actually reverts it on save — the MORTGAGE? checkbox above only ever sends `true` for
+      // checked boxes, which means unchecking it never clears a previous override; don't repeat
+      // that here.
+      const pf={}; document.querySelectorAll('.cd-paidfull').forEach(x=>{ pf[x.dataset.nm]=x.checked; });
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({mortgage_rate_pct:numOrNull(g('cd-mr').value),
                              mortgage_payment_monthly:numOrNull(g('cd-mp').value),
@@ -2907,6 +2918,7 @@ function cashdebtContent(){
                              refi_rate_pct:numOrNull(g('cd-rr').value),
                              refi_closing_costs:numOrNull(g('cd-cc').value),
                              debt_extra_monthly:numOrNull(g('cd-extra').value),
+                             pay_in_full_overrides:pf,
                              debt_rates:dr, debt_min_payments:dmp, is_mortgage_overrides:mo})});
       load(false); };
   },0);

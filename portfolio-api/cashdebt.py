@@ -144,16 +144,36 @@ def avalanche(debts, invest_hurdle_pct):
     `top_dollar_cost`/`rate_vs_dollar_disagree` surface that without changing the existing
     rate-based `priority`/row order, which is still the correct avalanche METHOD (rate is the
     right thing to target first for the guaranteed-return argument; dollar cost is a separate,
-    complementary fact worth seeing alongside it, not a replacement)."""
+    complementary fact worth seeing alongside it, not a replacement).
+
+    Two carve-outs on top of the rate-based `priority` (2026-07-23, Jason):
+    - balance <= 0 never reads 'pay-first', regardless of APR — there is nothing to pay off, and
+      the old behavior (e.g. a $0-balance 16% card still flagged pay-first) fired a $0/yr "avalanche
+      target" alert that was pure noise.
+    - `pay_in_full=True` (a per-account override the household sets when they know a card is a
+      transactor paid off every statement, not real revolving debt) forces 'paid-in-full' and zeroes
+      `annual_interest`, since no interest is actually being charged on it, regardless of whatever
+      balance happens to be sitting on it mid-cycle. This is a household-supplied fact the balance
+      snapshot alone can never distinguish from real revolving debt."""
     rows = []
     for d in debts or []:
         bal, rate = _f(d.get("balance"), 0.0), _f(d.get("rate_pct"))
         minp = _f(d.get("min_payment"))
+        pay_in_full = bool(d.get("pay_in_full"))
+        if pay_in_full:
+            priority = "paid-in-full"
+        elif rate is None:
+            priority = "set-rate"
+        elif bal <= 0:
+            priority = "carry"
+        elif rate > invest_hurdle_pct:
+            priority = "pay-first"
+        else:
+            priority = "carry"
+        annual_interest = 0.0 if pay_in_full else (round(bal * rate / 100.0, 2) if rate is not None else None)
         rows.append({"name": d.get("name"), "balance": round(bal, 2), "rate_pct": rate,
-                     "min_payment": minp,
-                     "priority": ("set-rate" if rate is None else
-                                  ("pay-first" if rate > invest_hurdle_pct else "carry")),
-                     "annual_interest": (round(bal * rate / 100.0, 2) if rate is not None else None)})
+                     "min_payment": minp, "pay_in_full": pay_in_full,
+                     "priority": priority, "annual_interest": annual_interest})
     rows.sort(key=lambda x: -(x["rate_pct"] or -1))
     by_dollar = sorted([r for r in rows if r["annual_interest"] is not None],
                        key=lambda x: -x["annual_interest"])
@@ -187,14 +207,17 @@ def payoff_simulator(debts, extra_monthly=0.0, max_months=600):
 
     Only debts with BOTH an APR and a minimum payment set are simulated — a guessed minimum
     payment could materially mislead a real payoff schedule, so a debt missing either is
-    reported in `excluded` (with which field is missing) instead of silently assumed."""
+    reported in `excluded` (with which field is missing) instead of silently assumed. Debts
+    flagged `pay_in_full` are skipped outright (2026-07-23) — they're not real revolving debt
+    being paid down over time, so they don't belong in an amortization schedule regardless of
+    whatever balance/APR happen to be on file for them."""
     ready, excluded = [], []
     for d in (debts or []):
         name = d.get("name")
         bal = _f(d.get("balance"), 0.0)
         rate = _f(d.get("rate_pct"))
         minp = _f(d.get("min_payment"))
-        if bal <= 0:
+        if bal <= 0 or d.get("pay_in_full"):
             continue
         if rate is None or not minp:
             missing = []
