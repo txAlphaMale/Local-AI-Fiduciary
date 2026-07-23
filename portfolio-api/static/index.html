@@ -216,7 +216,30 @@
   .chat-bar{display:flex;gap:var(--space-2);align-items:flex-end;border-top:1px solid var(--color-border);padding-top:var(--space-2);margin-top:var(--space-1);}
   .chat-input{flex:1;resize:none;min-height:38px;max-height:140px;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);font-family:inherit;font-size:13px;line-height:1.4;}
   .chat-input:focus{outline:none;border-color:var(--color-accent);}
+  /* Guided tour popover (Driver.js, 2026-07-23) — retheme its hardcoded-white default to the
+     app's own tokens so it matches whichever of the 4 themes is active, instead of a fixed
+     white/black popover clashing with dark themes or looking generic against DAYLIGHT. */
+  .fid-tour-popover{background:var(--color-panel)!important;color:var(--color-text)!important;border:1px solid var(--color-accent);border-radius:var(--radius-lg)!important;box-shadow:0 4px 24px rgba(0,0,0,0.35)!important;}
+  .fid-tour-popover, .fid-tour-popover *{--driver-popover-font-family:inherit;font-family:inherit!important;}
+  .fid-tour-popover .driver-popover-title{color:var(--color-accent)!important;font-size:var(--font-size-lg)!important;letter-spacing:1px;}
+  .fid-tour-popover .driver-popover-description{color:var(--color-text)!important;font-size:var(--font-size-md)!important;}
+  .fid-tour-popover .driver-popover-progress-text{color:var(--color-text-muted)!important;font-size:var(--font-size-sm)!important;}
+  .fid-tour-popover .driver-popover-footer-btn{background:var(--color-panel-alt)!important;color:var(--color-text)!important;border:1px solid var(--color-border-strong)!important;border-radius:var(--radius-md)!important;font-family:inherit!important;font-size:var(--font-size-sm)!important;}
+  .fid-tour-popover .driver-popover-next-btn{background:var(--color-accent)!important;color:var(--color-panel)!important;border-color:var(--color-accent)!important;}
+  .fid-tour-popover .driver-popover-close-btn{color:var(--color-text-muted)!important;}
+  .fid-tour-popover .driver-popover-arrow-side-left{border-right-color:var(--color-panel)!important;}
+  .fid-tour-popover .driver-popover-arrow-side-right{border-left-color:var(--color-panel)!important;}
+  .fid-tour-popover .driver-popover-arrow-side-top{border-bottom-color:var(--color-panel)!important;}
+  .fid-tour-popover .driver-popover-arrow-side-bottom{border-top-color:var(--color-panel)!important;}
 </style>
+<!-- Guided coach-mark tour (2026-07-23, RESUME-TRACKER "new user tour" item): Driver.js — MIT
+     licensed, ~5kb, zero dependencies, no build step needed. Chosen over Shepherd.js/Intro.js
+     specifically because those are AGPL-licensed unless a commercial license is purchased, which
+     matters given this project's own stated possible-SaaS-subscription future; Driver.js's
+     permissive MIT license carries no such risk. Loaded from jsDelivr per the project's own
+     install docs (driverjs.com/docs/installation). -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1/dist/driver.css" />
+<script src="https://cdn.jsdelivr.net/npm/driver.js@1/dist/driver.js.iife.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -314,43 +337,97 @@ function applyTheme(key){
   try{ localStorage.setItem('fidTheme', THEME); }catch(_){}
 }
 applyTheme(THEME);
-// First-run onboarding spotlights (2026-07-19, RESUME-TRACKER item 10, option (b) — Jason wanted
-// the actual pop-up version, not just a WIKI-link pointer). Dismiss state is per-spotlight-id,
-// persisted so a dismissed spotlight stays dismissed across reloads; it degrades to the existing
-// small amber warning + "?" wikiLink (already built) rather than disappearing entirely.
-let SETUP_DISMISSED={}; try{ SETUP_DISMISSED=JSON.parse(localStorage.getItem('fidSetupDismissed')||'{}')||{}; }catch(_){ SETUP_DISMISSED={}; }
-function dismissSetup(id){ SETUP_DISMISSED[id]=true; try{ localStorage.setItem('fidSetupDismissed',JSON.stringify(SETUP_DISMISSED)); }catch(_){} render(); }
-// Builds a dismissible, prominent callout — `actionLabel`/`actionFn` render an optional button
-// (e.g. "jump to the field" or "go to the panel that has it"). Returns null once dismissed, so
-// callers can just `if(sp) wrap.appendChild(sp)`.
-function setupSpotlight(id, msg, actionLabel, actionFn){
-  if(SETUP_DISMISSED[id]) return null;
-  const box=el('div'); box.style.cssText='display:flex;align-items:center;gap:var(--space-3);'+
-    'border:1px solid var(--color-accent);background:var(--overlay-accent-weaker);border-radius:var(--radius-lg);'+
-    'padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);';
-  const txt=el('div'); txt.style.cssText='flex:1;font-size:var(--font-size-base);color:var(--color-text);'; txt.textContent='⚑ '+msg;
-  box.appendChild(txt);
-  if(actionLabel && actionFn){
-    const btn=el('button',null,actionLabel); btn.style.cssText='white-space:nowrap;'; btn.onclick=actionFn; box.appendChild(btn);
+// Guided coach-mark tour (2026-07-23 — REPLACES the old per-field setupSpotlight() banners that
+// lived here: Jason asked for one onboarding mechanism instead of two overlapping ones, having
+// not seen the old banners in practice and preferring the UI stay uncluttered). Built on Driver.js
+// (MIT licensed, ~5kb, CDN-loaded in <head> — chosen over Shepherd.js/Intro.js specifically
+// because those are AGPL unless a commercial license is bought, a real risk given this project's
+// stated possible-SaaS future). This app is a single-page, non-routed dashboard (TAB/SUBTAB
+// globals + a full synchronous render() redraw, no client-side router), so the tour can't use
+// Driver.js's normal single-instance multi-step `steps` array (most target elements don't exist
+// until their own panel is the one currently rendered). Instead it follows Driver.js's own
+// documented pattern for steps that live on different "pages" (driverjs.com/docs/multi-page-tour):
+// one driver() instance per step, destroyed and recreated on Next/Prev, with TAB/SUBTAB switched
+// and render() called BEFORE the next instance is built.
+const TOUR_TARGETS = {
+  // SETUP_FIELDS id (app.py) -> live DOM element id. Only fields that actually have a rendered
+  // input somewhere are listed — e.g. home_value_override has no UI field anywhere yet (a real,
+  // separate gap; flagged in RESUME-TRACKER, not built here), so it's intentionally absent rather
+  // than pointing the tour at nothing.
+  income_self:'ins-inc-s', income_spouse:'ins-inc-sp', policies:'ins-name',
+  k401_pretax:'bn-pre', k401_biweekly:'bn-bw', isr_status:'bn-isr', hsa_contribution:'bn-hsa',
+  mortgage_rate:'cd-mr', refi_rate:'cd-rr', deposit_yield:'cd-dy', debt_rates:'cd-dr',
+};
+let TOUR_DONE=false; try{ TOUR_DONE = localStorage.getItem('fidTourDone')==='1'; }catch(_){ TOUR_DONE=false; }
+function _tourMarkDone(){ TOUR_DONE=true; try{ localStorage.setItem('fidTourDone','1'); }catch(_){} }
+function buildTourSteps(){
+  const steps=[
+    {tab:'dashboard', title:'Welcome to the terminal', desc:'A quick tour of what\'s where, and which fields unlock more of the app. Close any time with the ✕ or Esc — nothing here is required.'},
+    {tab:'dashboard', element:'#cockpit-panel', title:'Cockpit', desc:'Always-visible "what needs attention" strip. Click any chip to jump straight to the tab with the full detail.'},
+    {tab:'dashboard', element:'#main-tabbar', title:'Tabs', desc:'Everything is organized into these top-level tabs, each with its own sub-tabs. Drag a tab to reorder it.'},
+  ];
+  const sp = SETUPPROG;
+  if(sp && !sp.error){
+    const bySubtab={}, order=[];
+    (sp.tiers||[]).forEach(t=>(t.items||[]).forEach(it=>{
+      if(it.filled || !it.applicable) return;
+      const elId = TOUR_TARGETS[it.id]; if(!elId) return;
+      const jump = it.jump; if(!jump) return;
+      const key = jump.tab+'::'+jump.subtab;
+      if(!bySubtab[key]){ bySubtab[key]=[]; order.push(key); }
+      bySubtab[key].push({tab:jump.tab, subtab:jump.subtab, element:'#'+elId, title:it.group, desc:it.note||'Fill this in to unlock more of this panel.'});
+    }));
+    order.forEach(key=>steps.push(...bySubtab[key]));
   }
-  const x=el('span',null,'✕'); x.title='Dismiss (won\'t ask again)';
-  x.style.cssText='cursor:pointer;color:var(--color-text-muted);padding:0 var(--space-1);'; x.onclick=()=>dismissSetup(id);
-  box.appendChild(x);
-  return box;
+  steps.push({tab:'wiki', focusWiki:'setup-guide', element:'#wiki-setup-guide', title:'Full checklist, any time', desc:'Every optional field — filled or not — lives here with live checkmarks. Replay this tour any time from the 🎯 icon next to COCKPIT.'});
+  return steps;
+}
+function startTour(){
+  if(!window.driver || !window.driver.js){ console.warn('driver.js not loaded — tour unavailable'); return; }
+  const driverFn = window.driver.js.driver;
+  const steps = buildTourSteps();
+  let d=null;
+  const goToStep=(idx)=>{
+    if(idx<0) return;
+    if(idx>=steps.length){ if(d) d.destroy(); _tourMarkDone(); return; }
+    const s=steps[idx];
+    if(s.tab==='wiki'){ TAB='wiki'; if(s.focusWiki){ WIKI_FOCUS=s.focusWiki; WIKI_OPEN[s.focusWiki]=true; } render(); }
+    else { TAB=s.tab; if(s.subtab) setSubtab(s.tab, s.subtab); else render(); }
+    setTimeout(()=>{
+      if(d) d.destroy();
+      const isLast = idx===steps.length-1;
+      const step={ element: s.element||undefined,
+        popover:{ title:s.title, description:s.desc,
+          showButtons: idx===0 ? ['next','close'] : (isLast? ['previous','close'] : ['next','previous','close']),
+          nextBtnText: isLast?'Done':'Next →', prevBtnText:'← Back',
+          onNextClick:()=>goToStep(idx+1), onPrevClick:()=>goToStep(idx-1),
+          onCloseClick:()=>{ d.destroy(); _tourMarkDone(); } } };
+      if(!step.element) delete step.element;
+      d = driverFn({ allowClose:true, stagePadding:6, animate:true, popoverClass:'fid-tour-popover',
+        progressText:(idx+1)+' of '+steps.length, showProgress:true,
+        steps:[step] });
+      d.drive();
+    }, s.element? 150:0);
+  };
+  _tourMarkDone();   // mark "seen" the instant it starts, not just on completion — closing early
+                     // shouldn't re-trigger the auto-start on every future Dashboard visit; the
+                     // manual 🎯 replay icon stays available regardless of this flag.
+  goToStep(0);
+}
+let _TOUR_AUTOSTART_CHECKED=false;
+function _maybeAutoStartTour(){
+  if(_TOUR_AUTOSTART_CHECKED) return; _TOUR_AUTOSTART_CHECKED=true;
+  if(TOUR_DONE || TAB!=='dashboard') return;
+  const sp=SETUPPROG; if(!sp || sp.error || !sp.total || sp.done>=sp.total) return;
+  setTimeout(startTour, 600);
 }
 
-// Persistent Dashboard setup-progress checklist card (RESUME-TRACKER "START HERE NEXT SESSION"
-// item, 2026-07-19 -> built 2026-07-22 — option (a), the bigger alternative to the per-field
-// spotlights above). Backed by GET /api/setup-progress (SETUP_FIELDS in app.py), a unified
-// completeness model across every optional onboarding field in NEW-USER-SETUP-GUIDE.md /
-// W('setup-guide', ...), not just the 2 fields the old `setup_needed` flag covered. Dismiss
-// state is separate from SETUP_DISMISSED (the per-field spotlights) and, unlike those,
-// "dismissed" here never means gone forever — it collapses to a small reopenable chip
-// (fidSetupCardDismissed in localStorage) rather than disappearing.
-let SETUP_CARD_DISMISSED=false;
-try{ SETUP_CARD_DISMISSED = localStorage.getItem('fidSetupCardDismissed')==='1'; }catch(_){ SETUP_CARD_DISMISSED=false; }
-function dismissSetupCard(){ SETUP_CARD_DISMISSED=true; try{ localStorage.setItem('fidSetupCardDismissed','1'); }catch(_){} render(); }
-function reopenSetupCard(){ SETUP_CARD_DISMISSED=false; try{ localStorage.setItem('fidSetupCardDismissed','0'); }catch(_){} render(); }
+// Setup-progress data model (RESUME-TRACKER "START HERE NEXT SESSION" item, 2026-07-19 -> built
+// 2026-07-22, REVISED 2026-07-23). Backed by GET /api/setup-progress (SETUP_FIELDS in app.py), a
+// unified completeness model across every optional onboarding field in NEW-USER-SETUP-GUIDE.md /
+// W('setup-guide', ...). The original build put the full checklist in a big persistent Dashboard
+// card; Jason asked for that to move into the WIKI (buildWiki()'s setup-guide special case, below)
+// with the checkboxes preserved live, leaving only a slim contextual chip + tour launcher here.
 const SETUP_TIER_LABEL = {1:'TIER 1 · do these first', 2:'TIER 2 · real dollars if they apply to you', 3:'TIER 3 · everyone eventually, not everyone immediately'};
 function setupItemRow(it){
   const row=el('div'); row.style.cssText='display:flex;align-items:flex-start;gap:var(--space-2);padding:2px 0;';
@@ -373,51 +450,26 @@ function setupItemRow(it){
   return row;
 }
 function setupProgressCard(){
+  // Slim contextual nudge only — the full live checklist now lives in WIKI -> Getting started ->
+  // First-time setup checklist (buildWiki()'s setup-guide special case), and the guided tour
+  // (startTour(), above) is the primary "show me what to do" path. Renders nothing once every
+  // applicable field is filled — nothing left to nudge about.
   const sp = SETUPPROG;
-  if(!sp || sp.error) return null;   // still loading, or the endpoint isn't there yet — render nothing over a broken card
-  const wrap=el('div');
-  if(SETUP_CARD_DISMISSED){
-    // Slim, always-present reopen affordance — the whole point is this is NOT "gone forever"
-    // the way a dismissed per-field spotlight is.
-    const chip=el('div'); chip.title='Reopen the first-time setup checklist';
-    chip.style.cssText='display:inline-flex;align-items:center;gap:var(--space-2);cursor:pointer;'+
-      'border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-1) var(--space-2);'+
-      'margin-bottom:var(--space-3);font-size:var(--font-size-sm);color:var(--color-text-muted);';
-    chip.textContent = '▸ First-time setup: '+sp.done+' of '+sp.total+' done';
-    chip.onclick=reopenSetupCard;
-    wrap.appendChild(chip);
-    return wrap;
-  }
-  const box=el('div'); box.style.cssText='border:1px solid var(--color-accent);border-radius:var(--radius-lg);'+
-    'padding:var(--space-3);margin-bottom:var(--space-3);background:var(--overlay-accent-weaker);';
-  const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);flex-wrap:wrap;';
-  head.innerHTML = '<span class="ph" style="border:none;padding:0;margin:0;">⚑ FIRST-TIME SETUP</span>';
-  head.appendChild(wikiLink('setup-guide'));
-  const prog=el('span'); prog.style.cssText='margin-left:auto;font-size:var(--font-size-base);color:var(--color-text-muted);';
-  prog.textContent = sp.done+' of '+sp.total+' done';
-  head.appendChild(prog);
-  const x=el('span',null,'✕'); x.title='Dismiss (a small "'+sp.done+' of '+sp.total+' done" chip stays on the Dashboard so this isn\'t gone forever)';
-  x.style.cssText='cursor:pointer;color:var(--color-text-muted);padding:0 var(--space-1);'; x.onclick=dismissSetupCard;
-  head.appendChild(x);
-  box.appendChild(head);
-  const barOuter=el('div'); barOuter.style.cssText='height:6px;border-radius:3px;background:var(--color-border);overflow:hidden;margin-bottom:var(--space-3);';
-  const barInner=el('div'); const pct = sp.total ? Math.round(100*sp.done/sp.total) : 100;
-  barInner.style.cssText='height:100%;background:var(--color-accent);width:'+pct+'%;';
-  barOuter.appendChild(barInner); box.appendChild(barOuter);
-  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
-  intro.textContent = (sp.total>0 && sp.done>=sp.total)
-    ? 'Every optional field below is filled in — nothing left to unlock. Dismiss any time; a small reopen chip stays on the Dashboard.'
-    : 'Nothing below is required — Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting and this Dashboard already work off your connected holdings alone. Each item below unlocks one more real number somewhere. Skip anything you don\'t want to enter.';
-  box.appendChild(intro);
-  (sp.tiers||[]).forEach(t=>{
-    const visible=(t.items||[]).filter(it=>it.applicable);
-    if(!visible.length) return;
-    const th=el('div'); th.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-text-muted);margin:var(--space-2) 0 4px;';
-    th.textContent = (SETUP_TIER_LABEL[t.tier]||('TIER '+t.tier)) + (t.total ? ' — '+t.done+'/'+t.total : '');
-    box.appendChild(th);
-    visible.forEach(it=>box.appendChild(setupItemRow(it)));
-  });
-  wrap.appendChild(box);
+  if(!sp || sp.error || !sp.total || sp.done>=sp.total) return null;
+  const wrap=el('div'); wrap.style.cssText='display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
+  const chip=el('span'); chip.title='Open the full first-time setup checklist (WIKI)';
+  chip.style.cssText='cursor:pointer;display:inline-flex;align-items:center;gap:var(--space-2);'+
+    'border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-1) var(--space-2);'+
+    'font-size:var(--font-size-sm);color:var(--color-text-muted);';
+  chip.textContent = '▸ First-time setup: '+sp.done+' of '+sp.total+' done';
+  chip.onclick=()=>{ WIKI_FOCUS='setup-guide'; WIKI_OPEN['setup-guide']=true; TAB='wiki'; render(); };
+  wrap.appendChild(chip);
+  const tourBtn=el('span',null,'🎯 Take the tour'); tourBtn.title='Guided walkthrough of the cockpit, tabs, and what still needs filling in';
+  tourBtn.style.cssText='cursor:pointer;display:inline-flex;align-items:center;'+
+    'border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-1) var(--space-2);'+
+    'font-size:var(--font-size-sm);color:var(--color-accent);';
+  tourBtn.onclick=startTour;
+  wrap.appendChild(tourBtn);
   return wrap;
 }
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
@@ -507,6 +559,7 @@ async function load(refresh, bg){
     try{ const pc=await gj('/api/prompts'); if(pc && !pc.error){ PROMPTS_CFG=pc; } }catch(_){}
     _resumeResearchPolls();   // re-attach pollers for any on-demand analysis still running after a reload/navigation
     render();   // re-render with research / insights / plan / ideas / strategist panels
+    if(!bg) _maybeAutoStartTour();   // once per page session, only after a real (non-background) load
     if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
   }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
   document.getElementById('refresh').textContent='↻ REFRESH';
@@ -526,7 +579,7 @@ function W(id,cat,title,def,read,use){ WIKI.push({id,cat,title,def,read,use}); }
 W('setup-guide','Getting started','First-time setup checklist',
   'A ranked checklist of the optional forms — scattered across a few panels — that unlock the rest of the app beyond what your connected holdings alone already produce (Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting, and the Dashboard all work with zero setup). Ranked by biggest unlock for the least typing, not a hard dependency chain — skip anything you don\'t want to enter and that module just stays a placeholder.',
   '**Tier 1 (PLAN → ASSUMPTIONS, do this one first)**: state of residence (biggest single lever — Estate/ACA/Tax/Cash·Debt all read it; left blank, the app silently assumes Texas and flags it in ⚠ ATTENTION until set), filing status, ages, target retirement age, annual expenses/savings, household size, birth year + SS estimate, estate donee count, home cost basis. **Tier 2**: PLAN → INSURANCE (household income — nothing on that page computes without it; children; policies in force; home value override), PLAN → CASH·DEBT (mortgage rate/payment, refi rate, deposit yield, per-debt APRs, the mortgage checkbox for oddly-named loans), PLAN → BENEFITS (401(k) %/match formula, per-paycheck total, after-tax/ISR status for mega-backdoor Roth, HSA facts). **Tier 3**: ACA benchmark premium, IPS policy targets/position caps, Finnhub/Tavily API keys (`.env`, unlocks Research/news/scanning).',
-  'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist. **The Dashboard\'s ⚑ FIRST-TIME SETUP card (2026-07-22) tracks this same checklist live** against your actual saved config — a ✓/○ per field, a running "X of N done", and a GO → link that jumps straight to the panel that has it. Dismissing it leaves a small "First-time setup: X of N done" chip on the Dashboard rather than hiding it for good — click the chip any time to bring the full card back.');
+  'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist. **The live checklist tracking your actual saved config is right below this entry** (2026-07-23 — moved here from a Dashboard card, per a user request to keep the Dashboard itself uncluttered) — a ✓/○ per field, a running "X of N done", and a GO → link that jumps straight to the panel that has it. A small "First-time setup: X of N done" chip + a 🎯 tour button also show on the Dashboard while anything is still outstanding. **Prefer a guided walkthrough instead?** Click 🎯 next to COCKPIT on any tab (or the button below) for a step-by-step tour that highlights each unfilled field directly, one panel at a time.');
 W('overview','Getting started','What this terminal is',
   'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
   'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
@@ -891,6 +944,34 @@ function buildWiki(box){
           `<div style="margin-top:var(--space-2);"><span class="muted" style="font-size:var(--font-size-sm);letter-spacing:1px;">HOW TO READ IT</span><br>${nl(e.read)}</div>`+
           `<div style="margin-top:var(--space-2);"><span class="muted" style="font-size:var(--font-size-sm);letter-spacing:1px;">WHEN TO USE IT</span><br>${nl(e.use)}</div>`;
         card.appendChild(d);
+        // Live interactive checklist (2026-07-23) — moved here from the old Dashboard card per
+        // Jason's ask: same setupItemRow()/SETUP_TIER_LABEL used before, just rendered inside the
+        // WIKI entry instead of a standalone card, so the checkboxes/GO-> links survive the move.
+        if(e.id==='setup-guide' && SETUPPROG && !SETUPPROG.error){
+          const sp=SETUPPROG;
+          const live=el('div'); live.id='wiki-setup-guide-live';
+          live.style.cssText='margin-top:var(--space-3);border-top:1px solid var(--color-border);padding-top:var(--space-3);';
+          const lh=el('div'); lh.style.cssText='display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);flex-wrap:wrap;';
+          lh.innerHTML='<span style="font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-text-muted);">LIVE CHECKLIST — '+sp.done+' of '+sp.total+' done</span>';
+          const tourBtn=el('span',null,'🎯 Take the guided tour');
+          tourBtn.style.cssText='cursor:pointer;margin-left:auto;color:var(--color-accent);font-size:var(--font-size-sm);';
+          tourBtn.onclick=startTour;
+          lh.appendChild(tourBtn);
+          live.appendChild(lh);
+          const barOuter=el('div'); barOuter.style.cssText='height:6px;border-radius:3px;background:var(--color-border);overflow:hidden;margin-bottom:var(--space-3);';
+          const barInner=el('div'); const pct2 = sp.total?Math.round(100*sp.done/sp.total):100;
+          barInner.style.cssText='height:100%;background:var(--color-accent);width:'+pct2+'%;';
+          barOuter.appendChild(barInner); live.appendChild(barOuter);
+          (sp.tiers||[]).forEach(t=>{
+            const visible=(t.items||[]).filter(it=>it.applicable);
+            if(!visible.length) return;
+            const th=el('div'); th.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-text-muted);margin:var(--space-2) 0 4px;';
+            th.textContent=(SETUP_TIER_LABEL[t.tier]||('TIER '+t.tier))+(t.total?' — '+t.done+'/'+t.total:'');
+            live.appendChild(th);
+            visible.forEach(it=>live.appendChild(setupItemRow(it)));
+          });
+          card.appendChild(live);
+        }
       }
       box.appendChild(card);
     });
@@ -953,7 +1034,7 @@ function render(){
   if(TAB==='strategist' && !haveStrat) TAB='positions';
   const _gear=document.getElementById('gear'); if(_gear) _gear.style.color=(TAB==='settings')?'var(--color-accent)':'';
   const p=el('div','panel'); p.style.marginTop='10px';
-  const tabBar=el('div'); tabBar.style.cssText='display:flex;align-items:center;gap:var(--space-3);border-bottom:1px solid var(--color-border);padding-bottom:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
+  const tabBar=el('div'); tabBar.id='main-tabbar'; tabBar.style.cssText='display:flex;align-items:center;gap:var(--space-3);border-bottom:1px solid var(--color-border);padding-bottom:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
   const tabSpecsRaw=[['dashboard','DASHBOARD'],['positions',`OVERVIEW · ${d.unique_securities}`]];
   if(haveResearch) tabSpecsRaw.push(['research','RESEARCH · IDEAS']);
   if(haveInsights) tabSpecsRaw.push(['insights','RISK · EXPOSURE']);
@@ -1065,10 +1146,14 @@ function render(){
 }
 
 function cockpitPanel(){
-  const p=el('div','panel'); p.style.cssText='margin-bottom:var(--space-3);padding:var(--space-2) var(--space-3);';
+  const p=el('div','panel'); p.id='cockpit-panel'; p.style.cssText='margin-bottom:var(--space-3);padding:var(--space-2) var(--space-3);';
   const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-2);';
   head.innerHTML='<span class="ph" style="border:none;padding:0;margin:0;">⚑ COCKPIT · WHAT NEEDS ATTENTION</span>';
   head.appendChild(wikiLink('cockpit'));
+  const tourIcon=el('span',null,'🎯'); tourIcon.title='Replay the guided tour of the terminal';
+  tourIcon.style.cssText='cursor:pointer;font-size:var(--font-size-sm);opacity:0.75;';
+  tourIcon.onclick=startTour;
+  head.appendChild(tourIcon);
   p.appendChild(head);
   const anyLoaded = EXP||INSIGHTS||TAX||TAXAUDIT||FL||RETIRE||DISCO;
   if(!anyLoaded){ const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-base);'; m.textContent='Scanning your book (drift · concentration · tax · fees · liquidity · outlook)…'; p.appendChild(m); return p; }
@@ -2517,8 +2602,6 @@ function benefitsContent(){
   const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const f=r.facts||{}, S=r.sections||{};
   if(r.setup_needed){
-    const sp=setupSpotlight('ben-income','No income on file yet — BENEFITS reads salary from the same PLAN→INSURANCE household register, so nothing here can compute headroom until it\'s set.','GO TO PLAN → INSURANCE',()=>{ TAB='plan'; setSubtab('plan','insurance'); });
-    if(sp) wrap.appendChild(sp);
     const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
     w.appendChild(document.createTextNode('⚠ Enter salary (PLAN→INSURANCE income) + the plan facts below to compute headroom. '));
     w.appendChild(wikiLink('setup-guide')); wrap.appendChild(w); }
@@ -2867,9 +2950,6 @@ function insuranceContent(){
   const u=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
   const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   if(r.setup_needed){
-    const sp=setupSpotlight('ins-income','No household income on file — the NEED column below is income-driven; without it this page can only size the umbrella and P&C lines.','JUMP TO THE FIELD ↓',()=>{
-      const f2=document.getElementById('ins-inc-s'); if(f2){ f2.scrollIntoView({block:'center',behavior:'smooth'}); f2.focus(); } });
-    if(sp) wrap.appendChild(sp);
     const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
     w.appendChild(document.createTextNode('⚠ Enter household incomes below — the NEED column is income-driven; without it this page can only size the umbrella and P&C lines. '));
     w.appendChild(wikiLink('setup-guide')); wrap.appendChild(w); }
