@@ -8947,8 +8947,20 @@ FIDUCIARY_PROMPT = (
     "get_social_security, get_benefits (401k match / HSA / Roth contribution room), get_fees_liquidity, "
     "get_lookthrough (fund holdings), get_scorecard, get_opportunities and get_discovery (ideas), "
     "get_fundamentals / get_valuation / get_research for a specific ticker, search_knowledge for tax rules / "
-    "IRA-Roth mechanics / investing-policy guidance from {user}'s local reference library (cite the source "
-    "doc), and web_search for current news or context.\n"
+    "IRA-Roth mechanics / investing-policy guidance / estate-planning mechanics from {user}'s local reference "
+    "library (cite the source doc), and web_search for current news or context.\n"
+    "Estate planning — answer BOTH kinds of question, not just the numbers: {user}'s ESTATE module (via "
+    "get_retirement/search_knowledge) already quantifies the tax/basis side of their actual plan (step-up "
+    "ledger, gift-vs-hold, gifting runway, titling audit, and — once an estate nears the exemption — the "
+    "SLAT/IDGT/GRAT/dynasty-trust tier). But {user} may also ask HOW to actually do something: what a "
+    "revocable vs. irrevocable trust means in plain terms, whether they need a will, a trust, or both, what "
+    "funding a trust actually involves (retitling deeds/accounts, what stays on beneficiary designations "
+    "instead), the difference between a durable financial POA and a healthcare directive, roughly what "
+    "probate involves and how long it takes, Texas-specific shortcuts (independent administration, muniment "
+    "of title, small estate affidavit), and honest DIY-vs-attorney tradeoffs. search_knowledge over the "
+    "estate-planning-mechanics reference doc for this — it's the foundational layer beneath the tax-strategy "
+    "one. Always frame this as preparation for a licensed estate-planning attorney (what to ask for, what to "
+    "expect), never as a substitute for drafting the actual documents.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
     "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
     "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
@@ -9029,10 +9041,13 @@ FIDUCIARY_TOOLS = [
                        "required": ["ticker"]}}},
     {"type": "function", "function": {"name": "search_knowledge",
         "description": "Search the user's local Knowledge library (their Investment Policy Statement + curated "
-                       "IRS/SEC/Vanguard tax & investing reference docs) for relevant passages. Use this for "
-                       "tax rules, IRA/Roth mechanics, and investing-principle / policy guidance. Returns the "
-                       "top passages with their source document — cite the source and verify against current "
-                       "official guidance.",
+                       "IRS/SEC/Vanguard tax & investing reference docs, plus estate-planning reference docs) "
+                       "for relevant passages. Use this for tax rules, IRA/Roth mechanics, investing-principle "
+                       "/ policy guidance, AND estate-planning questions — both the advanced tax-strategy tier "
+                       "(SLAT/IDGT/GRAT, basis/step-up, GST) and the foundational mechanics tier (revocable "
+                       "vs. irrevocable trusts, funding a trust, will-vs-trust, durable POA vs. healthcare "
+                       "directive, probate basics, DIY-vs-attorney). Returns the top passages with their "
+                       "source document — cite the source and verify against current official guidance.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string"},
             "k": {"type": "number", "description": "How many passages to return (default 4)."}},
