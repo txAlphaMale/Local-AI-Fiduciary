@@ -439,6 +439,19 @@ function _maybeAutoStartTour(){
 // card; Jason asked for that to move into the WIKI (buildWiki()'s setup-guide special case, below)
 // with the checkboxes preserved live, leaving only a slim contextual chip + tour launcher here.
 const SETUP_TIER_LABEL = {1:'TIER 1 · do these first', 2:'TIER 2 · real dollars if they apply to you', 3:'TIER 3 · everyone eventually, not everyone immediately'};
+// Icon legend (see LEGEND_HTML below, rendered once above the WIKI checklist) — 2026-07-23,
+// Jason: household_size's muted "·" got misread as "not set" because the dot was overloaded to
+// mean two different things (has-a-default vs genuinely-blank). Now four distinct icons, each
+// meaning exactly one thing:
+//   ✓ (green)  filled — set, either by you or a real auto-detected value.
+//   · (muted)  has a usable DEFAULT already baked in (household size, filing status, target age,
+//              IPS policy targets) — the app already works correctly with it as-is; only change
+//              it if that default doesn't describe your situation.
+//   ! (red)    unfilled AND blocks or silently skews a real calculation for every household —
+//              state of residence, birth year(s), income, ISR status. Worth fixing regardless of
+//              your situation.
+//   △ (amber)  unfilled but genuinely situational — normal to leave blank if it doesn't apply to
+//              you (e.g. home value override if you rent, mortgage rate if you have none).
 function setupItemRow(it){
   // 2026-07-23 (Jason: "make the entries in the checklist links to the location where the user
   // needs to provide the setting"): the label itself is now a click-through to that field's panel
@@ -447,9 +460,11 @@ function setupItemRow(it){
   // value lives so you can review or change it, rather than only ever being able to jump to what's
   // still missing.
   const row=el('div'); row.style.cssText='display:flex;align-items:flex-start;gap:var(--space-2);padding:2px 0;';
-  const mark=el('span', null, !it.scored ? '·' : (it.filled ? '✓' : '○'));
-  mark.style.cssText='width:14px;flex:none;font-size:var(--font-size-base);'+
-    (!it.scored ? 'color:var(--color-text-muted);' : (it.filled ? 'color:var(--color-positive);' : 'color:var(--color-accent);'));
+  const glyph = !it.scored ? '·' : (it.filled ? '✓' : (it.severity==='critical' ? '!' : '△'));
+  const glyphColor = !it.scored ? 'var(--color-text-muted)'
+    : (it.filled ? 'var(--color-positive)' : (it.severity==='critical' ? 'var(--color-negative)' : 'var(--color-accent)'));
+  const mark=el('span', null, glyph);
+  mark.style.cssText='width:14px;flex:none;font-size:var(--font-size-base);font-weight:'+(glyph==='!'?'700':'400')+';color:'+glyphColor+';';
   row.appendChild(mark);
   const txt=el('div'); txt.style.cssText='flex:1;font-size:var(--font-size-base);line-height:1.4;';
   const noteHtml = it.note ? ' <span class="muted" style="font-size:var(--font-size-sm);">— '+it.note+'</span>' : '';
@@ -990,6 +1005,18 @@ function buildWiki(box){
           tourBtn.onclick=startTour;
           lh.appendChild(tourBtn);
           live.appendChild(lh);
+          // Icon legend (2026-07-23, Jason: "is there a legend...which is a default usable value
+          // vs something I need to enter to unblock a capability?") — spelled out once, plainly,
+          // right above the checklist rather than relying on hover tooltips no one finds.
+          const legend=el('div'); legend.style.cssText='font-size:var(--font-size-sm);line-height:1.6;'+
+            'color:var(--color-text-muted);margin-bottom:var(--space-3);padding:6px 8px;'+
+            'border:1px solid var(--color-border);border-radius:var(--radius-md);';
+          legend.innerHTML =
+            '<span style="color:var(--color-positive);">✓</span> set &nbsp; '+
+            '<span style="color:var(--color-text-muted);">·</span> has a working default — nothing to fix, change only if you want to customize &nbsp; '+
+            '<span style="color:var(--color-negative);font-weight:700;">!</span> blank and blocks or skews a real calculation for everyone — worth fixing &nbsp; '+
+            '<span style="color:var(--color-accent);">△</span> blank and situational — normal to skip if it doesn\'t apply to you';
+          live.appendChild(legend);
           const barOuter=el('div'); barOuter.style.cssText='height:6px;border-radius:3px;background:var(--color-border);overflow:hidden;margin-bottom:var(--space-3);';
           const barInner=el('div'); const pct2 = sp.total?Math.round(100*sp.done/sp.total):100;
           barInner.style.cssText='height:100%;background:var(--color-accent);width:'+pct2+'%;';

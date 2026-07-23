@@ -6777,11 +6777,25 @@ async def post_secrets(req: Request):
 # isn't "incomplete", just "not customized"; still SHOWN in the card for transparency per the
 # guide, just never counted against the X-of-N and never rendered as a red/open item), jump
 # (tab, subtab) for the card's "go there" click (None for the two API-key items, which live in
-# .env, not a UI form).
+# .env, not a UI form), severity ("critical" -- default "optional" -- for a SCORED-and-UNFILLED
+# item only: 2026-07-23, per Jason: household_size's muted dot got misread as "not set" when it
+# was actually just "has a usable default." That's a different confusion from the same dot being
+# used for genuinely-blank-but-situational fields (e.g. home_value_override for a renter -- blank
+# is completely normal, nothing is wrong). "critical" = blank silently produces a WRONG or
+# incomplete number for every household (not just a missing nice-to-have) -- state_of_residence
+# (silently assumes Texas), birth_year/spouse_birth_year (every age-gated tax/benefit rule quietly
+# never fires without it), income_self/income_spouse ("nothing on the INSURANCE page computes"),
+# isr_status ("the one fact that unlocks or blocks this lane"). Everything else scored is
+# "optional" by default: either it has a graceful fallback (annual_expenses/annual_savings read
+# Monarch's own cashflow; ss_benefit just reports "unavailable" rather than a wrong number) or it's
+# genuinely situational and normal to skip (home_value_override for a renter, mortgage_rate/
+# refi_rate for someone without a mortgage, k401_*/hsa_contribution for someone without that
+# benefit, aca_slcsp pre only relevant pre-Medicare, policies/debt_rates/position_caps/estate_*
+# explicitly "optional" in their own notes already).
 SETUP_FIELDS = [
     # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
     {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
-     "key": "state_of_residence", "jump": ("plan", "assumptions"),
+     "key": "state_of_residence", "jump": ("plan", "assumptions"), "severity": "critical",
      "note": "Biggest single lever -- Estate, ACA, Tax and Cash·Debt all read it. Left blank, the app silently assumes Texas."},
     {"id": "filing_status", "tier": 1, "group": "Filing status", "cfg": "retire",
      "key": "filing_status", "scored": False, "jump": ("plan", "assumptions"),
@@ -6803,9 +6817,9 @@ SETUP_FIELDS = [
      "key": "household_size", "scored": False, "jump": ("plan", "assumptions"),
      "note": "Defaults to 2 -- change it if your tax household is a different size."},
     {"id": "birth_year", "tier": 1, "group": "Birth year", "cfg": "retire",
-     "key": "birth_year", "jump": ("plan", "assumptions")},
+     "key": "birth_year", "jump": ("plan", "assumptions"), "severity": "critical"},
     {"id": "spouse_birth_year", "tier": 1, "group": "Spouse birth year", "cfg": "retire",
-     "key": "spouse_birth_year", "required_if": "mfj", "jump": ("plan", "assumptions")},
+     "key": "spouse_birth_year", "required_if": "mfj", "jump": ("plan", "assumptions"), "severity": "critical"},
     {"id": "ss_benefit", "tier": 1, "group": "SS estimated benefit (at FRA)", "cfg": "retire",
      "key": "ss_estimated_fra_benefit", "jump": ("plan", "assumptions"),
      "note": "Best source: your own ssa.gov/myaccount statement."},
@@ -6821,10 +6835,10 @@ SETUP_FIELDS = [
 
     # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
     {"id": "income_self", "tier": 2, "group": "Your income", "cfg": "insurance",
-     "key": "income_self", "jump": ("plan", "insurance"),
+     "key": "income_self", "jump": ("plan", "insurance"), "severity": "critical",
      "note": "Nothing on the INSURANCE page computes without at least one income entered."},
     {"id": "income_spouse", "tier": 2, "group": "Spouse income", "cfg": "insurance",
-     "key": "income_spouse", "required_if": "mfj", "jump": ("plan", "insurance")},
+     "key": "income_spouse", "required_if": "mfj", "jump": ("plan", "insurance"), "severity": "critical"},
     {"id": "policies", "tier": 2, "group": "Policies in force", "cfg": "insurance",
      "key": "policies", "kind": "list", "jump": ("plan", "insurance"),
      "note": "One row per policy -- life, disability, umbrella, home, auto, LTC."},
@@ -6850,6 +6864,7 @@ SETUP_FIELDS = [
      "key": "k401_biweekly_total", "jump": ("plan", "benefits")},
     {"id": "isr_status", "tier": 2, "group": "After-tax/ISR status (mega-backdoor Roth)", "cfg": "insurance",
      "key": "inservice_rollover", "kind": "sentinel", "sentinel": "unknown", "jump": ("plan", "benefits"),
+     "severity": "critical",
      "note": "If unknown, ask your plan administrator -- it's the one fact that unlocks or blocks this lane."},
     {"id": "hsa_contribution", "tier": 2, "group": "HSA contribution", "cfg": "insurance",
      "key": "hsa_contribution", "jump": ("plan", "benefits")},
@@ -6909,7 +6924,7 @@ def _setup_progress():
         scored = applicable and spec.get("scored", True)
         item = {"id": spec["id"], "tier": spec["tier"], "group": spec["group"],
                 "filled": bool(filled), "applicable": applicable, "scored": scored,
-                "note": spec.get("note"),
+                "severity": spec.get("severity", "optional"), "note": spec.get("note"),
                 "jump": {"tab": spec["jump"][0], "subtab": spec["jump"][1]} if spec.get("jump") else None}
         t = tiers.setdefault(spec["tier"], {"tier": spec["tier"], "done": 0, "total": 0, "items": []})
         t["items"].append(item)
