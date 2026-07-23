@@ -110,10 +110,19 @@
      gray-beige page vs. crisp white cards, a real perceptible "lift") and darkened --bd/--bd2
      meaningfully so card edges are clearly visible at a glance, not just theoretically present.
      Still overrides ONLY Tier-1 primitives — nothing else needed for the whole app to re-color. */
+  /* REVISION 2 (same day): Jason's second live pass — panel/page separation now reads fine, but
+     text was still too faded (--txt/--mut leaned grey, not truly dark) and the signal colors were
+     over-desaturated ("truer" red/green/blue requested). Values below were chosen against
+     computed WCAG contrast ratios (not eyeballed): --txt near-black (18.9:1 on white, plenty of
+     headroom), --mut/--dim firmed up (8.9:1 / 4.6:1, was 6-ish/3.8), and amber/grn/red/blu all
+     picked as more saturated "true" tones while staying >=4.5:1 against white (small 9-12px text
+     in this dashboard needs real contrast, not just visual vividness) — green in particular: the
+     most saturated candidate tested (#16a34a) only cleared 3.3:1, unsafe at this font size, so
+     landed one step darker (#0f7a38, 5.4:1) as the vivid-but-legible balance. */
   :root[data-theme="daylight"]{
     --bg:#ece7dc; --panel:#ffffff; --panel2:#f5f2ea; --bd:#c9c2b0; --bd2:#a89f88;
-    --amber:#8a5a00; --txt:#232323; --mut:#6b6b63; --dim:#8f887a;
-    --grn:#1f8a52; --red:#c23b3b; --blu:#2568c4;
+    --amber:#a0530a; --txt:#111111; --mut:#4d4a42; --dim:#7a7468;
+    --grn:#0f7a38; --red:#c81e1e; --blu:#1d4ed8;
   }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--color-bg);color:var(--color-text);
@@ -2295,7 +2304,7 @@ function themeContent(){
       const swatchColors={amber:{'--bg':'#0a0b0d','--panel':'#121417','--amber':'#f0a823','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4a9eff'},
         cobalt:{'--bg':'#080b12','--panel':'#0d1420','--amber':'#4d9bff','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4ad4ff'},
         highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'},
-        daylight:{'--bg':'#ece7dc','--panel':'#ffffff','--amber':'#8a5a00','--grn':'#1f8a52','--red':'#c23b3b','--blu':'#2568c4'}}[t.key];
+        daylight:{'--bg':'#ece7dc','--panel':'#ffffff','--amber':'#a0530a','--grn':'#0f7a38','--red':'#c81e1e','--blu':'#1d4ed8'}}[t.key];
       const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${swatchColors[varname]};border:1px solid var(--color-border-strong);`;
       dots.appendChild(sw);
     });
