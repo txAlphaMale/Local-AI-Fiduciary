@@ -145,22 +145,43 @@ def run(facts, limits=None):
                                       f"(2026 {cov} limit ${hsa_limit:,.0f})."})
 
     # ---- Roth IRA (direct vs backdoor) ----
+    # RESUME-TRACKER 2026-07-20: previously always ranked the full per_spouse_limit x2 as
+    # available headroom with no input for what's already been contributed this year — it
+    # couldn't tell "$0 contributed" from "already maxed both IRAs in January". contributed_self/
+    # _spouse are YTD dollar figures from the household register (mirrors how hsa_contribution
+    # already works); remaining_self/_spouse subtract them before ranking so the "avenue" dollar
+    # figure reflects what's actually still open, not the gross annual limit.
     magi = _f(f.get("magi")) or salary
     lo, hi = L["roth_ira_mfj_phaseout"]
     per_spouse = L["ira_limit"] + (L["ira_catchup"] if age >= 50 else 0.0)
+    contributed_self = _f(f.get("roth_contributed_self"))
+    contributed_spouse = _f(f.get("roth_contributed_spouse"))
+    remaining_self = round(max(0.0, per_spouse - contributed_self), 2)
+    remaining_spouse = round(max(0.0, per_spouse - contributed_spouse), 2)
+    remaining_total = round(remaining_self + remaining_spouse, 2)
+    contributed_note = ""
+    if contributed_self or contributed_spouse:
+        contributed_note = (f" (${contributed_self + contributed_spouse:,.0f} already contributed "
+                            f"YTD across both — ${remaining_total:,.0f} of this year's room remains.)")
     if magi < lo:
         ira_status, ira_msg = "direct", (f"MAGI ~${magi:,.0f} is below the ${lo:,.0f} MFJ "
                                          f"phase-out — BOTH spouses can contribute "
                                          f"${per_spouse:,.0f} directly to Roth IRAs; no backdoor "
-                                         "gymnastics needed.")
-        out["rank"].append({"avenue": "Roth IRA ×2 (direct)", "dollars": per_spouse * 2,
-                            "why": "tax-free growth, no RMD, heirs inherit income-tax-free"})
+                                         "gymnastics needed." + contributed_note)
+        if remaining_total > 0:
+            out["rank"].append({"avenue": "Roth IRA ×2 (direct)", "dollars": remaining_total,
+                                "why": "tax-free growth, no RMD, heirs inherit income-tax-free"})
     elif magi < hi:
-        ira_status, ira_msg = "partial", f"MAGI in the ${lo:,.0f}–${hi:,.0f} phase-out — partial direct, or backdoor."
+        ira_status, ira_msg = "partial", (f"MAGI in the ${lo:,.0f}–${hi:,.0f} phase-out — partial "
+                                          "direct, or backdoor." + contributed_note)
     else:
-        ira_status, ira_msg = "backdoor", "Over the phase-out — the backdoor route (watch pro-rata if any pre-tax IRA exists)."
+        ira_status, ira_msg = "backdoor", ("Over the phase-out — the backdoor route (watch "
+                                           "pro-rata if any pre-tax IRA exists)." + contributed_note)
     out["sections"]["roth_ira"] = {"status": ira_status, "per_spouse_limit": per_spouse,
-                                   "phaseout_mfj": [lo, hi], "msg": ira_msg}
+                                   "phaseout_mfj": [lo, hi], "msg": ira_msg,
+                                   "contributed_self": contributed_self, "contributed_spouse": contributed_spouse,
+                                   "remaining_self": remaining_self, "remaining_spouse": remaining_spouse,
+                                   "remaining_total": remaining_total}
 
     # ---- Mega-backdoor capacity (§415(c)) ----
     total_415 = ee_dollars + m["earned_match_dollars"] + salary * _f(f.get("aftertax_pct")) / 100.0

@@ -5082,7 +5082,9 @@ def get_benefits():
              "hsa_coverage": cfg.get("hsa_coverage"),
              "hsa_contribution": cfg.get("hsa_contribution"),
              "hsa_invested": cfg.get("hsa_invested"),
-             "magi": (cfg.get("income_self") or 0) + (cfg.get("income_spouse") or 0)}
+             "magi": (cfg.get("income_self") or 0) + (cfg.get("income_spouse") or 0),
+             "roth_contributed_self": cfg.get("roth_ira_contribution_self"),
+             "roth_contributed_spouse": cfg.get("roth_ira_contribution_spouse")}
     res = benefits.run(facts)
     res["facts"] = facts
     res["generated_at"] = int(time.time())
@@ -5175,13 +5177,14 @@ def get_cashdebt():
                    if a.get("is_asset") is False and _is_mortgage_account(a, mort_overrides))
     debts = []
     rates = cfg.get("debt_rates") or {}
+    min_payments = cfg.get("debt_min_payments") or {}
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             if _is_mortgage_account(a, mort_overrides):
                 continue
             nm = a.get("name") or "?"
             debts.append({"name": nm, "balance": abs(a.get("balance") or 0),
-                          "rate_pct": rates.get(nm)})
+                          "rate_pct": rates.get(nm), "min_payment": min_payments.get(nm)})
     inputs = {"cash_total": _cash_total(d),
               "annual_expenses": exp,
               "needs_pct": ret.get("needs_pct_of_expenses") or 65,
@@ -5193,6 +5196,7 @@ def get_cashdebt():
               "mortgage_payment_monthly": cfg.get("mortgage_payment_monthly"),
               "refi_rate_pct": cfg.get("refi_rate_pct"),
               "refi_closing_costs": cfg.get("refi_closing_costs"),
+              "debt_extra_monthly": cfg.get("debt_extra_monthly"),
               "debts": debts}
     sinfo = _state_of_residence_info(ret, d)
     inputs["state"] = sinfo["code"]
@@ -5215,6 +5219,13 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      "mortgage_rate_pct": None, "mortgage_payment_monthly": None,
                      "deposit_yield_pct": None, "refi_rate_pct": None,
                      "refi_closing_costs": None, "debt_rates": {},
+                     # debt_min_payments{name: $/mo}, debt_extra_monthly ($): RESUME-TRACKER
+                     # 2026-07-20 payoff-simulator inputs — mirrors debt_rates' shape (keyed by
+                     # the same Monarch account name). No amortization/snowball simulation is
+                     # possible without a minimum payment per debt (a guessed one could mislead a
+                     # real payoff schedule); debt_extra_monthly is the household's chosen extra
+                     # $/mo budget to throw at whichever debt the strategy targets.
+                     "debt_min_payments": {}, "debt_extra_monthly": None,
                      # is_mortgage_overrides{name: bool}: the "mortgage"/"home loan" name-substring
                      # heuristic below misses accounts like a Rocket-branded loan that never says
                      # "mortgage" in its Monarch name — a per-account override, checked in the
@@ -5232,6 +5243,11 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      "k401_pay_frequency": "biweekly", "k401_pay_periods_custom": None,
                      "plan_aftertax": False, "inservice_rollover": "unknown",
                      "hsa_coverage": "family", "hsa_contribution": None, "hsa_invested": True,
+                     # roth_ira_contribution_self/_spouse: YTD $ already contributed this year
+                     # (RESUME-TRACKER 2026-07-20) — mirrors hsa_contribution's pattern. Without
+                     # this, benefits.py's roth_ira headroom always assumed $0 contributed and
+                     # ranked the full annual limit x2, with no way to know if it was already maxed.
+                     "roth_ira_contribution_self": None, "roth_ira_contribution_spouse": None,
                      # OPP-5 continuity binder (PLAN→CONTINUITY): key-contacts register — attorney,
                      # CPA, financial advisor, insurance agent, executor, guardian, etc. Nothing here
                      # is computed; it's just surfaced verbatim into the binder for the survivor.
@@ -5275,7 +5291,8 @@ async def post_insurance_config(req: Request):
               "refi_rate_pct", "refi_closing_costs",
               "k401_pretax_pct", "k401_aftertax_pct", "k401_match_t1_pct", "k401_match_t1_rate",
               "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total",
-              "k401_pay_periods_custom", "hsa_contribution"):
+              "k401_pay_periods_custom", "hsa_contribution",
+              "debt_extra_monthly", "roth_ira_contribution_self", "roth_ira_contribution_spouse"):
         if k in body:
             try:
                 cfg[k] = None if body[k] in (None, "") else float(body[k])
@@ -5289,6 +5306,14 @@ async def post_insurance_config(req: Request):
             except (TypeError, ValueError):
                 pass
         cfg["debt_rates"] = dr
+    if isinstance(body.get("debt_min_payments"), dict):
+        dmp = {}
+        for nm, v in list(body["debt_min_payments"].items())[:30]:
+            try:
+                dmp[str(nm)[:120]] = float(v)
+            except (TypeError, ValueError):
+                pass
+        cfg["debt_min_payments"] = dmp
     if isinstance(body.get("is_mortgage_overrides"), dict):
         # MERGE (not replace) — an account correctly flagged mortgage no longer appears in the
         # avalanche table, so it can't be re-sent by a later save; a full-replace would silently
@@ -6646,6 +6671,176 @@ async def post_secrets(req: Request):
     except Exception:
         pass
     return {"ok": True, "saved": saved, "ignored": ignored, "restart_required": bool(saved)}
+
+
+# ============ Persistent setup-progress checklist card (RESUME-TRACKER "START HERE NEXT
+# SESSION" item, 2026-07-19 -> built 2026-07-22) ============
+# Unified completeness model across EVERY optional onboarding field described in
+# NEW-USER-SETUP-GUIDE.md / the W('setup-guide', ...) wiki entry. Before this, only 2 fields
+# (household income, feeding the BENEFITS/INSURANCE `setup_needed` flag) had any coded
+# "is this filled in" check anywhere in the app -- everything else was invisible to the app
+# itself, only documented in the static guide. This is the bigger, real-work alternative to
+# the per-field spotlights (`setupSpotlight()`/`SETUP_DISMISSED`, 2026-07-19 option (b)):
+# those only fire once you're already deep in a panel that needs one specific field; this
+# gives a single at-a-glance "X of N done" view up front, on the Dashboard.
+#
+# Each spec: id, tier (1/2/3, mirrors the guide's tiers), group (display label matching the
+# guide's row), cfg (which store the key lives in: retire/insurance/policy/secret), key (the
+# actual config key), kind ("scalar" default -- None/"" = blank; "list"/"dict" -- empty = blank;
+# "sentinel" -- a specific non-None placeholder value, e.g. inservice_rollover's "unknown",
+# counts as blank), required_if ("mfj" -- only scored for a married household, e.g. spouse age/
+# income/birth year never show as an open item for a single filer), scored (False for fields
+# that ship with an already-reasonable default -- filing_status defaults to mfj, target_age to
+# 60, household_size to 2, the IPS policy targets to a 70/10/15/5 draft -- so leaving them alone
+# isn't "incomplete", just "not customized"; still SHOWN in the card for transparency per the
+# guide, just never counted against the X-of-N and never rendered as a red/open item), jump
+# (tab, subtab) for the card's "go there" click (None for the two API-key items, which live in
+# .env, not a UI form).
+SETUP_FIELDS = [
+    # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
+    {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
+     "key": "state_of_residence", "jump": ("plan", "assumptions"),
+     "note": "Biggest single lever -- Estate, ACA, Tax and Cash·Debt all read it. Left blank, the app silently assumes Texas."},
+    {"id": "filing_status", "tier": 1, "group": "Filing status", "cfg": "retire",
+     "key": "filing_status", "scored": False, "jump": ("plan", "assumptions"),
+     "note": "Defaults to Married Filing Jointly -- change it if that's not accurate."},
+    {"id": "current_age", "tier": 1, "group": "Current age", "cfg": "retire",
+     "key": "current_age", "jump": ("plan", "assumptions")},
+    {"id": "spouse_age", "tier": 1, "group": "Spouse age", "cfg": "retire",
+     "key": "spouse_age", "required_if": "mfj", "jump": ("plan", "assumptions")},
+    {"id": "target_age", "tier": 1, "group": "Target retirement age", "cfg": "retire",
+     "key": "target_age", "scored": False, "jump": ("plan", "assumptions"),
+     "note": "Defaults to 60 -- change it if you're aiming for a different age."},
+    {"id": "annual_expenses", "tier": 1, "group": "Annual expenses", "cfg": "retire",
+     "key": "annual_expenses_override", "jump": ("plan", "assumptions"),
+     "note": "Leave blank to use Monarch's own cashflow read where available."},
+    {"id": "annual_savings", "tier": 1, "group": "Annual savings", "cfg": "retire",
+     "key": "annual_savings_override", "jump": ("plan", "assumptions")},
+    {"id": "household_size", "tier": 1, "group": "Household size", "cfg": "retire",
+     "key": "household_size", "scored": False, "jump": ("plan", "assumptions"),
+     "note": "Defaults to 2 -- change it if your tax household is a different size."},
+    {"id": "birth_year", "tier": 1, "group": "Birth year", "cfg": "retire",
+     "key": "birth_year", "jump": ("plan", "assumptions")},
+    {"id": "spouse_birth_year", "tier": 1, "group": "Spouse birth year", "cfg": "retire",
+     "key": "spouse_birth_year", "required_if": "mfj", "jump": ("plan", "assumptions")},
+    {"id": "ss_benefit", "tier": 1, "group": "SS estimated benefit (at FRA)", "cfg": "retire",
+     "key": "ss_estimated_fra_benefit", "jump": ("plan", "assumptions"),
+     "note": "Best source: your own ssa.gov/myaccount statement."},
+    {"id": "estate_donees", "tier": 1, "group": "Estate donees (# of people)", "cfg": "retire",
+     "key": "estate_donees", "jump": ("plan", "assumptions")},
+    {"id": "estate_home_basis", "tier": 1, "group": "Estate home cost basis", "cfg": "retire",
+     "key": "estate_home_basis", "jump": ("plan", "assumptions"),
+     "note": "Purchase price + capital improvements on your primary residence."},
+
+    # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
+    {"id": "income_self", "tier": 2, "group": "Your income", "cfg": "insurance",
+     "key": "income_self", "jump": ("plan", "insurance"),
+     "note": "Nothing on the INSURANCE page computes without at least one income entered."},
+    {"id": "income_spouse", "tier": 2, "group": "Spouse income", "cfg": "insurance",
+     "key": "income_spouse", "required_if": "mfj", "jump": ("plan", "insurance")},
+    {"id": "policies", "tier": 2, "group": "Policies in force", "cfg": "insurance",
+     "key": "policies", "kind": "list", "jump": ("plan", "insurance"),
+     "note": "One row per policy -- life, disability, umbrella, home, auto, LTC."},
+    {"id": "home_value_override", "tier": 2, "group": "Home value override", "cfg": "insurance",
+     "key": "home_value_override", "jump": ("plan", "insurance"),
+     "note": "Only needed if your home isn't tracked via Monarch/Zillow."},
+
+    # ---- Tier 2: PLAN -> CASH·DEBT (same insurance.json register) ----
+    {"id": "mortgage_rate", "tier": 2, "group": "Mortgage rate + monthly payment", "cfg": "insurance",
+     "key": "mortgage_rate_pct", "jump": ("plan", "cashdebt")},
+    {"id": "refi_rate", "tier": 2, "group": "Refi candidate rate + closing costs", "cfg": "insurance",
+     "key": "refi_rate_pct", "jump": ("plan", "cashdebt")},
+    {"id": "deposit_yield", "tier": 2, "group": "Deposit yield (checking/savings APY)", "cfg": "insurance",
+     "key": "deposit_yield_pct", "jump": ("plan", "cashdebt")},
+    {"id": "debt_rates", "tier": 2, "group": "Per-debt APRs", "cfg": "insurance",
+     "key": "debt_rates", "kind": "dict", "jump": ("plan", "cashdebt"),
+     "note": "Only debts missing a rate show as set-rate on the avalanche table."},
+
+    # ---- Tier 2: PLAN -> BENEFITS (same insurance.json register) ----
+    {"id": "k401_pretax", "tier": 2, "group": "401(k) % + match formula", "cfg": "insurance",
+     "key": "k401_pretax_pct", "jump": ("plan", "benefits")},
+    {"id": "k401_biweekly", "tier": 2, "group": "Per-paycheck 401(k) total", "cfg": "insurance",
+     "key": "k401_biweekly_total", "jump": ("plan", "benefits")},
+    {"id": "isr_status", "tier": 2, "group": "After-tax/ISR status (mega-backdoor Roth)", "cfg": "insurance",
+     "key": "inservice_rollover", "kind": "sentinel", "sentinel": "unknown", "jump": ("plan", "benefits"),
+     "note": "If unknown, ask your plan administrator -- it's the one fact that unlocks or blocks this lane."},
+    {"id": "hsa_contribution", "tier": 2, "group": "HSA contribution", "cfg": "insurance",
+     "key": "hsa_contribution", "jump": ("plan", "benefits")},
+
+    # ---- Tier 3: everyone eventually, not everyone immediately ----
+    {"id": "aca_slcsp", "tier": 3, "group": "ACA benchmark premium (SLCSP)", "cfg": "retire",
+     "key": "aca_slcsp_annual", "jump": ("plan", "assumptions"),
+     "note": "Only relevant pre-Medicare (before 65)."},
+    {"id": "policy_targets", "tier": 3, "group": "IPS policy targets", "cfg": "policy",
+     "key": "targets_by_sleeve", "scored": False, "jump": ("insights", "drift"),
+     "note": "Ships with a reasonable default (70/10/15/5 US-equity/Intl/Bond/Cash) -- only edit if yours differs."},
+    {"id": "position_caps", "tier": 3, "group": "Position caps per ticker", "cfg": "policy",
+     "key": "position_caps", "kind": "dict", "jump": ("insights", "drift"),
+     "note": "Optional -- only if you want a per-name concentration alert."},
+    {"id": "api_finnhub", "tier": 3, "group": "Finnhub API key", "cfg": "secret",
+     "key": "FINNHUB_API_KEY", "jump": None,
+     "note": "Set in .env (see INSTALL.md) -- gates Research briefs and grounded valuation."},
+    {"id": "api_tavily", "tier": 3, "group": "Tavily API key", "cfg": "secret",
+     "key": "TAVILY_API_KEY", "jump": None,
+     "note": "Set in .env (see INSTALL.md) -- gates news alerts and opportunity scanning."},
+]
+
+
+def _setup_field_filled(spec, retire, insurance, policy, secrets_set):
+    """True if `spec`'s value counts as provided. `secrets_set` is the set of secret keys that
+    are set (env-locked OR saved) -- same definition /api/secrets itself uses."""
+    if spec["cfg"] == "secret":
+        return spec["key"] in secrets_set
+    cfg = {"retire": retire, "insurance": insurance, "policy": policy}.get(spec["cfg"]) or {}
+    val = cfg.get(spec["key"])
+    kind = spec.get("kind", "scalar")
+    if kind in ("list", "dict"):
+        return bool(val)
+    if kind == "sentinel":
+        return val is not None and val != spec.get("sentinel")
+    return val not in (None, "")
+
+
+def _setup_progress():
+    """Compute the full onboarding completeness model: every SETUP_FIELDS entry checked against
+    the LIVE config, grouped by tier, with an honest X-of-N that only counts fields where
+    "blank" really means "not yet provided" for THIS household (married-only fields are excluded
+    from a single filer's denominator; already-reasonable-default fields are shown but never
+    counted -- see SETUP_FIELDS' docstring)."""
+    retire = _read_retire()
+    insurance = _read_insurance_cfg()
+    policy = _read_policy()
+    married = tax.norm_status(retire.get("filing_status") or "mfj") == "mfj"
+    secrets_stored = _read_secrets()
+    secrets_set = {s["key"] for s in SECRET_SPECS
+                   if s["key"] in _ENV_SECRETS_AT_BOOT or bool(secrets_stored.get(s["key"]))}
+
+    tiers = {}
+    for spec in SETUP_FIELDS:
+        applicable = not (spec.get("required_if") == "mfj" and not married)
+        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set)
+        scored = applicable and spec.get("scored", True)
+        item = {"id": spec["id"], "tier": spec["tier"], "group": spec["group"],
+                "filled": bool(filled), "applicable": applicable, "scored": scored,
+                "note": spec.get("note"),
+                "jump": {"tab": spec["jump"][0], "subtab": spec["jump"][1]} if spec.get("jump") else None}
+        t = tiers.setdefault(spec["tier"], {"tier": spec["tier"], "done": 0, "total": 0, "items": []})
+        t["items"].append(item)
+        if scored:
+            t["total"] += 1
+            if filled:
+                t["done"] += 1
+    tier_list = [tiers[k] for k in sorted(tiers)]
+    done = sum(t["done"] for t in tier_list)
+    total = sum(t["total"] for t in tier_list)
+    return {"done": done, "total": total,
+            "pct": round(100.0 * done / total, 1) if total else 100.0,
+            "married": married, "tiers": tier_list}
+
+
+@app.get("/api/setup-progress")
+def get_setup_progress():
+    return _setup_progress()
 
 
 def _dividend_drip_split():

@@ -137,19 +137,125 @@ def refi_break_even(balance, current_payment, refi_rate_pct, closing_costs, term
 
 
 def avalanche(debts, invest_hurdle_pct):
-    """Non-mortgage debts ranked by rate; anything above the hurdle is 'pay first'."""
+    """Non-mortgage debts ranked by rate; anything above the hurdle is 'pay first'.
+    Also ranks by real DOLLAR cost (RESUME-TRACKER 2026-07-20, Jason's "lazy" assessment):
+    rate-only ranking can bury a large low-rate balance's real $/yr cost behind a tiny
+    high-rate one (e.g. a $21 card at 19.49% vs a $16,000 loan at 7.7%) — `dollar_rank` and
+    `top_dollar_cost`/`rate_vs_dollar_disagree` surface that without changing the existing
+    rate-based `priority`/row order, which is still the correct avalanche METHOD (rate is the
+    right thing to target first for the guaranteed-return argument; dollar cost is a separate,
+    complementary fact worth seeing alongside it, not a replacement)."""
     rows = []
     for d in debts or []:
         bal, rate = _f(d.get("balance"), 0.0), _f(d.get("rate_pct"))
+        minp = _f(d.get("min_payment"))
         rows.append({"name": d.get("name"), "balance": round(bal, 2), "rate_pct": rate,
+                     "min_payment": minp,
                      "priority": ("set-rate" if rate is None else
                                   ("pay-first" if rate > invest_hurdle_pct else "carry")),
                      "annual_interest": (round(bal * rate / 100.0, 2) if rate is not None else None)})
     rows.sort(key=lambda x: -(x["rate_pct"] or -1))
+    by_dollar = sorted([r for r in rows if r["annual_interest"] is not None],
+                       key=lambda x: -x["annual_interest"])
+    for rank, r in enumerate(by_dollar, start=1):
+        r["dollar_rank"] = rank
+    top_rate_name = rows[0]["name"] if rows and rows[0]["rate_pct"] is not None else None
+    top_dollar_name = by_dollar[0]["name"] if by_dollar else None
     return {"rows": rows, "invest_hurdle_pct": invest_hurdle_pct,
+            "top_dollar_cost": by_dollar[0] if by_dollar else None,
+            "rate_vs_dollar_disagree": bool(top_rate_name and top_dollar_name and top_rate_name != top_dollar_name),
             "note": ("Avalanche = highest rate first; any debt costing more than the expected "
                      "nominal return is a guaranteed-return prepayment target. 'set-rate' rows "
-                     "need their APR entered in the register.")}
+                     "need their APR entered in the register. Rate ranks the guaranteed RETURN of "
+                     "paying a debt off first; dollar_rank ranks actual $/yr interest cost — a "
+                     "large low-rate balance can cost more in real dollars than a tiny high-rate "
+                     "one, even though the smaller one is still the mathematically better target.")}
+
+
+def payoff_simulator(debts, extra_monthly=0.0, max_months=600):
+    """Month-by-month amortization comparing AVALANCHE (highest rate first) against SNOWBALL
+    (smallest balance first), with each retired debt's own minimum payment rolling PERMANENTLY
+    onto the remaining queue (the real "snowball" behavior Jason described — a payoff frees
+    capacity for every month after, not just the one it happens in), plus any user-chosen extra
+    monthly budget. Within a single month, if the current target's balance is smaller than the
+    available extra pool, the leftover cascades to the next debt in priority order the SAME
+    month rather than being wasted.
+
+    Interest accrues monthly on the remaining balance (simple monthly compounding) — a
+    reasonable decision-support approximation, not a precise daily-accrual schedule; a debt
+    with an intro/variable rate will drift from this estimate once its real rate changes.
+
+    Only debts with BOTH an APR and a minimum payment set are simulated — a guessed minimum
+    payment could materially mislead a real payoff schedule, so a debt missing either is
+    reported in `excluded` (with which field is missing) instead of silently assumed."""
+    ready, excluded = [], []
+    for d in (debts or []):
+        name = d.get("name")
+        bal = _f(d.get("balance"), 0.0)
+        rate = _f(d.get("rate_pct"))
+        minp = _f(d.get("min_payment"))
+        if bal <= 0:
+            continue
+        if rate is None or not minp:
+            missing = []
+            if rate is None:
+                missing.append("APR")
+            if not minp:
+                missing.append("minimum payment")
+            excluded.append({"name": name, "balance": round(bal, 2), "missing": missing})
+            continue
+        ready.append({"name": name, "balance": bal, "rate_pct": rate, "min_payment": minp})
+    if not ready:
+        return {"available": False, "excluded": excluded,
+                "note": "Enter both an APR and a minimum payment for at least one debt to run the payoff simulator."}
+
+    def _simulate(order_key):
+        sim = [dict(d) for d in ready]
+        months, total_interest = 0, 0.0
+        extra_pool_monthly = _f(extra_monthly, 0.0) or 0.0
+        while any(d["balance"] > 0.01 for d in sim) and months < max_months:
+            months += 1
+            for d in sim:
+                if d["balance"] > 0:
+                    interest = d["balance"] * (d["rate_pct"] / 100.0 / 12.0)
+                    d["balance"] += interest
+                    total_interest += interest
+            for d in sim:
+                if d["balance"] <= 0:
+                    continue
+                pay = min(d["min_payment"], d["balance"])
+                d["balance"] -= pay
+                if d["balance"] <= 0.01:
+                    d["balance"] = 0.0
+                    extra_pool_monthly += d["min_payment"]   # freed permanently, from this month on
+            remaining = sorted((d for d in sim if d["balance"] > 0.01), key=order_key)
+            pool = extra_pool_monthly
+            for d in remaining:
+                if pool <= 0:
+                    break
+                pay = min(pool, d["balance"])
+                d["balance"] -= pay
+                pool -= pay
+                if d["balance"] <= 0.01:
+                    d["balance"] = 0.0
+                    extra_pool_monthly += d["min_payment"]   # this one also frees up, for NEXT month
+        resolved = months < max_months
+        return {"months": months if resolved else None, "resolved": resolved,
+                "total_interest": round(total_interest, 2)}
+
+    av = _simulate(lambda d: -d["rate_pct"])
+    sn = _simulate(lambda d: d["balance"])
+    return {"available": True, "extra_monthly": _f(extra_monthly, 0.0) or 0.0, "excluded": excluded,
+            "debts_simulated": [d["name"] for d in ready], "avalanche": av, "snowball": sn,
+            "interest_saved_by_avalanche": (round(sn["total_interest"] - av["total_interest"], 2)
+                                             if av["resolved"] and sn["resolved"] else None),
+            "note": ("Avalanche targets the highest-rate debt first; snowball targets the "
+                     "smallest balance first. Each payoff frees that debt's own minimum payment, "
+                     "which rolls onto the remaining queue for every month after (true rollover), "
+                     "plus your extra monthly budget above. Avalanche minimizes total interest by "
+                     "construction; snowball can still be the better real-world choice if the "
+                     "faster small-balance wins keep you paying at all — a behavioral tradeoff, "
+                     "not a math error.")}
 
 
 def run(inputs, knobs=None):
@@ -170,6 +276,7 @@ def run(inputs, knobs=None):
                            i.get("refi_rate_pct"), i.get("refi_closing_costs"),
                            _f(i.get("refi_term_years"), k["refi_term_years"]))
     av = avalanche(i.get("debts"), exp_nom)
+    payoff = payoff_simulator(i.get("debts"), i.get("debt_extra_monthly"))
     alerts = []
     if ef["status"] == "critical":
         alerts.append({"level": "action", "msg": f"Emergency fund covers only "
@@ -186,8 +293,15 @@ def run(inputs, knobs=None):
             alerts.append({"level": "warn", "msg": f"{r_['name']}: {r_['rate_pct']}% APR beats the "
                            f"{exp_nom}% invest hurdle — avalanche target "
                            f"(~${r_['annual_interest']:,.0f}/yr interest)."})
+    if payoff.get("available") and payoff["avalanche"]["resolved"] and payoff["snowball"]["resolved"]:
+        alerts.append({"level": "info",
+                       "msg": f"At ${payoff['extra_monthly']:,.0f}/mo extra: avalanche clears "
+                              f"non-mortgage debt in {payoff['avalanche']['months']} months "
+                              f"(${payoff['avalanche']['total_interest']:,.0f} interest) vs "
+                              f"snowball's {payoff['snowball']['months']} months "
+                              f"(${payoff['snowball']['total_interest']:,.0f} interest)."})
     return {"emergency_fund": ef, "idle_cash": ic, "mortgage": mort, "refi": refi,
-            "avalanche": av, "alerts": alerts, "knobs": k,
+            "avalanche": av, "payoff_simulator": payoff, "alerts": alerts, "knobs": k,
             "note": ("Cash, liquidity and debt hygiene from the live balance sheet. Educational "
                      "decision-support — liquidity and job-security context always trumps the "
                      "spreadsheet on emergency-fund sizing.")}

@@ -245,7 +245,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
@@ -294,6 +294,88 @@ function setupSpotlight(id, msg, actionLabel, actionFn){
   x.style.cssText='cursor:pointer;color:var(--color-text-muted);padding:0 var(--space-1);'; x.onclick=()=>dismissSetup(id);
   box.appendChild(x);
   return box;
+}
+
+// Persistent Dashboard setup-progress checklist card (RESUME-TRACKER "START HERE NEXT SESSION"
+// item, 2026-07-19 -> built 2026-07-22 — option (a), the bigger alternative to the per-field
+// spotlights above). Backed by GET /api/setup-progress (SETUP_FIELDS in app.py), a unified
+// completeness model across every optional onboarding field in NEW-USER-SETUP-GUIDE.md /
+// W('setup-guide', ...), not just the 2 fields the old `setup_needed` flag covered. Dismiss
+// state is separate from SETUP_DISMISSED (the per-field spotlights) and, unlike those,
+// "dismissed" here never means gone forever — it collapses to a small reopenable chip
+// (fidSetupCardDismissed in localStorage) rather than disappearing.
+let SETUP_CARD_DISMISSED=false;
+try{ SETUP_CARD_DISMISSED = localStorage.getItem('fidSetupCardDismissed')==='1'; }catch(_){ SETUP_CARD_DISMISSED=false; }
+function dismissSetupCard(){ SETUP_CARD_DISMISSED=true; try{ localStorage.setItem('fidSetupCardDismissed','1'); }catch(_){} render(); }
+function reopenSetupCard(){ SETUP_CARD_DISMISSED=false; try{ localStorage.setItem('fidSetupCardDismissed','0'); }catch(_){} render(); }
+const SETUP_TIER_LABEL = {1:'TIER 1 · do these first', 2:'TIER 2 · real dollars if they apply to you', 3:'TIER 3 · everyone eventually, not everyone immediately'};
+function setupItemRow(it){
+  const row=el('div'); row.style.cssText='display:flex;align-items:flex-start;gap:var(--space-2);padding:2px 0;';
+  const mark=el('span', null, !it.scored ? '·' : (it.filled ? '✓' : '○'));
+  mark.style.cssText='width:14px;flex:none;font-size:var(--font-size-base);'+
+    (!it.scored ? 'color:var(--color-text-muted);' : (it.filled ? 'color:var(--color-positive);' : 'color:var(--color-accent);'));
+  row.appendChild(mark);
+  const txt=el('div'); txt.style.cssText='flex:1;font-size:var(--font-size-base);line-height:1.4;';
+  txt.innerHTML = it.group + (it.note ? ' <span class="muted" style="font-size:var(--font-size-sm);">— '+it.note+'</span>' : '');
+  row.appendChild(txt);
+  if(!it.filled && it.jump){
+    const go=el('span',null,'GO →'); go.title='Jump to the panel that has this field';
+    go.style.cssText='cursor:pointer;color:var(--color-accent);font-size:var(--font-size-sm);white-space:nowrap;flex:none;';
+    go.onclick=()=>{ TAB=it.jump.tab; setSubtab(it.jump.tab, it.jump.subtab); };
+    row.appendChild(go);
+  } else if(!it.filled && !it.jump){
+    const hint=el('span','muted','.env — see INSTALL.md'); hint.style.cssText='font-size:var(--font-size-sm);white-space:nowrap;flex:none;';
+    row.appendChild(hint);
+  }
+  return row;
+}
+function setupProgressCard(){
+  const sp = SETUPPROG;
+  if(!sp || sp.error) return null;   // still loading, or the endpoint isn't there yet — render nothing over a broken card
+  const wrap=el('div');
+  if(SETUP_CARD_DISMISSED){
+    // Slim, always-present reopen affordance — the whole point is this is NOT "gone forever"
+    // the way a dismissed per-field spotlight is.
+    const chip=el('div'); chip.title='Reopen the first-time setup checklist';
+    chip.style.cssText='display:inline-flex;align-items:center;gap:var(--space-2);cursor:pointer;'+
+      'border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-1) var(--space-2);'+
+      'margin-bottom:var(--space-3);font-size:var(--font-size-sm);color:var(--color-text-muted);';
+    chip.textContent = '▸ First-time setup: '+sp.done+' of '+sp.total+' done';
+    chip.onclick=reopenSetupCard;
+    wrap.appendChild(chip);
+    return wrap;
+  }
+  const box=el('div'); box.style.cssText='border:1px solid var(--color-accent);border-radius:var(--radius-lg);'+
+    'padding:var(--space-3);margin-bottom:var(--space-3);background:var(--overlay-accent-weaker);';
+  const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);flex-wrap:wrap;';
+  head.innerHTML = '<span class="ph" style="border:none;padding:0;margin:0;">⚑ FIRST-TIME SETUP</span>';
+  head.appendChild(wikiLink('setup-guide'));
+  const prog=el('span'); prog.style.cssText='margin-left:auto;font-size:var(--font-size-base);color:var(--color-text-muted);';
+  prog.textContent = sp.done+' of '+sp.total+' done';
+  head.appendChild(prog);
+  const x=el('span',null,'✕'); x.title='Dismiss (a small "'+sp.done+' of '+sp.total+' done" chip stays on the Dashboard so this isn\'t gone forever)';
+  x.style.cssText='cursor:pointer;color:var(--color-text-muted);padding:0 var(--space-1);'; x.onclick=dismissSetupCard;
+  head.appendChild(x);
+  box.appendChild(head);
+  const barOuter=el('div'); barOuter.style.cssText='height:6px;border-radius:3px;background:var(--color-border);overflow:hidden;margin-bottom:var(--space-3);';
+  const barInner=el('div'); const pct = sp.total ? Math.round(100*sp.done/sp.total) : 100;
+  barInner.style.cssText='height:100%;background:var(--color-accent);width:'+pct+'%;';
+  barOuter.appendChild(barInner); box.appendChild(barOuter);
+  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  intro.textContent = (sp.total>0 && sp.done>=sp.total)
+    ? 'Every optional field below is filled in — nothing left to unlock. Dismiss any time; a small reopen chip stays on the Dashboard.'
+    : 'Nothing below is required — Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting and this Dashboard already work off your connected holdings alone. Each item below unlocks one more real number somewhere. Skip anything you don\'t want to enter.';
+  box.appendChild(intro);
+  (sp.tiers||[]).forEach(t=>{
+    const visible=(t.items||[]).filter(it=>it.applicable);
+    if(!visible.length) return;
+    const th=el('div'); th.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-text-muted);margin:var(--space-2) 0 4px;';
+    th.textContent = (SETUP_TIER_LABEL[t.tier]||('TIER '+t.tier)) + (t.total ? ' — '+t.done+'/'+t.total : '');
+    box.appendChild(th);
+    visible.forEach(it=>box.appendChild(setupItemRow(it)));
+  });
+  wrap.appendChild(box);
+  return wrap;
 }
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
@@ -372,10 +454,10 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp;
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     try{ const rc=await gj('/api/research-cache?history=1'); if(rc && !rc.error){ RESEARCH_CACHE={recent:rc.recent||[], items:rc.items||{}}; } }catch(_){}
@@ -401,7 +483,7 @@ function W(id,cat,title,def,read,use){ WIKI.push({id,cat,title,def,read,use}); }
 W('setup-guide','Getting started','First-time setup checklist',
   'A ranked checklist of the optional forms — scattered across a few panels — that unlock the rest of the app beyond what your connected holdings alone already produce (Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting, and the Dashboard all work with zero setup). Ranked by biggest unlock for the least typing, not a hard dependency chain — skip anything you don\'t want to enter and that module just stays a placeholder.',
   '**Tier 1 (PLAN → ASSUMPTIONS, do this one first)**: state of residence (biggest single lever — Estate/ACA/Tax/Cash·Debt all read it; left blank, the app silently assumes Texas and flags it in ⚠ ATTENTION until set), filing status, ages, target retirement age, annual expenses/savings, household size, birth year + SS estimate, estate donee count, home cost basis. **Tier 2**: PLAN → INSURANCE (household income — nothing on that page computes without it; children; policies in force; home value override), PLAN → CASH·DEBT (mortgage rate/payment, refi rate, deposit yield, per-debt APRs, the mortgage checkbox for oddly-named loans), PLAN → BENEFITS (401(k) %/match formula, per-paycheck total, after-tax/ISR status for mega-backdoor Roth, HSA facts). **Tier 3**: ACA benchmark premium, IPS policy targets/position caps, Finnhub/Tavily API keys (`.env`, unlocks Research/news/scanning).',
-  'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist.');
+  'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist. **The Dashboard\'s ⚑ FIRST-TIME SETUP card (2026-07-22) tracks this same checklist live** against your actual saved config — a ✓/○ per field, a running "X of N done", and a GO → link that jumps straight to the panel that has it. Dismissing it leaves a small "First-time setup: X of N done" chip on the Dashboard rather than hiding it for good — click the chip any time to bring the full card back.');
 W('overview','Getting started','What this terminal is',
   'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
   'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
@@ -650,9 +732,9 @@ W('earnings-trigger','Automation','Post-earnings brief refresh (event-driven res
   'Checked once daily (08:15 local) by the internal scheduler; it only enqueues the job kind `earnings_brief` when a print is actually due, so a blank #jobs badge on a normal day is correct, not broken. Each report date only triggers once (tracked internally) so it won\'t re-fire every day the check runs. You can also force it via POST /api/run-earnings-brief.',
   'You don\'t need to do anything — this rides the ⚠ ATTENTION "Earnings" flags already on your dashboard. If a print seems to have landed but the brief still looks stale the next morning, check #jobs for `earnings_brief` or force it manually; known gap: a before-market report on a day the calendar hadn\'t yet surfaced (rare, free-tier data lag) can be missed until the NEXT scheduled analysis run.');
 W('benefits','Planning','Benefits & contribution room',
-  'The guaranteed-return ladder for the next saved dollar: employer-match capture (instant 50-100% return), HSA headroom (the only triple-tax-advantaged account), 401(k) employee-limit headroom with age catch-ups (and the >$150k mandatory-Roth catch-up rule), direct-vs-backdoor Roth IRA eligibility against the MFJ phase-out, and mega-backdoor capacity (§415(c) limit minus everything already going in). All 2026 limits are IRS-verified and registered in the AUDITS→GROUNDING watchdog, so they re-flag themselves every January.',
-  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income. The PER-PAYCHECK TOTAL field (employee+match) has its own pay-frequency selector — weekly, bi-weekly, semi-monthly (1st/15th), monthly, or a custom periods/year for irregular pay (e.g. gig work) — used to annualize it for the salary cross-check line. Pick the one that matches your actual payroll; picking the wrong one silently mis-prices the implied salary (a weekly payroll read as bi-weekly understates it by 2x).',
-  'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier.');
+  'The guaranteed-return ladder for the next saved dollar: employer-match capture (instant 50-100% return), HSA headroom (the only triple-tax-advantaged account), 401(k) employee-limit headroom with age catch-ups (and the >$150k mandatory-Roth catch-up rule), direct-vs-backdoor Roth IRA eligibility against the MFJ phase-out (now net of what you\'ve actually contributed this year, not the gross annual limit — see below), and mega-backdoor capacity (§415(c) limit minus everything already going in). All 2026 limits are IRS-verified and registered in the AUDITS→GROUNDING watchdog, so they re-flag themselves every January.',
+  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income. The PER-PAYCHECK TOTAL field (employee+match) has its own pay-frequency selector — weekly, bi-weekly, semi-monthly (1st/15th), monthly, or a custom periods/year for irregular pay (e.g. gig work) — used to annualize it for the salary cross-check line. Pick the one that matches your actual payroll; picking the wrong one silently mis-prices the implied salary (a weekly payroll read as bi-weekly understates it by 2x). **Roth IRA contributed YTD (2026-07-22)**: two new fields (you / spouse) track what you\'ve actually put into a Roth IRA so far this year — the NEXT MARGINAL DOLLAR table\'s "Roth IRA ×2" line now shows what\'s actually still open, not the full annual limit as if $0 had gone in; if both spouses have already maxed out, the line drops off the table entirely rather than falsely still recommending it.',
+  'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier. Update the Roth YTD fields whenever you make a contribution so the remaining-room figure stays honest through the year.');
 W('narrative','Dashboard','State of the Wealth (weekly letter)',
   'A plain-language weekly note the AI writes to the household by composing every module\'s cached headline — net worth and its week change, funded ratio, YTD vs your own policy, concentration and attention flags, harvestable losses, earnings ahead, and the AI\'s own track record — ending with a single THIS WEEK\'S FOCUS action. The family-office quarterly letter, weekly and personal.',
   'Top of the DASHBOARD tab. Writes itself Monday mornings through the job queue (SETTINGS → TASK SCHEDULE), or GENERATE NOW any time (watch the #jobs badge). It cites only numbers the modules actually computed — nothing is invented. It is a single one-shot generation (not a per-ticker loop like the research briefs), so on this hardware it can legitimately take several minutes; it has its own timeout (NARR_LLM_TIMEOUT, separate from the research pipeline\'s) sized for that.',
@@ -666,9 +748,9 @@ W('performance','Insights & risk','Performance vs policy (TWR)',
   'INSIGHTS → PERFORMANCE. EXCESS vs POLICY is the verdict column: green means your implementation (picks/tilts) beat the allocation itself; red means the plain policy mix would have done better. Coverage % tells you how much of the book had history; the flow-guard count tells you how approximate the tracked number is.',
   'Use it quarterly for the only honest self-review: "did my decisions add value over my own plan?" Persistent negative excess is the data telling you to index the sleeve. Money-weighted views (which include timing of contributions) live in ATTRIBUTION and the paper book.');
 W('cashdebt','Planning','Cash, liquidity & debt desk',
-  'The household-CFO hygiene panel: emergency-fund months (actual cash ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, and an avalanche ranking of non-mortgage debts against the invest hurdle.',
-  'PLAN → CASH · DEBT. Red alerts = underfunded EF or debts beating the hurdle; the drag line prices what parked cash forfeits per year. Enter mortgage rate/payment, deposit yield, refi candidates, and per-debt APRs in the editor — balances come from the live feed, the T-bill from FRED daily.',
-  'Use it monthly and on rate moves: it catches the quiet losses (idle cash, expensive debt) and answers the perennial "extra $1k: mortgage or market?" with the guaranteed-vs-expected framing instead of vibes. EF sizing judgment (job security, one vs two incomes) still overrides the spreadsheet.');
+  'The household-CFO hygiene panel: emergency-fund months (actual cash ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, an avalanche ranking of non-mortgage debts against the invest hurdle (now with a $-RANK column too — a large low-rate balance can cost more real dollars/yr than a tiny high-rate one, and the panel flags it when the two rankings disagree), and a PAYOFF SIMULATOR comparing avalanche vs snowball month-by-month.',
+  'PLAN → CASH · DEBT. Red alerts = underfunded EF or debts beating the hurdle; the drag line prices what parked cash forfeits per year. Enter mortgage rate/payment, deposit yield, refi candidates, and per-debt APRs in the editor — balances come from the live feed, the T-bill from FRED daily. **Payoff simulator (2026-07-22)**: enter a minimum payment per debt (next to its APR in the table) and an optional extra $/mo toward payoff, and it runs a real month-by-month amortization two ways — AVALANCHE (highest rate first) and SNOWBALL (smallest balance first) — each retired debt\'s own minimum payment rolls onto the rest of the queue permanently once it\'s paid off (true rollover, not just a one-time bump), reporting months-to-debt-free and total interest for each strategy side by side. A debt missing either its APR or minimum payment is listed as excluded rather than guessed at — enter both to include it.',
+  'Use it monthly and on rate moves: it catches the quiet losses (idle cash, expensive debt) and answers the perennial "extra $1k: mortgage or market?" with the guaranteed-vs-expected framing instead of vibes. EF sizing judgment (job security, one vs two incomes) still overrides the spreadsheet. Avalanche always minimizes total interest paid — but snowball\'s faster small-balance wins are a legitimate behavioral tradeoff if that\'s what keeps you paying at all; the simulator shows both so it\'s your call, not a math verdict.');
 W('continuity','Planning','Continuity binder + document currency',
   'An always-current, auto-generated estate-OPERATIONS doc for whoever has to handle things if you can\'t: an action checklist, an account-by-account map of how each one actually transfers (beneficiary vs TOD deed vs probate — pulled straight from the ESTATE titling audit), embedded gain the step-up would wipe, any debts to settle, and a key-contacts register (attorney, CPA, advisor, executor, where the will is kept). Composes numbers already computed elsewhere — it adds no new modeling, just assembles the document view of it. Paired with a DOCUMENT CURRENCY tracker (GAP-8): a recurring staleness check on your will, durable POA, healthcare directive, trust, and beneficiary-designation review — each shows the year you last reviewed it and flags ✓ current / ⚠ stale / — not recorded against an editable review-cadence knob (default 3 years).',
   'PLAN → CONTINUITY. The checklist up top is meant to be read first under stress; the document-currency table, account map, and debts below it are the supporting detail. Both sections regenerate from live data/config on every load, so neither can silently drift the way a one-time printed binder or a "I\'ll remember when I last updated my will" mental note would — though a PRINTED copy (🖶 PRINT button) obviously freezes at print time, so reprint after any major change. A stale or never-recorded document also surfaces on the ⚠ ATTENTION header badge (Estate hygiene category) so it doesn\'t require remembering to check this tab.',
@@ -1084,6 +1166,13 @@ function moversPanel(title,items,field){
 function dashboardContent(){
   const d=DATA;
   const wrap=el('div');
+  // Persistent setup-progress checklist card (RESUME-TRACKER "START HERE NEXT SESSION" item,
+  // 2026-07-19/22) — leftmost/first thing seen, per Jason's original framing. Renders nothing
+  // if /api/setup-progress hasn't loaded yet or the household has already dismissed it AND
+  // finished everything (see setupProgressCard()'s own dismissed-chip logic for the in-between
+  // dismissed-but-not-done case).
+  const spCard = setupProgressCard();
+  if(spCard) wrap.appendChild(spCard);
   // OPP-1: State-of-the-Wealth weekly letter (latest), atop the dashboard
   const nl=(NARR&&NARR.latest)||null;
   const nbox=el('div'); nbox.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);margin-bottom:var(--space-3);';
@@ -2412,7 +2501,8 @@ function benefitsContent(){
   }
   const ri=S.roth_ira||{};
   if(ri.status){ const s3=el('div'); s3.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
-    s3.innerHTML=`<b>ROTH IRA</b> — <b class="${ri.status==='direct'?'pos':''}">${esc(ri.status).toUpperCase()}</b>: <span class="muted">${esc(ri.msg)}</span>`;
+    s3.innerHTML=`<b>ROTH IRA</b> — <b class="${ri.status==='direct'?'pos':''}">${esc(ri.status).toUpperCase()}</b>: <span class="muted">${esc(ri.msg)}</span>`+
+      ((ri.contributed_self||ri.contributed_spouse)?`<br/><span class="muted" style="font-size:var(--font-size-sm);">YTD contributed — you: ${u(ri.contributed_self)} (${u(ri.remaining_self)} room left) · spouse: ${u(ri.contributed_spouse)} (${u(ri.remaining_spouse)} room left)</span>`:'');
     wrap.appendChild(s3); }
   const mb=S.mega_backdoor||{};
   if(mb.sec415c_limit){ const s4=el('div'); s4.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
@@ -2443,7 +2533,9 @@ function benefitsContent(){
     `in-service rollover <select id="bn-isr"><option${f.inservice_rollover==='unknown'?' selected':''}>unknown</option><option${f.inservice_rollover==='yes'?' selected':''}>yes</option><option${f.inservice_rollover==='no'?' selected':''}>no</option></select> `+
     `HSA <select id="bn-hc"><option${f.hsa_coverage==='family'?' selected':''}>family</option><option${f.hsa_coverage==='self'?' selected':''}>self</option></select> `+
     `contribution/yr <input id="bn-hsa" type="number" step="50" value="${pv(f.hsa_contribution)}" style="width:70px;"/> `+
-    `invested <select id="bn-hi"><option value="1"${f.hsa_invested?' selected':''}>yes</option><option value="0"${!f.hsa_invested?' selected':''}>no</option></select> `+
+    `invested <select id="bn-hi"><option value="1"${f.hsa_invested?' selected':''}>yes</option><option value="0"${!f.hsa_invested?' selected':''}>no</option></select><br/>`+
+    `Roth IRA contributed YTD — you <input id="bn-roth-self" type="number" step="50" value="${pv(f.roth_contributed_self)}" style="width:70px;" title="how much you've already put into a Roth IRA this year"/> `+
+    `spouse <input id="bn-roth-spouse" type="number" step="50" value="${pv(f.roth_contributed_spouse)}" style="width:70px;" title="how much your spouse has already put into a Roth IRA this year"/> `+
     `<button id="bn-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
@@ -2458,7 +2550,9 @@ function benefitsContent(){
           k401_pay_frequency:g('bn-freq').value, k401_pay_periods_custom:parseFloat(g('bn-freq-custom').value)||null,
           plan_aftertax:g('bn-pa').value==='1', inservice_rollover:g('bn-isr').value,
           hsa_coverage:g('bn-hc').value, hsa_contribution:parseFloat(g('bn-hsa').value)||null,
-          hsa_invested:g('bn-hi').value==='1'})});
+          hsa_invested:g('bn-hi').value==='1',
+          roth_ira_contribution_self:parseFloat(g('bn-roth-self').value)||null,
+          roth_ira_contribution_spouse:parseFloat(g('bn-roth-spouse').value)||null})});
       load(false); };
   },0);
   const sc=r.salary_crosscheck;
@@ -2510,15 +2604,52 @@ function cashdebtContent(){
   const av=r.avalanche||{};
   if((av.rows||[]).length){
     wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · AVALANCHE (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>INTEREST/yr</th><th>CALL</th><th>MORTGAGE?</th>'; t.appendChild(hr);
+    // RESUME-TRACKER 2026-07-20 (Jason: rate-only ranking is "lazy"): $-RANK surfaces real dollar
+    // cost alongside APR — a large low-rate balance can rank #1 here even while sitting near the
+    // bottom of the APR-sorted rows above it, which is exactly the case Jason flagged.
+    if(av.rate_vs_dollar_disagree && av.top_dollar_cost){
+      const dn=el('div'); dn.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);margin-bottom:var(--space-1);';
+      dn.textContent=`⚑ Highest real dollar cost is ${av.top_dollar_cost.name} (${u(av.top_dollar_cost.annual_interest)}/yr) — not the top-APR row below.`;
+      wrap.appendChild(dn);
+    }
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':(x.priority==='carry'?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
+      const minCell=`<input class="cd-minp" data-nm="${esc(x.name)}" type="number" step="5" value="${x.min_payment!=null?x.min_payment:''}" placeholder="min $" style="width:60px;"/>`;
       const mortCell=`<input class="cd-mort" data-nm="${esc(x.name)}" type="checkbox" title="This IS actually the mortgage (name detection missed it) — check + SAVE to move it out of this table and into the MORTGAGE line above."/>`;
-      tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td>`+
-        `<td>${u(x.annual_interest)}</td><td class="${pc}">${esc(x.priority)}</td><td>${mortCell}</td>`;
+      tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td><td>${minCell}</td>`+
+        `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${mortCell}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
+  }
+  // ---- payoff simulator: avalanche vs snowball, month-by-month (RESUME-TRACKER 2026-07-20) ----
+  const po=r.payoff_simulator||{};
+  if(po.available){
+    wrap.appendChild(el('div','ph','PAYOFF SIMULATOR · AVALANCHE vs SNOWBALL'));
+    const pav=po.avalanche||{}, psn=po.snowball||{};
+    const t2=el('table'); const h2=el('tr'); h2.innerHTML='<th class="l">STRATEGY</th><th>MONTHS TO DEBT-FREE</th><th>TOTAL INTEREST</th>'; t2.appendChild(h2);
+    const row=(label,res)=>{ const tr=el('tr');
+      tr.innerHTML=`<td class="l sym">${label}</td><td>${res.resolved?res.months+' mo':'>'+ (600)+' mo (doesn’t resolve at this pace)'}</td><td>${u(res.total_interest)}</td>`;
+      return tr; };
+    t2.appendChild(row('AVALANCHE (highest rate first)', pav));
+    t2.appendChild(row('SNOWBALL (smallest balance first)', psn));
+    wrap.appendChild(t2);
+    if(po.interest_saved_by_avalanche!=null){
+      const sv=el('div'); sv.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-1);';
+      sv.innerHTML=(po.interest_saved_by_avalanche>0
+        ? `Avalanche saves <b class="pos">${u(po.interest_saved_by_avalanche)}</b> in total interest vs snowball at $${po.extra_monthly||0}/mo extra.`
+        : `Both strategies land on the same total interest here.`);
+      wrap.appendChild(sv);
+    }
+    if((po.excluded||[]).length){
+      const ex=el('div','muted'); ex.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);line-height:1.4;';
+      ex.textContent='Not simulated (missing '+po.excluded.map(e=>e.name+': '+e.missing.join('/')).join('; ')+') — enter both an APR and a minimum payment above to include these.';
+      wrap.appendChild(ex);
+    }
+    const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);line-height:1.4;'; note.textContent=po.note||''; wrap.appendChild(note);
+  } else if(po.note){
+    const ex=el('div','muted'); ex.style.cssText='font-size:var(--font-size-sm);margin:var(--space-2) 0;'; ex.textContent='PAYOFF SIMULATOR: '+po.note; wrap.appendChild(ex);
   }
   // ---- inputs editor (facts ride the household register / insurance-config) ----
   const inp=r.inputs||{};
@@ -2528,13 +2659,15 @@ function cashdebtContent(){
     `P&I payment <input id="cd-mp" type="number" step="10" value="${inp.mortgage_payment_monthly!=null?inp.mortgage_payment_monthly:''}" style="width:74px;"/>/mo &nbsp; `+
     `Deposit yield <input id="cd-dy" type="number" step="0.05" value="${inp.deposit_yield_pct!=null?inp.deposit_yield_pct:''}" placeholder="0.4" style="width:56px;"/>% &nbsp; `+
     `Refi rate <input id="cd-rr" type="number" step="0.125" value="${inp.refi_rate_pct!=null?inp.refi_rate_pct:''}" style="width:60px;"/>% `+
-    `closing costs <input id="cd-cc" type="number" step="100" value="${inp.refi_closing_costs!=null?inp.refi_closing_costs:''}" style="width:74px;"/><br/>`+
-    (((av.rows||[]).length)?'<span class="muted">Per-debt APR inputs now inline in the table above.</span>':'')+
+    `closing costs <input id="cd-cc" type="number" step="100" value="${inp.refi_closing_costs!=null?inp.refi_closing_costs:''}" style="width:74px;"/> `+
+    `Extra $/mo toward debt payoff <input id="cd-extra" type="number" step="25" value="${inp.debt_extra_monthly!=null?inp.debt_extra_monthly:''}" style="width:70px;" title="feeds the avalanche/snowball payoff simulator above"/><br/>`+
+    (((av.rows||[]).length)?'<span class="muted">Per-debt APR + minimum payment inputs now inline in the table above.</span>':'')+
     `<button id="cd-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
     if(g('cd-save')) g('cd-save').onclick=async()=>{
       const dr={}; document.querySelectorAll('.cd-dr').forEach(x=>{ if(x.value!=='') dr[x.dataset.nm]=parseFloat(x.value); });
+      const dmp={}; document.querySelectorAll('.cd-minp').forEach(x=>{ if(x.value!=='') dmp[x.dataset.nm]=parseFloat(x.value); });
       const mo={}; document.querySelectorAll('.cd-mort').forEach(x=>{ if(x.checked) mo[x.dataset.nm]=true; });
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({mortgage_rate_pct:parseFloat(g('cd-mr').value)||null,
@@ -2542,7 +2675,8 @@ function cashdebtContent(){
                              deposit_yield_pct:g('cd-dy').value===''?null:parseFloat(g('cd-dy').value),
                              refi_rate_pct:parseFloat(g('cd-rr').value)||null,
                              refi_closing_costs:parseFloat(g('cd-cc').value)||null,
-                             debt_rates:dr, is_mortgage_overrides:mo})});
+                             debt_extra_monthly:parseFloat(g('cd-extra').value)||null,
+                             debt_rates:dr, debt_min_payments:dmp, is_mortgage_overrides:mo})});
       load(false); };
   },0);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);line-height:1.5;';
