@@ -95,16 +95,24 @@
     --amber:#ffb020; --txt:#f5f5f5; --mut:#b8b8b8; --dim:#868686;
     --grn:#3ddb8f; --red:#ff6b6b; --blu:#5eb3ff;
   }
-  /* DAYLIGHT (2026-07-23) — the first LIGHT variant, a harder proof of the token architecture
-     than cobalt/highcontrast: those two hue-shift an already-dark palette, this one inverts the
-     bg/text relationship entirely. All 6 signal colors (amber/grn/red/blu) are deepened from
-     their dark-theme values, since the dark theme's brighter tones read fine on near-black but
-     lose contrast/legibility used as text/accent color on a light background. Warm paper (not
-     stark white) bg to avoid harsh glare in a dense data dashboard. Overrides ONLY Tier-1
-     primitives, same as the other two — nothing else needed for the whole app to re-color. */
+  /* DAYLIGHT (2026-07-23, revised same day per Jason's live feedback) — the first LIGHT variant,
+     a harder proof of the token architecture than cobalt/highcontrast: those two hue-shift an
+     already-dark palette, this one inverts the bg/text relationship entirely. All 6 signal colors
+     (amber/grn/red/blu) are deepened from their dark-theme values, since the dark theme's
+     brighter tones read fine on near-black but lose contrast/legibility used as text/accent color
+     on a light background.
+     REVISION: the first pass (--bg:#f7f5f0/--panel:#ffffff/--bd:#ddd8cd) was too flat — Jason
+     caught it live ("too bright... difficult to visually differentiate the elements... because of
+     a shared page background and background of each element"). The dark theme gets its panel-vs-
+     page separation from strong BORDER contrast (bright amber accents + visible --bd/--bd2 against
+     near-black), not fill contrast alone — the first daylight pass had both panel fill AND border
+     too close to the page bg to read as separated cards. Fix: widened the --bg/--panel gap (warm
+     gray-beige page vs. crisp white cards, a real perceptible "lift") and darkened --bd/--bd2
+     meaningfully so card edges are clearly visible at a glance, not just theoretically present.
+     Still overrides ONLY Tier-1 primitives — nothing else needed for the whole app to re-color. */
   :root[data-theme="daylight"]{
-    --bg:#f7f5f0; --panel:#ffffff; --panel2:#f0ede6; --bd:#ddd8cd; --bd2:#c7c0b0;
-    --amber:#8a5a00; --txt:#232323; --mut:#6b6b63; --dim:#9c968a;
+    --bg:#ece7dc; --panel:#ffffff; --panel2:#f5f2ea; --bd:#c9c2b0; --bd2:#a89f88;
+    --amber:#8a5a00; --txt:#232323; --mut:#6b6b63; --dim:#8f887a;
     --grn:#1f8a52; --red:#c23b3b; --blu:#2568c4;
   }
   *{box-sizing:border-box;}
@@ -2287,7 +2295,7 @@ function themeContent(){
       const swatchColors={amber:{'--bg':'#0a0b0d','--panel':'#121417','--amber':'#f0a823','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4a9eff'},
         cobalt:{'--bg':'#080b12','--panel':'#0d1420','--amber':'#4d9bff','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4ad4ff'},
         highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'},
-        daylight:{'--bg':'#f7f5f0','--panel':'#ffffff','--amber':'#8a5a00','--grn':'#1f8a52','--red':'#c23b3b','--blu':'#2568c4'}}[t.key];
+        daylight:{'--bg':'#ece7dc','--panel':'#ffffff','--amber':'#8a5a00','--grn':'#1f8a52','--red':'#c23b3b','--blu':'#2568c4'}}[t.key];
       const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${swatchColors[varname]};border:1px solid var(--color-border-strong);`;
       dots.appendChild(sw);
     });
