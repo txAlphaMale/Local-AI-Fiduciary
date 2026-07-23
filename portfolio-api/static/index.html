@@ -316,7 +316,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
@@ -526,6 +526,9 @@ function setupProgressCard(){
 }
 let SUBTAB={}; try{ SUBTAB=JSON.parse(localStorage.getItem('fidSubtab')||'{}')||{}; }catch(_){ SUBTAB={}; }
 let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'{}')||{}; }catch(_){ SUBORDER={}; }
+// Which paper-trading scenario the STRATEGIST tab is currently viewing (2026-07-23, multi-scenario
+// ledgers) — remembered across reloads; null until the first load() resolves the server's default.
+let CURRENT_SCENARIO_ID=null; try{ CURRENT_SCENARIO_ID=localStorage.getItem('fidScenarioId')||null; }catch(_){ CURRENT_SCENARIO_ID=null; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
 function reorderSubtab(panel, orderedKeys, fromKey, toKey){
   if(fromKey===toKey) return;
@@ -601,10 +604,15 @@ async function load(refresh, bg){
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
-    const [an,ins,ret,ide,dis,str,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp;
+    // keep the scenario switcher pointed at a real scenario: adopt the server's resolved default
+    // the first time (nothing chosen yet), or if a previously-selected scenario_id was deleted.
+    if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
+      CURRENT_SCENARIO_ID=STRAT.id; try{ localStorage.setItem('fidScenarioId', CURRENT_SCENARIO_ID); }catch(_){}
+    }
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     try{ const rc=await gj('/api/research-cache?history=1'); if(rc && !rc.error){ RESEARCH_CACHE={recent:rc.recent||[], items:rc.items||{}}; } }catch(_){}
@@ -4090,33 +4098,46 @@ function lookthroughContent(){
 
 function stratPost(path,body,label){
   return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})})
-    .then(r=>r.json()).then(d=>{ if(d&&d.error){ alert(label+' failed: '+d.error); } load(false); return d; })
+    .then(r=>r.json()).then(async d=>{
+      if(d&&d.error){ alert(label+' failed: '+d.error); return d; }
+      // optimistic-ish: refetch just the (fast) single-scenario endpoint and re-render NOW, instead
+      // of waiting on load()'s ~40-endpoint batch to get back around to /api/paper — same fix as the
+      // settings/policy/cashdebt flash-revert bugs found earlier this session, applied up front here
+      // rather than repeating the mistake in new code.
+      try{
+        const sid=(d&&d.scenario_id)||CURRENT_SCENARIO_ID;
+        const fresh=await (await fetch('/api/paper'+(sid?('?scenario_id='+encodeURIComponent(sid)):''))).json();
+        if(fresh && !fresh.error){ STRAT=fresh; if(TAB==='strategist') render(); }
+      }catch(_){}
+      load(false);
+      return d;
+    })
     .catch(e=>alert(label+' failed: '+e));
 }
 function stratRun(){
   const s=document.getElementById('strat-runstatus');
-  if(s) s.textContent='⏳ Strategist review started — the model runs for several minutes. Hit REFRESH to see new trades & the weekly report.';
+  if(s) s.textContent='⏳ Strategist review started — covers every ACTIVE scenario in turn (one at a time). Hit REFRESH to see new trades & each scenario\'s weekly report.';
   fetch('/api/paper/run',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(s&&d&&d.status==='already running') s.textContent='⏳ A review is already running…'; })
     .catch(e=>{ if(s) s.textContent='Run failed: '+e; });
 }
 function stratReset(){
   const c=parseFloat(document.getElementById('strat-reset').value)||2000;
-  if(!confirm('Reset the paper portfolio to $'+c.toLocaleString()+'? This wipes positions, history, and any recurring contribution.')) return;
-  stratPost('/api/paper/reset',{starting_cash:c},'Reset');
+  if(!confirm('Reset the "'+((STRAT&&STRAT.name)||'current')+'" scenario to $'+c.toLocaleString()+'? This wipes its positions, history, and any recurring contribution — other scenarios are untouched.')) return;
+  stratPost('/api/paper/reset',{starting_cash:c,scenario_id:CURRENT_SCENARIO_ID},'Reset');
 }
 function stratContribute(){
   const a=parseFloat(document.getElementById('strat-add').value);
   if(!a||a<=0){ alert('Enter a positive amount to add.'); return; }
-  stratPost('/api/paper/contribute',{amount:a},'Contribute');
+  stratPost('/api/paper/contribute',{amount:a,scenario_id:CURRENT_SCENARIO_ID},'Contribute');
 }
 function stratRecurring(){
   const a=parseFloat(document.getElementById('strat-rec').value);
   const cad=document.getElementById('strat-cad').value;
   if(!a||a<=0){ alert('Enter a positive recurring amount.'); return; }
-  stratPost('/api/paper/recurring',{amount:a,cadence:cad},'Set recurring');
+  stratPost('/api/paper/recurring',{amount:a,cadence:cad,scenario_id:CURRENT_SCENARIO_ID},'Set recurring');
 }
-function stratStopRecurring(){ stratPost('/api/paper/recurring',{amount:0},'Stop recurring'); }
+function stratStopRecurring(){ stratPost('/api/paper/recurring',{amount:0,scenario_id:CURRENT_SCENARIO_ID},'Stop recurring'); }
 function stratSeedToggle(){ const p=document.getElementById('strat-seedpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none'); }
 function stratSeedAll(v){ document.querySelectorAll('.seedck').forEach(x=>{ x.checked=v; }); }
 function stratSeed(){
@@ -4124,8 +4145,102 @@ function stratSeed(){
   if(!tickers.length){ alert('Select at least one holding to seed.'); return; }
   const basis=document.getElementById('seed-basis').value;
   const cash=parseFloat(document.getElementById('seed-cash').value)||0;
-  if(!confirm('Reset the paper book and seed it with '+tickers.length+' of your holdings ('+basis+' basis)? This wipes the current paper portfolio.')) return;
-  stratPost('/api/paper/seed',{tickers:tickers,cash:cash,basis:basis},'Seed');
+  if(!confirm('Reset the "'+((STRAT&&STRAT.name)||'current')+'" scenario and seed it with '+tickers.length+' of your holdings ('+basis+' basis)? This wipes that scenario\'s current paper portfolio — other scenarios are untouched.')) return;
+  stratPost('/api/paper/seed',{tickers:tickers,cash:cash,basis:basis,scenario_id:CURRENT_SCENARIO_ID},'Seed');
+}
+
+// ---------------------------------------------------------------------------
+// SCENARIO SWITCHER (2026-07-23) — up to MAX_ACTIVE scenarios can be active at once (server-
+// enforced; the cap exists because each active scenario gets its own full weekly Strategist LLM
+// pass — see cashdebt-style optimistic-render notes throughout this session for why every mutating
+// action below refetches /api/paper/scenarios immediately rather than waiting on load().
+// ---------------------------------------------------------------------------
+function scenarioSwitch(sid){
+  if(sid===CURRENT_SCENARIO_ID) return;
+  CURRENT_SCENARIO_ID=sid; try{ localStorage.setItem('fidScenarioId', sid); }catch(_){}
+  fetch('/api/paper?scenario_id='+encodeURIComponent(sid)).then(r=>r.json()).then(d=>{
+    if(d && !d.error){ STRAT=d; if(TAB==='strategist') render(); }
+  }).catch(()=>{});
+}
+async function _scenariosRefresh(){
+  try{ const d=await (await fetch('/api/paper/scenarios')).json(); if(d && !d.error){ SCENARIOS=d; if(TAB==='strategist') render(); } }catch(_){}
+}
+function scenarioCreate(){
+  if(SCENARIOS && SCENARIOS.active_count>=SCENARIOS.max_active){
+    alert('Scenario cap reached ('+SCENARIOS.max_active+' active max) — archive or delete one first.'); return;
+  }
+  const name=(prompt('Name for the new scenario:')||'').trim();
+  if(!name) return;
+  const cash=parseFloat(prompt('Starting cash ($):','2000'))||2000;
+  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name,cash:cash})})
+    .then(r=>r.json()).then(d=>{
+      if(d&&d.error){ alert('Create failed: '+d.error); return; }
+      scenarioSwitch(d.scenario.id);
+      _scenariosRefresh();
+    }).catch(e=>alert('Create failed: '+e));
+}
+function scenarioArchive(sid,name){
+  if(!confirm('Archive "'+name+'"? It stops getting weekly Strategist reviews and frees an active slot, but its history stays viewable — this does not delete it.')) return;
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/archive',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error){ alert('Archive failed: '+d.error); return; }
+    _scenariosRefresh();
+    if(sid===CURRENT_SCENARIO_ID) load(false);   // the default scenario may have shifted
+  }).catch(e=>alert('Archive failed: '+e));
+}
+function scenarioActivate(sid,name){
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/activate',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error){ alert('Activate failed: '+d.error); return; }
+    _scenariosRefresh();
+  }).catch(e=>alert('Activate failed: '+e));
+}
+function scenarioDelete(sid,name){
+  if(!confirm('PERMANENTLY delete "'+name+'"? This cannot be undone — its whole history goes with it. Archive instead if you just want it out of the way.')) return;
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/delete',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error){ alert('Delete failed: '+d.error); return; }
+    if(sid===CURRENT_SCENARIO_ID){ CURRENT_SCENARIO_ID=null; try{ localStorage.removeItem('fidScenarioId'); }catch(_){} }
+    _scenariosRefresh();
+    if(!CURRENT_SCENARIO_ID) load(false);
+  }).catch(e=>alert('Delete failed: '+e));
+}
+function scenarioSwitcher(){
+  const wrap=el('div'); wrap.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);';
+  const sc=SCENARIOS;
+  if(!sc || !sc.scenarios){ wrap.appendChild(el('div','muted','Scenario list unavailable.')); return wrap; }
+  const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-2);';
+  head.appendChild(el('span','ph','SCENARIOS'));
+  const cnt=el('span','muted'); cnt.style.fontSize='var(--font-size-sm)';
+  cnt.textContent=sc.active_count+' of '+sc.max_active+' active slots used';
+  head.appendChild(cnt);
+  const addBtn=el('button',null,'+ NEW SCENARIO'); addBtn.style.marginLeft='auto'; addBtn.onclick=scenarioCreate;
+  if(sc.active_count>=sc.max_active) addBtn.title='Cap reached — archive or delete one first';
+  head.appendChild(addBtn);
+  wrap.appendChild(head);
+  const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);';
+  sc.scenarios.forEach(s=>{
+    const active=s.id===CURRENT_SCENARIO_ID;
+    const archived=s.status==='archived';
+    const card=el('div'); card.style.cssText=`border:1px solid ${active?'var(--color-accent)':'var(--color-border)'};border-radius:var(--radius-md);`+
+      `padding:var(--space-2) var(--space-3);min-width:150px;${archived?'opacity:0.6;':''}`;
+    const nm=el('div'); nm.style.cssText='cursor:pointer;font-size:var(--font-size-md);letter-spacing:0.5px;'+`color:${active?'var(--color-accent)':'var(--color-text)'};`;
+    nm.textContent=(archived?'⏸ ':(active?'▸ ':''))+s.name; nm.onclick=()=>scenarioSwitch(s.id);
+    card.appendChild(nm);
+    const st=el('div','muted'); st.style.fontSize='var(--font-size-sm)';
+    st.innerHTML=usd(s.total_value)+' <span class="'+cls(s.return_pct)+'">'+(s.return_pct!=null?((s.return_pct>0?'+':'')+s.return_pct+'%'):'—')+'</span>'+(archived?' · archived':'');
+    card.appendChild(st);
+    const acts=el('div'); acts.style.cssText='margin-top:4px;display:flex;gap:8px;font-size:var(--font-size-sm);';
+    if(archived){
+      const a1=el('span',null,'reactivate'); a1.style.cssText='cursor:pointer;color:var(--color-accent);'; a1.onclick=()=>scenarioActivate(s.id,s.name); acts.appendChild(a1);
+    } else {
+      const a1=el('span',null,'archive'); a1.style.cssText='cursor:pointer;color:var(--color-text-muted);'; a1.onclick=()=>scenarioArchive(s.id,s.name); acts.appendChild(a1);
+    }
+    if(sc.scenarios.length>1){ const a2=el('span',null,'delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
+    card.appendChild(acts);
+    row.appendChild(card);
+  });
+  wrap.appendChild(row);
+  const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);line-height:1.4;'; note.textContent=sc.note||''; wrap.appendChild(note);
+  return wrap;
 }
 
 function flContent(f){
@@ -4262,18 +4377,21 @@ function taxContent(bracket, audit){
 
 function stratContent(r){
   const wrap=el('div');
+  wrap.appendChild(scenarioSwitcher());
   if(!r || r.error){ wrap.appendChild(el('div','muted','Paper portfolio unavailable.')); return wrap; }
   const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);';
-  sub.textContent=`HYPOTHETICAL paper portfolio · no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
+  sub.textContent=`${r.name||'HYPOTHETICAL'} · ${r.status==='archived'?'ARCHIVED — read-only history · ':''}no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
   wrap.appendChild(sub);
   // ---- controls: run / reset / contribute / recurring ----
   const rec=r.recurring;
   const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
+  const archived=r.status==='archived';
   ctrl.innerHTML=
     `<button onclick="stratRun()">▶ RUN REVIEW</button>`+
     `<span class="muted">|</span>`+
-    `<span>Reset $<input id="strat-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="stratReset()">↺ RESET</button> <button onclick="stratSeedToggle()">⊕ SEED</button></span>`+
+    (archived ? `<span class="muted">Archived — reactivate this scenario in the switcher above to edit it again.</span>` :
+    (`<span>Reset $<input id="strat-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="stratReset()">↺ RESET</button> <button onclick="stratSeedToggle()">⊕ SEED</button></span>`+
     `<span class="muted">|</span>`+
     `<span>Add $<input id="strat-add" type="number" placeholder="500" style="width:74px;"/> <button onclick="stratContribute()">+ CASH</button></span>`+
     `<span class="muted">|</span>`+
@@ -4282,20 +4400,22 @@ function stratContent(r){
       `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
       `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
       `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
-      `<button onclick="stratRecurring()">SET</button>${rec?' <button onclick="stratStopRecurring()">STOP</button>':''}</span>`;
+      `<button onclick="stratRecurring()">SET</button>${rec?' <button onclick="stratStopRecurring()">STOP</button>':''}</span>`));
   wrap.appendChild(ctrl);
-  // seed-from-holdings picker (hidden until ⊕ SEED)
-  const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
-  let boxes='';
-  seedable.forEach(c=>{ boxes+=`<label style="display:inline-flex;align-items:center;gap:var(--space-1);margin:2px 12px 2px 0;font-size:var(--font-size-base);white-space:nowrap;"><input type="checkbox" class="seedck" data-ticker="${c.ticker}" checked/> <span style="color:var(--color-accent)">${c.ticker}</span> <span class="muted">${usd(c.value)}</span></label>`; });
-  const seedPanel=el('div'); seedPanel.id='strat-seedpanel'; seedPanel.style.cssText='display:none;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);margin-bottom:var(--space-3);';
-  seedPanel.innerHTML=
-    `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">SEED FROM MY HOLDINGS</div>`+
-    `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="seed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="seed-cash" type="number" value="0" style="width:80px;"/></div>`+
-    `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
-    `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS the paper book.</div>`+
-    `<div><button onclick="stratSeed()">✓ SEED &amp; RESET</button> <button onclick="stratSeedAll(true)">all</button> <button onclick="stratSeedAll(false)">none</button> <button onclick="stratSeedToggle()">cancel</button></div>`;
-  wrap.appendChild(seedPanel);
+  if(!archived){
+    // seed-from-holdings picker (hidden until ⊕ SEED)
+    const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
+    let boxes='';
+    seedable.forEach(c=>{ boxes+=`<label style="display:inline-flex;align-items:center;gap:var(--space-1);margin:2px 12px 2px 0;font-size:var(--font-size-base);white-space:nowrap;"><input type="checkbox" class="seedck" data-ticker="${c.ticker}" checked/> <span style="color:var(--color-accent)">${c.ticker}</span> <span class="muted">${usd(c.value)}</span></label>`; });
+    const seedPanel=el('div'); seedPanel.id='strat-seedpanel'; seedPanel.style.cssText='display:none;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);margin-bottom:var(--space-3);';
+    seedPanel.innerHTML=
+      `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">SEED FROM MY HOLDINGS</div>`+
+      `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="seed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="seed-cash" type="number" value="0" style="width:80px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS the paper book.</div>`+
+      `<div><button onclick="stratSeed()">✓ SEED &amp; RESET</button> <button onclick="stratSeedAll(true)">all</button> <button onclick="stratSeedAll(false)">none</button> <button onclick="stratSeedToggle()">cancel</button></div>`;
+    wrap.appendChild(seedPanel);
+  }
   const runStatus=el('div','muted'); runStatus.id='strat-runstatus'; runStatus.style.cssText='font-size:var(--font-size-sm);min-height:13px;margin-bottom:var(--space-3);'; wrap.appendChild(runStatus);
   if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; ri.innerHTML=`<span style="color:var(--color-accent)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
   if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':''); wrap.appendChild(ci); }

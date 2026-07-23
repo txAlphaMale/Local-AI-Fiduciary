@@ -8239,22 +8239,140 @@ def _apply_recurring(p):
     return changed
 
 
-def _read_paper():
+# ---------------------------------------------------------------------------
+# MULTI-SCENARIO PAPER LEDGERS (2026-07-23, Jason — Phase 1 of the 2026-07-19 backlog item).
+# What used to be ONE global hypothetical paper-trading ledger is now a REGISTRY of named
+# scenarios (start from scratch, or seeded once from the real portfolio and left to diverge).
+# Capped at MAX_ACTIVE_SCENARIOS "active" at a time -- Jason's explicit resource-constraint call:
+# each active scenario gets its own full weekly Strategist ReAct pass (a real LLM run on the
+# dual-Pascal box), so uncapped scenario count directly multiplies GPU load. Archiving a scenario
+# frees a slot without deleting its history (still viewable/comparable), so the cap limits live
+# GPU work, not how many scenarios you can keep around for comparison.
+#
+# Legacy single-ledger installs migrate IN PLACE the first time this loads: the old flat
+# paper.json becomes scenario id "default"/name "Default", status active, every field carried
+# over verbatim. Every call site that doesn't care which scenario (the IRR calc, the backtest
+# reader, a plain `/api/paper` hit with no scenario_id) keeps working unchanged against
+# `_default_scenario_id()` -- the first active scenario by creation order -- so this is additive,
+# not a breaking change for anything that predates it.
+# ---------------------------------------------------------------------------
+MAX_ACTIVE_SCENARIOS = int(os.environ.get("PAPER_MAX_ACTIVE_SCENARIOS", "2"))
+
+
+def _new_scenario_id():
+    return uuid.uuid4().hex[:12]
+
+
+def _empty_scenario_fields(cash):
+    """The ledger-only fields (no id/name/status/created) for a from-scratch scenario."""
+    return {"starting_cash": round(cash, 2), "cash": round(cash, 2), "contributed": 0.0,
+            "seed_basis": 0.0, "seeded_from": None, "positions": {}, "transactions": [],
+            "reports": [], "recurring": None}
+
+
+def _seeded_scenario_fields(sel, cash, basis_mode):
+    """The ledger-only fields for a scenario seeded from the owner's REAL holdings (real share
+    counts). `sel`: list of tickers, or None/'all' for every tradable holding. `basis_mode`:
+    'current' (seed at today's price, return starts ~0 — measures forward decisions from here)
+    or 'real' (carry actual cost basis, return reflects embedded gains already baked in).
+    Mutual funds and cash are skipped (no live tradable price)."""
+    d = _data()
+    by_ticker = {c.get("ticker"): c for c in d.get("consolidated", []) if c.get("ticker")}
+    if sel in (None, "all", "ALL", "*"):
+        want = [t for t, c in by_ticker.items() if c.get("type") not in ("Cash", "Mutual Fund")]
+    else:
+        want = [str(t).upper().strip() for t in sel if t]
+    positions, txns, seed_cost, seed_mkt, skipped = {}, [], 0.0, 0.0, []
+    ts = int(time.time())
+    for t in want:
+        c = by_ticker.get(t)
+        px = (c.get("price") if c else None) or _price(t)
+        qty = c.get("quantity") if c else None
+        if not c or not px or not qty or c.get("type") in ("Cash", "Mutual Fund"):
+            skipped.append(t)
+            continue
+        avg = round(c["cost_total"] / qty, 4) if (basis_mode == "real" and c.get("cost_total")) else round(px, 4)
+        positions[t] = {"shares": round(qty, 6), "avg_cost": avg}
+        seed_cost += qty * avg
+        seed_mkt += qty * px
+        txns.append({"ts": ts, "action": "seed", "ticker": t, "shares": round(qty, 6),
+                     "price": round(px, 4), "value": round(qty * px, 2)})
+    fields = {"starting_cash": round(cash, 2), "cash": round(cash, 2), "contributed": 0.0,
+              "seed_basis": round(seed_cost, 2), "positions": positions, "transactions": txns,
+              "reports": [], "recurring": None, "seeded_from": f"real_holdings ({basis_mode} basis)"}
+    return fields, {"seeded": len(positions), "skipped": skipped, "seed_market_value": round(seed_mkt, 2),
+                    "seed_cost_basis": round(seed_cost, 2)}
+
+
+def _read_registry():
     try:
         with open(PAPER_FILE, encoding="utf-8") as f:
-            p = json.load(f)
+            raw = json.load(f)
     except Exception:
-        p = {"starting_cash": DEFAULT_PAPER_CASH, "cash": DEFAULT_PAPER_CASH, "contributed": 0.0,
-             "positions": {}, "transactions": [], "reports": [], "created": int(time.time())}
+        raw = None
+    if isinstance(raw, dict) and isinstance(raw.get("scenarios"), dict) and raw["scenarios"]:
+        return raw
+    # Migrate a legacy flat ledger (or start fresh on a brand-new install) into one scenario.
+    legacy = raw if isinstance(raw, dict) else {}
+    scenario = {"id": "default", "name": "Default", "status": "active",
+                "starting_cash": legacy.get("starting_cash", DEFAULT_PAPER_CASH),
+                "cash": legacy.get("cash", DEFAULT_PAPER_CASH),
+                "contributed": legacy.get("contributed", 0.0),
+                "seed_basis": legacy.get("seed_basis", 0.0),
+                "seeded_from": legacy.get("seeded_from"),
+                "positions": legacy.get("positions", {}), "transactions": legacy.get("transactions", []),
+                "reports": legacy.get("reports", []), "recurring": legacy.get("recurring"),
+                "created": legacy.get("created", int(time.time()))}
+    reg = {"scenarios": {"default": scenario}}
+    _write_registry(reg)
+    return reg
+
+
+def _write_registry(reg):
+    os.makedirs(os.path.dirname(PAPER_FILE) or ".", exist_ok=True)
+    with open(PAPER_FILE, "w", encoding="utf-8") as f:
+        json.dump(reg, f, ensure_ascii=False, indent=2)
+
+
+def _active_scenarios(reg):
+    return sorted((s for s in (reg.get("scenarios") or {}).values() if s.get("status") == "active"),
+                  key=lambda s: s.get("created") or 0)
+
+
+def _default_scenario_id(reg=None):
+    """Which scenario an implicit (no scenario_id given) call operates on: the oldest ACTIVE one,
+    or failing that, the oldest scenario period. Keeps every pre-existing call site working."""
+    reg = reg or _read_registry()
+    active = _active_scenarios(reg)
+    if active:
+        return active[0]["id"]
+    any_ = sorted((reg.get("scenarios") or {}).values(), key=lambda s: s.get("created") or 0)
+    return any_[0]["id"] if any_ else "default"
+
+
+def _read_paper(scenario_id=None):
+    reg = _read_registry()
+    scens = reg.setdefault("scenarios", {})
+    sid = scenario_id or _default_scenario_id(reg)
+    p = scens.get(sid)
+    if p is None:      # unknown/stale id — fall back to the default rather than erroring
+        sid = _default_scenario_id(reg)
+        p = scens.get(sid)
+    if p is None:       # registry genuinely empty (defensive; migration should prevent this)
+        p = dict(_empty_scenario_fields(DEFAULT_PAPER_CASH), id="default", name="Default",
+                 status="active", created=int(time.time()))
+        sid = p["id"]
+        scens[sid] = p
+        _write_registry(reg)
     if _apply_recurring(p):
-        _write_paper(p)
+        _write_paper(sid, p)
     return p
 
 
-def _write_paper(p):
-    os.makedirs(os.path.dirname(PAPER_FILE) or ".", exist_ok=True)
-    with open(PAPER_FILE, "w", encoding="utf-8") as f:
-        json.dump(p, f, ensure_ascii=False, indent=2)
+def _write_paper(scenario_id, p):
+    reg = _read_registry()
+    reg.setdefault("scenarios", {})[scenario_id] = p
+    _write_registry(reg)
 
 
 def _paper_marked(p):
@@ -8281,7 +8399,8 @@ def _paper_marked(p):
     contributed = round(p.get("contributed") or 0.0, 2)
     seed_basis = round(p.get("seed_basis") or 0.0, 2)    # cost of positions the book was seeded with
     basis = start + contributed + seed_basis             # capital actually put in (cash + deposits + seeded cost)
-    return {"starting_cash": start, "contributed": contributed, "seed_basis": seed_basis,
+    return {"id": p.get("id"), "name": p.get("name"), "status": p.get("status"),
+            "starting_cash": start, "contributed": contributed, "seed_basis": seed_basis,
             "seeded_from": p.get("seeded_from"), "invested_capital": round(basis, 2),
             "cash": cash, "holdings_value": round(holdings_val, 2),
             "total_value": total, "total_return": round(total - basis, 2),
@@ -8294,12 +8413,115 @@ def _paper_marked(p):
 
 
 @app.get("/api/paper")
-def get_paper():
-    """The Strategist's hypothetical paper portfolio, marked to current prices."""
-    return _paper_marked(_read_paper())
+def get_paper(scenario_id: str = None):
+    """A hypothetical paper-trading scenario, marked to current prices. Omit scenario_id for the
+    default (oldest active) scenario — old integrations keep working unchanged."""
+    return _paper_marked(_read_paper(scenario_id))
 
 
-def _exec_trade(action, ticker, dollars=None, shares=None):
+@app.get("/api/paper/scenarios")
+def get_paper_scenarios():
+    """List every scenario (active + archived) with a lightweight marked summary each, for the
+    scenario switcher UI."""
+    reg = _read_registry()
+    scens = sorted((reg.get("scenarios") or {}).values(), key=lambda s: s.get("created") or 0)
+    out = []
+    for s in scens:
+        m = _paper_marked(s)
+        out.append({"id": m["id"], "name": m["name"], "status": m["status"],
+                    "total_value": m["total_value"], "return_pct": m["return_pct"],
+                    "invested_capital": m["invested_capital"], "created": m["created"],
+                    "seeded_from": m["seeded_from"], "position_count": len(m["positions"])})
+    default_id = _default_scenario_id(reg)
+    return {"scenarios": out, "default_scenario_id": default_id,
+            "max_active": MAX_ACTIVE_SCENARIOS, "active_count": len(_active_scenarios(reg)),
+            "note": f"Up to {MAX_ACTIVE_SCENARIOS} scenarios can be active (Strategist-managed) at "
+                    "once — each active scenario gets its own weekly LLM review, so the cap bounds "
+                    "GPU load. Archive one to free a slot without losing its history; archived "
+                    "scenarios are frozen (no more trades/reviews) but stay viewable for comparison."}
+
+
+@app.post("/api/paper/scenarios")
+async def post_paper_scenario(req: Request):
+    """Create a new scenario. Body: {name, cash (from-scratch starting cash, ignored if seed given),
+    seed: {tickers: [...]|'all', cash, basis: 'current'|'real'} | omitted for from-scratch}.
+    Enforces MAX_ACTIVE_SCENARIOS — a new scenario always starts active."""
+    body = await req.json()
+    reg = _read_registry()
+    if len(_active_scenarios(reg)) >= MAX_ACTIVE_SCENARIOS:
+        return JSONResponse({"error": f"scenario cap reached ({MAX_ACTIVE_SCENARIOS} active max) — "
+                                       "archive or delete an existing scenario first"}, status_code=400)
+    name = str(body.get("name") or "").strip()[:80] or f"Scenario {len(reg.get('scenarios') or {}) + 1}"
+    seed = body.get("seed")
+    seed_meta = None
+    if isinstance(seed, dict):
+        try:
+            seed_cash = float(seed.get("cash") or 0)
+        except (TypeError, ValueError):
+            seed_cash = 0.0
+        basis_mode = str(seed.get("basis") or "current").lower()
+        fields, seed_meta = _seeded_scenario_fields(seed.get("tickers"), seed_cash, basis_mode)
+    else:
+        try:
+            cash = float(body.get("cash") or DEFAULT_PAPER_CASH)
+        except (TypeError, ValueError):
+            cash = DEFAULT_PAPER_CASH
+        fields = _empty_scenario_fields(cash)
+    sid = _new_scenario_id()
+    ts = int(time.time())
+    scenario = dict(fields, id=sid, name=name, status="active", created=ts)
+    reg.setdefault("scenarios", {})[sid] = scenario
+    _write_registry(reg)
+    out = {"ok": True, "scenario": _paper_marked(scenario)}
+    if seed_meta:
+        out["seed_result"] = seed_meta
+    return out
+
+
+@app.post("/api/paper/scenarios/{scenario_id}/archive")
+def post_paper_archive(scenario_id: str):
+    """Freeze a scenario (no more trades/Strategist reviews) and free its active slot. History
+    stays intact and viewable — this is not a delete."""
+    reg = _read_registry()
+    s = (reg.get("scenarios") or {}).get(scenario_id)
+    if not s:
+        return JSONResponse({"error": "scenario not found"}, status_code=404)
+    s["status"] = "archived"
+    _write_registry(reg)
+    return {"ok": True, "scenario": _paper_marked(s)}
+
+
+@app.post("/api/paper/scenarios/{scenario_id}/activate")
+def post_paper_activate(scenario_id: str):
+    """Reactivate an archived scenario — subject to the same MAX_ACTIVE_SCENARIOS cap as creation."""
+    reg = _read_registry()
+    s = (reg.get("scenarios") or {}).get(scenario_id)
+    if not s:
+        return JSONResponse({"error": "scenario not found"}, status_code=404)
+    if s["status"] != "active" and len(_active_scenarios(reg)) >= MAX_ACTIVE_SCENARIOS:
+        return JSONResponse({"error": f"scenario cap reached ({MAX_ACTIVE_SCENARIOS} active max) — "
+                                       "archive another active scenario first"}, status_code=400)
+    s["status"] = "active"
+    _write_registry(reg)
+    return {"ok": True, "scenario": _paper_marked(s)}
+
+
+@app.post("/api/paper/scenarios/{scenario_id}/delete")
+def post_paper_delete(scenario_id: str):
+    """Permanently remove a scenario. Blocked if it's the only one left — the registry always
+    keeps at least one scenario so implicit (no scenario_id) calls have somewhere to land."""
+    reg = _read_registry()
+    scens = reg.get("scenarios") or {}
+    if scenario_id not in scens:
+        return JSONResponse({"error": "scenario not found"}, status_code=404)
+    if len(scens) <= 1:
+        return JSONResponse({"error": "can't delete the only remaining scenario"}, status_code=400)
+    scens.pop(scenario_id, None)
+    _write_registry(reg)
+    return {"ok": True, "remaining": len(scens)}
+
+
+def _exec_trade(action, ticker, dollars=None, shares=None, scenario_id=None):
     """Core paper-trade logic at the current price. Returns (result_dict, error_str)."""
     action = str(action or "").lower()
     t = str(ticker or "").upper().strip()
@@ -8308,7 +8530,8 @@ def _exec_trade(action, ticker, dollars=None, shares=None):
     px = _price(t)
     if not px:
         return None, f"no price available for {t}"
-    p = _read_paper()
+    p = _read_paper(scenario_id)
+    sid = p["id"]
     positions = p.setdefault("positions", {})
     pos = positions.get(t) or {"shares": 0.0, "avg_cost": 0.0}
     if action == "buy":
@@ -8342,84 +8565,76 @@ def _exec_trade(action, ticker, dollars=None, shares=None):
     p.setdefault("transactions", []).append({"ts": int(time.time()), "action": action, "ticker": t,
                                              "shares": round(traded, 6), "price": round(px, 4),
                                              "value": round(traded * px, 2)})
-    _write_paper(p)
+    _write_paper(sid, p)
     return {"ok": True, "action": action, "ticker": t, "shares": round(traded, 6),
             "price": px, "cash": p["cash"]}, None
 
 
 @app.post("/api/paper/trade")
 async def paper_trade(req: Request):
-    """Execute a HYPOTHETICAL trade. Body: {action: buy|sell, ticker, dollars|shares}. Paper only."""
+    """Execute a HYPOTHETICAL trade. Body: {action: buy|sell, ticker, dollars|shares, scenario_id}.
+    Omit scenario_id for the default scenario. Paper only."""
     body = await req.json()
-    res, err = _exec_trade(body.get("action"), body.get("ticker"), body.get("dollars"), body.get("shares"))
+    res, err = _exec_trade(body.get("action"), body.get("ticker"), body.get("dollars"), body.get("shares"),
+                           scenario_id=body.get("scenario_id"))
     return res if res else JSONResponse({"error": err}, status_code=400)
 
 
 @app.post("/api/paper/reset")
 async def paper_reset(req: Request):
-    """Reset the hypothetical portfolio to a starting cash balance. Body: {starting_cash}."""
+    """Reset ONE scenario's ledger to a starting cash balance (positions/history/recurring wiped
+    for that scenario only — other scenarios are untouched). Body: {starting_cash, scenario_id}."""
     body = await req.json()
     cash = float(body.get("starting_cash") or DEFAULT_PAPER_CASH)
-    _write_paper({"starting_cash": cash, "cash": cash, "contributed": 0.0, "seed_basis": 0.0,
-                  "positions": {}, "transactions": [], "reports": [], "recurring": None,
-                  "seeded_from": None, "created": int(time.time())})
-    return {"ok": True, "starting_cash": cash}
+    reg = _read_registry()
+    sid = body.get("scenario_id") or _default_scenario_id(reg)
+    existing = (reg.get("scenarios") or {}).get(sid) or {}
+    fields = _empty_scenario_fields(cash)
+    scenario = dict(fields, id=sid, name=existing.get("name", "Default"),
+                    status=existing.get("status", "active"), created=int(time.time()))
+    reg.setdefault("scenarios", {})[sid] = scenario
+    _write_registry(reg)
+    return {"ok": True, "starting_cash": cash, "scenario_id": sid}
 
 
 @app.post("/api/paper/seed")
 async def paper_seed(req: Request):
-    """RESET the paper portfolio pre-seeded with a selection of the owner's REAL holdings (real share
-    counts). Body: {tickers: [...] | "all", cash: 0, basis: "current"|"real"}. basis 'current' seeds
-    each position at today's price (return starts ~0 — measures the Strategist's forward decisions);
-    'real' carries your actual per-share cost basis (return then reflects embedded gains). Mutual funds
-    and cash are skipped (no live price to trade). HYPOTHETICAL — no real orders."""
+    """RESET one scenario's ledger, pre-seeded with a selection of the owner's REAL holdings (real
+    share counts). Body: {tickers: [...] | "all", cash: 0, basis: "current"|"real", scenario_id}.
+    basis 'current' seeds each position at today's price (return starts ~0 — measures the
+    Strategist's forward decisions); 'real' carries your actual per-share cost basis (return then
+    reflects embedded gains). Mutual funds and cash are skipped (no live price to trade).
+    HYPOTHETICAL — no real orders."""
     body = await req.json()
-    sel = body.get("tickers")
     try:
         cash = float(body.get("cash") or 0)
     except (TypeError, ValueError):
         cash = 0
     basis_mode = str(body.get("basis") or "current").lower()
-    d = _data()
-    by_ticker = {c.get("ticker"): c for c in d.get("consolidated", []) if c.get("ticker")}
-    if sel in (None, "all", "ALL", "*"):
-        want = [t for t, c in by_ticker.items() if c.get("type") not in ("Cash", "Mutual Fund")]
-    else:
-        want = [str(t).upper().strip() for t in sel if t]
-    positions, txns, seed_cost, seed_mkt, skipped = {}, [], 0.0, 0.0, []
-    ts = int(time.time())
-    for t in want:
-        c = by_ticker.get(t)
-        px = (c.get("price") if c else None) or _price(t)
-        qty = c.get("quantity") if c else None
-        if not c or not px or not qty or c.get("type") in ("Cash", "Mutual Fund"):
-            skipped.append(t)
-            continue
-        avg = round(c["cost_total"] / qty, 4) if (basis_mode == "real" and c.get("cost_total")) else round(px, 4)
-        positions[t] = {"shares": round(qty, 6), "avg_cost": avg}
-        seed_cost += qty * avg
-        seed_mkt += qty * px
-        txns.append({"ts": ts, "action": "seed", "ticker": t, "shares": round(qty, 6),
-                     "price": round(px, 4), "value": round(qty * px, 2)})
-    _write_paper({"starting_cash": round(cash, 2), "cash": round(cash, 2), "contributed": 0.0,
-                  "seed_basis": round(seed_cost, 2), "positions": positions, "transactions": txns,
-                  "reports": [], "recurring": None, "created": ts,
-                  "seeded_from": f"real_holdings ({basis_mode} basis)"})
-    return {"ok": True, "seeded": len(positions), "skipped": skipped,
-            "seed_market_value": round(seed_mkt, 2), "seed_cost_basis": round(seed_cost, 2),
-            "cash": round(cash, 2), "invested_capital": round(seed_cost + cash, 2), "basis_mode": basis_mode}
+    fields, seed_meta = _seeded_scenario_fields(body.get("tickers"), cash, basis_mode)
+    reg = _read_registry()
+    sid = body.get("scenario_id") or _default_scenario_id(reg)
+    existing = (reg.get("scenarios") or {}).get(sid) or {}
+    scenario = dict(fields, id=sid, name=existing.get("name", "Default"),
+                    status=existing.get("status", "active"), created=int(time.time()))
+    reg.setdefault("scenarios", {})[sid] = scenario
+    _write_registry(reg)
+    return {"ok": True, "scenario_id": sid, "basis_mode": basis_mode,
+            "cash": round(cash, 2), "invested_capital": round(seed_meta["seed_cost_basis"] + cash, 2),
+            **seed_meta}
 
 
-def _log_report(summary):
-    """Append a weekly report + snapshot total value. Returns {ok, report_count}."""
-    p = _read_paper()
+def _log_report(summary, scenario_id=None):
+    """Append a weekly report + snapshot total value to one scenario. Returns {ok, report_count}."""
+    p = _read_paper(scenario_id)
+    sid = p["id"]
     marked = _paper_marked(p)
     p.setdefault("reports", []).append({"ts": int(time.time()), "total_value": marked["total_value"],
                                         "return_pct": marked["return_pct"],
                                         "summary": str(summary or "")[:4000]})
     p["reports"] = p["reports"][-26:]
-    _write_paper(p)
-    return {"ok": True, "report_count": len(p["reports"])}
+    _write_paper(sid, p)
+    return {"ok": True, "report_count": len(p["reports"]), "scenario_id": sid}
 
 
 @app.post("/api/paper/report")
@@ -8440,41 +8655,46 @@ async def paper_contribute(req: Request):
         amt = 0
     if amt <= 0:
         return JSONResponse({"error": "amount must be > 0"}, status_code=400)
-    p = _read_paper()
+    p = _read_paper(body.get("scenario_id"))
+    sid = p["id"]
     p["cash"] = round((p.get("cash") or 0) + amt, 2)
     p["contributed"] = round((p.get("contributed") or 0) + amt, 2)
     p.setdefault("transactions", []).append({"ts": int(time.time()), "action": "deposit",
         "ticker": "CASH", "shares": 0, "price": 0, "value": round(amt, 2)})
-    _write_paper(p)
-    return {"ok": True, "added": round(amt, 2), "cash": p["cash"], "contributed": p["contributed"]}
+    _write_paper(sid, p)
+    return {"ok": True, "added": round(amt, 2), "cash": p["cash"], "contributed": p["contributed"],
+            "scenario_id": sid}
 
 
 @app.post("/api/paper/recurring")
 async def paper_recurring(req: Request):
-    """Set or clear a RECURRING cash contribution. Body: {amount, cadence: weekly|biweekly|monthly}.
-    amount<=0 clears it. Applied lazily on read (no external scheduler needed)."""
+    """Set or clear a RECURRING cash contribution on one scenario. Body: {amount,
+    cadence: weekly|biweekly|monthly, scenario_id}. amount<=0 clears it. Applied lazily on read
+    (no external scheduler needed)."""
     body = await req.json()
     try:
         amt = float(body.get("amount") or 0)
     except (TypeError, ValueError):
         amt = 0
-    p = _read_paper()
+    p = _read_paper(body.get("scenario_id"))
+    sid = p["id"]
     if amt <= 0:
         p["recurring"] = None
-        _write_paper(p)
-        return {"ok": True, "recurring": None}
+        _write_paper(sid, p)
+        return {"ok": True, "recurring": None, "scenario_id": sid}
     cadence = str(body.get("cadence") or "monthly").lower()
     days = {"weekly": 7, "biweekly": 14, "monthly": 30}.get(cadence, 30)
     p["recurring"] = {"amount": round(amt, 2), "cadence": cadence, "cadence_days": days,
                       "next_ts": int(time.time()) + days * 86400}
-    _write_paper(p)
-    return {"ok": True, "recurring": p["recurring"]}
+    _write_paper(sid, p)
+    return {"ok": True, "recurring": p["recurring"], "scenario_id": sid}
 
 
 @app.post("/api/paper/run")
 def paper_run():
-    """Dashboard trigger for the Strategist's weekly review (local/unguarded; single-flighted by the
-    same lock as /api/run-strategist, so it can't pile up concurrent runs)."""
+    """Dashboard trigger for the Strategist's weekly review — covers EVERY active scenario in one
+    job (sequentially, one LLM pass at a time; see `_do_strategist`), local/unguarded, single-
+    flighted by the same lock as /api/run-strategist so it can't pile up concurrent runs."""
     jid, created = _enqueue("strategist", source="dashboard")   # serial queue + dedup (Increment B)
     return {"ok": True, "status": "queued" if created else "already queued/running",
             "job_id": jid, **_strat_state}
@@ -8521,6 +8741,10 @@ STRATEGIST_PROMPT = (
     "You are the Strategist — an autonomous portfolio manager running a HYPOTHETICAL paper-trading "
     "account (a SIMULATION; no real money, no real orders are ever placed). Your job is to grow a small "
     "starting balance through disciplined, well-reasoned buy/sell decisions and to report honestly.\n"
+    "You are managing the '{scenario_name}' scenario specifically — {user} may have more than one paper "
+    "scenario running in parallel with different starting conditions; every tool call in this run reads "
+    "and writes ONLY this one scenario's ledger, so decide and report as if it's the only book that exists "
+    "for this session.\n"
     "ACCOUNT TOOLS: get_paper_portfolio (your cash, positions, P/L, return vs. start — call this FIRST); "
     "paper_buy(ticker, dollars); paper_sell(ticker, shares — omit shares to sell the whole position); "
     "log_report(summary — call this LAST, exactly once).\n"
@@ -8614,7 +8838,8 @@ STRATEGIST_TOOLS = [
 STRAT_NUM_CTX = int(os.environ.get("STRAT_NUM_CTX", "32768"))         # full context — don't truncate the agent's working memory
 STRAT_LLM_TIMEOUT = int(os.environ.get("STRAT_LLM_TIMEOUT", "1800"))   # per-call ceiling; weekly bg job, reasoning ON is slow on Pascal
 _strat_lock = threading.Lock()
-_strat_state = {"status": "idle", "iterations": 0, "started": 0, "finished": 0}
+_strat_state = {"status": "idle", "iterations": 0, "started": 0, "finished": 0,
+                "scenario": None, "scenario_id": None, "scenarios_done": 0, "scenarios_total": 0}
 
 # --- Strategist run telemetry (N13 candidate 3): a durable, capped JSONL audit log of every
 #     autonomous weekly run so the ReAct loop is OBSERVABLE, not a black box. One record per run:
@@ -8641,21 +8866,25 @@ def _log_strategist_run(rec):
         pass
 
 
-def _strategist_dispatch(name, args):
-    """Run one tool call in-process and return a JSON-serializable result."""
+def _strategist_dispatch(name, args, scenario_id=None):
+    """Run one tool call in-process and return a JSON-serializable result. `scenario_id` scopes
+    the paper-ledger tools to ONE scenario for the duration of a run — the weekly loop below fixes
+    it per pass (never exposed as a model-choosable tool argument, so the model can't accidentally
+    trade the wrong scenario); advisory/read-only chat callers resolve it to the default scenario."""
     args = args or {}
     try:
         if name == "get_paper_portfolio":
-            return _paper_marked(_read_paper())
+            return _paper_marked(_read_paper(scenario_id))
         if name == "paper_buy":
             res, err = _exec_trade("buy", args.get("ticker"), dollars=args.get("dollars"),
-                                   shares=args.get("shares"))
+                                   shares=args.get("shares"), scenario_id=scenario_id)
             return res or {"error": err}
         if name == "paper_sell":
-            res, err = _exec_trade("sell", args.get("ticker"), shares=args.get("shares"))
+            res, err = _exec_trade("sell", args.get("ticker"), shares=args.get("shares"),
+                                   scenario_id=scenario_id)
             return res or {"error": err}
         if name == "log_report":
-            return _log_report(args.get("summary"))
+            return _log_report(args.get("summary"), scenario_id=scenario_id)
         if name == "get_opportunities":
             return _opportunities()
         if name == "get_discovery":
@@ -8691,28 +8920,29 @@ def _strategist_dispatch(name, args):
         return {"error": f"{name} failed: {e}"}
 
 
-def _do_strategist(max_iter=20):
-    if not _strat_lock.acquire(blocking=False):
-        return
+def _do_strategist_one(scenario_id, scenario_name, max_iter):
+    """One full ReAct pass against ONE scenario. Returns the run's telemetry dict. Caller (below)
+    holds `_strat_lock` for the whole multi-scenario job and drives one of these per active
+    scenario, sequentially — never in parallel, so this never adds concurrent GPU load beyond the
+    single existing `_gpu_slot()` serialization point."""
     _t0 = time.time()
-    # Per-run telemetry — pure instrumentation; it records what the loop did, never changes decisions.
-    telem = {"ts": int(_t0), "max_iter": max_iter, "iterations": 0, "tool_calls": {},
+    telem = {"ts": int(_t0), "scenario_id": scenario_id, "scenario_name": scenario_name,
+             "max_iter": max_iter, "iterations": 0, "tool_calls": {},
              "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
     try:
-        _strat_state.update(status="running", iterations=0, started=int(time.time()), finished=0)
         messages = [
-            {"role": "system", "content": _sys(STRATEGIST_PROMPT)},
-            {"role": "user", "content": "Perform your weekly review now: call get_paper_portfolio, research "
-             "a few opportunities, make any buy/sell trades you judge worthwhile, then call log_report with "
-             "your summary. Be efficient — don't deep-dive every name."},
+            {"role": "system", "content": _sys(STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name))},
+            {"role": "user", "content": f"Perform your weekly review of the '{scenario_name}' scenario now: "
+             "call get_paper_portfolio, research a few opportunities, make any buy/sell trades you judge "
+             "worthwhile, then call log_report with your summary. Be efficient — don't deep-dive every name."},
         ]
         reported = False
-        # Per-run web-search budget (settings knob, default 20). Caps ONLY this unattended weekly
-        # run so an agentic loop can't spray Tavily calls / crowd the free-tier pool it shares with
-        # the daily pipelines. The interactive chat + on-demand advisory runs are deliberately NOT
-        # capped here (they're user-paced).
+        # Per-run web-search budget (settings knob, default 20) — PER SCENARIO PASS, same as before
+        # multi-scenario support existed. Caps ONLY this unattended weekly run so an agentic loop
+        # can't spray Tavily calls / crowd the free-tier pool it shares with the daily pipelines.
+        # The interactive chat + on-demand advisory runs are deliberately NOT capped here (user-paced).
         search_budget = _knob("strategist_search_budget")
         telem["search_budget"] = search_budget
         search_calls = 0
@@ -8738,13 +8968,13 @@ def _do_strategist(max_iter=20):
                     telem["error"] = f"ollama {r.status_code}"
                     _strat_state.update(status=f"error: ollama {r.status_code}: {r.text[:200]}",
                                         finished=int(time.time()))
-                    return
+                    return telem
                 msg = (r.json() or {}).get("message") or {}
             except Exception as e:
                 telem["ended"] = "exception"
                 telem["error"] = str(e)[:200]
                 _strat_state.update(status=f"error: {e}", finished=int(time.time()))
-                return
+                return telem
             tcs = msg.get("tool_calls") or []
             asst = {"role": "assistant", "content": msg.get("content") or ""}
             if tcs:
@@ -8781,9 +9011,9 @@ def _do_strategist(max_iter=20):
                                            "research you've already gathered and finish your review."}
                     else:
                         search_calls += 1
-                        result = _strategist_dispatch(nm, a)
+                        result = _strategist_dispatch(nm, a, scenario_id=scenario_id)
                 else:
-                    result = _strategist_dispatch(nm, a)
+                    result = _strategist_dispatch(nm, a, scenario_id=scenario_id)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
                     reported = True
                 # Trim large tool results by SHRINKING FIELDS, never by chopping the serialized JSON
@@ -8807,12 +9037,37 @@ def _do_strategist(max_iter=20):
                 telem["ended"] = "cap"   # exhausted all iterations without a natural stop or a report
             final = next((m["content"] for m in reversed(messages)
                           if m.get("role") == "assistant" and m.get("content")), "")
-            _log_report(final or "Weekly run ended without an explicit report (may have hit the step cap).")
+            _log_report(final or "Weekly run ended without an explicit report (may have hit the step cap).",
+                       scenario_id=scenario_id)
         telem["converged"] = reported
-        _strat_state.update(status="idle", finished=int(time.time()))
     finally:
         telem["duration_s"] = round(time.time() - _t0, 1)
-        _log_strategist_run(telem)
+    return telem
+
+
+def _do_strategist(max_iter=20):
+    """Weekly Strategist review — runs once per ACTIVE scenario, SEQUENTIALLY (never in parallel;
+    each pass is a separate full ReAct loop under the same single `_gpu_slot()` serialization
+    everything else on the box already respects). Jason, 2026-07-23: capped at MAX_ACTIVE_SCENARIOS
+    active scenarios specifically so this job's total GPU time scales with a small, bounded number,
+    not with however many scenarios a user creates. A brand-new/legacy install always has exactly
+    one scenario (post-migration), so this reduces to the original single-ledger behavior."""
+    if not _strat_lock.acquire(blocking=False):
+        return
+    try:
+        reg = _read_registry()
+        active = _active_scenarios(reg)
+        if not active:      # defensive — migration guarantees at least one scenario exists
+            active = [{"id": _default_scenario_id(reg), "name": "Default"}]
+        _strat_state.update(status="running", iterations=0, started=int(time.time()), finished=0,
+                            scenarios_total=len(active), scenarios_done=0, scenario=None)
+        for idx, s in enumerate(active):
+            _strat_state.update(scenario=s.get("name"), scenario_id=s.get("id"), iterations=0)
+            telem = _do_strategist_one(s["id"], s.get("name") or s["id"], max_iter)
+            _log_strategist_run(telem)
+            _strat_state["scenarios_done"] = idx + 1
+        _strat_state.update(status="idle", finished=int(time.time()), scenario=None)
+    finally:
         _strat_lock.release()
 
 
