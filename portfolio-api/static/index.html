@@ -2402,13 +2402,28 @@ function savePolicy(){
     drift_threshold_pct: parseFloat(document.getElementById('pol-drift').value)||5,
     position_caps: caps };
   fetch('/api/policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+    .then(r=>r.json()).then(d=>{
+      // optimistic: merge the saved policy straight into INSIGHTS and re-render NOW, before load()'s
+      // ~40-endpoint batch resolves — otherwise the still-stale INSIGHTS gets rendered first and the
+      // fields you just set flash back to their pre-save values for the several seconds that takes
+      if(d && d.ok && d.policy && INSIGHTS){
+        INSIGHTS.policy=d.policy;
+        if(INSIGHTS.allocation) INSIGHTS.allocation.forEach(a=>{ if(d.policy.targets_by_type && d.policy.targets_by_type[a.type]!=null) a.target_pct=d.policy.targets_by_type[a.type]; });
+        if(TAB==='insights') render();
+      }
+      load(false);
+    }).catch(e=>alert('Save failed: '+e));
 }
 
 function saveAcct(name, field, val){
   const body={account:name}; body[field]=val;
   fetch('/api/accounts-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+    .then(r=>r.json()).then(d=>{
+      // optimistic: the response already carries the full authoritative config — swap it in and
+      // re-render immediately so the checkbox doesn't flip back while load()'s batch is in flight
+      if(d && d.ok && d.config){ ACCTCFG=d.config; if(TAB==='audits') render(); }
+      load(false);
+    }).catch(e=>alert('Save failed: '+e));
 }
 function accountsEditor(){
   const wrap=el('div');
@@ -2441,7 +2456,23 @@ function saveSettings(){
   document.querySelectorAll('.set-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
   document.querySelectorAll('.cfg-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(d=>{ if(d && d.restart_required && d.restart_required.length){ alert('Saved. Model config applies on the next portfolio-api restart.'); } load(false); })
+    .then(r=>r.json()).then(d=>{
+      if(d && d.restart_required && d.restart_required.length){ alert('Saved. Model config applies on the next portfolio-api restart.'); }
+      // optimistic: patch SETTINGS_CFG's items in place from what we just posted and re-render NOW —
+      // otherwise load()'s ~40-endpoint batch hasn't refetched /api/settings yet, so the intervening
+      // render (fired as soon as /api/portfolio alone returns) paints the OLD cached values and the
+      // field you just saved appears to revert for several seconds before the real refetch lands
+      if(d && d.ok && SETTINGS_CFG){
+        (SETTINGS_CFG.settings||[]).concat(SETTINGS_CFG.config||[]).forEach(it=>{
+          if(!(it.key in body) || it.env_locked) return;
+          const v=body[it.key];
+          if(v===''||v==null){ it.value=it.default; it.source='default'; }
+          else{ it.value=v; it.source='settings'; }
+        });
+        if(TAB==='settings') render();
+      }
+      load(false);
+    })
     .catch(e=>alert('Save failed: '+e));
 }
 function themeContent(){
@@ -2518,7 +2549,17 @@ function saveSecrets(){
   document.querySelectorAll('.sec-inp').forEach(i=>{ if(i.disabled) return; if(i.value!=='') body[i.dataset.key]=i.value; });
   if(!Object.keys(body).length){ alert('No new secret values entered.'); return; }
   fetch('/api/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(d=>{ alert('Saved: '+((d.saved||[]).join(', ')||'(none)')+(d.restart_required?'\n\nRestart portfolio-api to apply.':'')); load(false); })
+    .then(r=>r.json()).then(d=>{
+      alert('Saved: '+((d.saved||[]).join(', ')||'(none)')+(d.restart_required?'\n\nRestart portfolio-api to apply.':''));
+      // optimistic: flip the just-saved keys' status badge to "saved" immediately, instead of it
+      // sitting on "not set" until load()'s batch re-fetches /api/secrets a few seconds later
+      if(d && d.saved && d.saved.length && SECRETS_CFG){
+        const saved=new Set(d.saved);
+        (SECRETS_CFG.secrets||[]).forEach(it=>{ if(saved.has(it.key)){ it.source='saved'; it.set=true; } });
+        if(TAB==='settings') render();
+      }
+      load(false);
+    })
     .catch(e=>alert('Save failed: '+e));
 }
 function secretsContent(){
