@@ -1985,7 +1985,7 @@ def _marginal_curve():
     ctx = _tax_ctx(cfg)
     actx = _aca_ctx(cfg)
     status = ctx["status"]
-    age = cfg.get("current_age")
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
     base_ord = float(cfg.get("roth_base_ordinary") or 0)
     ltcg = float(cfg.get("roth_base_ltcg") or 0)
     magi_base = base_ord + ltcg
@@ -2044,7 +2044,7 @@ def _roth_plan():
     """Marginal curve + a multi-year conversion ladder over the pre-RMD valley."""
     curve = _marginal_curve()
     cfg = _read_retire()
-    age = cfg.get("current_age")
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
     rmd = _knob("roth_rmd_age")
     n_years = min(40, max(0, rmd - age)) if age else 10
     trad = _balances_by_tax_status().get("deferred", 0.0)
@@ -4648,6 +4648,28 @@ def _read_retire():
         return dict(DEFAULT_RETIRE)
 
 
+def _derive_age(birth_year, stored_age=None, ref_year=None):
+    """Age as of the end of `ref_year` (defaults to the current year), derived from birth year.
+    2026-07-23: replaces manually-entered current_age/spouse_age as the single source of truth,
+    per Jason's ask — but only after confirming year-only precision is actually sufficient for
+    every place this app uses age, not assumed. Checked directly against the code: every age-gated
+    rule here (tax.py standard_deduction's 65+ addon; benefits.py's 401(k) 50+ catch-up, 60-63
+    super-catch-up, HSA 55+ catch-up, IRA 50+ catch-up) is a plain `age >= N` integer comparison —
+    which matches the IRS's OWN convention for all of these (each is defined by statute as
+    "attained by the end of the year," not by exact birth date), so year-only math is not an
+    approximation here, it's the correct test. SS claim age is unaffected (already a separate,
+    directly-entered decimal field, never derived from birth year).
+    Falls back to `stored_age` — the old manually-entered value, if an existing config file still
+    has one — only when birth_year isn't set yet, so upgrading to this doesn't silently blank out
+    a previously-working age for an install that hasn't entered a birth year yet."""
+    if birth_year:
+        try:
+            return (ref_year or datetime.date.today().year) - int(birth_year)
+        except (TypeError, ValueError):
+            pass
+    return stored_age
+
+
 _STATE_ADDR_RE = re.compile(r"\b([A-Z]{2})\s+\d{5}(?:-\d{4})?\b")
 
 
@@ -5097,7 +5119,8 @@ def get_benefits():
     cfg = _read_insurance_cfg()
     ret = _read_retire()
     facts = {"salary": cfg.get("income_self"),
-             "age": ret.get("current_age"), "spouse_age": ret.get("spouse_age"),
+             "age": _derive_age(ret.get("birth_year"), ret.get("current_age")),
+             "spouse_age": _derive_age(ret.get("spouse_birth_year"), ret.get("spouse_age")),
              "pretax_pct": cfg.get("k401_pretax_pct"),
              "aftertax_pct": cfg.get("k401_aftertax_pct"),
              "match_t1_pct": cfg.get("k401_match_t1_pct"),
@@ -5417,7 +5440,8 @@ def get_insurance():
                  "mortgage_balance": round(mort, 2),
                  "income_self": cfg.get("income_self"),
                  "income_spouse": cfg.get("income_spouse"),
-                 "age_self": ret.get("current_age"), "age_spouse": ret.get("spouse_age"),
+                 "age_self": _derive_age(ret.get("birth_year"), ret.get("current_age")),
+                 "age_spouse": _derive_age(ret.get("spouse_birth_year"), ret.get("spouse_age")),
                  "retire_age": ret.get("target_age") or 60,
                  "children": cfg.get("children") or 0,
                  "home_value": home_val,
@@ -5450,8 +5474,8 @@ def _tax_ctx(cfg=None):
     cfg = cfg if cfg is not None else _read_retire()
     status = os.environ.get("TAX_FILING_STATUS") or cfg.get("filing_status") or "mfj"
     return {"status": tax.norm_status(status),
-            "age": cfg.get("current_age"),
-            "spouse_age": cfg.get("spouse_age"),
+            "age": _derive_age(cfg.get("birth_year"), cfg.get("current_age")),
+            "spouse_age": _derive_age(cfg.get("spouse_birth_year"), cfg.get("spouse_age")),
             "fill_to_rate": float(cfg.get("convert_fill_to_rate") or 0.12)}
 
 
@@ -6119,23 +6143,27 @@ def _retirement():
     assumptions = {"withdrawal_rate_pct": cfg.get("withdrawal_rate_pct"),
                    "expected_real_return_pct": cfg.get("expected_real_return_pct"),
                    "annual_expenses": annual_expenses, "expenses_source": exp_source,
-                   "annual_savings": annual_savings, "current_age": cfg.get("current_age"),
+                   "annual_savings": annual_savings,
+                   # current_age/spouse_age (2026-07-23, superseding the same-day fix that added a
+                   # manual "Spouse age" input): DERIVED from birth_year/spouse_birth_year via
+                   # _derive_age() rather than manually entered — Jason caught, entering spouse
+                   # birth year didn't satisfy the "Spouse age" checklist item, which exposed that
+                   # this app was asking for two separately-maintained, redundant facts per person
+                   # (current_age drifts stale every birthday; birth year never does) for BOTH
+                   # people, not just the newly-added spouse field. Confirmed year-only precision
+                   # is sufficient before making this the source of truth: every age-gated rule in
+                   # this codebase (tax.py's 65+ standard-deduction addon; benefits.py's 401(k)
+                   # 50+/60-63/HSA 55+/IRA 50+ catch-up thresholds) is a plain `age >= N` integer
+                   # check, matching the IRS's OWN "attained by year-end" convention for every one
+                   # of those rules — not an approximation. See _derive_age()'s docstring.
+                   "current_age": _derive_age(cfg.get("birth_year"), cfg.get("current_age")),
                    "target_age": cfg.get("target_age"),
-                   # 2026-07-23 — two real gaps found while wiring the setup-progress tour to
-                   # ASSUMPTIONS, both now fixed:
-                   # (a) spouse_age was read directly off cfg by every tax call site (standard
-                   #     deduction age-65+ addon, catch-up eligibility, etc. — see tax.py call
-                   #     sites) but NO form anywhere ever wrote it, and it wasn't even echoed here
-                   #     for the editor to show, so it was permanently None for every MFJ
-                   #     household regardless of what a user tried to enter — a silent tax-calc
-                   #     gap, not just a missing checklist field. Added spouse_age here + a new
-                   #     "Spouse age" input in ASSUMPTIONS (ret-sage) + saveRetire() now sends it.
-                   # (b) state_of_residence was never echoed here either, so the ASSUMPTIONS
-                   #     dropdown always rendered as "Auto-detect" on reload even after a user
-                   #     explicitly picked a state — display-only (every real calculation reads
-                   #     the raw config directly via _state_of_residence_info(), so this never
-                   #     affected actual numbers), but confusing and now fixed alongside (a).
-                   "spouse_age": cfg.get("spouse_age"),
+                   "spouse_age": _derive_age(cfg.get("spouse_birth_year"), cfg.get("spouse_age")),
+                   # state_of_residence (2026-07-23): was never echoed here, so the ASSUMPTIONS
+                   # dropdown always rendered as "Auto-detect" on reload even after a user
+                   # explicitly picked a state — display-only (every real calculation reads the raw
+                   # config directly via _state_of_residence_info(), so this never affected actual
+                   # numbers), but confusing. Fixed by echoing it like every other field here.
                    "state_of_residence": cfg.get("state_of_residence"),
                    "income_target_yield_pct": cfg.get("income_target_yield_pct"),
                    "optimistic_real_return_pct": cfg.get("optimistic_real_return_pct"),
@@ -6163,7 +6191,7 @@ def _retirement():
     progress_pct = round(investable / fi_number * 100, 1) if fi_number else None
     years = _years_to_fi(investable, annual_savings or 0, r, fi_number)
     fi_year = (datetime.date.today().year + years) if years is not None else None
-    age = cfg.get("current_age")
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
     fi_age = (age + years) if (age is not None and years is not None) else None
 
     coast = None
@@ -6758,10 +6786,11 @@ SETUP_FIELDS = [
     {"id": "filing_status", "tier": 1, "group": "Filing status", "cfg": "retire",
      "key": "filing_status", "scored": False, "jump": ("plan", "assumptions"),
      "note": "Defaults to Married Filing Jointly -- change it if that's not accurate."},
-    {"id": "current_age", "tier": 1, "group": "Current age", "cfg": "retire",
-     "key": "current_age", "jump": ("plan", "assumptions")},
-    {"id": "spouse_age", "tier": 1, "group": "Spouse age", "cfg": "retire",
-     "key": "spouse_age", "required_if": "mfj", "jump": ("plan", "assumptions")},
+    # current_age/spouse_age REMOVED as separate checklist items 2026-07-23: both are now derived
+    # from birth_year/spouse_birth_year (see _derive_age()) rather than separately entered, so
+    # "is birth_year filled" already fully covers "is age known" — a dedicated current_age/
+    # spouse_age entry here would just be a second, now-meaningless checklist line for the same
+    # underlying fact (birth_year/spouse_birth_year below still gate the real completeness count).
     {"id": "target_age", "tier": 1, "group": "Target retirement age", "cfg": "retire",
      "key": "target_age", "scored": False, "jump": ("plan", "assumptions"),
      "note": "Defaults to 60 -- change it if you're aiming for a different age."},

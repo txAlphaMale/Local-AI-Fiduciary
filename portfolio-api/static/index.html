@@ -359,7 +359,7 @@ const TOUR_TARGETS = {
   // real inputs live in PLAN->ESTATE) — all fixed alongside this expansion. `spouse_age` and
   // `home_value_override` inputs were added specifically to give the tour something real to point
   // at, not just to satisfy the tour.
-  state_of_residence:'ret-state', filing_status:'ret-fs', current_age:'ret-age', spouse_age:'ret-sage',
+  state_of_residence:'ret-state', filing_status:'ret-fs',
   target_age:'ret-tage', annual_expenses:'ret-exp', annual_savings:'ret-sav', household_size:'ret-hh',
   birth_year:'ret-by', spouse_birth_year:'ret-sby', ss_benefit:'ret-ssb',
   estate_donees:'est-donees', estate_home_basis:'est-homebasis',
@@ -2040,7 +2040,6 @@ function saveRetire(){
   const body={
     withdrawal_rate_pct: num('ret-wr')||4,
     expected_real_return_pct: num('ret-rr')||5,
-    current_age: num('ret-age'),
     target_age: num('ret-tage')||60,
     annual_expenses_override: num('ret-exp'),
     annual_savings_override: num('ret-sav'),
@@ -2055,7 +2054,6 @@ function saveRetire(){
   const opt=(id,key,xf)=>{const v=num(id); if(v!=null) body[key]=xf?xf(v):v;};
   opt('ret-fill','convert_fill_to_rate',v=>v/100);   // UI shows % ; config stores a decimal rate
   opt('ret-needs','needs_pct_of_expenses');          // funded-ratio needs/wants split (G1)
-  opt('ret-sage','spouse_age');
   opt('ret-hh','household_size');
   opt('ret-slcsp','aca_slcsp_annual');
   opt('ret-by','birth_year');
@@ -2113,7 +2111,7 @@ function planContent(r){
     const ed=el('div'); ed.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-4);';
     ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">ASSUMPTIONS · EDIT</div>`+
       `<div style="margin-bottom:var(--space-2);">Withdrawal rate <input id="ret-wr" type="number" step="0.1" value="${pv(a.withdrawal_rate_pct)}" style="width:54px;"/>% &nbsp; Real return <input id="ret-rr" type="number" step="0.1" value="${pv(a.expected_real_return_pct)}" style="width:54px;"/>% &nbsp; Optimistic <input id="ret-opt" type="number" step="0.1" value="${pv(a.optimistic_real_return_pct)}" placeholder="8" style="width:54px;"/>% &nbsp; Volatility <input id="ret-vol" type="number" step="0.5" value="${pv(a.volatility_pct)}" placeholder="16" style="width:54px;"/>% <span class="muted" style="font-size:var(--font-size-sm);">(Monte Carlo)</span> &nbsp; Needs <input id="ret-needs" type="number" step="5" min="0" max="100" value="${pv(a.needs_pct_of_expenses)}" placeholder="65" style="width:54px;"/>% <span class="muted" style="font-size:var(--font-size-sm);">(essential share of spending — funded ratio)</span></div>`+
-      `<div style="margin-bottom:var(--space-2);">Current age <input id="ret-age" type="number" value="${pv(a.current_age)}" placeholder="—" style="width:54px;"/> &nbsp; Spouse age <input id="ret-sage" type="number" value="${pv(a.spouse_age)}" placeholder="—" style="width:54px;"/> &nbsp; Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);">Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(current age is derived from birth year below — no longer entered separately)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Annual expenses <input id="ret-exp" type="number" value="${a.expenses_source==='override'?Math.round(a.annual_expenses):''}" placeholder="${a.expenses_source==='monarch_cashflow'?'Monarch '+Math.round(a.annual_expenses):'set target $'}" style="width:120px;"/> &nbsp; Annual savings <input id="ret-sav" type="number" value="" placeholder="${a.annual_savings!=null?Math.round(a.annual_savings):'set $'}" style="width:120px;"/></div>`+
       `<div style="margin-bottom:var(--space-2);">Income target yield <input id="ret-yield" type="number" step="0.1" value="${pv(a.income_target_yield_pct)}" placeholder="3.5" style="width:54px;"/>% <span class="muted" style="font-size:var(--font-size-sm);">(for the dividend-income view)</span></div>`+
       `<div class="ph" style="border:none;margin:10px 0 6px;padding:0;">TAX · ACA · SOCIAL SECURITY</div>`+
@@ -2125,8 +2123,8 @@ function planContent(r){
         Object.keys(STATE_NAMES).sort((x,y)=>STATE_NAMES[x]<STATE_NAMES[y]?-1:1).map(o=>`<option value="${o}"${a.state_of_residence===o?' selected':''}>${STATE_NAMES[o]}</option>`).join('')+
         `</select> <span class="muted" style="font-size:var(--font-size-sm);">(drives estate community-property/TOD-deed rules, ACA Medicaid-expansion status, and the state-tax note — see the Glossary/Wiki for what changes per state)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Household size <input id="ret-hh" type="number" step="1" value="${pv(a.household_size)}" placeholder="2" style="width:54px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(people on the return — drives ACA FPL)</span> &nbsp; Benchmark Silver premium <input id="ret-slcsp" type="number" step="1" value="${pv(a.aca_slcsp_annual)}" placeholder="SLCSP $/yr" style="width:110px;"/> <span class="muted" style="font-size:var(--font-size-sm);">($/yr, for a $ PTC estimate)</span></div>`+
-      `<div style="margin-bottom:var(--space-2);">You — Birth year <input id="ret-by" type="number" step="1" value="${pv(a.birth_year)}" placeholder="1975" style="width:64px;"/> &nbsp; SS claim age <input id="ret-ca" type="number" step="1" value="${pv(a.ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-ssb" type="number" step="1" value="${pv(a.ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
-      `<div style="margin-bottom:var(--space-2);">Spouse — Birth year <input id="ret-sby" type="number" step="1" value="${pv(a.spouse_birth_year)}" placeholder="1977" style="width:64px;"/> &nbsp; SS claim age <input id="ret-sca" type="number" step="1" value="${pv(a.spouse_ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-sssb" type="number" step="1" value="${pv(a.spouse_ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);">You — Birth year <input id="ret-by" type="number" step="1" value="${pv(a.birth_year)}" placeholder="1975" style="width:64px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(age ${a.current_age!=null?a.current_age:'—'})</span> &nbsp; SS claim age <input id="ret-ca" type="number" step="1" value="${pv(a.ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-ssb" type="number" step="1" value="${pv(a.ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);">Spouse — Birth year <input id="ret-sby" type="number" step="1" value="${pv(a.spouse_birth_year)}" placeholder="1977" style="width:64px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(age ${a.spouse_age!=null?a.spouse_age:'—'})</span> &nbsp; SS claim age <input id="ret-sca" type="number" step="1" value="${pv(a.spouse_ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-sssb" type="number" step="1" value="${pv(a.spouse_ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
       `<button onclick="saveRetire()">↳ SAVE ASSUMPTIONS</button>`;
     wrap.appendChild(ed);
     return wrap;
