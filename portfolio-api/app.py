@@ -5420,7 +5420,15 @@ def get_insurance():
                  "age_self": ret.get("current_age"), "age_spouse": ret.get("spouse_age"),
                  "retire_age": ret.get("target_age") or 60,
                  "children": cfg.get("children") or 0,
-                 "home_value": home_val, "real_rate_pct": rr}
+                 "home_value": home_val,
+                 # Raw override value (2026-07-23, new UI field) — distinct from "home_value"
+                 # above, which is the RESOLVED value (override if set, else auto-detected from
+                 # the Monarch/Zillow real-estate account balance). Exposing the raw override
+                 # separately lets the frontend input show blank when nothing was ever explicitly
+                 # entered, instead of pre-filling with the auto-detected balance and making an
+                 # untouched field look "set."
+                 "home_value_override": cfg.get("home_value_override"),
+                 "real_rate_pct": rr}
     sinfo = _state_of_residence_info(ret, d)
     household["state"] = sinfo["code"]
     res = insurance.run(household, cfg.get("policies"))
@@ -6113,6 +6121,22 @@ def _retirement():
                    "annual_expenses": annual_expenses, "expenses_source": exp_source,
                    "annual_savings": annual_savings, "current_age": cfg.get("current_age"),
                    "target_age": cfg.get("target_age"),
+                   # 2026-07-23 — two real gaps found while wiring the setup-progress tour to
+                   # ASSUMPTIONS, both now fixed:
+                   # (a) spouse_age was read directly off cfg by every tax call site (standard
+                   #     deduction age-65+ addon, catch-up eligibility, etc. — see tax.py call
+                   #     sites) but NO form anywhere ever wrote it, and it wasn't even echoed here
+                   #     for the editor to show, so it was permanently None for every MFJ
+                   #     household regardless of what a user tried to enter — a silent tax-calc
+                   #     gap, not just a missing checklist field. Added spouse_age here + a new
+                   #     "Spouse age" input in ASSUMPTIONS (ret-sage) + saveRetire() now sends it.
+                   # (b) state_of_residence was never echoed here either, so the ASSUMPTIONS
+                   #     dropdown always rendered as "Auto-detect" on reload even after a user
+                   #     explicitly picked a state — display-only (every real calculation reads
+                   #     the raw config directly via _state_of_residence_info(), so this never
+                   #     affected actual numbers), but confusing and now fixed alongside (a).
+                   "spouse_age": cfg.get("spouse_age"),
+                   "state_of_residence": cfg.get("state_of_residence"),
                    "income_target_yield_pct": cfg.get("income_target_yield_pct"),
                    "optimistic_real_return_pct": cfg.get("optimistic_real_return_pct"),
                    "volatility_pct": cfg.get("volatility_pct") or MC_VOLATILITY_PCT,
@@ -6756,10 +6780,14 @@ SETUP_FIELDS = [
     {"id": "ss_benefit", "tier": 1, "group": "SS estimated benefit (at FRA)", "cfg": "retire",
      "key": "ss_estimated_fra_benefit", "jump": ("plan", "assumptions"),
      "note": "Best source: your own ssa.gov/myaccount statement."},
+    # jump fixed 2026-07-23 (found while wiring the tour): both inputs actually live in
+    # estateContent() (PLAN -> ESTATE, ids est-donees/est-homebasis), not ASSUMPTIONS — the old
+    # ("plan","assumptions") jump target has been silently wrong since this checklist was first
+    # built, sending every "GO ->" click for these two items to the wrong sub-tab.
     {"id": "estate_donees", "tier": 1, "group": "Estate donees (# of people)", "cfg": "retire",
-     "key": "estate_donees", "jump": ("plan", "assumptions")},
+     "key": "estate_donees", "jump": ("plan", "estate")},
     {"id": "estate_home_basis", "tier": 1, "group": "Estate home cost basis", "cfg": "retire",
-     "key": "estate_home_basis", "jump": ("plan", "assumptions"),
+     "key": "estate_home_basis", "jump": ("plan", "estate"),
      "note": "Purchase price + capital improvements on your primary residence."},
 
     # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
