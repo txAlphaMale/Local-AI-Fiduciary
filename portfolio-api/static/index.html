@@ -245,7 +245,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
@@ -379,6 +379,7 @@ async function load(refresh, bg){
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     try{ const rc=await gj('/api/research-cache?history=1'); if(rc && !rc.error){ RESEARCH_CACHE={recent:rc.recent||[], items:rc.items||{}}; } }catch(_){}
+    try{ const pc=await gj('/api/prompts'); if(pc && !pc.error){ PROMPTS_CFG=pc; } }catch(_){}
     _resumeResearchPolls();   // re-attach pollers for any on-demand analysis still running after a reload/navigation
     render();   // re-render with research / insights / plan / ideas / strategist panels
     if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
@@ -431,8 +432,8 @@ W('allocation','Dashboard','Allocation donuts (institution / asset type)',
   'Each slice is a share of invested value; the legend lists top holdings with percentages. Institution concentration is custodial risk; asset-type mix is your rough stock/bond/cash posture.',
   'Use the asset-type donut for a quick check against your target mix, and the institution donut to notice if too much sits at one custodian.');
 W('accounts-panel','Dashboard','Accounts — holdings plus other assets and liabilities',
-  'A list of every account: brokerage/holdings accounts first, then an Other assets and liabilities section for cash, the home, and debts that move net worth but hold no securities.',
-  'Holdings accounts show market value; the other section shows assets in normal color and liabilities in red. Together they reconcile to net worth.',
+  'A list of every account: brokerage/holdings accounts first, then an Other assets and liabilities section for cash, the home, and debts that move net worth but hold no securities. An investment account whose provider syncs only a balance (no line-item holdings — some 401(k)s do this) is shown with the accounts and marked "balance only", and is counted in the Institution donut; it just can\'t appear in per-security views (exposure, drift, tax) because there are no holdings to analyze.',
+  'Holdings accounts show market value; the other section shows assets in normal color and liabilities in red. Together they reconcile to net worth. The Institution donut includes balance-only investment accounts (its total is invested holdings + those balances); the Asset-type donut stays holdings-only, since a balance without holdings has no known asset type.',
   'This is where to confirm the terminal sees a real asset (the home) or a liability (a mortgage). A wrong balance here is usually a provider-sync issue to fix upstream.');
 W('movers','Dashboard','Top gainers / losers / day movers',
   'Gainers and losers rank positions by total unrealized dollar gain/loss; day movers rank by the largest one-day percentage change.',
@@ -636,6 +637,10 @@ W('chat','Automation','Chat personas',
   'An in-app chat with a Fiduciary persona (planning/analysis) and a Strategist persona, both read-only, with tools to query your book and the research data. It has your knowledge documents in a local RAG. You can also attach an image (paste a screenshot or click 📎) — e.g. a watchlist, a brokerage screenshot, or a headline — and a separate small vision model reads it for ticker symbols, then hands them to the SAME persona/tools to research, before the persona answers. Both personas can see your REAL fund expense ratios and 401k/HSA/Roth contribution room (get_fees_liquidity / get_benefits) as context — you should not need to type balances, expense ratios, or match/headroom figures into chat yourself; ask directly and it looks them up.',
   'Pick a persona and ask; it streams its answer and a thinking indicator while it reasons. It queues behind a running strategist job so they never compete for the GPU. An attached image shows a small 👁 chip naming what tickers it found (or that none were found) before the answer streams — that step itself briefly queues for the GPU too if something else is using it, same as everything else here. Generation runs on the server independent of your browser, so you can switch tabs, navigate away, or even reload mid-answer without losing it — a still-generating conversation shows a ⏳ in the session list; re-open it to reconnect to the live stream and it will finish on screen.',
   'Use it to interrogate your own data in plain language (what is my true tech exposure) — the answers are grounded in the same figures the tabs show. Pasting a screenshot is a shortcut for "look these up" — verify the tickers the 👁 chip identified are actually what you meant before trusting the follow-up research, especially on a blurry or cropped image. Strategist keeps a narrower deep-planning toolset than Fiduciary by design (no IPS/tax/retirement/estate tools) — for retirement-account or tax-planning questions specifically, ask the Fiduciary persona instead of Strategist.');
+W('prompts','Automation','Persona prompts & how you\'re addressed',
+  'The system prompts that define how the Fiduciary and Strategist chat personas behave are editable, and you set how they refer to you. A {user} token in each prompt is replaced with your chosen reference (your name, or the default "the user") everywhere it appears. This is the fix for the app\'s origins as a single-person tool — nothing is hardcoded to one name anymore.',
+  'SETTINGS → PERSONA PROMPTS. Set the "refer to you" field once; edit either prompt and SAVE to customize its instructions/tone/guardrails; RESET TO DEFAULT restores the built-in version. Overrides are stored privately (gitignored) and apply to your next message with no restart.',
+  'Use it to rename how the assistants address you, tighten or loosen a persona\'s style, or add a standing instruction (e.g. "always show your math"). Keep the tool names in the default prompt if you edit it — they are how the persona knows what it can do. Educational personas only — editing the prompt does not grant new tools or the ability to trade.');
 W('knowledge','Automation','Knowledge library (local RAG)',
   'A folder of reference documents (.md/.txt/.pdf) the chat personas can search: your IPS, IRS publications, investing-principles guides, plus the committed reference/ set (estate & generational transfer, business-acquisition/QSBS frameworks, and a dated snapshot of the grounded 2026 tax/ACA/SS parameters). Everything is embedded locally with bge-m3 — nothing leaves the machine.',
   'SETTINGS → KNOWLEDGE shows the folder, document/chunk counts, embedding model, and last index time. Drop files in the host folder (or remove them) and hit REINDEX; it runs in the background on the job queue and the button shows live chunk-level progress (% and current file) instead of blocking. The personas answer with citations from these documents via their search_knowledge tool.',
@@ -914,6 +919,7 @@ function render(){
       {key:'theme',label:'THEME',build:()=>themeContent()},
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
+      {key:'prompts',label:'PERSONA PROMPTS',build:()=>promptsContent()},
       {key:'schedule',label:'TASK SCHEDULE',build:()=>scheduleContent()},
       {key:'knowledge',label:'KNOWLEDGE',build:()=>knowledgeContent()},
     ]));
@@ -1023,12 +1029,21 @@ function accountsPanel(d){
       `<span style="text-align:right">${usd(a.value)}</span>`;
     p.appendChild(row);
   });
+  // Balance-only investment accounts (2026-07-22): 401(k)/IRA/HSA/brokerage accounts whose provider
+  // syncs a balance but no line-item holdings. They belong with the ACCOUNTS (and the institution
+  // donut), not under "Other Assets" — the "balance only" note explains why they have no holdings detail.
+  (d.investment_balance_accounts||[]).forEach(a=>{
+    const row=el('div','row');
+    row.innerHTML=`<span class="nm">${a.account}<br><span class="sub">${shortInst(a.institution)} · balance only</span></span>`+
+      `<span style="text-align:right">${usd(a.value)}</span>`;
+    p.appendChild(row);
+  });
   // OTHER ASSETS & LIABILITIES: everything in the net-worth roll-up that ISN'T a
   // holdings/brokerage account — cash, the home (Zillow-valued), and all debts.
   // These move net worth but were invisible here (this panel only listed
   // holdings accounts), so the home + liabilities never showed. Liabilities carry
   // a POSITIVE balance in the feed (= debt owed) and are shown negative/red.
-  const held=new Set((d.by_account||[]).map(a=>a.account));
+  const held=new Set([...(d.by_account||[]).map(a=>a.account), ...((d.investment_balance_accounts||[]).map(a=>a.account))]);
   const other=(d.accounts||[]).filter(a=>!held.has(a.name) && Math.round(a.balance||0)!==0);
   const assets=other.filter(a=>a.is_asset!==false);
   const liabs =other.filter(a=>a.is_asset===false);
@@ -1116,7 +1131,7 @@ function dashboardContent(){
   // on the wide column prevents the nested grid from overflowing on narrow viewports.
   const body=el('div'); body.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:10px;margin-top:10px;align-items:start;';
   const small=el('div','grid cols');
-  small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.invested_value));
+  small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value));
   small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
   small.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
   small.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
@@ -1550,6 +1565,51 @@ function runScheduleNow(kind, btn){
   if(!url){ alert('No manual trigger wired for "'+kind+'" yet.'); return; }
   runJob(url, btn, 'queued…').then(()=>load(false));
 }
+function promptsContent(){
+  const wrap=el('div');
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  wrap.appendChild(el('div','ph','PERSONA PROMPTS · HOW THE ASSISTANTS BEHAVE'));
+  if(!PROMPTS_CFG){ wrap.appendChild(el('div','muted','Loading…')); return wrap; }
+  const tok=esc(PROMPTS_CFG.token||'{user}');
+  const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
+  info.innerHTML='The system prompts the Fiduciary and Strategist chat personas follow. The token <b>'+tok+'</b> is replaced everywhere with how you want the assistants to refer to you (set below). Edit a prompt and SAVE to customize it; RESET restores the built-in default. Changes apply to your next message — no restart needed.';
+  wrap.appendChild(info);
+  // ---- user reference ----
+  const refBox=el('div'); refBox.style.cssText='margin-bottom:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--color-border-strong);';
+  const refLbl=el('div'); refLbl.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
+  refLbl.innerHTML='How should the assistants refer to you? <span class="muted" style="font-size:var(--font-size-sm)">(fills the '+tok+' token — e.g. your first name; blank uses the default "'+esc(PROMPTS_CFG.user_ref_default||'the user')+'")</span>';
+  refBox.appendChild(refLbl);
+  const refIn=el('input'); refIn.id='prm-userref'; refIn.type='text'; refIn.value=PROMPTS_CFG.user_ref_is_custom?(PROMPTS_CFG.user_ref||''):''; refIn.placeholder=PROMPTS_CFG.user_ref_default||'the user'; refIn.style.cssText='width:280px;';
+  refBox.appendChild(refIn);
+  const refSave=el('button',null,'↳ SAVE'); refSave.style.cssText='margin-left:var(--space-2);'; refSave.onclick=saveUserRef; refBox.appendChild(refSave);
+  if(PROMPTS_CFG.user_ref_is_custom){ const refReset=el('button',null,'↺ default'); refReset.style.cssText='margin-left:var(--space-1);font-size:var(--font-size-sm);'; refReset.onclick=()=>{ const i=document.getElementById('prm-userref'); if(i) i.value=''; saveUserRef(); }; refBox.appendChild(refReset); }
+  wrap.appendChild(refBox);
+  // ---- per-persona prompt editors ----
+  const personas=PROMPTS_CFG.personas||{};
+  Object.keys(personas).forEach(key=>{
+    const p=personas[key];
+    const box=el('div'); box.style.cssText='margin-bottom:var(--space-4);';
+    const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-1);';
+    h.innerHTML='<b>'+esc(p.label||key)+'</b> <span class="muted" style="font-size:var(--font-size-sm)">'+(p.is_custom?'· customized':'· default')+'</span>';
+    box.appendChild(h);
+    const ta=el('textarea'); ta.id='prm-'+key; ta.rows=10; ta.value=p.current||'';
+    ta.style.cssText='width:100%;font-family:inherit;font-size:var(--font-size-sm);line-height:1.5;box-sizing:border-box;';
+    box.appendChild(ta);
+    const bar=el('div'); bar.style.cssText='margin-top:var(--space-1);';
+    const save=el('button',null,'↳ SAVE'); save.onclick=()=>savePrompt(key); bar.appendChild(save);
+    const reset=el('button',null,'↺ RESET TO DEFAULT'); reset.style.cssText='margin-left:var(--space-2);'; reset.onclick=()=>resetPrompt(key); bar.appendChild(reset);
+    box.appendChild(bar);
+    wrap.appendChild(box);
+  });
+  return wrap;
+}
+function _saveProms(payload){
+  return fetch('/api/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(r=>r.json()).then(d=>{ if(d && !d.error){ PROMPTS_CFG=d; } if(TAB==='settings') render(); }).catch(e=>alert('Save failed: '+e));
+}
+function saveUserRef(){ const i=document.getElementById('prm-userref'); _saveProms({user_ref:(i&&i.value||'').trim()}); }
+function savePrompt(key){ const i=document.getElementById('prm-'+key); _saveProms({persona:key, prompt:(i&&i.value)||''}); }
+function resetPrompt(key){ if(!confirm('Reset the '+key+' prompt to the built-in default?')) return; _saveProms({persona:key, reset:true}); }
 function scheduleContent(){
   const s=SCHEDULE||{}, wrap=el('div');
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');

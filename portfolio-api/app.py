@@ -753,9 +753,14 @@ def _hold(h, conv="per_share"):
     }
 
 
-def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total_liabilities):
+def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total_liabilities,
+            balance_only=None):
     """Source-agnostic derivation: given normalized accounts + positions (from ANY provider),
-    compute the full dashboard payload (consolidation, weights, aggregations, movers)."""
+    compute the full dashboard payload (consolidation, weights, aggregations, movers).
+    `balance_only` (optional): investment accounts with a balance but no line-item holdings — folded
+    into the institution/type allocation and surfaced as accounts, but kept out of `positions` so
+    per-security analysis is unaffected. See _build_monarch for how they're identified."""
+    balance_only = balance_only or []
     invested = round(sum(p["value"] or 0 for p in positions), 2)
     total_gain = round(sum(p["gain"] or 0 for p in positions if p["gain"] is not None), 2)
     total_cost = round(sum(p["cost_total"] or 0 for p in positions if p["cost_total"] is not None), 2)
@@ -796,6 +801,28 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
             d[keyfn(p)] = round(d.get(keyfn(p), 0) + (p["value"] or 0), 2)
         return [{"label": k, "value": v} for k, v in sorted(d.items(), key=lambda x: -x[1])]
 
+    # Institution allocation with balance-only investment accounts folded in, so a 401(k) (or
+    # similar) that syncs only a balance still appears in the institution donut (2026-07-22).
+    # `allocation_total` = detailed positions + those balances = the institution donut's denominator.
+    # NOTE: by_type is deliberately LEFT positions-only — asset type is unknown for a holdings-less
+    # balance, and /api/rebalance derives policy-drift-by-type from by_type, so folding the balance
+    # in there would corrupt the drift math. The asset-type donut therefore stays on invested_value.
+    bo_total = round(sum(a.get("balance") or 0 for a in balance_only), 2)
+    allocation_total = round(invested + bo_total, 2)
+    inst_alloc = {}
+    for p in positions:
+        k = p["institution"] or "?"
+        inst_alloc[k] = round(inst_alloc.get(k, 0) + (p["value"] or 0), 2)
+    for a in balance_only:
+        k = a.get("institution") or "?"
+        inst_alloc[k] = round(inst_alloc.get(k, 0) + (a.get("balance") or 0), 2)
+    by_institution = [{"label": k, "value": v} for k, v in sorted(inst_alloc.items(), key=lambda x: -x[1])]
+    by_type = agg(lambda p: p["type"] or "Other")
+    investment_balance_accounts = [
+        {"account": a.get("name"), "institution": a.get("institution"),
+         "value": a.get("balance"), "type": a.get("type")}
+        for a in sorted(balance_only, key=lambda a: -(a.get("balance") or 0))]
+
     # gainers / losers / movers consolidated by security (one row per ticker)
     have_gain = [c for c in consolidated if c["gain"] is not None]
     have_day = [c for c in consolidated if c["day_pct"] is not None]
@@ -814,8 +841,10 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         "position_count": len(positions),
         "unique_securities": len(consolidated),
         "consolidated": consolidated,
-        "by_institution": agg(lambda p: p["institution"] or "?"),
-        "by_type": agg(lambda p: p["type"] or "Other"),
+        "by_institution": by_institution,
+        "by_type": by_type,
+        "allocation_total": allocation_total,
+        "investment_balance_accounts": investment_balance_accounts,
         "accounts": sorted(accounts, key=lambda a: -(a["balance"] or 0)),
         "by_account": sorted(by_account, key=lambda a: -(a.get("value") or 0)),
         "gainers": sorted(have_gain, key=lambda p: -p["gain"])[:8],
@@ -847,6 +876,7 @@ def _build_monarch():
             "balance": round(bal, 2),
             "holdings_count": a.get("holdingsCount") or 0,
             "is_asset": a.get("isAsset"),
+            "include_nw": a.get("includeBalanceInNetWorth"),
         })
 
     inv = [a for a in accounts if a["holdings_count"] > 0]
@@ -870,7 +900,23 @@ def _build_monarch():
             c2["institution"] = a["institution"]
             positions.append(c2)
 
-    return _derive(accounts, positions, by_account, inv, net_worth, total_assets, total_liabilities)
+    # Balance-only investment accounts (2026-07-22): tax-advantaged / brokerage accounts whose
+    # provider syncs a BALANCE but no line-item holdings (e.g. some 401(k)s — confirmed with a
+    # an employer 401(k) that landed under "Other Assets"). They have holdings_count==0, so they
+    # never enter positions/by_account and were shown only as balance-only "Other Assets", missing
+    # from the ACCOUNTS list and the institution donut. Surface them as real investment accounts
+    # (attributed to their institution) WITHOUT injecting a fake security into positions, so
+    # securities analysis (exposure/risk/tax-lots/rebalance) stays clean. _account_tax_status != "na"
+    # is the "this is an investment account" signal (401k/IRA/Roth/HSA/brokerage), excluding cash,
+    # the home, and loans, which correctly remain under Other Assets / Liabilities.
+    balance_only = [a for a in accounts
+                    if (a.get("holdings_count") or 0) == 0
+                    and a.get("include_nw")
+                    and a.get("is_asset") is not False
+                    and round(a.get("balance") or 0) != 0
+                    and _account_tax_status(a.get("name"), a.get("type")) != "na"]
+    return _derive(accounts, positions, by_account, inv, net_worth, total_assets,
+                   total_liabilities, balance_only=balance_only)
 
 
 def _build_csv():
@@ -8104,7 +8150,13 @@ def _today_line():
 
 
 def _sys(prompt):
-    """System prompt with the current date grounded in front of it."""
+    """System prompt with the current date grounded in front of it. Also substitutes the {user}
+    token (how the assistants refer to the user — see _user_ref / SETTINGS → PERSONA PROMPTS) so any
+    prompt can carry {user} and have it resolved centrally; a no-op for prompts without the token."""
+    try:
+        prompt = prompt.replace("{user}", _user_ref())
+    except Exception:
+        pass
     return _today_line() + "\n\n" + prompt
 
 
@@ -8122,7 +8174,7 @@ STRATEGIST_PROMPT = (
     "paper_buy(ticker, dollars); paper_sell(ticker, shares — omit shares to sell the whole position); "
     "log_report(summary — call this LAST, exactly once).\n"
     "RESEARCH TOOLS: get_opportunities and get_discovery (idea sources); get_fundamentals(ticker) and "
-    "get_valuation(ticker); get_research(ticker) (a Buy/Sell/Hold brief); get_holdings (The user's REAL "
+    "get_valuation(ticker); get_research(ticker) (a Buy/Sell/Hold brief); get_holdings ({user}'s REAL "
     "portfolio, for context only — never trade it); web_search(query) (LIVE web/news via Tavily — use it "
     "to surface NEW opportunities beyond get_discovery and to check what's moving a name now). web_search "
     "is BUDGET-LIMITED per run: spend it on high-value discovery, not on every name, and once it reports "
@@ -8470,12 +8522,12 @@ def strategist_runs(limit: int = 50):
 # ---------------------------------------------------------------------------
 STRATEGIST_ADVICE_PROMPT = (
     "You are the Strategist, operating in ADVISORY mode. This is analysis ONLY: you place NO trades and "
-    "record nothing — no buy, sell, or report tools exist in this mode. Jason is asking what you would do "
+    "record nothing — no buy, sell, or report tools exist in this mode. {user} is asking what you would do "
     "with a specific amount of NEW cash. Reason it through with your research and data tools.\n"
-    "TOOLS: get_holdings (The user's REAL portfolio — the positions your plan MUST consider); "
-    "get_fees_liquidity and get_benefits (The user's REAL fund expense ratios and 401k/HSA/Roth "
+    "TOOLS: get_holdings ({user}'s REAL portfolio — the positions your plan MUST consider); "
+    "get_fees_liquidity and get_benefits ({user}'s REAL fund expense ratios and 401k/HSA/Roth "
     "contribution room — use these for any question involving fees or contribution/match headroom "
-    "instead of asking Jason to supply figures the app already tracks); "
+    "instead of asking {user} to supply figures the app already tracks); "
     "get_paper_portfolio (the hypothetical book, extra context only); get_opportunities and get_discovery "
     "(idea sources); get_fundamentals(ticker), get_valuation(ticker), get_research(ticker).\n"
     "Prefer `ttm` (trailing-twelve-month) margins over any single annual figure, and check the multi-year "
@@ -8685,19 +8737,23 @@ _chat_init()
 
 
 # ---- Fiduciary persona: full read-only analytics + web, no mutation ----
+# Default persona system prompts. `{user}` is substituted at request time with the configured
+# user reference (SETTINGS → PERSONA PROMPTS, default "the user") — see _resolve_persona_prompt.
+# Users can override either prompt entirely and reset it back to these defaults.
 FIDUCIARY_PROMPT = (
-    "You are the Fiduciary — Jason's read-only, holistic financial advisor. You analyze his REAL "
+    "You are the Fiduciary — {user}'s read-only, holistic financial advisor. You analyze their REAL "
     "portfolio and financial plan; you place no trades and change nothing. Ground every answer in your "
     "tools rather than assumption, and cite the figures you used.\n"
-    "START by calling get_holdings and get_policy (his Investment Policy Statement) so your advice fits "
-    "his actual positions and targets. Then reach for the tool that fits the question: get_exposure "
+    "START by calling get_holdings and get_policy ({user}'s Investment Policy Statement) so your advice fits "
+    "their actual positions and targets. Then reach for the tool that fits the question: get_exposure "
     "(sector/beta/concentration), get_rebalance (IPS sleeve drift), get_risk_metrics (realized vol / "
     "drawdown / Sharpe), get_retirement and get_income_plan (long-range plan, Monte Carlo, glide path), "
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
-    "get_social_security, get_fees_liquidity, get_lookthrough (fund holdings), get_scorecard, "
-    "get_opportunities and get_discovery (ideas), get_fundamentals / get_valuation / get_research for a "
-    "specific ticker, search_knowledge for tax rules / IRA-Roth mechanics / investing-policy guidance from "
-    "Jason's local reference library (cite the source doc), and web_search for current news or context.\n"
+    "get_social_security, get_benefits (401k match / HSA / Roth contribution room), get_fees_liquidity, "
+    "get_lookthrough (fund holdings), get_scorecard, get_opportunities and get_discovery (ideas), "
+    "get_fundamentals / get_valuation / get_research for a specific ticker, search_knowledge for tax rules / "
+    "IRA-Roth mechanics / investing-policy guidance from {user}'s local reference library (cite the source "
+    "doc), and web_search for current news or context.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
     "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
     "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
@@ -8848,16 +8904,16 @@ def _fiduciary_dispatch(name, args):
 STRATEGIST_CHAT_PROMPT = (
     "You are the Strategist in conversational ADVISORY mode. You discuss ideas, opportunities and "
     "portfolio moves, but you place NO trades and record nothing — no buy/sell/report tools exist here. "
-    "There are TWO separate books — do not conflate them: get_holdings is The user's REAL portfolio (his "
+    "There are TWO separate books — do not conflate them: get_holdings is {user}'s REAL portfolio (their "
     "actual money, actual positions, actual cost basis) and get_paper_portfolio is YOUR OWN separate "
     "hypothetical simulation book that only tracks the paper trades you have logged — it does NOT reflect "
-    "what Jason actually owns or how much. Whenever Jason asks about a position he holds, adding to an "
+    "what {user} actually owns or how much. Whenever {user} asks about a position they hold, adding to an "
     "existing holding, sizing a real purchase, or 'my' portfolio/holding, that means the REAL book: call "
-    "get_holdings FIRST (not get_paper_portfolio) to see his actual size, cost basis and weight in that "
-    "name before saying anything about it. Only reach for get_paper_portfolio when Jason is explicitly "
+    "get_holdings FIRST (not get_paper_portfolio) to see their actual size, cost basis and weight in that "
+    "name before saying anything about it. Only reach for get_paper_portfolio when {user} is explicitly "
     "asking about your paper-trading track record or hypothetical strategy performance.\n"
-    "Also available: get_fees_liquidity for his REAL fund expense ratios/liquidity flags and get_benefits "
-    "for his REAL 401k/HSA/Roth contribution room (use these instead of asking Jason to type figures the "
+    "Also available: get_fees_liquidity for their REAL fund expense ratios/liquidity flags and get_benefits "
+    "for their REAL 401k/HSA/Roth contribution room (use these instead of asking {user} to type figures the "
     "app already tracks), get_opportunities and get_discovery for ideas, get_fundamentals / get_valuation "
     "/ get_research to dig into a name, and web_search(query) for LIVE web/news via Tavily — use it to "
     "uncover fresh opportunities and to answer 'what's driving this stock right now / why is it up or "
@@ -8875,6 +8931,101 @@ PERSONAS = {
     "strategist": {"prompt": STRATEGIST_CHAT_PROMPT, "tools": STRATEGIST_ADVICE_TOOLS,
                    "dispatch": _advice_dispatch, "model": ANALYSIS_MODEL, "temp": 0.4},
 }
+
+# --- Customizable persona prompts + user reference (2026-07-22) ----------------------------------
+# The two chat persona prompts above are DEFAULTS. A user can (a) set how the assistants refer to
+# them (the `{user}` token — default "the user", e.g. set to their name) and (b) override either
+# system prompt entirely, with a one-click reset back to the default. Overrides live in a gitignored
+# JSON store (personal / may embed a name), resolved at request time so no restart is needed.
+PROMPTS_FILE = os.environ.get("PROMPTS_FILE", "/data/prompts.json")
+DEFAULT_USER_REF = "the user"
+DEFAULT_PERSONA_PROMPTS = {"fiduciary": FIDUCIARY_PROMPT, "strategist": STRATEGIST_CHAT_PROMPT}
+PERSONA_LABELS = {"fiduciary": "Fiduciary", "strategist": "Strategist"}
+
+def _read_prompts_store():
+    try:
+        with open(PROMPTS_FILE, encoding="utf-8") as f:
+            d = json.load(f) or {}
+    except Exception:
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
+    if not isinstance(d.get("prompts"), dict):
+        d["prompts"] = {}
+    return d
+
+def _write_prompts_store(d):
+    os.makedirs(os.path.dirname(PROMPTS_FILE) or ".", exist_ok=True)
+    with open(PROMPTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    try:
+        os.chmod(PROMPTS_FILE, 0o600)   # may embed the user's name — keep it private
+    except Exception:
+        pass
+
+def _user_ref():
+    v = (_read_prompts_store().get("user_ref") or "").strip()
+    return v or DEFAULT_USER_REF
+
+def _resolve_persona_prompt(key):
+    """The system prompt actually sent for persona `key`: the user's override if set, else the coded
+    default, with the `{user}` token filled in from the configured user reference."""
+    store = _read_prompts_store()
+    tmpl = store["prompts"].get(key) or DEFAULT_PERSONA_PROMPTS.get(key, "")
+    return tmpl.replace("{user}", _user_ref())
+
+
+@app.get("/api/prompts")
+def get_prompts():
+    """Current persona-prompt configuration for the SETTINGS editor: the user reference plus, per
+    persona, the coded default, the effective current text (override or default), whether it's
+    customized, and a preview with `{user}` already substituted."""
+    store = _read_prompts_store()
+    overrides = store["prompts"]
+    ref = _user_ref()
+    personas = {}
+    for key, default in DEFAULT_PERSONA_PROMPTS.items():
+        cur = overrides.get(key) or default
+        personas[key] = {
+            "label": PERSONA_LABELS.get(key, key.capitalize()),
+            "default": default,
+            "current": cur,
+            "is_custom": bool(overrides.get(key)),
+            "resolved_preview": cur.replace("{user}", ref),
+        }
+    return {"user_ref": ref, "user_ref_default": DEFAULT_USER_REF,
+            "user_ref_is_custom": bool((store.get("user_ref") or "").strip()),
+            "token": "{user}", "personas": personas}
+
+
+@app.post("/api/prompts")
+async def post_prompts(req: Request):
+    """Update the user reference and/or a persona's system-prompt override.
+    Body: {user_ref?: str, persona?: 'fiduciary'|'strategist', prompt?: str, reset?: bool}.
+    reset=true (or an empty prompt) clears that persona's override back to the coded default;
+    an empty user_ref resets the reference to the default. Applies immediately (no restart)."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    store = _read_prompts_store()
+    if "user_ref" in body:
+        store["user_ref"] = str(body.get("user_ref") or "").strip()
+    persona = body.get("persona")
+    if persona in DEFAULT_PERSONA_PROMPTS:
+        if body.get("reset"):
+            store["prompts"].pop(persona, None)
+        elif "prompt" in body:
+            txt = str(body.get("prompt") or "").strip()
+            if txt and txt != DEFAULT_PERSONA_PROMPTS[persona]:
+                store["prompts"][persona] = txt
+            else:
+                store["prompts"].pop(persona, None)   # identical to default or blank → treat as reset
+    try:
+        _write_prompts_store(store)
+    except Exception as e:
+        return JSONResponse({"error": f"could not save prompts: {e}"}, status_code=500)
+    return get_prompts()
 
 
 def _sse(event, data):
@@ -9034,7 +9185,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         yield _sse("session", {"session_id": session_id, "persona": persona_key})
 
         history = _chat_messages(session_id)[-CHAT_MAX_HISTORY:]
-        messages = [{"role": "system", "content": _sys(persona["prompt"])}]
+        # Resolve the system prompt at request time: the user's override (if any) with the {user}
+        # reference substituted, falling back to the coded default. See _resolve_persona_prompt.
+        messages = [{"role": "system", "content": _sys(_resolve_persona_prompt(persona_key))}]
         for m in history:
             if m["role"] in ("user", "assistant"):
                 messages.append({"role": m["role"], "content": m["content"] or ""})

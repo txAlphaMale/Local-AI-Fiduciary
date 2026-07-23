@@ -28,7 +28,7 @@ Two containers via Docker Compose, plus Ollama on the host:
 So `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`); Ollama
 is the only host dependency. Scheduling is internal — there is no separate scheduler
 container to run. *(Earlier versions used an external **n8n** container for cron; that has
-been retired in favor of a built-in scheduler. See `MIGRATION.md` if you're upgrading.)*
+been retired in favor of a built-in scheduler.)*
 
 The **dashboard** (`http://localhost:8097`) has tabs for Positions, Research (B/S/H
 briefs), Insights (drift), Plan (FIRE + Monte Carlo + Tax/ACA/Social-Security editor),

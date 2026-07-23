@@ -2,9 +2,7 @@
 
 You've got the containers running (`INSTALL.md`) and Monarch/holdings connected — the
 dashboard loads and shows real positions. This doc is the next step: a handful of forms,
-scattered across a few panels, that unlock the rest of the app. Nobody points you at them
-today (RESUME-TRACKER item 9) — this is that pointer, until the guided-UI version (item 10)
-exists.
+scattered across a few panels, that unlock the rest of the app.
 
 **Nothing below is required.** Skip anything you don't want to enter — that module just
 stays a placeholder instead of a real number, and nothing else breaks. Do them in any order;

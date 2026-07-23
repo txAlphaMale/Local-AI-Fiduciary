@@ -44,6 +44,7 @@ retirement.json
 accounts.json
 settings.json
 secrets.json
+prompts.json
 knowledge_index.json
 
 # ---- Knowledge RAG folder — your own reference docs (may be personal, e.g. your IPS) ----
@@ -53,6 +54,17 @@ knowledge/*
 !knowledge/reference/
 !knowledge/reference/*.md
 chat.db
+
+# ---- Internal dev/planning artifacts & real personal data — do NOT share with collaborators ----
+# These are working notes/reviews, not user-facing docs, and several embedded real financial
+# figures/account names. Untracked 2026-07-22 (were committed earlier by mistake). The whole docs/
+# folder is internal R&D EXCEPT DEPENDENCIES.md (a plain, non-personal dependency list linked from
+# INSTALL.md). See SHARING-CHECKLIST.md section 4.
+RESUME-TRACKER.md
+MEMORY-HANDOFF-FROM-LOCAL-AI.md
+MIGRATION.md
+docs/*
+!docs/DEPENDENCIES.md
 
 # ---- Local backups / scratch ----
 *.known-good
