@@ -2920,6 +2920,30 @@ function cashdebtContent(){
                              debt_extra_monthly:numOrNull(g('cd-extra').value),
                              pay_in_full_overrides:pf,
                              debt_rates:dr, debt_min_payments:dmp, is_mortgage_overrides:mo})});
+      // optimistic: patch the just-saved APR/min-payment/paid-in-full values straight into
+      // CASHDEBT.avalanche.rows and recompute each row's priority/annual_interest locally (same
+      // rule cashdebt.py's avalanche() uses) so this panel reflects the save immediately — otherwise
+      // load()'s ~40-endpoint batch hasn't re-fetched /api/cashdebt yet, and the next render (fired
+      // as soon as /api/portfolio alone returns) paints the OLD cached rows, so the checkboxes/APR/
+      // min-payment fields you just set flash back to their pre-save state for several seconds.
+      const av2 = CASHDEBT && CASHDEBT.avalanche;
+      if(av2 && av2.rows){
+        const hurdle = av2.invest_hurdle_pct;
+        av2.rows.forEach(row=>{
+          if(row.name in dr) row.rate_pct = dr[row.name];
+          if(row.name in dmp) row.min_payment = dmp[row.name];
+          if(row.name in pf) row.pay_in_full = pf[row.name];
+          row.priority = row.pay_in_full ? 'paid-in-full'
+            : (row.rate_pct==null ? 'set-rate'
+            : (row.balance<=0 ? 'carry'
+            : ((hurdle!=null && row.rate_pct>hurdle) ? 'pay-first' : 'carry')));
+          row.annual_interest = row.pay_in_full ? 0
+            : (row.rate_pct!=null ? Math.round(row.balance*row.rate_pct/100*100)/100 : null);
+        });
+        const _PRIORITY_ORDER={'pay-first':0,'carry':1,'set-rate':2,'paid-in-full':3};
+        av2.rows.sort((a,b)=>(_PRIORITY_ORDER[a.priority]??9)-(_PRIORITY_ORDER[b.priority]??9) || (b.rate_pct||-1)-(a.rate_pct||-1));
+        if(TAB==='plan') render();
+      }
       load(false); };
   },0);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);line-height:1.5;';

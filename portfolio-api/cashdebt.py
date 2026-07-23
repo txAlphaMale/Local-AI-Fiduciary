@@ -154,7 +154,19 @@ def avalanche(debts, invest_hurdle_pct):
       transactor paid off every statement, not real revolving debt) forces 'paid-in-full' and zeroes
       `annual_interest`, since no interest is actually being charged on it, regardless of whatever
       balance happens to be sitting on it mid-cycle. This is a household-supplied fact the balance
-      snapshot alone can never distinguish from real revolving debt."""
+      snapshot alone can never distinguish from real revolving debt.
+
+    ROW ORDER (2026-07-23, Jason: "I expect it to ... list the debts in order of which need to be
+    paid off first"): grouped by `priority` first -- pay-first, then carry, then set-rate, then
+    paid-in-full -- and rate-descending WITHIN each group. This is not a new ranking method, it's
+    making the existing one legible: strict rate-descending order (the old sort) interleaved
+    zero-balance/paid-in-full/low-rate rows among the real targets, so the table didn't read
+    top-to-bottom as an attack sequence even though `priority` already encoded one. Rate-first
+    IS still the actual interest-minimizing sequence -- `payoff_simulator()` below runs the real
+    month-by-month avalanche-vs-snowball comparison and avalanche (rate order) always wins or ties
+    on total interest by construction, since every dollar of extra payment is guaranteed to be
+    earning its highest available rate of return at each step. Paid-in-full rows sink to the bottom
+    because they're not part of the payoff project at all, not because they're low-priority debt."""
     rows = []
     for d in debts or []:
         bal, rate = _f(d.get("balance"), 0.0), _f(d.get("rate_pct"))
@@ -174,7 +186,8 @@ def avalanche(debts, invest_hurdle_pct):
         rows.append({"name": d.get("name"), "balance": round(bal, 2), "rate_pct": rate,
                      "min_payment": minp, "pay_in_full": pay_in_full,
                      "priority": priority, "annual_interest": annual_interest})
-    rows.sort(key=lambda x: -(x["rate_pct"] or -1))
+    _PRIORITY_ORDER = {"pay-first": 0, "carry": 1, "set-rate": 2, "paid-in-full": 3}
+    rows.sort(key=lambda x: (_PRIORITY_ORDER.get(x["priority"], 9), -(x["rate_pct"] or -1)))
     by_dollar = sorted([r for r in rows if r["annual_interest"] is not None],
                        key=lambda x: -x["annual_interest"])
     for rank, r in enumerate(by_dollar, start=1):
