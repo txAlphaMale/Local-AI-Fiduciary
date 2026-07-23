@@ -691,6 +691,35 @@ _CIT_NAME_RE = re.compile(
     r'\b(collective (investment )?trust|common trust fund|commingled (investment )?fund|\bCIT\b)\b',
     re.I)
 
+# Known ticker overrides (2026-07-23) — Jason confirmed via Monarch's OWN web UI that it displays
+# the correct ticker for these holdings (e.g. "SRFM" for Surf Air Mobility, pulled from a Wells
+# Fargo/Finicity-sourced account); the gap is specifically in what Monarch's API exposes to this
+# app for these securities (ticker/CUSIP both come back blank), not in Monarch's own knowledge of
+# the security. Without this, `_hold()`'s existing `ticker or name` fallback substitutes the
+# security NAME as a fake ticker — which both mis-triggers `_is_cit()` (a real, publicly-traded
+# stock gets flagged as a non-traded CIT) AND silently breaks every other ticker-keyed lookup for
+# that holding (SEC/EDGAR fundamentals, Finnhub quotes, Tavily news, Buy/Sell briefs) since none of
+# those accept a company name string in place of a real ticker. Keyed by the exact security name as
+# Monarch reports it (matched case-insensitively) — add an entry here whenever a real holding is
+# mis-flagged or fails downstream analytics because its ticker/CUSIP came back blank from the feed.
+KNOWN_TICKER_OVERRIDES = {
+    "SURF AIR MOBILITY INC": "SRFM",
+    "DRAGANFLY INC F": "DPRO",
+}
+
+
+def _resolve_ticker(s):
+    """Real ticker if Monarch supplied one; else a known manual override by exact (case-
+    insensitive) security name; else the bare name as a last-resort display fallback (pre-existing
+    behavior). Used by BOTH `_hold()` (so overridden holdings flow the real ticker through every
+    downstream lookup) and `_is_cit()` (so an override counts as "has a real ticker" and isn't
+    flagged CIT)."""
+    ticker = (s.get("ticker") or "").strip()
+    if ticker:
+        return ticker
+    name = (s.get("name") or "").strip()
+    return KNOWN_TICKER_OVERRIDES.get(name.upper()) or name or "?"
+
 
 def _is_cit(s):
     """Heuristic Collective Investment Trust / non-traded-fund detector (RESUME-TRACKER
@@ -715,7 +744,8 @@ def _is_cit(s):
     typ = s.get("typeDisplay") or s.get("type") or ""
     if typ == "Cash":
         return False
-    no_real_id = not ticker and not cusip
+    overridden = bool(name) and name.upper() in KNOWN_TICKER_OVERRIDES
+    no_real_id = not ticker and not cusip and not overridden
     name_hit = bool(_CIT_NAME_RE.search(name)) if name else False
     return no_real_id or name_hit
 
@@ -738,7 +768,7 @@ def _hold(h, conv="per_share"):
     gain = round(val - cost_total, 2) if (val is not None and cost_total is not None) else None
     gain_pct = round(gain / cost_total * 100, 2) if (gain is not None and cost_total) else None
     return {
-        "ticker": s.get("ticker") or (s.get("name") or "?"),
+        "ticker": _resolve_ticker(s),
         "name": s.get("name"),
         "type": s.get("typeDisplay") or s.get("type") or "Other",
         "quantity": qty,

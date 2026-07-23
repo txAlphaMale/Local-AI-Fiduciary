@@ -430,19 +430,41 @@ function _maybeAutoStartTour(){
 // with the checkboxes preserved live, leaving only a slim contextual chip + tour launcher here.
 const SETUP_TIER_LABEL = {1:'TIER 1 · do these first', 2:'TIER 2 · real dollars if they apply to you', 3:'TIER 3 · everyone eventually, not everyone immediately'};
 function setupItemRow(it){
+  // 2026-07-23 (Jason: "make the entries in the checklist links to the location where the user
+  // needs to provide the setting"): the label itself is now a click-through to that field's panel
+  // whenever a jump target exists — not just the trailing GO-> affordance, and not just for
+  // unfilled items. A FILLED item is just as useful to link: clicking it jumps you to where that
+  // value lives so you can review or change it, rather than only ever being able to jump to what's
+  // still missing.
   const row=el('div'); row.style.cssText='display:flex;align-items:flex-start;gap:var(--space-2);padding:2px 0;';
   const mark=el('span', null, !it.scored ? '·' : (it.filled ? '✓' : '○'));
   mark.style.cssText='width:14px;flex:none;font-size:var(--font-size-base);'+
     (!it.scored ? 'color:var(--color-text-muted);' : (it.filled ? 'color:var(--color-positive);' : 'color:var(--color-accent);'));
   row.appendChild(mark);
   const txt=el('div'); txt.style.cssText='flex:1;font-size:var(--font-size-base);line-height:1.4;';
-  txt.innerHTML = it.group + (it.note ? ' <span class="muted" style="font-size:var(--font-size-sm);">— '+it.note+'</span>' : '');
+  const noteHtml = it.note ? ' <span class="muted" style="font-size:var(--font-size-sm);">— '+it.note+'</span>' : '';
+  const goto=()=>{ TAB=it.jump.tab; setSubtab(it.jump.tab, it.jump.subtab); };
+  if(it.jump){
+    const link=el('span',null,it.group);
+    link.style.cssText='cursor:pointer;color:var(--color-accent);text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;';
+    link.title = it.filled ? 'Go to where this is set, to review or change it' : 'Jump to the panel that has this field';
+    link.onclick=goto;
+    txt.appendChild(link);
+    txt.insertAdjacentHTML('beforeend', noteHtml);
+  } else {
+    txt.innerHTML = it.group + noteHtml;
+  }
   row.appendChild(txt);
   if(!it.filled && it.jump){
     const go=el('span',null,'GO →'); go.title='Jump to the panel that has this field';
     go.style.cssText='cursor:pointer;color:var(--color-accent);font-size:var(--font-size-sm);white-space:nowrap;flex:none;';
-    go.onclick=()=>{ TAB=it.jump.tab; setSubtab(it.jump.tab, it.jump.subtab); };
+    go.onclick=goto;
     row.appendChild(go);
+  } else if(it.filled && it.jump){
+    const rv=el('span',null,'review →'); rv.title='Go to where this is set';
+    rv.style.cssText='cursor:pointer;color:var(--color-text-muted);font-size:var(--font-size-sm);white-space:nowrap;flex:none;';
+    rv.onclick=goto;
+    row.appendChild(rv);
   } else if(!it.filled && !it.jump){
     const hint=el('span','muted','.env — see INSTALL.md'); hint.style.cssText='font-size:var(--font-size-sm);white-space:nowrap;flex:none;';
     row.appendChild(hint);
