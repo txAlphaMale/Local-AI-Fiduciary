@@ -123,6 +123,20 @@
     --bg:#ece7dc; --panel:#ffffff; --panel2:#f5f2ea; --bd:#c9c2b0; --bd2:#a89f88;
     --amber:#a0530a; --txt:#111111; --mut:#4d4a42; --dim:#7a7468;
     --grn:#0f7a38; --red:#c81e1e; --blu:#1d4ed8;
+    /* REVISION 3 (2026-07-23, same day — "briefs display colors still soft"): the base
+       --overlay-*-weak tokens (defined once in :root, not per-theme) are hardcoded rgba()
+       literals built from the DARK theme's brighter signal colors (e.g. rgba(240,168,35,0.13)
+       — the old bright --amber #f0a823). Live-verified via computed styles: badge/chip
+       borders and text ARE rendering the correct v3 daylight hex values (checked directly,
+       not by eye) — the actual defect was these overlay tints, which stayed tied to the
+       dark palette's amber/grn/red/blu instead of daylight's own, so the FIRST-TIME SETUP
+       card and setup-spotlight callout fills were nudging toward the WRONG accent hue.
+       Re-derived here from this theme's own signal colors at the same alpha weights. */
+    --overlay-accent-weak: rgba(160,83,10,0.13);
+    --overlay-accent-weaker: rgba(160,83,10,0.07);
+    --overlay-positive-weak: rgba(15,122,56,0.12);
+    --overlay-negative-weak: rgba(200,30,30,0.12);
+    --overlay-info-weak: rgba(29,78,216,0.12);
   }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--color-bg);color:var(--color-text);
