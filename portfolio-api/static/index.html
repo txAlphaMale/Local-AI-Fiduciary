@@ -95,6 +95,18 @@
     --amber:#ffb020; --txt:#f5f5f5; --mut:#b8b8b8; --dim:#868686;
     --grn:#3ddb8f; --red:#ff6b6b; --blu:#5eb3ff;
   }
+  /* DAYLIGHT (2026-07-23) — the first LIGHT variant, a harder proof of the token architecture
+     than cobalt/highcontrast: those two hue-shift an already-dark palette, this one inverts the
+     bg/text relationship entirely. All 6 signal colors (amber/grn/red/blu) are deepened from
+     their dark-theme values, since the dark theme's brighter tones read fine on near-black but
+     lose contrast/legibility used as text/accent color on a light background. Warm paper (not
+     stark white) bg to avoid harsh glare in a dense data dashboard. Overrides ONLY Tier-1
+     primitives, same as the other two — nothing else needed for the whole app to re-color. */
+  :root[data-theme="daylight"]{
+    --bg:#f7f5f0; --panel:#ffffff; --panel2:#f0ede6; --bd:#ddd8cd; --bd2:#c7c0b0;
+    --amber:#8a5a00; --txt:#232323; --mut:#6b6b63; --dim:#9c968a;
+    --grn:#1f8a52; --red:#c23b3b; --blu:#2568c4;
+  }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--color-bg);color:var(--color-text);
     font-family:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
@@ -262,7 +274,7 @@ let CHAT_PENDING_IMAGES = [];   // array of base64 strings (data-URL prefix kept
 // Theme (step 3, 2026-07-19 — UI-THEMING-DESIGN-TOKEN-PROPOSAL.md): swaps ONLY the Tier-1 color
 // primitives (see :root[data-theme] blocks in <style>) via an attribute on <html>. Applied here,
 // as early in the script as possible, so there's no visible flash of the default theme on load.
-const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'}];
+const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'},{key:'daylight',label:'DAYLIGHT'}];
 let THEME='amber'; try{ THEME=localStorage.getItem('fidTheme')||'amber'; }catch(_){ THEME='amber'; }
 function applyTheme(key){
   THEME=key||'amber';
@@ -2274,7 +2286,8 @@ function themeContent(){
       // card may not be the active theme — so it can't just read var(varname) off itself.
       const swatchColors={amber:{'--bg':'#0a0b0d','--panel':'#121417','--amber':'#f0a823','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4a9eff'},
         cobalt:{'--bg':'#080b12','--panel':'#0d1420','--amber':'#4d9bff','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4ad4ff'},
-        highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'}}[t.key];
+        highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'},
+        daylight:{'--bg':'#f7f5f0','--panel':'#ffffff','--amber':'#8a5a00','--grn':'#1f8a52','--red':'#c23b3b','--blu':'#2568c4'}}[t.key];
       const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${swatchColors[varname]};border:1px solid var(--color-border-strong);`;
       dots.appendChild(sw);
     });
