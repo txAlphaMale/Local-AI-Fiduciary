@@ -5267,6 +5267,13 @@ def get_cashdebt():
 # comes from the same _data() everything else uses. Read-only analysis, no products.
 INSURANCE_FILE = os.environ.get("INSURANCE_FILE", "/data/insurance.json")
 DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
+                     # no_income: explicit household confirmation of "$0, on purpose" (unemployed /
+                     # retired / no earned income) -- 2026-07-23, Jason. Without this flag, a $0 entry
+                     # in income_self/income_spouse is NOT counted as answered by the setup checklist
+                     # (see _setup_field_filled's "income" kind) and the INSURANCE page's setup_needed
+                     # highlight still fires -- both would otherwise treat an accidental/placeholder 0
+                     # the same as a deliberate "we have no income" answer.
+                     "no_income": False,
                      "home_value_override": None, "home_address": None, "policies": [],
                      # GAP-2 cash/debt facts (same household register, edited in PLAN→CASH·DEBT):
                      "mortgage_rate_pct": None, "mortgage_payment_monthly": None,
@@ -5400,7 +5407,7 @@ async def post_insurance_config(req: Request):
         cfg["hsa_coverage"] = body["hsa_coverage"]
     if body.get("k401_pay_frequency") in ("weekly", "biweekly", "semimonthly", "monthly", "custom"):
         cfg["k401_pay_frequency"] = body["k401_pay_frequency"]
-    for bk in ("plan_aftertax", "hsa_invested"):
+    for bk in ("plan_aftertax", "hsa_invested", "no_income"):
         if bk in body:
             cfg[bk] = bool(body[bk])
     if isinstance(body.get("policies"), list):
@@ -5440,6 +5447,7 @@ def get_insurance():
                  "mortgage_balance": round(mort, 2),
                  "income_self": cfg.get("income_self"),
                  "income_spouse": cfg.get("income_spouse"),
+                 "no_income": bool(cfg.get("no_income")),
                  "age_self": _derive_age(ret.get("birth_year"), ret.get("current_age")),
                  "age_spouse": _derive_age(ret.get("spouse_birth_year"), ret.get("spouse_age")),
                  "retire_age": ret.get("target_age") or 60,
@@ -5460,7 +5468,7 @@ def get_insurance():
     res["policies_echo"] = cfg.get("policies") or []
     res["state_of_residence_source"] = sinfo["source"]
     res["generated_at"] = int(time.time())
-    if not cfg.get("income_self") and not cfg.get("income_spouse"):
+    if not cfg.get("income_self") and not cfg.get("income_spouse") and not cfg.get("no_income"):
         res["setup_needed"] = True
     return res
 
@@ -6835,10 +6843,13 @@ SETUP_FIELDS = [
 
     # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
     {"id": "income_self", "tier": 2, "group": "Your income", "cfg": "insurance",
-     "key": "income_self", "jump": ("plan", "insurance"), "severity": "critical",
-     "note": "Nothing on the INSURANCE page computes without at least one income entered."},
+     "key": "income_self", "kind": "income", "jump": ("plan", "insurance"), "severity": "critical",
+     "note": "Nothing on the INSURANCE page computes without at least one income entered. "
+             "$0/blank counts once you tick \"no income (unemployed/retired)\" next to the income fields."},
     {"id": "income_spouse", "tier": 2, "group": "Spouse income", "cfg": "insurance",
-     "key": "income_spouse", "required_if": "mfj", "jump": ("plan", "insurance"), "severity": "critical"},
+     "key": "income_spouse", "kind": "income", "required_if": "mfj", "jump": ("plan", "insurance"),
+     "severity": "critical",
+     "note": "$0/blank counts once you tick \"no income (unemployed/retired)\" next to the income fields."},
     {"id": "policies", "tier": 2, "group": "Policies in force", "cfg": "insurance",
      "key": "policies", "kind": "list", "jump": ("plan", "insurance"),
      "note": "One row per policy -- life, disability, umbrella, home, auto, LTC."},
@@ -6900,6 +6911,15 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set):
         return bool(val)
     if kind == "sentinel":
         return val is not None and val != spec.get("sentinel")
+    if kind == "income":
+        # A literal 0 -- or a still-blank field -- is only a legitimate "answered" state once the
+        # household has said so explicitly via the "no income" checkbox; otherwise an untouched
+        # field or an accidental 0 would silently read as "answered" with no signal it was ever
+        # looked at. Any nonzero value is unambiguous and always counts on its own, same as the
+        # generic scalar case below.
+        if val in (None, "", 0):
+            return bool(insurance.get("no_income"))
+        return True
     return val not in (None, "")
 
 
@@ -6922,15 +6942,22 @@ def _setup_progress():
         applicable = not (spec.get("required_if") == "mfj" and not married)
         filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set)
         scored = applicable and spec.get("scored", True)
+        severity = spec.get("severity", "optional")
+        # "done" (drives the % bar / X-of-N counts) != "filled" (drives the ✓/△/! glyph). A blank
+        # optional/situational field (△) already has a usable default, so it counts as progress; only
+        # a blank CRITICAL field (!) should cost you percentage -- Jason, 2026-07-23: "consider usable
+        # defaults as progress and only detract percentage by factoring the critical ! entries
+        # unresolved." `filled` itself is untouched so the checklist icon still shows the true state.
+        counts_as_done = filled or severity != "critical"
         item = {"id": spec["id"], "tier": spec["tier"], "group": spec["group"],
                 "filled": bool(filled), "applicable": applicable, "scored": scored,
-                "severity": spec.get("severity", "optional"), "note": spec.get("note"),
+                "severity": severity, "note": spec.get("note"),
                 "jump": {"tab": spec["jump"][0], "subtab": spec["jump"][1]} if spec.get("jump") else None}
         t = tiers.setdefault(spec["tier"], {"tier": spec["tier"], "done": 0, "total": 0, "items": []})
         t["items"].append(item)
         if scored:
             t["total"] += 1
-            if filled:
+            if counts_as_done:
                 t["done"] += 1
     tier_list = [tiers[k] for k in sorted(tiers)]
     done = sum(t["done"] for t in tier_list)

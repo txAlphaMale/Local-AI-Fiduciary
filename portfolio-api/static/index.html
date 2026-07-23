@@ -294,6 +294,11 @@ const pct = n => n==null?'—':(n>0?'+':'')+n.toFixed(2)+'%';
 const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+// Parse a numeric form field where 0 is a legitimate value (income, rates, contributions, etc.)
+// — do NOT use `parseFloat(x)||null`, since 0 is falsy in JS and that pattern silently discards
+// a real zero entry back to null/unset. Blank/unparseable -> null; everything else -> the number,
+// including 0. (Bug found 2026-07-23: spouse income of 0 wouldn't save/clear the setup checklist.)
+const numOrNull = v => { if(v===''||v==null) return null; const n=parseFloat(v); return isNaN(n)?null:n; };
 
 // Analysis token (guards /api/run-*, /api/knowledge/reindex): server injects the real value at
 // GET / time (see app.py's index() — string-substitutes this placeholder), empty when the
@@ -2768,17 +2773,17 @@ function benefitsContent(){
     if(g('bn-freq')) g('bn-freq').onchange=()=>{ const w=g('bn-freq-custom-wrap'); if(w) w.style.display=(g('bn-freq').value==='custom')?'':'none'; };
     if(g('bn-save')) g('bn-save').onclick=async()=>{
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({k401_pretax_pct:parseFloat(g('bn-pre').value)||null,
+        body:JSON.stringify({k401_pretax_pct:numOrNull(g('bn-pre').value),
           k401_aftertax_pct:g('bn-aft').value===''?0:parseFloat(g('bn-aft').value),
-          k401_match_t1_rate:parseFloat(g('bn-t1r').value)||null, k401_match_t1_pct:parseFloat(g('bn-t1p').value)||null,
-          k401_match_t2_rate:parseFloat(g('bn-t2r').value)||null, k401_match_t2_pct:parseFloat(g('bn-t2p').value)||null,
-          k401_biweekly_total:parseFloat(g('bn-bw').value)||null,
-          k401_pay_frequency:g('bn-freq').value, k401_pay_periods_custom:parseFloat(g('bn-freq-custom').value)||null,
+          k401_match_t1_rate:numOrNull(g('bn-t1r').value), k401_match_t1_pct:numOrNull(g('bn-t1p').value),
+          k401_match_t2_rate:numOrNull(g('bn-t2r').value), k401_match_t2_pct:numOrNull(g('bn-t2p').value),
+          k401_biweekly_total:numOrNull(g('bn-bw').value),
+          k401_pay_frequency:g('bn-freq').value, k401_pay_periods_custom:numOrNull(g('bn-freq-custom').value),
           plan_aftertax:g('bn-pa').value==='1', inservice_rollover:g('bn-isr').value,
-          hsa_coverage:g('bn-hc').value, hsa_contribution:parseFloat(g('bn-hsa').value)||null,
+          hsa_coverage:g('bn-hc').value, hsa_contribution:numOrNull(g('bn-hsa').value),
           hsa_invested:g('bn-hi').value==='1',
-          roth_ira_contribution_self:parseFloat(g('bn-roth-self').value)||null,
-          roth_ira_contribution_spouse:parseFloat(g('bn-roth-spouse').value)||null})});
+          roth_ira_contribution_self:numOrNull(g('bn-roth-self').value),
+          roth_ira_contribution_spouse:numOrNull(g('bn-roth-spouse').value)})});
       load(false); };
   },0);
   const sc=r.salary_crosscheck;
@@ -2896,12 +2901,12 @@ function cashdebtContent(){
       const dmp={}; document.querySelectorAll('.cd-minp').forEach(x=>{ if(x.value!=='') dmp[x.dataset.nm]=parseFloat(x.value); });
       const mo={}; document.querySelectorAll('.cd-mort').forEach(x=>{ if(x.checked) mo[x.dataset.nm]=true; });
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({mortgage_rate_pct:parseFloat(g('cd-mr').value)||null,
-                             mortgage_payment_monthly:parseFloat(g('cd-mp').value)||null,
-                             deposit_yield_pct:g('cd-dy').value===''?null:parseFloat(g('cd-dy').value),
-                             refi_rate_pct:parseFloat(g('cd-rr').value)||null,
-                             refi_closing_costs:parseFloat(g('cd-cc').value)||null,
-                             debt_extra_monthly:parseFloat(g('cd-extra').value)||null,
+        body:JSON.stringify({mortgage_rate_pct:numOrNull(g('cd-mr').value),
+                             mortgage_payment_monthly:numOrNull(g('cd-mp').value),
+                             deposit_yield_pct:numOrNull(g('cd-dy').value),
+                             refi_rate_pct:numOrNull(g('cd-rr').value),
+                             refi_closing_costs:numOrNull(g('cd-cc').value),
+                             debt_extra_monthly:numOrNull(g('cd-extra').value),
                              debt_rates:dr, debt_min_payments:dmp, is_mortgage_overrides:mo})});
       load(false); };
   },0);
@@ -3088,6 +3093,7 @@ function insuranceContent(){
   const incHi=r.setup_needed?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-sm);':'';
   ed.innerHTML=`<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Gross income — self <input id="ins-inc-s" type="number" step="1000" value="${h.income_self!=null?h.income_self:''}" style="width:90px;${incHi}"/> `+
     `spouse <input id="ins-inc-sp" type="number" step="1000" value="${h.income_spouse!=null?h.income_spouse:''}" style="width:90px;${incHi}"/> `+
+    `<label style="cursor:pointer;" title="Tick this if the household truly has no income (unemployed/retired) — leave the field(s) blank or enter 0, either way. Without this checked, a 0 or blank income doesn't count toward the setup checklist and this page keeps flagging itself as unfinished."><input id="ins-no-income" type="checkbox" ${h.no_income?'checked':''}/> no income (unemployed/retired)</label> `+
     `children <input id="ins-kids" type="number" step="1" min="0" value="${h.children!=null?h.children:0}" style="width:44px;"/> `+
     `home address <input id="ins-addr" value="${esc(h.home_address||'')}" placeholder="street, city, ST zip" style="width:200px;" title="optional — enables the RentCast AVM second opinion in PLAN→REAL ESTATE (free tier, needs RENTCAST_API_KEY in secrets)"/><br/>`+
     `Home value override <input id="ins-homeval" type="number" step="1000" value="${h.home_value_override!=null?h.home_value_override:''}" placeholder="${h.home_value?('auto: $'+Math.round(h.home_value).toLocaleString()):'unset'}" style="width:110px;"/> `+
@@ -3114,15 +3120,16 @@ function insuranceContent(){
     if(g('ins-add')) g('ins-add').onclick=()=>{ const cov=parseFloat(g('ins-cov').value);
       if(!cov){ return; }
       wrap._pols.push({kind:g('ins-kind').value, owner:g('ins-owner').value, name:g('ins-name').value||null,
-        coverage:cov, premium_annual:parseFloat(g('ins-prem').value)||null, term_expires:parseInt(g('ins-term').value)||null});
+        coverage:cov, premium_annual:numOrNull(g('ins-prem').value), term_expires:parseInt(g('ins-term').value)||null});
       g('ins-cov').value=''; g('ins-prem').value=''; g('ins-name').value=''; renderPols(); };
     if(g('ins-save')) g('ins-save').onclick=async()=>{ INS_POLS=wrap._pols;
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({income_self:parseFloat(g('ins-inc-s').value)||null,
-                             income_spouse:parseFloat(g('ins-inc-sp').value)||null,
+        body:JSON.stringify({income_self:numOrNull(g('ins-inc-s').value),
+                             income_spouse:numOrNull(g('ins-inc-sp').value),
+                             no_income:g('ins-no-income').checked,
                              children:parseInt(g('ins-kids').value)||0,
                              home_address:(g('ins-addr')&&g('ins-addr').value)||null,
-                             home_value_override:g('ins-homeval').value===''?null:parseFloat(g('ins-homeval').value),
+                             home_value_override:numOrNull(g('ins-homeval').value),
                              policies:wrap._pols})});
       load(false); };
   },0);
