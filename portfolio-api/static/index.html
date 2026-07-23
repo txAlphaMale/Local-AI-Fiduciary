@@ -172,7 +172,7 @@
     border-bottom:1px solid var(--color-border-strong);cursor:pointer;user-select:none;white-space:nowrap;}
   th.l,td.l{text-align:left;}
   th:hover{color:var(--color-accent);}
-  td{padding:var(--space-1) var(--space-2);text-align:right;border-bottom:1px solid #191c20;white-space:nowrap;}
+  td{padding:var(--space-1) var(--space-2);text-align:right;border-bottom:1px solid var(--color-border);white-space:nowrap;}
   td.sym{color:var(--color-accent);text-align:left;}
   td.name{color:var(--color-text-muted);text-align:left;max-width:230px;overflow:hidden;text-overflow:ellipsis;}
   /* Free-text description/note/rationale cells (step-up "treatment", avenue "why", gap "note", etc.)
@@ -1424,7 +1424,7 @@ function analysisContent(a){
     if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; extra.push(`<span class="muted" style="display:block;font-size:var(--font-size-base);margin-top:var(--space-1)">⚠ RISKS: ${esc(kr)}</span>`); }
     const tgt=g.target_mean?` <span class="muted" style="font-size:var(--font-size-base)">$${Math.round(g.target_mean)}</span>`:'';
     const conf=m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:'';
-    const row=el('div'); row.id='brief-'+t; row.style.cssText='display:grid;grid-template-columns:70px 150px 1fr;gap:var(--space-2);padding:7px 0;border-bottom:1px solid #191c20;font-size:var(--font-size-md);align-items:start;transition:background 0.4s;';
+    const row=el('div'); row.id='brief-'+t; row.style.cssText='display:grid;grid-template-columns:70px 150px 1fr;gap:var(--space-2);padding:7px 0;border-bottom:1px solid var(--color-border);font-size:var(--font-size-md);align-items:start;transition:background 0.4s;';
     // CIT (RESUME-TRACKER 2026-07-18k): no Buy/Sell/Hold badge to show (rating is intentionally
     // null) — label it plainly instead of letting it read as "no signal yet".
     const ratingCell = b.is_cit
@@ -1432,7 +1432,7 @@ function analysisContent(a){
       : `${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}`;
     row.innerHTML=`<span style="color:var(--color-accent)">${t}</span>`+
       `<span>${ratingCell}</span>`+
-      `<span style="line-height:1.45"><span class="muted">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
+      `<span style="line-height:1.45"><span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
     wrap.appendChild(row);
   });
   return wrap;
@@ -1517,7 +1517,7 @@ function researchBrief(d){
   let html=`<span style="color:var(--color-accent)">${d.ticker}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:''):'');
   if(g.target_mean) html+=` <span class="muted">· analyst target $${(+g.target_mean).toFixed(2)}</span>`;
   const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));
-  if(th) html+=`<div class="muted" style="margin-top:var(--space-1)">${th}</div>`;
+  if(th) html+=`<div style="color:var(--color-text);margin-top:var(--space-1)">${th}</div>`;
   if(m.bull_case) html+=`<div class="pos" style="font-size:var(--font-size-base);margin-top:var(--space-1)">▲ BULL: ${dsc(m.bull_case)}</div>`;
   if(m.bear_case) html+=`<div class="neg" style="font-size:var(--font-size-base);margin-top:var(--space-1)">▼ BEAR: ${dsc(m.bear_case)}</div>`;
   if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; html+=`<div class="muted" style="font-size:var(--font-size-base);margin-top:var(--space-1)">⚠ RISKS: ${dsc(kr)}</div>`; }
@@ -1644,10 +1644,10 @@ function discoveredContent(){
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
     const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
     const px=i.price!=null?'$'+(+i.price).toFixed(2):'—';
-    const row=el('div'); row.style.cssText='padding:var(--space-2) 0;border-bottom:1px solid #191c20;font-size:var(--font-size-md);line-height:1.45;';
+    const row=el('div'); row.style.cssText='padding:var(--space-2) 0;border-bottom:1px solid var(--color-border);font-size:var(--font-size-md);line-height:1.45;';
     let html=`<span style="color:var(--color-accent)">${i.ticker}</span> <span class="muted">${px} · FIT </span><span class="${fitc}">${fit}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:''):'');
     const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));
-    if(th) html+=`<div class="muted" style="margin-top:var(--space-1)">${th}</div>`;
+    if(th) html+=`<div style="color:var(--color-text);margin-top:var(--space-1)">${th}</div>`;
     if(m.bull_case) html+=`<div class="pos" style="font-size:var(--font-size-base);margin-top:var(--space-1)">▲ BULL: ${dsc(m.bull_case)}</div>`;
     if(m.bear_case) html+=`<div class="neg" style="font-size:var(--font-size-base);margin-top:var(--space-1)">▼ BEAR: ${dsc(m.bear_case)}</div>`;
     if(m.key_risks){ const kr=Array.isArray(m.key_risks)?m.key_risks.join('; '):m.key_risks; html+=`<div class="muted" style="font-size:var(--font-size-base);margin-top:var(--space-1)">⚠ RISKS: ${dsc(kr)}</div>`; }
@@ -1667,7 +1667,7 @@ function alertsContent(){
   if(typeof DISCO==='undefined' || !DISCO || !DISCO.alerts || !DISCO.alerts.length){
     wrap.appendChild(el('div','muted','No holdings news alerts right now.')); return wrap; }
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='material news / SEC 8-K on your largest positions'; wrap.appendChild(sub);
-  DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid #191c20;'; let html=`<span style="color:var(--color-accent)">${a.ticker}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
+  DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid var(--color-border);'; let html=`<span style="color:var(--color-accent)">${a.ticker}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
   return wrap;
 }
 
@@ -4108,7 +4108,7 @@ function drawStrat(){
     data:{labels:STRAT_SERIES.map(x=>new Date(x.t*1000).toLocaleDateString()),
       datasets:[{data:STRAT_SERIES.map(x=>x.v),borderColor:resolveColor('var(--color-positive)'),backgroundColor:'rgba(46,194,126,0.12)',fill:true,tension:0.2,pointRadius:2}]},
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-      scales:{y:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{color:'#191c20'}},x:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{display:false}}}}}));
+      scales:{y:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{color:resolveColor('var(--color-border)')}},x:{ticks:{color:resolveColor('var(--color-text-muted)')},grid:{display:false}}}}}));
 }
 
 function drawCharts(d){
@@ -4133,8 +4133,8 @@ function drawCharts(d){
           {label:'Portfolio',data:pts.map(p=>norm(p.invested_value||p.net_worth,pv0)),borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
           {label:'SPY',data:pts.map(p=>norm(p.spy,sp0)),borderColor:resolveColor('var(--color-info)'),backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
         options:{responsive:true,maintainAspectRatio:false,
-          plugins:{legend:{display:true,position:'top',labels:{color:'#888780',boxWidth:10,font:{size:10}}}},
-          scales:{x:{display:false},y:{ticks:{color:'#888780',font:{size:9}},grid:{color:'#191c20'}}}}}));
+          plugins:{legend:{display:true,position:'top',labels:{color:resolveColor('var(--color-text-muted)'),boxWidth:10,font:{size:10}}}},
+          scales:{x:{display:false},y:{ticks:{color:resolveColor('var(--color-text-muted)'),font:{size:9}},grid:{color:resolveColor('var(--color-border)')}}}}}));
     }
   }
 }
