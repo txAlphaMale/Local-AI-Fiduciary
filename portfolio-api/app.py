@@ -7150,9 +7150,11 @@ def get_settings():
                         "editable": True, "applies": "restart", "options": spec.get("options")})
     return {"settings": out, "config": cfg_out,
             "note": "Analysis knobs apply at request time (no restart). Model config saves here and applies "
-                    "on the next RESTART. A real .env value always wins over a saved one while both exist — "
-                    "remove the .env line, then restart, to activate a value you've already saved here. API "
-                    "keys / provider credentials live in the SECRETS tab instead (also DB-backed, encrypted)."}
+                    "the next time portfolio-api's container is RECREATED (`docker compose up -d` — a plain "
+                    "`restart` reuses the existing container's environment and will NOT pick this up). A "
+                    "real .env value always wins over a saved one while both exist — remove the .env line, "
+                    "then `docker compose up -d`, to activate a value you've already saved here. API keys / "
+                    "provider credentials live in the SECRETS tab instead (also DB-backed, encrypted)."}
 
 
 @app.post("/api/settings")
@@ -7200,8 +7202,11 @@ async def post_settings(req: Request):
 
 
 # ---- Secrets editor (N6 Phase 2): write-only, masked. Values are NEVER returned. ----
-# scope "app"  = portfolio-api reads it directly -> editable here, applies on RESTART.
-# scope "mcpo" = used by the mcpo container -> NOT editable here (set in .env + restart mcpo).
+# scope "app"  = portfolio-api reads it directly -> editable here, applies when portfolio-api's
+#                container is next RECREATED (`docker compose up -d` -- NOT `restart`, which
+#                reuses the container's existing environment and won't see this at all).
+# scope "mcpo" = used by the mcpo container -> NOT editable here (set in .env; `docker compose
+#                up -d` to apply a change there too).
 SECRET_SPECS = [
     {"key": "FINNHUB_API_KEY",       "label": "Finnhub API key",                 "group": "Market data",            "scope": "app"},
     {"key": "SEC_USER_AGENT",        "label": "SEC EDGAR User-Agent (your email)", "group": "Market data",          "scope": "app"},
@@ -7233,7 +7238,8 @@ SECRET_SPECS = [
     # ---- AI / LLM provider (2026-07-24, Claude integration) ----
     # portfolio-api makes these calls directly (unlike Monarch/Tavily/mcpo below) — no separate
     # container involved, so this is a normal "app" scope secret: DB-backed, UI-editable, applies
-    # on the next portfolio-api restart. Anthropic Pro (claude.ai) subscriptions do NOT include
+    # the next time portfolio-api's container is recreated (`docker compose up -d`, not `restart`).
+    # Anthropic Pro (claude.ai) subscriptions do NOT include
     # API access — this key comes from a separate console.anthropic.com account with its own
     # pay-per-token billing. See NEW-USER-SETUP-GUIDE.md.
     {"key": "LLM_API_KEY",   "label": "LLM provider API key (Anthropic/OpenAI-compatible — blank for local Ollama)",
@@ -7274,10 +7280,13 @@ _write_secrets(_read_secrets())   # one-time-per-boot upgrade pass: re-encrypts 
 # env_file. A key already set in portfolio-api's REAL environment (env_locked, i.e. a real .env
 # value) is deliberately EXCLUDED here, not just skipped on the read side -- so mcpo's separate
 # `env_file: .env` entry is always the one supplying it, and the two files are never actually
-# defining the same key at once. Applies on mcpo's NEXT RESTART (`docker compose restart mcpo`),
-# same "restart to apply" story as every other secret/config value in this app -- there is no
-# live push into an already-running mcpo container (that would need Docker-socket access from
-# portfolio-api, deliberately not done here).
+# defining the same key at once. Applies the next time mcpo's container is RECREATED
+# (`docker compose up -d mcpo` -- NOT `docker compose restart mcpo`, which reuses the existing
+# container's environment and will never see an edited env_file). When migrating a currently
+# env-locked value off .env, recreate portfolio-api FIRST (its boot is what regenerates this
+# file with the now-unlocked value) and mcpo SECOND. There is no live push into an already-
+# running mcpo container (that would need Docker-socket access from portfolio-api, deliberately
+# not done here).
 MCPO_SECRETS_FILE = os.environ.get("MCPO_SECRETS_FILE", "/mcpo-secrets/mcpo.env")
 
 
@@ -7308,8 +7317,9 @@ def get_secrets():
     (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable
     here. 2026-07-24: editable no longer requires NOT env_locked -- you can stage a replacement
     value into the DB while the old .env value is still active, so migrating off .env only takes
-    ONE restart (remove the .env line + restart, instead of restart-then-save-then-restart-again).
-    A staged value has zero effect until the .env entry is actually removed."""
+    ONE container recreation (`docker compose up -d`, NOT `restart` -- restart reuses the
+    container's existing environment and never sees an edited .env at all). A staged value has
+    zero effect until the .env entry is actually removed."""
     stored = _read_secrets()
     out = []
     for spec in SECRET_SPECS:
@@ -7323,12 +7333,13 @@ def get_secrets():
                     "editable": spec["scope"] in ("app", "mcpo-file")})
     return {"secrets": out,
             "note": "Write-only — values are never shown, and encrypted at rest (secrets_crypto.py). "
-                    "'app' secrets you set here save to the DB and apply on the NEXT portfolio-api "
-                    "RESTART; Monarch/Tavily secrets save the same way but apply on mcpo's NEXT "
-                    "RESTART instead (docker compose restart mcpo) — used by that separate container. "
-                    "A real .env value always wins over a saved one while both exist — remove the "
-                    ".env line, then restart, to activate a value you've already saved here. The mcpo "
-                    "API key itself stays .env-only (it's a startup CLI flag, not a runtime value)."}
+                    "'app' secrets you set here save to the DB and apply the next time portfolio-api's "
+                    "container is recreated (`docker compose up -d`); Monarch/Tavily secrets save the "
+                    "same way but apply on mcpo's next `docker compose up -d` instead — used by that "
+                    "separate container. A plain `restart` does NOT pick up an edited .env/mcpo.env; "
+                    "only `up -d` re-reads them and recreates the container. A real .env value always "
+                    "wins over a saved one while both exist. The mcpo API key itself stays .env-only "
+                    "(it's a startup CLI flag, not a runtime value)."}
 
 
 @app.post("/api/secrets")
@@ -7337,8 +7348,10 @@ async def post_secrets(req: Request):
     at rest; mcpo-file additionally rewrites ./mcpo-secrets/mcpo.env for any key NOT currently
     env-locked). Ignores 'mcpo'-scope (env-only) keys and unknown keys. Blank clears. A key that's
     currently env_locked can still be SAVED here (staged) -- it just has no effect until the real
-    .env value is removed and the relevant service is restarted (portfolio-api for 'app', mcpo for
-    'mcpo-file'). Values never echoed back."""
+    .env value is removed and the relevant service's container is RECREATED via `docker compose
+    up -d` (portfolio-api for 'app', mcpo for 'mcpo-file' -- recreate portfolio-api first when
+    migrating a currently-locked value, since its boot regenerates the mcpo bridge file). A plain
+    `restart` will NOT pick this up. Values never echoed back."""
     body = await req.json()
     stored = _read_secrets()
     by_key = {s["key"]: s for s in SECRET_SPECS}

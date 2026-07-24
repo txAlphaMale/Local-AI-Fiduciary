@@ -99,10 +99,11 @@ typed `http://` URL still gets you there automatically instead of a connection e
 > in `.env` wins and shows read-only.
 >
 > Monarch and Tavily credentials (2026-07-24) are ALSO editable from the same SECRETS panel now
-> — portfolio-api writes them to `mcpo-secrets/mcpo.env`, which the mcpo container reads on its
-> own next restart (`docker compose restart mcpo`), same "restart to apply" story as everything
-> else here. Only the mcpo API key itself stays `.env`-only (it's a startup CLI flag, not
-> something a running container can pick up from a file).
+> — portfolio-api writes them to `mcpo-secrets/mcpo.env`, which the mcpo container reads the next
+> time it's **recreated**: `docker compose up -d mcpo` (not `docker compose restart mcpo` — a
+> plain restart reuses the container's existing environment and will NOT pick up the change).
+> Only the mcpo API key itself stays `.env`-only (it's a startup CLI flag, not something a
+> running container can pick up from a file).
 >
 > The same SECRETS/SETTINGS mechanism covers the optional Claude (Anthropic) provider added
 > 2026-07-24 — no `.env` editing needed to enable it. See `NEW-USER-SETUP-GUIDE.md`'s "AI
@@ -114,9 +115,12 @@ typed `http://` URL still gets you there automatically instead of a connection e
 > same bootstrap pattern as `SESSION_SECRET`. Back that key file up alongside your data volume;
 > losing it makes every already-saved value permanently unrecoverable.
 >
-> **Migrating a value OFF `.env` and into the UI now takes exactly one restart:** you can save
-> the new value from SETTINGS/SECRETS *while the old `.env` line is still active* — it's staged,
-> not applied yet (the panel will say so). Then remove that line from `.env` and restart the
-> relevant service (portfolio-api, or `docker compose restart mcpo` for Monarch/Tavily) — the
-> staged value activates immediately, no second restart, no gap where the feature is briefly
-> unconfigured.
+> **Migrating a value OFF `.env` and into the UI now takes exactly one container recreation:**
+> you can save the new value from SETTINGS/SECRETS *while the old `.env` line is still active* —
+> it's staged, not applied yet (the panel will say so). Then remove that line from `.env` and run
+> `docker compose up -d` for the relevant service — **not** `docker compose restart`, which
+> reuses the container's existing environment and won't see the edited `.env` at all. For
+> Monarch/Tavily specifically, recreate portfolio-api first (`docker compose up -d
+> portfolio-api`) — its boot is what regenerates `mcpo-secrets/mcpo.env` with the now-unlocked
+> value — then mcpo (`docker compose up -d mcpo`). The staged value activates on that one pass,
+> no second recreation, no gap where the feature is briefly unconfigured.

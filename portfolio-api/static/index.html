@@ -714,11 +714,11 @@ W('https-cert','Getting started','HTTPS / certificates (SETTINGS → SECURITY �
 W('secrets-encryption','Getting started','Secrets encryption & the secrets.key backup (SETTINGS → SECRETS)',
   'Every credential saved from SETTINGS → SECRETS (Finnhub, SnapTrade, Monarch, Tavily, the Claude/LLM provider keys, etc.) is encrypted before it\'s stored — not just protected by a locked-down file, an actual encryption key stands between the database and anyone reading it.',
   'The encryption key lives at `secrets.key` in the app\'s data volume, generated automatically the first time it\'s needed (same auto-generate-if-absent approach `SESSION_SECRET` already uses) — nothing to set up. Values you save through the UI are encrypted before they reach the database; the app decrypts them again only when it actually needs to use them (calling Finnhub, logging into Monarch, etc.). One thing this does NOT cover: `mcpo-secrets/mcpo.env`, the small bridge file that carries Monarch/Tavily credentials to the separate mcpo container — Docker itself reads that file directly, which means it has to stay plain text (locked down to owner-only access, but not encrypted the way the database copy is).',
-  '**Back up `secrets.key` along with your data volume.** If that key is ever lost — a wiped volume, a botched restore that skips it — every credential already saved through SETTINGS → SECRETS becomes permanently unreadable, with no way to recover it; you\'d need to re-enter everything from scratch. It\'s worth including in whatever backup routine already covers your data volume, not treated as an afterthought. Migrating a credential OFF `.env` and into this UI takes exactly one restart: save the new value here while the old `.env` line is still active (it\'s held in reserve, not yet in effect — the panel says so), then remove that `.env` line and restart the relevant service once.');
+  '**Back up `secrets.key` along with your data volume.** If that key is ever lost — a wiped volume, a botched restore that skips it — every credential already saved through SETTINGS → SECRETS becomes permanently unreadable, with no way to recover it; you\'d need to re-enter everything from scratch. It\'s worth including in whatever backup routine already covers your data volume, not treated as an afterthought. Migrating a credential OFF `.env` and into this UI takes one clean pass: save the new value here while the old `.env` line is still active (it\'s held in reserve, not yet in effect — the panel says so), then remove that `.env` line and run `docker compose up -d` for the affected service. **Note the command** — a plain restart (`docker compose restart`) reuses the container\'s existing environment and will NOT pick up an edited `.env`/mcpo.env; only `up -d` re-reads it and recreates the container. Monarch/Tavily specifically need portfolio-api recreated first (it regenerates the mcpo bridge file on boot), then mcpo.');
 W('ai-provider','Getting started','AI provider (SETTINGS → AI / LLM PROVIDER): local Ollama vs. hosted Claude',
   'Every LLM-backed feature — chat, the weekly Strategist run, cash-deployment advice, the Dashboard narrative, and every research brief\'s JSON synthesis — routes through one swappable backend, set in SETTINGS → AI / LLM PROVIDER. The default is your own local Ollama models (zero marginal cost, fully private, bounded by these two 1080 Tis). Optionally, chat/analysis alone can point at Anthropic\'s Claude API instead — a separate, metered, pay-per-token service, added 2026-07-24.',
   'Two model tiers exist for the Claude path: an "everyday" model (chat + the Dashboard narrative) and a "Strategist" model (the autonomous weekly paper-trading run + the on-demand cash-deployment planner), since those two run longer, tool-heavier ReAct loops that can justify a stronger/pricier model — set separately so a quick chat question doesn\'t pay Opus-tier cost every turn. Embeddings (the Knowledge/RAG index that lets chat cite your own documents) CANNOT run on Claude — Anthropic sells no embeddings API at all — so they stay on local Ollama regardless of the chat provider, unless "Knowledge/RAG embeddings provider" is separately pointed at an OpenAI-compatible embeddings host. Retrieval quality is unaffected either way: Claude only ever sees the already-retrieved passages as plain text, same as Ollama does today. **Important:** a claude.ai Pro/Max chat subscription does NOT include API access — the key this needs comes from a separate console.anthropic.com account with its own pay-per-token billing, unrelated to a Pro subscription\'s usage.',
-  'Enter the provider, host URL (blank = provider default), and model names under SETTINGS → AI / LLM PROVIDER; the LLM and embeddings API keys live in the SECRETS panel (masked, write-only, never shown again once saved). Everything here applies on the NEXT portfolio-api restart, same as every other Model config field — there is no live swap. Leaving the provider on "ollama" (the default) changes nothing about how this app already behaves.');
+  'Enter the provider, host URL (blank = provider default), and model names under SETTINGS → AI / LLM PROVIDER; the LLM and embeddings API keys live in the SECRETS panel (masked, write-only, never shown again once saved). Everything here applies the next time portfolio-api\'s container is recreated (`docker compose up -d` — a plain `restart` reuses the old environment and won\'t pick this up), same as every other Model config field; there is no live swap. Leaving the provider on "ollama" (the default) changes nothing about how this app already behaves.');
 W('mfa','Getting started','Multi-factor authentication (MFA) & backup codes',
   'A rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) required at login on top of your password. Since this app manages your full financial picture, MFA is treated as a CRITICAL setup step — it shows a ! on the setup checklist and a stop on the guided tour, not an optional extra.',
   'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → SECURITY → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → SECURITY also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
@@ -2561,7 +2561,8 @@ function saveSettings(){
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       if(d && d.restart_required && d.restart_required.length){
-        let msg='Saved. Model config applies on the next portfolio-api restart.';
+        let msg='Saved. Model config applies the next time portfolio-api\'s container is recreated '
+               +'(docker compose up -d — a plain restart won\'t see this).';
         if(d.staged_behind_env && d.staged_behind_env.length){
           msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '
               +'them from .env — they\'re just staged and ready for when you do.';
@@ -3140,12 +3141,13 @@ function settingsContent(){
         }
         inp.style.cssText='width:200px;';
         // 2026-07-24: no longer disabled when env_locked -- you can stage a replacement value
-        // here while .env still wins, so swapping off .env only takes ONE restart (remove the
-        // .env line + restart) instead of restart-then-save-then-restart-again.
+        // here while .env still wins. Applying it needs `docker compose up -d`, NOT `restart` --
+        // restart reuses the container's existing (stale) environment and won't see an edited
+        // .env at all.
         const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
         meta.textContent = it.env_locked
-          ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + restart to activate it'+(it.staged_behind_env?' (already staged)':''))
-          : ('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
+          ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + `docker compose up -d` to activate it'+(it.staged_behind_env?' (already staged)':''))
+          : ('· applies on next `docker compose up -d`'+(it.source==='settings'?' · customized':' · default '+it.default));
         row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
       });
     });
@@ -3165,12 +3167,21 @@ function saveSecrets(){
       const specByKey={}; (SECRETS_CFG&&SECRETS_CFG.secrets||[]).forEach(it=>specByKey[it.key]=it);
       const mcpoRestart=(d.saved||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
       const apiRestart=(d.saved||[]).some(k=>!specByKey[k]||specByKey[k].scope!=='mcpo-file');
+      const stagedMcpo=(d.staged_behind_env||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
       let msg='Saved: '+((d.saved||[]).join(', ')||'(none)');
-      if(apiRestart) msg+='\n\nRestart portfolio-api to apply.';
-      if(mcpoRestart) msg+='\n\nRestart mcpo (docker compose restart mcpo) to apply.';
+      // 2026-07-24: `docker compose restart` reuses the container's EXISTING environment and will
+      // NOT pick up an edited .env or mcpo-secrets/mcpo.env -- only `up -d` re-reads them and
+      // recreates the container. Get this wrong and the value silently never activates.
+      if(apiRestart) msg+='\n\nApplies on the next `docker compose up -d` (not a plain restart) for portfolio-api.';
+      if(mcpoRestart) msg+='\n\nApplies on the next `docker compose up -d` (not a plain restart) for mcpo.';
       if(d.staged_behind_env && d.staged_behind_env.length){
         msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '
-            +'them from .env — they\'re just staged and ready for when you do.';
+            +'them from .env.';
+        if(stagedMcpo){
+          msg+=' For Monarch/Tavily specifically: recreate portfolio-api FIRST (docker compose up -d '
+              +'portfolio-api — it regenerates the mcpo bridge file on boot), THEN mcpo (docker compose '
+              +'up -d mcpo) — in that order, or mcpo may start before the fresh value is written.';
+        }
       }
       alert(msg);
       // optimistic: flip the just-saved keys' status badge to "saved" immediately, instead of it
@@ -3206,16 +3217,17 @@ function secretsContent(){
         inp.autocomplete='new-password'; inp.placeholder=(it.source==='saved'?'enter to replace · blank keeps':'enter value');
         inp.style.cssText='width:210px;'; row.appendChild(inp);
         // 2026-07-24: a key can be SAVED (staged) here even while env_locked -- it just has no
-        // effect until the .env line is removed AND the relevant service restarted. Collapses
-        // what used to be a restart-then-save-then-restart-again dance into one restart.
+        // effect until the .env line is removed AND the relevant service is RECREATED (`docker
+        // compose up -d`, not `restart` -- restart reuses the container's existing environment
+        // and won't see an edited .env/mcpo.env at all).
         if(it.env_locked){
           const svc = it.scope==='mcpo-file' ? 'mcpo' : 'portfolio-api';
           const lnote=el('span','muted'); lnote.style.cssText='font-size:var(--font-size-sm);';
-          lnote.textContent='· .env wins for now — remove it there + restart '+svc+' to activate'+(it.staged_behind_env?' (already staged)':'');
+          lnote.textContent='· .env wins for now — remove it there + `docker compose up -d '+svc+'` to activate'+(it.staged_behind_env?' (already staged)':'');
           row.appendChild(lnote);
         } else if(it.scope==='mcpo-file'){
           const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
-          mnote.textContent='· applies on next mcpo restart, not portfolio-api\'s';
+          mnote.textContent='· applies on next `docker compose up -d mcpo`, not portfolio-api\'s';
           row.appendChild(mnote);
         }
       } else {
@@ -3228,7 +3240,7 @@ function secretsContent(){
   });
   const btn=el('button',null,'↳ SAVE SECRETS'); btn.style.marginTop='12px'; btn.onclick=saveSecrets; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
-  foot.textContent='Write-only and encrypted at rest (Fernet, secrets_crypto.py) — stored values are never shown or sent back to the browser. Saved app-secrets apply on the next portfolio-api restart; Monarch/Tavily on mcpo\'s next restart. This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
+  foot.textContent='Write-only and encrypted at rest (Fernet, secrets_crypto.py) — stored values are never shown or sent back to the browser. Applies the next time the affected service\'s container is recreated: `docker compose up -d` for portfolio-api, or for mcpo\'s (Monarch/Tavily). A plain `restart` reuses the existing container environment and will NOT pick up an edited .env or mcpo.env. This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
   wrap.appendChild(foot);
   return wrap;
 }
