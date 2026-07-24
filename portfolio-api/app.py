@@ -3953,16 +3953,33 @@ def get_knowledge():
 
 @app.post("/api/knowledge/reindex")
 def post_knowledge_reindex():
-    """Queue a rebuild of the knowledge vector index (embeds new/changed docs via Ollama bge-m3).
+    """Queue a rebuild of the knowledge vector index (embeds new/changed docs via the LLM adapter).
     Non-blocking — runs on the serial job queue (Increment B) so it shares GPU-serialization +
     /api/jobs visibility with the other heavy jobs. Poll GET /api/knowledge for live chunk-level
-    progress ({reindexing, done_chunks, total_chunks, current_file}). Read-only w.r.t. your data."""
+    progress ({reindexing, done_chunks, total_chunks, current_file})."""
     try:
         jid, created = _enqueue("knowledge_reindex", source="api")
         return {"ok": True, "status": "queued" if created else "already queued/running",
                 "job_id": jid, **knowledge.status()}
     except Exception as e:
         return JSONResponse({"error": f"reindex failed: {e}"}, status_code=500)
+
+
+@app.post("/api/knowledge/delete")
+async def post_knowledge_delete(req: Request):
+    """RESUME-TRACKER 2026-07-24h — the new in-app removal action from the Knowledge/RAG
+    DB-backed storage design: drops a document (by its content hash) + its embedded chunks from
+    the DB. The source file, if still sitting in the read-only knowledge folder, is untouched —
+    it will be flagged in `reimported` on whatever future reindex next notices it's still there.
+    Body: {hash}."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    result = knowledge.delete_doc((body or {}).get("hash"))
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
 
 
 def _read_analysis():

@@ -3819,16 +3819,42 @@ function knowledgeContent(){
     btn.disabled=true; btn.textContent=`⏳ indexing… ${pct}% (${done}/${tot})`+(k.current_file?' — '+k.current_file:'');
     setTimeout(_knStartPoll,0);
   }
+  if(k.reimported && k.reimported.length){
+    const rh=el('div','ph','⚠ REIMPORTED ON LAST REINDEX'); rh.style.marginTop='12px'; wrap.appendChild(rh);
+    const rn=el('div','muted'); rn.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);margin-bottom:6px;';
+    rn.textContent='These file(s) were previously deleted from the knowledge library in-app, but are still sitting in the folder — they got re-imported on this reindex. If you meant to retire them permanently, delete the file(s) from the folder too.';
+    wrap.appendChild(rn);
+    k.reimported.forEach(f=>{ const x=el('div','muted'); x.style.cssText='font-size:var(--font-size-sm);'; x.textContent='↻ '+f; wrap.appendChild(x); });
+  }
   if(k.docs && k.docs.length){
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DOCUMENT</th><th>SIZE</th><th>CHUNKS</th>'; t.appendChild(hr);
-    k.docs.forEach(d=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${(d.file||'').replace(/</g,'&lt;')}</td><td>${d.size!=null?Math.round(d.size/1024)+'kb':'—'}</td><td>${d.chunks!=null?d.chunks:'<span class="muted">—</span>'}</td>`; t.appendChild(tr); });
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DOCUMENT</th><th>SIZE</th><th>CHUNKS</th><th></th>'; t.appendChild(hr);
+    k.docs.forEach(d=>{
+      const tr=el('tr');
+      const tdName=el('td','l sym'); tdName.textContent=d.file||'';
+      const tdSize=el('td'); tdSize.textContent=d.size!=null?Math.round(d.size/1024)+'kb':'—';
+      const tdChunks=el('td'); tdChunks.textContent=d.chunks!=null?d.chunks:'—';
+      const tdDel=el('td');
+      const delBtn=el('button',null,'✕ DELETE'); delBtn.style.cssText='font-size:var(--font-size-sm);padding:2px 8px;';
+      delBtn.onclick=()=>deleteKnowledgeDoc(d.hash, d.file);
+      tdDel.appendChild(delBtn);
+      tr.appendChild(tdName); tr.appendChild(tdSize); tr.appendChild(tdChunks); tr.appendChild(tdDel);
+      t.appendChild(tr);
+    });
     const th=el('div','ph','INDEXED DOCUMENTS'); th.style.marginTop='12px'; wrap.appendChild(th); wrap.appendChild(t);
   } else { const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-3);'; m.textContent='No documents yet — drop .md/.txt/.pdf files into the knowledge folder on the host, then REINDEX.'; wrap.appendChild(m); }
   if(k.errors && k.errors.length){ const eh=el('div','ph','INDEX WARNINGS'); eh.style.marginTop='12px'; wrap.appendChild(eh); k.errors.forEach(e=>{ const x=el('div','muted'); x.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);'; x.textContent='⚠ '+e; wrap.appendChild(x); }); }
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
-  foot.textContent='The Fiduciary chat searches these docs via its search_knowledge tool (tax/IRA/policy guidance). Embeddings use Ollama bge-m3 (pull it if the index is empty). Add/remove files in the folder, then REINDEX.';
+  foot.textContent='The Fiduciary chat searches these docs via its search_knowledge tool (tax/IRA/policy guidance). Content is deduped by hash and stored in the DB — DELETE removes a document from the library; it stays read-only-safe since the source file in the folder is never touched (re-adding it will flag it as reimported above). Add new files to the folder, then REINDEX.';
   wrap.appendChild(foot);
   return wrap;
+}
+function deleteKnowledgeDoc(hash, filename){
+  if(!hash) return;
+  if(!confirm(`Remove "${filename||hash}" from the knowledge library? The source file (if still in the folder) is not touched — it will reappear as "reimported" on a future reindex if it's still there.`)) return;
+  fetch('/api/knowledge/delete',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hash})})
+    .then(r=>r.json().then(j=>({ok:r.ok, j})))
+    .then(({ok,j})=>{ if(!ok || j.error){ alert('Delete failed: '+(j.error||'unknown error')); return; } load(false); })
+    .catch(e=>alert('Delete failed: '+e));
 }
 function driftContent(){
   const r=INSIGHTS; const wrap=el('div');

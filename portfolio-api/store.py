@@ -96,6 +96,34 @@ def init_db():
                 summary TEXT
             )""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_paper_reports_scenario_ts ON paper_reports(scenario_id, ts)")
+            # ---- Knowledge/RAG DB-backed storage (2026-07-24h) ----
+            c.execute("""CREATE TABLE IF NOT EXISTS knowledge_docs(
+                hash TEXT PRIMARY KEY,
+                filename TEXT,
+                size INTEGER,
+                imported_at INTEGER,
+                content BLOB
+            )""")
+            c.execute("""CREATE TABLE IF NOT EXISTS knowledge_chunks(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_hash TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                vec TEXT NOT NULL,
+                model TEXT NOT NULL
+            )""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc ON knowledge_chunks(doc_hash)")
+            c.execute("""CREATE TABLE IF NOT EXISTS knowledge_paths(
+                relpath TEXT PRIMARY KEY,
+                hash TEXT,
+                mtime INTEGER,
+                size INTEGER
+            )""")
+            c.execute("""CREATE TABLE IF NOT EXISTS knowledge_removed(
+                hash TEXT PRIMARY KEY,
+                filename TEXT,
+                removed_at INTEGER NOT NULL
+            )""")
         try:
             os.chmod(STORE_DB, 0o600)
         except Exception:
@@ -422,3 +450,151 @@ def migrated_keys():
     """For diagnostics/verification only — every key currently in the store."""
     with _conn() as c:
         return sorted(r["key"] for r in c.execute("SELECT key FROM app_state").fetchall())
+
+
+# ============================================================================
+# Knowledge/RAG DB-backed storage (2026-07-24h, LOCAL-HOSTING-HARDENING-PLAN.md, design
+# finalized 2026-07-23g). Replaces `knowledge.py`'s old flat `/data/knowledge_index.json` blob
+# (path+mtime/size keyed) with 4 real tables, content-hash (SHA-256) keyed:
+#   - knowledge_docs     -- one row per unique document CONTENT (the hash is the primary key,
+#                           not the filename) — raw bytes stored as a BLOB so re-embedding never
+#                           needs the host folder to still have the file, and so a future
+#                           cloud-packaged deployment with no host filesystem access still works.
+#   - knowledge_chunks   -- the embedded chunks for a doc_hash (text + JSON-encoded vector +
+#                           the embed model used, so a model change can be detected per-chunk).
+#   - knowledge_paths    -- CURRENT filesystem state: which relpath currently points at which
+#                           hash, with the mtime/size last seen there. Lets a rename (same
+#                           content, new path) skip a re-embed (hash unchanged) while a genuine
+#                           content edit (new hash under the same path) is still detected.
+#   - knowledge_removed  -- retention of hashes explicitly removed via the new in-app delete
+#                           action, so a reappearance of that same content on a later reindex
+#                           can be flagged as "reimported" instead of silently re-added.
+# The DB is now the source of truth for what's SEARCHABLE — the (still read-only) `/knowledge`
+# folder is only the INTAKE mechanism `knowledge.py`'s reindex scans to feed imports in. Deleting
+# a file from the folder no longer removes it from the index by itself (a deliberate behavior
+# change from the old design) — only the explicit in-app removal action does that.
+# ============================================================================
+def knowledge_doc_get(h):
+    with _conn() as c:
+        row = c.execute("SELECT hash, filename, size, imported_at FROM knowledge_docs WHERE hash=?",
+                        (h,)).fetchone()
+    return dict(row) if row else None
+
+
+def knowledge_doc_get_content(h):
+    """The raw imported bytes for a doc — used to re-extract/re-chunk without needing the file
+    to still exist on disk (e.g. after a model change forces a re-embed)."""
+    with _conn() as c:
+        row = c.execute("SELECT content FROM knowledge_docs WHERE hash=?", (h,)).fetchone()
+    return row["content"] if row else None
+
+
+def knowledge_doc_upsert(h, filename, size, imported_at, content):
+    with _conn() as c:
+        c.execute("""INSERT INTO knowledge_docs(hash, filename, size, imported_at, content)
+                     VALUES(?,?,?,?,?)
+                     ON CONFLICT(hash) DO UPDATE SET filename=excluded.filename""",
+                  (h, filename, size, imported_at, content))
+
+
+def knowledge_docs_all():
+    """Metadata only (no content blob) — for the status/UI listing."""
+    with _conn() as c:
+        rows = c.execute("SELECT hash, filename, size, imported_at FROM knowledge_docs "
+                         "ORDER BY filename").fetchall()
+    return [dict(r) for r in rows]
+
+
+def knowledge_doc_delete(h, filename=None):
+    """Removes a document + its chunks + its path mapping(s), and records the hash into
+    knowledge_removed so a later reindex can flag its reappearance rather than silently
+    re-adding it (Jason, 2026-07-23g: surface a reimport either way it cuts — bug magnet if
+    meant to retire permanently, safety net if the wrong doc was deleted by mistake)."""
+    with _conn() as c:
+        row = c.execute("SELECT filename FROM knowledge_docs WHERE hash=?", (h,)).fetchone()
+        fn = filename or (row["filename"] if row else None)
+        c.execute("DELETE FROM knowledge_chunks WHERE doc_hash=?", (h,))
+        c.execute("DELETE FROM knowledge_docs WHERE hash=?", (h,))
+        # Deliberately NOT deleting from knowledge_paths here: a path's (mtime, size) signature
+        # still matching what's on disk is what lets a non-force reindex (e.g. the one `search()`
+        # triggers on every query) recognize "nothing changed here" and skip re-scanning the file
+        # -- which is what keeps a delete actually STICK until an explicit reindex, instead of the
+        # very next search silently re-importing it (the path row still pointing at this now-gone
+        # hash makes THIS path a no-op for an unchanged file; only force=True -- the REINDEX button
+        # -- re-examines it regardless, correctly rediscovering + flagging it as reimported).
+        c.execute("""INSERT INTO knowledge_removed(hash, filename, removed_at) VALUES(?,?,?)
+                     ON CONFLICT(hash) DO UPDATE SET filename=excluded.filename,
+                        removed_at=excluded.removed_at""",
+                  (h, fn, int(time.time())))
+    return fn
+
+
+def knowledge_removed_get(h):
+    with _conn() as c:
+        row = c.execute("SELECT hash, filename, removed_at FROM knowledge_removed WHERE hash=?",
+                        (h,)).fetchone()
+    return dict(row) if row else None
+
+
+def knowledge_removed_clear(h):
+    """Called once a previously-removed hash is reimported — it's active again, so it shouldn't
+    keep claiming 'reimported' on every subsequent reindex pass."""
+    with _conn() as c:
+        c.execute("DELETE FROM knowledge_removed WHERE hash=?", (h,))
+
+
+def knowledge_chunks_replace(doc_hash, model, chunks):
+    """`chunks`: iterable of (chunk_index, text, vec_list). Replaces ALL chunks for this hash —
+    used both for a fresh import and for a forced re-embed (e.g. EMBED_MODEL changed)."""
+    with _conn() as c:
+        c.execute("DELETE FROM knowledge_chunks WHERE doc_hash=?", (doc_hash,))
+        c.executemany("INSERT INTO knowledge_chunks(doc_hash, chunk_index, text, vec, model) "
+                      "VALUES(?,?,?,?,?)",
+                      [(doc_hash, ci, txt, json.dumps(vec), model) for (ci, txt, vec) in chunks])
+
+
+def knowledge_chunk_count(doc_hash):
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) AS n FROM knowledge_chunks WHERE doc_hash=?",
+                        (doc_hash,)).fetchone()
+    return row["n"] if row else 0
+
+
+def knowledge_chunks_all():
+    """Every chunk across every doc, joined with its current filename — for `search()`'s
+    cosine-similarity scan (corpus is small; a full Python scan is still the right call here,
+    same as the old design, just reading from SQL instead of one JSON blob)."""
+    with _conn() as c:
+        rows = c.execute("""SELECT kc.doc_hash, kc.chunk_index, kc.text, kc.vec, kc.model,
+                                    kd.filename
+                             FROM knowledge_chunks kc
+                             JOIN knowledge_docs kd ON kd.hash = kc.doc_hash""").fetchall()
+    return [{"hash": r["doc_hash"], "chunk_index": r["chunk_index"], "text": r["text"],
+             "vec": json.loads(r["vec"]), "model": r["model"], "file": r["filename"]}
+            for r in rows]
+
+
+def knowledge_path_get(relpath):
+    with _conn() as c:
+        row = c.execute("SELECT relpath, hash, mtime, size FROM knowledge_paths WHERE relpath=?",
+                        (relpath,)).fetchone()
+    return dict(row) if row else None
+
+
+def knowledge_path_upsert(relpath, h, mtime, size):
+    with _conn() as c:
+        c.execute("""INSERT INTO knowledge_paths(relpath, hash, mtime, size) VALUES(?,?,?,?)
+                     ON CONFLICT(relpath) DO UPDATE SET hash=excluded.hash,
+                        mtime=excluded.mtime, size=excluded.size""",
+                  (relpath, h, mtime, size))
+
+
+def knowledge_path_delete(relpath):
+    with _conn() as c:
+        c.execute("DELETE FROM knowledge_paths WHERE relpath=?", (relpath,))
+
+
+def knowledge_paths_all():
+    with _conn() as c:
+        rows = c.execute("SELECT relpath, hash, mtime, size FROM knowledge_paths").fetchall()
+    return {r["relpath"]: {"hash": r["hash"], "mtime": r["mtime"], "size": r["size"]} for r in rows}
