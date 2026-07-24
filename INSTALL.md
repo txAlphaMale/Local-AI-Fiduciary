@@ -35,11 +35,14 @@ ollama pull qwen3.6:27b     # analysis + Strategist
 ollama pull bge-m3          # embeddings for the knowledge RAG
 ```
 
-**4. Pick your data source** — set `PORTFOLIO_PROVIDER` in `.env`:
+**4. Pick your data source** — set `PORTFOLIO_PROVIDER`, either in `.env` before first boot, or
+(2026-07-24) from the dashboard itself at **SETTINGS → ADVANCED KNOBS → "Portfolio data source"**
+once it's running (a `docker compose up -d portfolio-api` applies a UI-saved change — a plain
+`restart` won't):
 
 | Provider | Steps |
 |----------|-------|
-| `csv` *(no account)* | Fill a `holdings.csv` from `holdings.csv.example`; put it where `HOLDINGS_CSV` points (default `/data/holdings.csv`, or bind-mount it in the compose). |
+| `csv` *(no account)* | **Easiest: use the in-app HOLDINGS tab** (2026-07-24) — enter positions in an editable table or upload a CSV, no host file access needed. The old manual path still works too: fill a `holdings.csv` from `holdings.csv.example` and put it where `HOLDINGS_CSV` points (default `/data/holdings.csv`, or bind-mount it in the compose). |
 | `snaptrade` *(live, many brokers incl. Robinhood)* | Free dev signup at snaptrade.com → set `SNAPTRADE_CLIENT_ID`/`CONSUMER_KEY`; run `python3 snaptrade_register.py` to link brokerage(s) and get `USER_ID`/`USER_SECRET`. |
 | `monarch` | Set `MONARCH_EMAIL`/`PASSWORD`/`MFA_SECRET`. |
 

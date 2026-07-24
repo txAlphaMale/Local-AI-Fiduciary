@@ -25,7 +25,7 @@ import uuid
 
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -85,7 +85,8 @@ _SETTINGS_FILE_BOOT = os.environ.get("SETTINGS_FILE", "/data/settings.json")
 # _boot_merge actually consults).
 _CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE",
                     "LLM_API_DIALECT", "LLM_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_STRATEGIST_MODEL",
-                    "EMBED_API_DIALECT", "EMBED_BASE_URL")
+                    "EMBED_API_DIALECT", "EMBED_BASE_URL",
+                    "PORTFOLIO_PROVIDER")   # 2026-07-24 -- see CONFIG_SPECS below
 # Keys present in the REAL environment at boot (from .env / compose). Used so the UI can
 # honestly mark those "env-locked" — env wins and the UI must not pretend to override it.
 _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
@@ -328,6 +329,11 @@ CONFIG_SPECS = [
      "group": "AI / LLM provider", "default": "ollama", "options": ["ollama", "openai"]},
     {"key": "EMBED_BASE_URL", "label": "Embeddings host URL (blank = provider default)",
      "group": "AI / LLM provider", "default": ""},
+    # ---- Portfolio data source (2026-07-24) -- was .env-only; a new CSV user previously had no
+    # in-app way to even pick "csv" without editing .env by hand. See /api/holdings-csv for the
+    # matching in-app editor that goes with this.
+    {"key": "PORTFOLIO_PROVIDER", "label": "Portfolio data source", "group": "Portfolio provider",
+     "default": "monarch", "options": ["monarch", "csv", "snaptrade"]},
 ]
 
 
@@ -1720,6 +1726,8 @@ def build():
         d = _build_snaptrade()
     else:
         d = _build_monarch()
+    d["portfolio_provider"] = p   # 2026-07-24 -- lets the frontend know which provider is active
+                                  # (e.g. to badge the HOLDINGS panel as live vs. staged-but-inactive)
     _snapshot_value(d)          # record today's value for the accruing risk-metrics history
     _snapshot_shares(d)         # record today's per-ticker shares for the wash-sale ledger (GAP-4)
     return d
@@ -1744,6 +1752,156 @@ def _data():
         _cache["data"] = build()
         _cache["ts"] = now
     return _cache["data"]
+
+
+# ============ CSV holdings management (2026-07-24) ============
+# Previously PORTFOLIO_PROVIDER=csv users had NO in-app way to set holdings.csv at all -- it had
+# to be hand-placed on the host filesystem before this app existed for them at all, a real gap
+# for the "no brokerage account needed" onboarding path INSTALL.md advertises. These endpoints
+# read/write the exact same file _build_csv() consumes (HOLDINGS_CSV, default /data/holdings.csv)
+# -- there is no separate storage path to keep in sync.
+HOLDINGS_CSV_COLUMNS = ["ticker", "name", "quantity", "cost_basis", "account", "institution", "type"]
+HOLDINGS_TYPE_HINTS = ["Stock", "ETF", "Mutual Fund", "Bond", "Cash", "Real Estate", "Other"]
+
+
+def _holdings_csv_path():
+    return os.environ.get("HOLDINGS_CSV", "/data/holdings.csv")
+
+
+def _read_holdings_csv_rows():
+    """Raw saved rows (no live pricing) for the editable table -- distinct from _build_csv(),
+    which additionally fetches live Finnhub quotes for the dashboard itself."""
+    import csv as _csv
+    try:
+        with open(_holdings_csv_path(), newline="", encoding="utf-8-sig") as f:
+            rows = list(_csv.DictReader(f))
+    except FileNotFoundError:
+        return []
+    return [{
+        "ticker": (r.get("ticker") or "").strip().upper(),
+        "name": (r.get("name") or "").strip(),
+        "quantity": (r.get("quantity") or "").strip(),
+        "cost_basis": (r.get("cost_basis") or "").strip(),
+        "account": (r.get("account") or "").strip(),
+        "institution": (r.get("institution") or "").strip(),
+        "type": (r.get("type") or "").strip(),
+    } for r in rows]
+
+
+def _validate_holdings_rows(rows):
+    """Returns (clean_rows, errors). errors flags exactly what _build_csv() would otherwise
+    silently drop from the portfolio with zero explanation (blank ticker, non-numeric/zero/
+    negative quantity) or what would silently corrupt cost-basis math (non-numeric cost_basis) --
+    all-or-nothing on the write side (see post_holdings_csv) so a typo in one row can't quietly
+    vanish a position instead of failing loudly."""
+    clean, errors = [], []
+    for i, r in enumerate(rows, start=1):
+        tkr = (r.get("ticker") or "").strip().upper()
+        if not tkr:
+            errors.append({"row": i, "message": "Ticker is required."})
+            continue
+        try:
+            qty = float(r.get("quantity") or 0)
+        except (TypeError, ValueError):
+            errors.append({"row": i, "message": f"{tkr}: quantity must be a number."})
+            continue
+        if qty <= 0:
+            errors.append({"row": i, "message": f"{tkr}: quantity must be greater than 0."})
+            continue
+        cost_raw = r.get("cost_basis")
+        cost = None
+        if cost_raw not in (None, ""):
+            try:
+                cost = float(cost_raw)
+            except (TypeError, ValueError):
+                errors.append({"row": i, "message": f"{tkr}: cost basis must be a number."})
+                continue
+            if cost < 0:
+                errors.append({"row": i, "message": f"{tkr}: cost basis can't be negative."})
+                continue
+        clean.append({
+            "ticker": tkr,
+            "name": (r.get("name") or "").strip(),
+            "quantity": qty,
+            "cost_basis": cost if cost is not None else "",
+            "account": (r.get("account") or "").strip() or "Brokerage",
+            "institution": (r.get("institution") or "").strip(),
+            "type": (r.get("type") or "").strip() or "Stock",
+        })
+    return clean, errors
+
+
+def _write_holdings_csv_rows(clean_rows):
+    import csv as _csv, io as _io
+    buf = _io.StringIO()
+    w = _csv.DictWriter(buf, fieldnames=HOLDINGS_CSV_COLUMNS)
+    w.writeheader()
+    for r in clean_rows:
+        w.writerow(r)
+    store.atomic_write_text(_holdings_csv_path(), buf.getvalue())
+    _cache["data"] = None   # force the next /api/portfolio read to re-parse the file instead of
+                            # serving a stale cached build for up to TTL seconds
+
+
+@app.get("/api/holdings-csv")
+def get_holdings_csv():
+    """Current CSV-provider holdings for the in-app HOLDINGS editor. Available regardless of the
+    ACTIVE PORTFOLIO_PROVIDER, so a user can populate holdings.csv before switching to it (SETTINGS
+    -> Portfolio provider)."""
+    return {"rows": _read_holdings_csv_rows(), "path": _holdings_csv_path(),
+            "active_provider": os.environ.get("PORTFOLIO_PROVIDER", "monarch").lower(),
+            "type_hints": HOLDINGS_TYPE_HINTS}
+
+
+@app.post("/api/holdings-csv")
+async def post_holdings_csv(req: Request):
+    """Replace holdings.csv wholesale from the in-app table editor. Body: {"rows": [...]}.
+    All-or-nothing: if ANY row fails validation, NOTHING is written and every error comes back
+    together -- a save that fails loudly with a clear reason beats one that silently drops a row."""
+    body = await req.json()
+    rows = body.get("rows")
+    if not isinstance(rows, list):
+        return JSONResponse({"error": "Body must be {\"rows\": [...]}."}, status_code=400)
+    clean, errors = _validate_holdings_rows(rows)
+    if errors:
+        return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+    _write_holdings_csv_rows(clean)
+    return {"ok": True, "rows_written": len(clean)}
+
+
+@app.post("/api/holdings-csv/upload")
+async def post_holdings_csv_upload(req: Request):
+    """Wholesale replace from an uploaded .csv file. The frontend reads the file client-side with
+    FileReader and POSTs the raw text as the request body -- deliberately avoiding multipart/
+    form-data so this doesn't need the python-multipart dependency just for one endpoint."""
+    import csv as _csv, io as _io
+    raw = (await req.body()).decode("utf-8-sig", errors="replace")
+    if not raw.strip():
+        return JSONResponse({"error": "Uploaded file is empty."}, status_code=400)
+    try:
+        rows = list(_csv.DictReader(_io.StringIO(raw)))
+    except Exception as e:
+        return JSONResponse({"error": f"Could not parse CSV: {e}"}, status_code=400)
+    if not rows or "ticker" not in (rows[0].keys() if rows else []):
+        got = list(rows[0].keys()) if rows else []
+        return JSONResponse({"error": "CSV must have a header row including at least 'ticker' and "
+                                       f"'quantity' columns (found: {', '.join(got) or 'none'})."},
+                            status_code=400)
+    clean, errors = _validate_holdings_rows(rows)
+    if errors:
+        return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+    _write_holdings_csv_rows(clean)
+    return {"ok": True, "rows_written": len(clean)}
+
+
+@app.get("/api/holdings-csv/template")
+def get_holdings_csv_template():
+    """Downloadable starter CSV — header + two example rows, same columns _build_csv() reads."""
+    sample = ("ticker,name,quantity,cost_basis,account,institution,type\n"
+              "AAPL,Apple Inc,25,4200,Taxable Brokerage,Fidelity,Stock\n"
+              "VOO,Vanguard S&P 500 ETF,10,4100,Roth IRA,Fidelity,ETF\n")
+    return Response(content=sample, media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=holdings_template.csv"})
 
 
 # ---------------- Daily value snapshot -> realized risk metrics (accrues over time) ----------------

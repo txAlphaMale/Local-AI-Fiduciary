@@ -352,7 +352,7 @@ function runJob(url, btn, queuedLabel){
 
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
@@ -653,18 +653,21 @@ async function load(refresh, bg){
       // (SETTINGS) that could actually fix the failing provider. Fetch settings/secrets here,
       // independently of portfolio health, so SETTINGS/SECRETS stay reachable regardless.
       DATA=null;
-      const [setg,secg]=await Promise.all([gj('/api/settings'), gj('/api/secrets')]);
-      SETTINGS_CFG=setg; SECRETS_CFG=secg;
+      // Also fetch HOLDCSV here: if the failure IS the portfolio provider (e.g. Monarch down),
+      // switching to the CSV provider + HOLDINGS tab is the actual escape hatch -- it must stay
+      // reachable, not just SETTINGS.
+      const [setg,secg,hcsv]=await Promise.all([gj('/api/settings'), gj('/api/secrets'), gj('/api/holdings-csv')]);
+      SETTINGS_CFG=setg; SECRETS_CFG=secg; HOLDCSV=hcsv;
       document.getElementById('body').innerHTML='<div class="err">'+d.error
-        +'<br><br><span class="muted" style="font-size:var(--font-size-sm);">Portfolio data is unavailable, but SETTINGS (⚙, top right) still works — use it to fix the provider config.</span></div>';
+        +'<br><br><span class="muted" style="font-size:var(--font-size-sm);">Portfolio data is unavailable, but SETTINGS (⚙, top right) and the HOLDINGS tab still work — no brokerage account required if you switch to CSV.</span></div>';
       return;
     }
     DATA=d;
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
-    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv;
     // keep the scenario switcher pointed at a real scenario: adopt the server's resolved default
     // the first time (nothing chosen yet), or if a previously-selected scenario_id was deleted.
     if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
@@ -732,6 +735,10 @@ W('ai-provider','Getting started','AI provider (SETTINGS → AI / LLM PROVIDER):
   'Every LLM-backed feature — chat, the weekly Strategist run, cash-deployment advice, the Dashboard narrative, and every research brief\'s JSON synthesis — routes through one swappable backend, set in SETTINGS → AI / LLM PROVIDER. The default is your own local Ollama models (zero marginal cost, fully private, bounded by these two 1080 Tis). Optionally, chat/analysis alone can point at Anthropic\'s Claude API instead — a separate, metered, pay-per-token service, added 2026-07-24.',
   'Two model tiers exist for the Claude path: an "everyday" model (chat + the Dashboard narrative) and a "Strategist" model (the autonomous weekly paper-trading run + the on-demand cash-deployment planner), since those two run longer, tool-heavier ReAct loops that can justify a stronger/pricier model — set separately so a quick chat question doesn\'t pay Opus-tier cost every turn. Embeddings (the Knowledge/RAG index that lets chat cite your own documents) CANNOT run on Claude — Anthropic sells no embeddings API at all — so they stay on local Ollama regardless of the chat provider, unless "Knowledge/RAG embeddings provider" is separately pointed at an OpenAI-compatible embeddings host. Retrieval quality is unaffected either way: Claude only ever sees the already-retrieved passages as plain text, same as Ollama does today. **Important:** a claude.ai Pro/Max chat subscription does NOT include API access — the key this needs comes from a separate console.anthropic.com account with its own pay-per-token billing, unrelated to a Pro subscription\'s usage.',
   'Enter the provider, host URL (blank = provider default), and model names under SETTINGS → AI / LLM PROVIDER; the LLM and embeddings API keys live in the SECRETS panel (masked, write-only, never shown again once saved). Everything here applies the next time portfolio-api\'s container is recreated (`docker compose up -d` — a plain `restart` reuses the old environment and won\'t pick this up), same as every other Model config field; there is no live swap. Leaving the provider on "ollama" (the default) changes nothing about how this app already behaves.');
+W('holdings-csv','Getting started','No brokerage account? The HOLDINGS tab (CSV positions)',
+  'A full portfolio data source that needs no brokerage account, no OAuth, no third-party service at all — you enter positions directly, either by hand in an editable table or by uploading a spreadsheet export. Reachable as its own top-level HOLDINGS tab, always available regardless of whether Monarch/SnapTrade is even configured or currently working.',
+  'Each row needs a ticker and a quantity (a dollar amount for Cash-type rows) — everything else (name, cost basis, account, institution, type) is optional and defaults sensibly (account → "Brokerage", type → "Stock"). Use ⬇ DOWNLOAD TEMPLATE for a starter CSV with the right headers, or ⬆ UPLOAD CSV to replace the whole table at once from a spreadsheet export. Saving is all-or-nothing: if any row fails validation (blank ticker, non-numeric or zero/negative quantity, non-numeric cost basis), nothing is written and every problem row is listed together — better than a save that quietly drops one position with no explanation.',
+  'Filling this in does NOT automatically make it the active portfolio — check the banner at the top of the tab. If it says these holdings are "not the active data source," go to SETTINGS → ADVANCED KNOBS → "Portfolio data source" and switch it to CSV, then `docker compose up -d portfolio-api` (a plain `restart` won\'t pick it up). This is also the fastest way back onto a working dashboard if Monarch/mcpo is ever down: switch here temporarily rather than staring at a portfolio-load error.');
 W('mfa','Getting started','Multi-factor authentication (MFA) & backup codes',
   'A rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) required at login on top of your password. Since this app manages your full financial picture, MFA is treated as a CRITICAL setup step — it shows a ! on the setup checklist and a stop on the guided tour, not an optional extra.',
   'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → SECURITY → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → SECURITY also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
@@ -1201,6 +1208,10 @@ function render(){
   if(havePlan) tabSpecsRaw.push(['plan','PLAN · FI']);
   if(haveAudits) tabSpecsRaw.push(['audits','AUDITS · TAX·FEES']);
   if(haveStrat) tabSpecsRaw.push(['strategist','STRATEGIST']);
+  // Always available, independent of DATA/provider health (2026-07-24) — this is the escape
+  // hatch when Monarch/mcpo/SnapTrade is down, and the only in-app path for a no-brokerage-
+  // account CSV user, so it must never be gated behind a successful portfolio load.
+  tabSpecsRaw.push(['holdings', HOLDCSV && HOLDCSV.active_provider==='csv' ? 'HOLDINGS' : 'HOLDINGS (csv)']);
   tabSpecsRaw.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
   tabSpecsRaw.push(['wiki','WIKI']);   // in-app help — always available (rightmost)
   // SETTINGS is NOT a top tab — it opens from the ⚙ gear in the top-right (N11).
@@ -1278,6 +1289,7 @@ function render(){
   }
   else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
   else if(TAB==='strategist' && haveStrat){ tc.appendChild(stratContent(STRAT)); }
+  else if(TAB==='holdings'){ tc.appendChild(holdingsContent()); }
   else if(TAB==='chat'){ tc.appendChild(chatContent()); }
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
@@ -3214,6 +3226,117 @@ function saveSecrets(){
       load(false);
     })
     .catch(e=>alert('Save failed: '+e));
+}
+// ============================================================================
+// HOLDINGS (2026-07-24) — in-app CSV positions editor. Previously PORTFOLIO_PROVIDER=csv had NO
+// UI at all: a new user with no Monarch/SnapTrade account had to hand-place holdings.csv on the
+// host filesystem before the app was usable for them. This mirrors app.py's /api/holdings-csv
+// (GET rows / POST rows / POST upload / GET template) with a plain editable table + file upload,
+// always reachable as a top-level tab regardless of DATA/provider health — see load()'s d.error
+// branch, which fetches this even when the active provider itself is down.
+// ============================================================================
+function holdingsContent(){
+  const wrap=el('div');
+  const h=HOLDCSV||{rows:[],active_provider:'monarch',type_hints:['Stock','ETF','Mutual Fund','Bond','Cash','Real Estate','Other']};
+  if(h.active_provider!=='csv'){
+    const banner=el('div'); banner.style.cssText='background:rgba(224,98,58,0.12);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+    banner.innerHTML='These holdings are saved but <b>not the active data source</b> — the dashboard is currently reading from <b>'+((h.active_provider||'monarch').toUpperCase())+'</b>. Set SETTINGS → ADVANCED KNOBS → "Portfolio data source" to CSV, then <code>docker compose up -d portfolio-api</code>, to make this the live source.';
+    wrap.appendChild(banner);
+  }
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);line-height:1.5;';
+  sub.textContent='No brokerage account required — enter positions by hand, paste in a spreadsheet export, or drop in a CSV file. Live prices/day-change come from Finnhub once this is the active provider.';
+  wrap.appendChild(sub);
+
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;';
+  const tmplA=el('a',null,'⬇ DOWNLOAD TEMPLATE'); tmplA.href='/api/holdings-csv/template'; tmplA.setAttribute('download','holdings_template.csv'); tmplA.style.cssText='font-size:var(--font-size-sm);';
+  bar.appendChild(tmplA);
+  const fileInp=document.createElement('input'); fileInp.type='file'; fileInp.accept='.csv,text/csv'; fileInp.style.display='none';
+  const upBtn=el('button',null,'⬆ UPLOAD CSV'); upBtn.onclick=()=>fileInp.click();
+  fileInp.onchange=()=>{
+    const f=fileInp.files && fileInp.files[0]; if(!f) return;
+    const rdr=new FileReader();
+    rdr.onload=()=>{
+      fetch('/api/holdings-csv/upload',{method:'POST',headers:{'Content-Type':'text/csv'},body:rdr.result})
+        .then(r=>r.json().then(d=>({status:r.status,d})))
+        .then(({status,d})=>{
+          if(status!==200 || d.ok===false){
+            alert('Upload failed:\n'+((d.errors||[]).map(e=>'Row '+e.row+': '+e.message).join('\n')||d.error||'unknown error'));
+            return;
+          }
+          alert('Uploaded '+d.rows_written+' holding(s).'+(h.active_provider!=='csv'?' Switch SETTINGS → ADVANCED KNOBS → Portfolio data source to CSV to make it live.':''));
+          load(false);
+        }).catch(e=>alert('Upload failed: '+e));
+    };
+    rdr.readAsText(f);
+    fileInp.value='';
+  };
+  bar.appendChild(upBtn); bar.appendChild(fileInp);
+  const addBtn=el('button',null,'+ ADD ROW'); bar.appendChild(addBtn);
+  const saveBtn=el('button',null,'↳ SAVE HOLDINGS'); bar.appendChild(saveBtn);
+  wrap.appendChild(bar);
+
+  const errBox=el('div'); errBox.style.cssText='color:var(--color-negative);font-size:var(--font-size-sm);margin-bottom:var(--space-2);white-space:pre-line;';
+  wrap.appendChild(errBox);
+
+  const table=document.createElement('table'); table.style.cssText='width:100%;border-collapse:collapse;';
+  const thead=document.createElement('thead');
+  thead.innerHTML='<tr>'+['Ticker','Name','Quantity','Cost basis','Account','Institution','Type',''].map(x=>
+    `<th style="text-align:left;font-size:var(--font-size-sm);padding:4px 6px;border-bottom:1px solid var(--color-border);">${x}</th>`).join('')+'</tr>';
+  table.appendChild(thead);
+  const tbody=document.createElement('tbody');
+  table.appendChild(tbody);
+
+  const mkCell=(val,key)=>{
+    const td=document.createElement('td'); td.style.cssText='padding:2px 6px;';
+    if(key==='type'){
+      const sel=document.createElement('select'); sel.className='hold-inp'; sel.dataset.key=key; sel.style.cssText='width:100%;';
+      (h.type_hints||[]).forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; if(t===val) o.selected=true; sel.appendChild(o); });
+      if(val && !(h.type_hints||[]).includes(val)){ const o=document.createElement('option'); o.value=val; o.textContent=val; o.selected=true; sel.appendChild(o); }
+      td.appendChild(sel);
+    } else {
+      const inp=document.createElement('input'); inp.className='hold-inp'; inp.dataset.key=key; inp.value=(val==null?'':val); inp.style.cssText='width:100%;';
+      td.appendChild(inp);
+    }
+    return td;
+  };
+  const addRow=(row)=>{
+    row=row||{ticker:'',name:'',quantity:'',cost_basis:'',account:'',institution:'',type:'Stock'};
+    const tr=document.createElement('tr'); tr.className='hold-row';
+    ['ticker','name','quantity','cost_basis','account','institution','type'].forEach(k=>tr.appendChild(mkCell(row[k],k)));
+    const delTd=document.createElement('td');
+    const delBtn=el('button',null,'✕'); delBtn.title='remove row'; delBtn.onclick=()=>tr.remove();
+    delTd.appendChild(delBtn); tr.appendChild(delTd);
+    tbody.appendChild(tr);
+  };
+  (h.rows && h.rows.length ? h.rows : [null]).forEach(r=>addRow(r));
+  wrap.appendChild(table);
+
+  addBtn.onclick=()=>addRow(null);
+  saveBtn.onclick=()=>{
+    const rows=[];
+    tbody.querySelectorAll('tr.hold-row').forEach(tr=>{
+      const row={};
+      tr.querySelectorAll('.hold-inp').forEach(inp=>{ row[inp.dataset.key]=inp.value; });
+      if(Object.values(row).every(v=>!v || !String(v).trim())) return;   // skip a fully-blank row instead of erroring on it
+      rows.push(row);
+    });
+    errBox.textContent='';
+    fetch('/api/holdings-csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})})
+      .then(r=>r.json().then(d=>({status:r.status,d})))
+      .then(({status,d})=>{
+        if(status!==200 || d.ok===false){
+          errBox.textContent=(d.errors||[]).map(e=>'Row '+e.row+': '+e.message).join('\n')||d.error||'Save failed.';
+          return;
+        }
+        alert('Saved '+d.rows_written+' holding(s).'+(h.active_provider!=='csv'?' Switch SETTINGS → ADVANCED KNOBS → Portfolio data source to CSV to make it live.':''));
+        load(false);
+      }).catch(e=>{ errBox.textContent='Save failed: '+e; });
+  };
+
+  const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
+  foot.textContent='ticker and quantity are required (quantity is a dollar amount for Cash rows); cost_basis/name/institution are optional; account defaults to "Brokerage" if left blank. A save fails all-or-nothing with row-level errors shown above rather than silently dropping a bad row.';
+  wrap.appendChild(foot);
+  return wrap;
 }
 function secretsContent(){
   const wrap=el('div'); const s=SECRETS_CFG;

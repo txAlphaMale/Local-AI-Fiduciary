@@ -86,8 +86,9 @@ Same household-register file again.
 | ACA benchmark Silver premium (SLCSP $/yr) | PLAN → ASSUMPTIONS | A real dollar premium-tax-credit estimate, not just the %-of-income figure | Only relevant pre-Medicare (before 65) |
 | IPS policy targets (by asset type + by sleeve) | INSIGHTS → POLICY · DRIFT (edit via the policy form) | Drift-band alerts | Ships with a reasonable default (70/10/15/5 US-equity/Intl/Bond/Cash) — only edit if your actual target allocation differs |
 | Position caps per ticker | Same panel | Per-name concentration alerts | |
-| API keys (Finnhub, Tavily) | `.env` (see `INSTALL.md`) | Research briefs, news alerts, opportunity scanning | Infra-level, not a UI form — mentioned here only because it gates a lot of Research/Ideas |
+| API keys (Finnhub, Tavily) | SETTINGS → SECRETS (2026-07-24 — was `.env`-only) | Research briefs, news alerts, opportunity scanning | `.env` still works as a fallback/seed value, but the UI is the preferred path now — see the in-app WIKI → "Secrets encryption & the secrets.key backup" entry. |
 | AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |
+| No brokerage account? Portfolio data source (CSV) | HOLDINGS tab + SETTINGS → ADVANCED KNOBS | A full portfolio with no Monarch/SnapTrade account needed at all | See "No-brokerage-account holdings (CSV)" below — new 2026-07-24, this used to require hand-placing a file on the host. |
 
 ---
 
@@ -119,9 +120,43 @@ burn meaningfully more tokens per run than everyday chat.
 
 **Where to set it up:** SETTINGS → AI / LLM PROVIDER for the provider/host/model fields, SETTINGS
 → SECRETS for the API key(s) (masked, write-only — never shown again once saved). Like the other
-Model config fields, changes apply on the **next portfolio-api restart**, not live. Full detail —
-including exactly which app features fall into which tier — is in the in-app **WIKI → Getting
-started → "AI provider (SETTINGS → AI / LLM PROVIDER)"** entry.
+Model config fields, changes apply the next time portfolio-api's container is **recreated**
+(`docker compose up -d` — a plain `restart` reuses the existing container's environment and will
+NOT pick this up), not live. Full detail — including exactly which app features fall into which
+tier — is in the in-app **WIKI → Getting started → "AI provider (SETTINGS → AI / LLM PROVIDER)"**
+entry.
+
+---
+
+## No-brokerage-account holdings (CSV) — the HOLDINGS tab
+
+Don't use Monarch Money and don't have a SnapTrade-supported brokerage? You don't need either.
+The **HOLDINGS** tab (top-level, always visible) is a full portfolio data source with zero
+account linking — you enter positions directly.
+
+**Before 2026-07-24** this required hand-placing a `holdings.csv` file on the host filesystem
+before the app was usable at all — a real gap for anyone without Monarch/SnapTrade. It's now a
+normal in-app panel:
+
+- **Edit the table directly** — add/remove rows, type values in. Only ticker and quantity are
+  required (quantity is a dollar amount for `Cash`-type rows); name, cost basis, account, and
+  institution are optional and default sensibly.
+- **Upload a CSV** — click ⬆ UPLOAD CSV to replace the whole table at once from a spreadsheet
+  export. Click ⬇ DOWNLOAD TEMPLATE first if you want the right column headers to start from.
+- **Saving is all-or-nothing** — if any row fails validation (blank ticker, a zero/negative or
+  non-numeric quantity, a non-numeric cost basis), nothing is written and every problem row is
+  listed together, rather than silently dropping one position with no explanation.
+
+**One more step to make it live:** filling in the table doesn't automatically switch the active
+data source. Check the banner at the top of the HOLDINGS tab — if it says these holdings aren't
+active, go to SETTINGS → ADVANCED KNOBS → "Portfolio data source" and set it to `csv`, then run
+`docker compose up -d portfolio-api` (again, not a plain `restart`). This field used to be
+`.env`-only (`PORTFOLIO_PROVIDER=csv`); either path works, but the UI dropdown is the easier one
+now.
+
+This is also the fastest way back onto a working dashboard if Monarch/mcpo is ever down —
+switch to CSV temporarily instead of staring at a portfolio-load error. Full detail in the in-app
+**WIKI → Getting started → "No brokerage account? The HOLDINGS tab (CSV positions)"** entry.
 
 ---
 
