@@ -1,0 +1,82 @@
+name: Build & push images to ECR (manual, cloud-test path)
+
+# CLOUD-PORTABILITY-ROADMAP.md Phase 5 — deliberately manual/gated, not an auto-deploy pipeline.
+# This ONLY builds portfolio-api and pushes it to ECR under a tag you choose. `mcpo` has no local
+# Dockerfile at all (docker-compose.yml pins it to the public ghcr.io/open-webui/mcpo:main image
+# unchanged) so there's nothing of ours to build/push for it — the ECS task definition references
+# that same public image directly (see AWS-HOSTING-GUIDE.md). This workflow never touches ECS/
+# Fargate itself — updating the running service is a separate, explicit step, so a bad push here
+# can't silently roll out to a live test deployment.
+#
+# One-time setup this workflow depends on (see AWS-HOSTING-GUIDE.md "CI/CD" section):
+#   - An IAM OIDC identity provider for token.actions.githubusercontent.com in your AWS account
+#   - An IAM role ("github-actions-ecr-push") trusting that provider, scoped to ecr:* on just the
+#     repo below — its ARN goes in the AWS_ROLE_ARN repository variable (Settings -> Secrets
+#     and variables -> Actions -> Variables), not a secret, since a role ARN isn't sensitive itself
+#   - One ECR repository already created: fiduciary/portfolio-api
+#
+# Deliberately uses OIDC role assumption, not long-lived AWS access-key secrets in GitHub — nothing
+# to leak, nothing to rotate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag to push (e.g. test-2026-07-24). Defaults to the short commit SHA."
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # required for OIDC -> AWS role assumption
+  contents: read
+
+env:
+  AWS_REGION: us-east-1   # change if your test stack lives in a different region
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build + push portfolio-api
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker build -t "$REGISTRY/fiduciary/portfolio-api:$TAG" \
+                       -t "$REGISTRY/fiduciary/portfolio-api:latest" \
+                       ./portfolio-api
+          docker push "$REGISTRY/fiduciary/portfolio-api:$TAG"
+          docker push "$REGISTRY/fiduciary/portfolio-api:latest"
+
+      - name: Summary
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $REGISTRY/fiduciary/portfolio-api:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "mcpo is unchanged -- it still runs ghcr.io/open-webui/mcpo:main directly, no ECR push needed." >> "$GITHUB_STEP_SUMMARY"
+          echo "This did NOT update the running ECS service. See AWS-HOSTING-GUIDE.md's deploy step to roll it out." >> "$GITHUB_STEP_SUMMARY"

@@ -5934,7 +5934,21 @@ def get_cashdebt():
 # local JSON register; the balance-sheet side (net worth, liabilities, home, mortgage)
 # comes from the same _data() everything else uses. Read-only analysis, no products.
 INSURANCE_FILE = os.environ.get("INSURANCE_FILE", "/data/insurance.json")
-DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
+DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None,
+                     # income_sources_self/_spouse (2026-07-24, Jason: "implement multiple income
+                     # sources"): OPTIONAL itemized breakdown per earner -- {label, type
+                     # (w2/1099/self_employment/rental/pension/other), annual_amount, notes}.
+                     # income_self/income_spouse above stay the two scalars every downstream
+                     # calc (insurance.py's need-sizing, get_benefits()'s tax facts, the ACA/tax
+                     # MAGI figure, the setup checklist) already reads -- nothing else in the app
+                     # had to change. _read_insurance_cfg() below auto-derives the scalar as the
+                     # SUM of that person's sources list once it's non-empty (a household with two
+                     # side gigs and a W2 no longer has to mentally add them up and re-enter one
+                     # lump number every time something changes); an empty list leaves the scalar
+                     # exactly as manually entered, so a single-income-number household sees no
+                     # behavior change at all.
+                     "income_sources_self": [], "income_sources_spouse": [],
+                     "children": 0,
                      # no_income: explicit household confirmation of "$0, on purpose" (unemployed /
                      # retired / no earned income) -- 2026-07-23, Jason. Without this flag, a $0 entry
                      # in income_self/income_spouse is NOT counted as answered by the setup checklist
@@ -5995,6 +6009,8 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None, "children": 0,
                      # tripwire in _alerts_digest() (section 8) rather than a one-time report.
                      "estate_docs": [], "estate_doc_review_years": 3}
 _INS_POLICY_KEYS = ("kind", "owner", "name", "coverage", "premium_annual", "term_expires", "notes")
+_INCOME_SOURCE_KEYS = ("label", "type", "annual_amount", "notes")
+_INCOME_SOURCE_TYPES = ("w2", "1099", "self_employment", "rental", "pension", "other")
 _CONTACT_KEYS = ("role", "name", "phone", "email", "notes")
 _ESTATE_DOC_KEYS = ("doc_type", "last_reviewed", "notes")
 # Common estate-hygiene documents to track currency on (GAP-8). Not exhaustive — "notes" lets a
@@ -6002,12 +6018,40 @@ _ESTATE_DOC_KEYS = ("doc_type", "last_reviewed", "notes")
 ESTATE_DOC_TYPES = ("will", "durable_poa", "healthcare_directive", "trust", "beneficiary_review")
 
 
+def _income_sources_total(sources):
+    """Sum of annual_amount across a person's income_sources list -- None-safe, ignores any
+    row with a non-numeric amount rather than raising (a half-filled row shouldn't crash the
+    whole config read)."""
+    total = 0.0
+    any_row = False
+    for row in (sources or []):
+        try:
+            amt = row.get("annual_amount")
+            if amt in (None, ""):
+                continue
+            total += float(amt)
+            any_row = True
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return total if any_row else None
+
+
 def _read_insurance_cfg():
     try:
         cfg = store.read_json_strict(INSURANCE_FILE) or {}
     except Exception:
         cfg = {}
-    return {**DEFAULT_INSURANCE, **{k: cfg.get(k) for k in DEFAULT_INSURANCE if k in cfg}}
+    merged = {**DEFAULT_INSURANCE, **{k: cfg.get(k) for k in DEFAULT_INSURANCE if k in cfg}}
+    # Auto-derive income_self/income_spouse from the itemized sources list, once it's non-empty --
+    # the sources list becomes that person's source of truth; a still-empty list leaves whatever
+    # was manually entered in income_self/income_spouse completely untouched (backward compatible
+    # with every household that just enters one lump number and never uses the breakdown).
+    for scalar_key, sources_key in (("income_self", "income_sources_self"),
+                                     ("income_spouse", "income_sources_spouse")):
+        derived = _income_sources_total(merged.get(sources_key))
+        if derived is not None:
+            merged[scalar_key] = derived
+    return merged
 
 
 @app.get("/api/insurance-config")
@@ -6020,7 +6064,13 @@ async def post_insurance_config(req: Request):
     """Set household insurance facts (local config; not a money action).
     Body keys: income_self, income_spouse, children, home_value_override, and/or
     policies: FULL replacement list of {kind, owner, name, coverage, premium_annual,
-    term_expires, notes} (kind: life|disability|umbrella|home|auto|ltc)."""
+    term_expires, notes} (kind: life|disability|umbrella|home|auto|ltc).
+    income_sources_self / income_sources_spouse (2026-07-24): OPTIONAL FULL replacement lists of
+    {label, type, annual_amount, notes} (type: w2|1099|self_employment|rental|pension|other) --
+    itemized income breakdown per earner. Once either list is non-empty, _read_insurance_cfg()
+    auto-derives that person's income_self/income_spouse scalar as the sum of their sources on
+    every read, overriding whatever's separately saved under that scalar key -- a household that
+    doesn't use this stays on the plain single-number entry with zero behavior change."""
     body = await req.json()
     cfg = _read_insurance_cfg()
     for k in ("income_self", "income_spouse", "children", "home_value_override",
@@ -6096,6 +6146,23 @@ async def post_insurance_config(req: Request):
     if isinstance(body.get("policies"), list):
         cfg["policies"] = [{k: p.get(k) for k in _INS_POLICY_KEYS}
                            for p in body["policies"] if isinstance(p, dict) and p.get("kind")][:50]
+    for sk in ("income_sources_self", "income_sources_spouse"):
+        if isinstance(body.get(sk), list):
+            rows = []
+            for r in body[sk][:30]:
+                if not isinstance(r, dict) or not str(r.get("label") or "").strip():
+                    continue
+                try:
+                    amt = None if r.get("annual_amount") in (None, "") else max(0.0, float(r["annual_amount"]))
+                except (TypeError, ValueError):
+                    amt = None
+                rows.append({
+                    "label": str(r.get("label"))[:120],
+                    "type": r.get("type") if r.get("type") in _INCOME_SOURCE_TYPES else "other",
+                    "annual_amount": amt,
+                    "notes": (str(r.get("notes"))[:300] if r.get("notes") not in (None, "") else None),
+                })
+            cfg[sk] = rows
     store.write_json(INSURANCE_FILE, cfg)
     return {"ok": True, "config": cfg}
 
@@ -6147,6 +6214,8 @@ def get_insurance():
     res = insurance.run(household, cfg.get("policies"))
     res["household"] = household
     res["policies_echo"] = cfg.get("policies") or []
+    res["income_sources_self"] = cfg.get("income_sources_self") or []
+    res["income_sources_spouse"] = cfg.get("income_sources_spouse") or []
     res["state_of_residence_source"] = sinfo["source"]
     res["generated_at"] = int(time.time())
     if not cfg.get("income_self") and not cfg.get("income_spouse") and not cfg.get("no_income"):
@@ -10200,25 +10269,45 @@ def _chat_init():
         c.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)")
 
 
+def _chat_enc(v):
+    """Encrypts a chat.db text field before it hits SQLite -- message content/tool-call JSON and
+    session titles are arguably the single most sensitive table in the app (a verbatim transcript
+    of financial discussions). None passes through; session_id/role/persona/ts/created/updated
+    stay plain (sort/lookup keys, low sensitivity). 2026-07-24, "All sensitive information stored
+    needs to be encrypted"."""
+    if v is None:
+        return None
+    return secrets_crypto.encrypt(v)
+
+
+def _chat_dec(v):
+    """Decrypts a chat.db text field, with legacy-plaintext fallback for messages/titles written
+    before this module started encrypting (decrypt_or_legacy() returns non-token strings as-is).
+    Never raises."""
+    if v is None:
+        return None
+    return secrets_crypto.decrypt_or_legacy(v)
+
+
 def _chat_create_session(persona, title):
     sid = uuid.uuid4().hex[:16]
     now = int(time.time())
     with _chat_conn() as c:
         c.execute("INSERT INTO sessions(id, persona, title, created, updated) VALUES(?,?,?,?,?)",
-                  (sid, persona, title, now, now))
+                  (sid, persona, _chat_enc(title), now, now))
     return sid
 
 
 def _chat_add_message(sid, role, content, tool_json=None):
     with _chat_conn() as c:
         c.execute("INSERT INTO messages(session_id, role, content, tool_json, ts) VALUES(?,?,?,?,?)",
-                  (sid, role, content, tool_json, int(time.time())))
+                  (sid, role, _chat_enc(content), _chat_enc(tool_json), int(time.time())))
 
 
 def _chat_touch_session(sid, title=None):
     with _chat_conn() as c:
         if title:
-            c.execute("UPDATE sessions SET updated=?, title=? WHERE id=?", (int(time.time()), title, sid))
+            c.execute("UPDATE sessions SET updated=?, title=? WHERE id=?", (int(time.time()), _chat_enc(title), sid))
         else:
             c.execute("UPDATE sessions SET updated=? WHERE id=?", (int(time.time()), sid))
 
@@ -10227,14 +10316,21 @@ def _chat_sessions():
     with _chat_conn() as c:
         rows = c.execute("SELECT id, persona, title, created, updated FROM sessions "
                          "ORDER BY updated DESC LIMIT 200").fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    for d in out:
+        d["title"] = _chat_dec(d["title"])
+    return out
 
 
 def _chat_messages(sid):
     with _chat_conn() as c:
         rows = c.execute("SELECT role, content, tool_json, ts FROM messages WHERE session_id=? "
                          "ORDER BY id ASC", (sid,)).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    for d in out:
+        d["content"] = _chat_dec(d["content"])
+        d["tool_json"] = _chat_dec(d["tool_json"])
+    return out
 
 
 def _chat_delete_session(sid):

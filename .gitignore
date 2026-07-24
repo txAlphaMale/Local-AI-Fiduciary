@@ -64,9 +64,19 @@ chat.db
 # figures/account names. Untracked 2026-07-22 (were committed earlier by mistake). The whole docs/
 # folder is internal R&D EXCEPT DEPENDENCIES.md (a plain, non-personal dependency list linked from
 # INSTALL.md). See SHARING-CHECKLIST.md section 4.
+# 2026-07-24: the 2026-07-22 pass only untracked these AT THE TIP (git rm --cached) — none of them
+# were ever actually scrubbed from HISTORY despite section 4 saying so, and four more
+# internal-planning docs were added and committed in the days since (same mistake, again). ALL of
+# them — old and new — need a real git-filter-repo pass; see SHARING-CHECKLIST.md section 4 for
+# the command block.
 RESUME-TRACKER.md
 MEMORY-HANDOFF-FROM-LOCAL-AI.md
 MIGRATION.md
+AWS-DEPLOYMENT-PLAN.md
+AWS-HOSTING-GUIDE.md
+CLOUD-PORTABILITY-ROADMAP.md
+DISTRIBUTION-MONETIZATION-RESEARCH.md
+LOCAL-HOSTING-HARDENING-PLAN.md
 docs/*
 !docs/DEPENDENCIES.md
 

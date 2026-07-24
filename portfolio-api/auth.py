@@ -265,6 +265,28 @@ def invalidate_recovery_key(uid):
 # ---------------------------------------------------------------------------
 # TOTP MFA — provision (generate, not yet active) -> verify (activates + issues backup codes)
 # ---------------------------------------------------------------------------
+def _enc_totp(secret):
+    """Encrypts the TOTP secret before it lands in SQLite -- the one field in this whole auth
+    system that must stay REVERSIBLE (unlike password_hash/backup_codes_json/recovery_key_hash,
+    which are correctly one-way hashed) since verifying a code means recomputing it from the raw
+    secret. Reuses the app's single shared Fernet key (secrets_crypto.py) rather than a second
+    key; lazy import to avoid import-order issues (2026-07-24, "All sensitive information stored
+    needs to be encrypted")."""
+    from secrets_crypto import encrypt
+    return encrypt(secret)
+
+
+def _dec_totp(secret):
+    """Decrypts a stored TOTP secret, with legacy-plaintext fallback for accounts enrolled before
+    this module started encrypting (a base32 TOTP secret never parses as a valid Fernet token, so
+    decrypt_or_legacy() correctly falls through to returning it as-is). Re-provisioning
+    (mfa_provision) transparently upgrades a legacy row to encrypted on next write."""
+    if not secret:
+        return secret
+    from secrets_crypto import decrypt_or_legacy
+    return decrypt_or_legacy(secret)
+
+
 def mfa_provision(uid):
     """Generates a NEW TOTP secret and stores it un-enabled (a half-finished setup never
     grants MFA-bypass — mfa_check_code() only trusts totp_enabled=1 rows). Returns
@@ -275,7 +297,7 @@ def mfa_provision(uid):
     secret = pyotp.random_base32()
     with _conn() as c:
         c.execute("UPDATE users SET totp_secret=?, totp_enabled=0, backup_codes_json=NULL, updated=? WHERE id=?",
-                  (secret, int(time.time()), uid))
+                  (_enc_totp(secret), int(time.time()), uid))
     uri = pyotp.totp.TOTP(secret).provisioning_uri(name=user["username"], issuer_name=MFA_ISSUER)
     img = qrcode.make(uri)
     buf = io.BytesIO()
@@ -292,7 +314,7 @@ def mfa_verify_and_enable(uid, code):
     user = get_user_by_id(uid)
     if not user or not user.get("totp_secret"):
         return False, None
-    totp = pyotp.TOTP(user["totp_secret"])
+    totp = pyotp.TOTP(_dec_totp(user["totp_secret"]))
     if not totp.verify(str(code or "").strip(), valid_window=1):
         return False, None
     codes = [uuid.uuid4().hex[:10] for _ in range(10)]
@@ -312,7 +334,7 @@ def mfa_check_code(uid, code):
     code = str(code or "").strip()
     if not code:
         return False
-    if user.get("totp_secret") and pyotp.TOTP(user["totp_secret"]).verify(code, valid_window=1):
+    if user.get("totp_secret") and pyotp.TOTP(_dec_totp(user["totp_secret"])).verify(code, valid_window=1):
         return True
     try:
         hashed = json.loads(user.get("backup_codes_json") or "[]")

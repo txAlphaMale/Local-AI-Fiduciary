@@ -33,6 +33,70 @@ _lock = threading.Lock()   # SQLite handles its own file locking, but this keeps
 
 
 # ============================================================================
+# Encryption at rest (2026-07-24, "All sensitive information stored needs to be encrypted") --
+# every sensitive value this module persists routes through _enc()/_dec()/_dec_float() below,
+# which lazily import secrets_crypto.py's shared Fernet primitives. LAZY import (inside the
+# function body, not at module top) is deliberate, not an oversight: secrets_crypto.py itself
+# imports `store` (for atomic_write_bytes, to persist its key file) -- a top-level `import
+# secrets_crypto` here would create a circular import that breaks depending on which module
+# happens to be imported first. Deferring the import until these functions actually RUN (well
+# after both modules have finished loading at app startup) sidesteps that entirely.
+# ============================================================================
+def _enc(v):
+    """Encrypts a value for storage. None passes through (nothing to encrypt); everything else
+    is stringified first since Fernet only operates on str/bytes -- needed for the typed numeric
+    columns (value_history etc.) as well as the already-string JSON blob columns."""
+    if v is None:
+        return None
+    from secrets_crypto import encrypt
+    return encrypt(str(v))
+
+
+def _dec(v):
+    """Decrypts a value that might be a Fernet token (rows written after this module started
+    encrypting) or already-plain data (legacy rows from before -- a raw number in a typed SQL
+    column, or a plain JSON string in the generic blob table). Never raises; a non-string input
+    (already a number, already None) is returned unchanged since there's nothing to decrypt."""
+    if v is None or not isinstance(v, str):
+        return v
+    from secrets_crypto import decrypt_or_legacy
+    return decrypt_or_legacy(v)
+
+
+def _dec_float(v):
+    """_dec() plus a float cast for the numeric columns -- handles both a decrypted ciphertext
+    (comes back as a string, e.g. "887426.35") and an untouched legacy float (already numeric,
+    float() on it is a no-op)."""
+    d = _dec(v)
+    if d is None:
+        return None
+    try:
+        return float(d)
+    except (TypeError, ValueError):
+        return d
+
+
+def _enc_bytes(v):
+    """Binary-safe counterpart to _enc() -- for knowledge_docs.content, which is arbitrary raw
+    file bytes (PDF/DOCX/etc), not text. Encrypting it via _enc()'s str()-then-encode path would
+    mangle non-UTF8 bytes, so this routes through secrets_crypto's bytes-native encrypt_bytes()
+    instead."""
+    if v is None:
+        return None
+    from secrets_crypto import encrypt_bytes
+    return encrypt_bytes(v)
+
+
+def _dec_bytes(v):
+    """_dec()'s binary counterpart -- decrypts knowledge_docs.content, falling back to the raw
+    bytes as-is if they're legacy (pre-encryption) plaintext. Never raises."""
+    if v is None:
+        return None
+    from secrets_crypto import decrypt_bytes_or_legacy
+    return decrypt_bytes_or_legacy(v)
+
+
+# ============================================================================
 # Atomic flat-file writes (CLOUD-PORTABILITY-ROADMAP.md Phase 2, 2026-07-24) -- for the handful
 # of files that are STILL plain files by design rather than SQLite rows (the session-secret
 # bootstrap, the per-ticker price-history cache, TLS pending-CSR scratch files): write to a
@@ -190,10 +254,11 @@ def ensure_value_history_migrated(legacy_path):
         row = c.execute("SELECT value FROM app_state WHERE key=?", (_key_for(legacy_path),)).fetchone()
         if not row:
             return
-        for d in (json.loads(row["value"]) or []):
+        for d in (json.loads(_dec(row["value"])) or []):   # 2026-07-24: decrypt the legacy blob first
             c.execute("""INSERT OR REPLACE INTO value_history(date,net_worth,invested_value,spy,funded_ratio)
                          VALUES(?,?,?,?,?)""",
-                      (d.get("date"), d.get("net_worth"), d.get("invested_value"), d.get("spy"), d.get("funded_ratio")))
+                      (d.get("date"), _enc(d.get("net_worth")), _enc(d.get("invested_value")),
+                       _enc(d.get("spy")), _enc(d.get("funded_ratio"))))
 
 
 def ensure_strategist_runs_migrated(legacy_path):
@@ -204,7 +269,7 @@ def ensure_strategist_runs_migrated(legacy_path):
         row = c.execute("SELECT value FROM app_state WHERE key=?", (_key_for(legacy_path),)).fetchone()
         if not row:
             return
-        for line in (json.loads(row["value"]) or []):
+        for line in (json.loads(_dec(row["value"])) or []):   # 2026-07-24: decrypt the legacy blob first
             if not line or not line.strip():
                 continue
             try:
@@ -215,11 +280,11 @@ def ensure_strategist_runs_migrated(legacy_path):
                             iterations,tool_calls_json,repeat_calls,trades,search_calls,search_budget,
                             nudged,converged,ended,error,duration_s)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      (rec.get("ts"), rec.get("scenario_id"), rec.get("scenario_name"), rec.get("risk_profile"),
-                       rec.get("max_iter"), rec.get("iterations"), json.dumps(rec.get("tool_calls") or {}),
+                      (rec.get("ts"), rec.get("scenario_id"), _enc(rec.get("scenario_name")), rec.get("risk_profile"),
+                       rec.get("max_iter"), rec.get("iterations"), _enc(json.dumps(rec.get("tool_calls") or {})),
                        rec.get("repeat_calls"), rec.get("trades"), rec.get("search_calls"), rec.get("search_budget"),
                        int(bool(rec.get("nudged"))), int(bool(rec.get("converged"))), rec.get("ended"),
-                       rec.get("error"), rec.get("duration_s")))
+                       _enc(rec.get("error")), rec.get("duration_s")))
 
 
 def ensure_paper_migrated(legacy_path):
@@ -239,7 +304,7 @@ def ensure_paper_migrated(legacy_path):
         row = c.execute("SELECT value FROM app_state WHERE key=?", (_key_for(legacy_path),)).fetchone()
         if not row:
             return
-        reg = json.loads(row["value"]) or {}
+        reg = json.loads(_dec(row["value"])) or {}   # 2026-07-24: decrypt the legacy blob first
         scenarios = reg.get("scenarios")
         if not isinstance(scenarios, dict) or not scenarios:
             scenarios = {"default": reg} if (reg.get("transactions") or reg.get("reports")) else {}
@@ -247,15 +312,20 @@ def ensure_paper_migrated(legacy_path):
             for tx in (scen.get("transactions") or []):
                 c.execute("""INSERT INTO paper_transactions(scenario_id,ts,action,ticker,shares,price,value,recurring)
                              VALUES(?,?,?,?,?,?,?,?)""",
-                          (sid, tx.get("ts"), tx.get("action"), tx.get("ticker"), tx.get("shares"),
-                           tx.get("price"), tx.get("value"), int(bool(tx.get("recurring")))))
+                          (sid, tx.get("ts"), tx.get("action"), _enc(tx.get("ticker")), _enc(tx.get("shares")),
+                           _enc(tx.get("price")), _enc(tx.get("value")), int(bool(tx.get("recurring")))))
             for rep in (scen.get("reports") or []):
                 c.execute("""INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary)
                              VALUES(?,?,?,?,?)""",
-                          (sid, rep.get("ts"), rep.get("total_value"), rep.get("return_pct"), rep.get("summary")))
+                          (sid, rep.get("ts"), _enc(rep.get("total_value")), _enc(rep.get("return_pct")),
+                           _enc(rep.get("summary"))))
 
 
 # ---- value_history: typed read/write API (replaces raw read_json_strict/write_json call sites) ----
+# 2026-07-24: net_worth/invested_value/spy/funded_ratio are ENCRYPTED (this is a real net-worth
+# time series -- one of the more sensitive tables in the app). `date` stays plaintext -- it's the
+# primary key and used in every WHERE/ORDER BY, and a bare date with no dollar figure attached
+# isn't independently sensitive.
 def value_history_read_all():
     """Ascending by date -- same shape (list of dicts: date/net_worth/invested_value/spy/
     funded_ratio) every existing consumer (_risk_metrics, _vol_regime_signal, performance.py,
@@ -263,7 +333,12 @@ def value_history_read_all():
     with _conn() as c:
         rows = c.execute("SELECT date, net_worth, invested_value, spy, funded_ratio "
                          "FROM value_history ORDER BY date ASC").fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        out.append({"date": r["date"], "net_worth": _dec_float(r["net_worth"]),
+                    "invested_value": _dec_float(r["invested_value"]), "spy": _dec_float(r["spy"]),
+                    "funded_ratio": _dec_float(r["funded_ratio"])})
+    return out
 
 
 def value_history_today_spy(date):
@@ -272,7 +347,7 @@ def value_history_today_spy(date):
     without needing to load the whole history just to look at one row)."""
     with _conn() as c:
         row = c.execute("SELECT spy FROM value_history WHERE date=?", (date,)).fetchone()
-    return row["spy"] if row else None
+    return _dec_float(row["spy"]) if row else None
 
 
 def value_history_upsert_today(date, net_worth, invested_value, spy):
@@ -282,7 +357,7 @@ def value_history_upsert_today(date, net_worth, invested_value, spy):
         c.execute("""INSERT INTO value_history(date, net_worth, invested_value, spy) VALUES(?,?,?,?)
                      ON CONFLICT(date) DO UPDATE SET net_worth=excluded.net_worth,
                         invested_value=excluded.invested_value, spy=excluded.spy""",
-                  (date, net_worth, invested_value, spy))
+                  (date, _enc(net_worth), _enc(invested_value), _enc(spy)))
 
 
 def value_history_set_funded_ratio(date, funded_ratio):
@@ -290,10 +365,15 @@ def value_history_set_funded_ratio(date, funded_ratio):
     exists" guard (a funded-ratio snapshot with no matching value-snapshot row silently no-ops,
     same as before)."""
     with _conn() as c:
-        c.execute("UPDATE value_history SET funded_ratio=? WHERE date=?", (funded_ratio, date))
+        c.execute("UPDATE value_history SET funded_ratio=? WHERE date=?", (_enc(funded_ratio), date))
 
 
 # ---- strategist_runs: typed read/write API ----
+# 2026-07-24: scenario_name/tool_calls_json/error are ENCRYPTED (free-text/detail fields that can
+# carry real financial specifics via whatever the Strategist actually looked at or said). The
+# small enum/numeric telemetry columns (risk_profile, max_iter, iterations, counts, nudged/
+# converged flags, duration_s) stay plaintext -- low individual sensitivity, and ts/scenario_id
+# need to stay queryable/orderable.
 def strategist_run_log(rec):
     """Appends one telemetry record. No cap in storage (Stage B removes the old
     STRAT_RUN_LOG_MAX-based trim entirely) -- `limit` at read time is now a pure display/API
@@ -303,11 +383,11 @@ def strategist_run_log(rec):
                         iterations,tool_calls_json,repeat_calls,trades,search_calls,search_budget,
                         nudged,converged,ended,error,duration_s)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (rec.get("ts"), rec.get("scenario_id"), rec.get("scenario_name"), rec.get("risk_profile"),
-                   rec.get("max_iter"), rec.get("iterations"), json.dumps(rec.get("tool_calls") or {}),
+                  (rec.get("ts"), rec.get("scenario_id"), _enc(rec.get("scenario_name")), rec.get("risk_profile"),
+                   rec.get("max_iter"), rec.get("iterations"), _enc(json.dumps(rec.get("tool_calls") or {})),
                    rec.get("repeat_calls"), rec.get("trades"), rec.get("search_calls"), rec.get("search_budget"),
                    int(bool(rec.get("nudged"))), int(bool(rec.get("converged"))), rec.get("ended"),
-                   rec.get("error"), rec.get("duration_s")))
+                   _enc(rec.get("error")), rec.get("duration_s")))
 
 
 def strategist_runs_read(limit=None):
@@ -321,23 +401,30 @@ def strategist_runs_read(limit=None):
     with _conn() as c:
         rows = [dict(r) for r in c.execute(q, args).fetchall()]
     for r in rows:
-        r["tool_calls"] = json.loads(r.pop("tool_calls_json") or "{}")
+        r["scenario_name"] = _dec(r.get("scenario_name"))
+        r["error"] = _dec(r.get("error"))
+        r["tool_calls"] = json.loads(_dec(r.pop("tool_calls_json")) or "{}")
         r["nudged"] = bool(r["nudged"])
         r["converged"] = bool(r["converged"])
     return rows
 
 
 # ---- paper_transactions / paper_reports: typed read/write API, scoped by scenario_id ----
+# 2026-07-24: ticker/shares/price/value are ENCRYPTED -- even though this is a hypothetical paper
+# ledger (no real money moves), the actual dollar amounts and reasoning reflected in trade
+# specifics are still real financial detail worth protecting. action/recurring/ts/scenario_id
+# stay plaintext (query/order columns, low individual sensitivity).
 def paper_tx_append(scenario_id, ts, action, ticker, shares, price, value, recurring=False):
     with _conn() as c:
         c.execute("""INSERT INTO paper_transactions(scenario_id,ts,action,ticker,shares,price,value,recurring)
                      VALUES(?,?,?,?,?,?,?,?)""",
-                  (scenario_id, ts, action, ticker, shares, price, value, int(bool(recurring))))
+                  (scenario_id, ts, action, _enc(ticker), _enc(shares), _enc(price), _enc(value),
+                   int(bool(recurring))))
 
 
 def _paper_tx_row(r):
-    d = {"ts": r["ts"], "action": r["action"], "ticker": r["ticker"], "shares": r["shares"],
-         "price": r["price"], "value": r["value"]}
+    d = {"ts": r["ts"], "action": r["action"], "ticker": _dec(r["ticker"]), "shares": _dec_float(r["shares"]),
+         "price": _dec_float(r["price"]), "value": _dec_float(r["value"])}
     if r["recurring"]:
         d["recurring"] = True   # OPTIONAL key, only present when true -- matches the original JSON shape exactly
     return d
@@ -361,24 +448,29 @@ def paper_tx_recent(scenario_id, limit=40):
     return [_paper_tx_row(r) for r in rows][::-1]
 
 
+# 2026-07-24: total_value/return_pct/summary are ENCRYPTED (real dollar figures + LLM-written
+# commentary that can reference actual holdings/reasoning).
 def paper_report_append(scenario_id, ts, total_value, return_pct, summary):
     with _conn() as c:
         c.execute("INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary) VALUES(?,?,?,?,?)",
-                  (scenario_id, ts, total_value, return_pct, summary))
+                  (scenario_id, ts, _enc(total_value), _enc(return_pct), _enc(summary)))
 
 
 def paper_reports_all(scenario_id):
     with _conn() as c:
         rows = c.execute("SELECT ts,total_value,return_pct,summary FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts ASC, id ASC", (scenario_id,)).fetchall()
-    return [dict(r) for r in rows]
+    return [{"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
+            "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"])} for r in rows]
 
 
 def paper_reports_recent(scenario_id, limit=12):
     with _conn() as c:
         rows = c.execute("SELECT ts,total_value,return_pct,summary FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts DESC, id DESC LIMIT ?", (scenario_id, limit)).fetchall()
-    return [dict(r) for r in rows][::-1]
+    out = [{"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
+           "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"])} for r in rows]
+    return out[::-1]
 
 
 def paper_reports_count(scenario_id):
@@ -413,15 +505,19 @@ def read_json_strict(path):
     fallback is never needed again for that key), and raises FileNotFoundError — exactly what
     `open(path)` itself would do — if there's genuinely nothing in either place. Never partially
     succeeds: either you get valid parsed JSON, or an exception, same as the `open()` + `json.load()`
-    pair it replaces."""
+    pair it replaces.
+
+    2026-07-24: the stored value is decrypted here (transparently, with a legacy-plaintext
+    fallback via _dec() -- every one of the ~44 files behind this function, incl. real financial
+    data like retirement.json/insurance.json/accounts.json, was plaintext in the DB before this)."""
     key = _key_for(path)
     with _conn() as c:
         row = c.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
     if row is not None:
-        return json.loads(row["value"])
+        return json.loads(_dec(row["value"]))
     with open(path, encoding="utf-8") as f:   # legacy fallback -- first read after migrating TO this store
         data = json.load(f)
-    write_json(path, data)   # persist into the store so next time skips straight to the row above
+    write_json(path, data)   # persist into the store (encrypted) so next time skips straight to the row above
     return data
 
 
@@ -439,9 +535,16 @@ def read_json(path, default=None):
 def write_json(path, data):
     """Writes `data` (anything json-serializable) under `path`'s key. This is now the ONLY
     place that persists it — the legacy file at `path` is deliberately left untouched (not
-    updated, not deleted), so it stays as a frozen snapshot of whatever it last held."""
+    updated, not deleted), so it stays as a frozen snapshot of whatever it last held.
+
+    2026-07-24: encrypted at rest (_enc()) -- the whole serialized blob, not per-field, mirroring
+    exactly how app.py's SECRET_SPECS values already worked before this was generalized to every
+    other file behind this function. (SECRETS_FILE specifically ends up double-encrypted -- each
+    value individually by secrets_crypto in app.py, then this whole outer blob again here --
+    which is harmless, just slightly redundant for that one file, in exchange for not needing a
+    special case to skip it.)"""
     key = _key_for(path)
-    value = json.dumps(data, ensure_ascii=False)
+    value = _enc(json.dumps(data, ensure_ascii=False))
     now = int(time.time())
     with _conn() as c:
         c.execute("""INSERT INTO app_state(key, value, updated_at) VALUES(?,?,?)
@@ -458,7 +561,7 @@ def read_lines_strict(path):
     with _conn() as c:
         row = c.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
     if row is not None:
-        return json.loads(row["value"])
+        return json.loads(_dec(row["value"]))
     with open(path, encoding="utf-8") as f:
         lines = f.read().splitlines()
     write_lines(path, lines)
@@ -467,7 +570,7 @@ def read_lines_strict(path):
 
 def write_lines(path, lines):
     key = _key_for(path)
-    value = json.dumps(list(lines), ensure_ascii=False)
+    value = _enc(json.dumps(list(lines), ensure_ascii=False))
     now = int(time.time())
     with _conn() as c:
         c.execute("""INSERT INTO app_state(key, value, updated_at) VALUES(?,?,?)
@@ -507,7 +610,11 @@ def knowledge_doc_get(h):
     with _conn() as c:
         row = c.execute("SELECT hash, filename, size, imported_at FROM knowledge_docs WHERE hash=?",
                         (h,)).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    d = dict(row)
+    d["filename"] = _dec(d["filename"])
+    return d
 
 
 def knowledge_doc_get_content(h):
@@ -515,7 +622,7 @@ def knowledge_doc_get_content(h):
     to still exist on disk (e.g. after a model change forces a re-embed)."""
     with _conn() as c:
         row = c.execute("SELECT content FROM knowledge_docs WHERE hash=?", (h,)).fetchone()
-    return row["content"] if row else None
+    return _dec_bytes(row["content"]) if row else None
 
 
 def knowledge_doc_upsert(h, filename, size, imported_at, content):
@@ -523,15 +630,20 @@ def knowledge_doc_upsert(h, filename, size, imported_at, content):
         c.execute("""INSERT INTO knowledge_docs(hash, filename, size, imported_at, content)
                      VALUES(?,?,?,?,?)
                      ON CONFLICT(hash) DO UPDATE SET filename=excluded.filename""",
-                  (h, filename, size, imported_at, content))
+                  (h, _enc(filename), size, imported_at, _enc_bytes(content)))
 
 
 def knowledge_docs_all():
-    """Metadata only (no content blob) — for the status/UI listing."""
+    """Metadata only (no content blob) — for the status/UI listing. filename is encrypted at
+    rest, so this can't ORDER BY filename in SQL anymore (ciphertext sort order is meaningless) --
+    sorted in Python after decrypting instead."""
     with _conn() as c:
-        rows = c.execute("SELECT hash, filename, size, imported_at FROM knowledge_docs "
-                         "ORDER BY filename").fetchall()
-    return [dict(r) for r in rows]
+        rows = c.execute("SELECT hash, filename, size, imported_at FROM knowledge_docs").fetchall()
+    out = [dict(r) for r in rows]
+    for d in out:
+        d["filename"] = _dec(d["filename"])
+    out.sort(key=lambda d: (d["filename"] or ""))
+    return out
 
 
 def knowledge_doc_delete(h, filename=None):
@@ -541,7 +653,7 @@ def knowledge_doc_delete(h, filename=None):
     meant to retire permanently, safety net if the wrong doc was deleted by mistake)."""
     with _conn() as c:
         row = c.execute("SELECT filename FROM knowledge_docs WHERE hash=?", (h,)).fetchone()
-        fn = filename or (row["filename"] if row else None)
+        fn = filename or (_dec(row["filename"]) if row else None)
         c.execute("DELETE FROM knowledge_chunks WHERE doc_hash=?", (h,))
         c.execute("DELETE FROM knowledge_docs WHERE hash=?", (h,))
         # Deliberately NOT deleting from knowledge_paths here: a path's (mtime, size) signature
@@ -554,7 +666,7 @@ def knowledge_doc_delete(h, filename=None):
         c.execute("""INSERT INTO knowledge_removed(hash, filename, removed_at) VALUES(?,?,?)
                      ON CONFLICT(hash) DO UPDATE SET filename=excluded.filename,
                         removed_at=excluded.removed_at""",
-                  (h, fn, int(time.time())))
+                  (h, _enc(fn), int(time.time())))
     return fn
 
 
@@ -562,7 +674,11 @@ def knowledge_removed_get(h):
     with _conn() as c:
         row = c.execute("SELECT hash, filename, removed_at FROM knowledge_removed WHERE hash=?",
                         (h,)).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    d = dict(row)
+    d["filename"] = _dec(d["filename"])
+    return d
 
 
 def knowledge_removed_clear(h):
@@ -574,12 +690,16 @@ def knowledge_removed_clear(h):
 
 def knowledge_chunks_replace(doc_hash, model, chunks):
     """`chunks`: iterable of (chunk_index, text, vec_list). Replaces ALL chunks for this hash —
-    used both for a fresh import and for a forced re-embed (e.g. EMBED_MODEL changed)."""
+    used both for a fresh import and for a forced re-embed (e.g. EMBED_MODEL changed). Both
+    `text` (the actual document content, chunked) and `vec` (the embedding vector -- corpus is
+    small enough that per-chunk decrypt during search is cheap, see secrets_crypto.py) are
+    encrypted; doc_hash/chunk_index/model stay plain (lookup/join keys, low sensitivity)."""
     with _conn() as c:
         c.execute("DELETE FROM knowledge_chunks WHERE doc_hash=?", (doc_hash,))
         c.executemany("INSERT INTO knowledge_chunks(doc_hash, chunk_index, text, vec, model) "
                       "VALUES(?,?,?,?,?)",
-                      [(doc_hash, ci, txt, json.dumps(vec), model) for (ci, txt, vec) in chunks])
+                      [(doc_hash, ci, _enc(txt), _enc(json.dumps(vec)), model)
+                       for (ci, txt, vec) in chunks])
 
 
 def knowledge_chunk_count(doc_hash):
@@ -598,8 +718,8 @@ def knowledge_chunks_all():
                                     kd.filename
                              FROM knowledge_chunks kc
                              JOIN knowledge_docs kd ON kd.hash = kc.doc_hash""").fetchall()
-    return [{"hash": r["doc_hash"], "chunk_index": r["chunk_index"], "text": r["text"],
-             "vec": json.loads(r["vec"]), "model": r["model"], "file": r["filename"]}
+    return [{"hash": r["doc_hash"], "chunk_index": r["chunk_index"], "text": _dec(r["text"]),
+             "vec": json.loads(_dec(r["vec"])), "model": r["model"], "file": _dec(r["filename"])}
             for r in rows]
 
 
