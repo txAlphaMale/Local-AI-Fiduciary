@@ -8255,8 +8255,19 @@ def _apply_recurring(p):
 # reader, a plain `/api/paper` hit with no scenario_id) keeps working unchanged against
 # `_default_scenario_id()` -- the first active scenario by creation order -- so this is additive,
 # not a breaking change for anything that predates it.
+#
+# 2026-07-23b (Jason, same day): every scenario now carries a "kind" -- "ai" (Strategist-managed,
+# weekly autonomous ReAct pass, up to MAX_ACTIVE_SCENARIOS active) or "user" (a SEPARATE ledger the
+# user trades BY HAND via manual buy/sell -- the Strategist never touches it, capped at
+# MAX_USER_SCENARIOS since Jason wants exactly one). AI scenarios also carry a "risk_profile"
+# (conservative/moderate/aggressive) so two AI scenarios have a PRACTICAL reason to coexist --
+# they're given different mandates, not just duplicate runs of the same strategy (see
+# _RISK_PROFILE_GUIDANCE / STRATEGIST_PROMPT). Legacy/pre-existing scenarios migrate as
+# kind="ai", risk_profile="moderate" -- identical behavior to before this field existed.
 # ---------------------------------------------------------------------------
 MAX_ACTIVE_SCENARIOS = int(os.environ.get("PAPER_MAX_ACTIVE_SCENARIOS", "2"))
+MAX_USER_SCENARIOS = int(os.environ.get("PAPER_MAX_USER_SCENARIOS", "1"))
+RISK_PROFILES = ("conservative", "moderate", "aggressive")
 
 
 def _new_scenario_id():
@@ -8315,6 +8326,7 @@ def _read_registry():
     # Migrate a legacy flat ledger (or start fresh on a brand-new install) into one scenario.
     legacy = raw if isinstance(raw, dict) else {}
     scenario = {"id": "default", "name": "Default", "status": "active",
+                "kind": legacy.get("kind", "ai"), "risk_profile": legacy.get("risk_profile", "moderate"),
                 "starting_cash": legacy.get("starting_cash", DEFAULT_PAPER_CASH),
                 "cash": legacy.get("cash", DEFAULT_PAPER_CASH),
                 "contributed": legacy.get("contributed", 0.0),
@@ -8334,18 +8346,28 @@ def _write_registry(reg):
         json.dump(reg, f, ensure_ascii=False, indent=2)
 
 
-def _active_scenarios(reg):
-    return sorted((s for s in (reg.get("scenarios") or {}).values() if s.get("status") == "active"),
+def _active_scenarios(reg, kind=None):
+    """Active scenarios, oldest first. `kind` filters to 'ai' or 'user'; None (default) returns
+    both kinds together, which only the scenario-switcher listing needs -- every cap check and
+    the Strategist loop always pass an explicit kind so the two pools never bleed into each other."""
+    return sorted((s for s in (reg.get("scenarios") or {}).values()
+                   if s.get("status") == "active" and (kind is None or s.get("kind", "ai") == kind)),
                   key=lambda s: s.get("created") or 0)
 
 
-def _default_scenario_id(reg=None):
-    """Which scenario an implicit (no scenario_id given) call operates on: the oldest ACTIVE one,
-    or failing that, the oldest scenario period. Keeps every pre-existing call site working."""
+def _default_scenario_id(reg=None, kind="ai"):
+    """Which scenario an implicit (no scenario_id given) call operates on: the oldest ACTIVE
+    scenario of `kind` (default 'ai' -- every pre-existing call site predates the user-ledger
+    concept and means the AI-managed book), or failing that, the oldest scenario of that kind
+    period, or failing THAT, the oldest scenario of any kind (defensive only)."""
     reg = reg or _read_registry()
-    active = _active_scenarios(reg)
+    active = _active_scenarios(reg, kind=kind)
     if active:
         return active[0]["id"]
+    same_kind = sorted((s for s in (reg.get("scenarios") or {}).values() if s.get("kind", "ai") == kind),
+                       key=lambda s: s.get("created") or 0)
+    if same_kind:
+        return same_kind[0]["id"]
     any_ = sorted((reg.get("scenarios") or {}).values(), key=lambda s: s.get("created") or 0)
     return any_[0]["id"] if any_ else "default"
 
@@ -8400,6 +8422,7 @@ def _paper_marked(p):
     seed_basis = round(p.get("seed_basis") or 0.0, 2)    # cost of positions the book was seeded with
     basis = start + contributed + seed_basis             # capital actually put in (cash + deposits + seeded cost)
     return {"id": p.get("id"), "name": p.get("name"), "status": p.get("status"),
+            "kind": p.get("kind", "ai"), "risk_profile": p.get("risk_profile"),
             "starting_cash": start, "contributed": contributed, "seed_basis": seed_basis,
             "seeded_from": p.get("seeded_from"), "invested_capital": round(basis, 2),
             "cash": cash, "holdings_value": round(holdings_val, 2),
@@ -8421,37 +8444,53 @@ def get_paper(scenario_id: str = None):
 
 @app.get("/api/paper/scenarios")
 def get_paper_scenarios():
-    """List every scenario (active + archived) with a lightweight marked summary each, for the
-    scenario switcher UI."""
+    """List every scenario (active + archived, both kinds) with a lightweight marked summary
+    each, for the scenario switcher + YOUR LEDGER panel UI."""
     reg = _read_registry()
     scens = sorted((reg.get("scenarios") or {}).values(), key=lambda s: s.get("created") or 0)
     out = []
     for s in scens:
         m = _paper_marked(s)
-        out.append({"id": m["id"], "name": m["name"], "status": m["status"],
+        out.append({"id": m["id"], "name": m["name"], "status": m["status"], "kind": m["kind"],
+                    "risk_profile": m["risk_profile"],
                     "total_value": m["total_value"], "return_pct": m["return_pct"],
                     "invested_capital": m["invested_capital"], "created": m["created"],
                     "seeded_from": m["seeded_from"], "position_count": len(m["positions"])})
-    default_id = _default_scenario_id(reg)
+    default_id = _default_scenario_id(reg, kind="ai")
     return {"scenarios": out, "default_scenario_id": default_id,
-            "max_active": MAX_ACTIVE_SCENARIOS, "active_count": len(_active_scenarios(reg)),
-            "note": f"Up to {MAX_ACTIVE_SCENARIOS} scenarios can be active (Strategist-managed) at "
-                    "once — each active scenario gets its own weekly LLM review, so the cap bounds "
-                    "GPU load. Archive one to free a slot without losing its history; archived "
-                    "scenarios are frozen (no more trades/reviews) but stay viewable for comparison."}
+            "max_active": MAX_ACTIVE_SCENARIOS, "active_count": len(_active_scenarios(reg, kind="ai")),
+            "max_user_ledgers": MAX_USER_SCENARIOS,
+            "user_ledger_count": len(_active_scenarios(reg, kind="user")),
+            "risk_profiles": list(RISK_PROFILES),
+            "note": f"Up to {MAX_ACTIVE_SCENARIOS} AI scenarios can be active (Strategist-managed) "
+                    "at once — each active scenario gets its own weekly LLM review, so the cap "
+                    "bounds GPU load. Archive one to free a slot without losing its history; "
+                    f"archived scenarios are frozen (no more trades/reviews) but stay viewable for "
+                    f"comparison. Separately, up to {MAX_USER_SCENARIOS} ledger(s) can be YOURS to "
+                    "trade by hand — the Strategist never touches those."}
 
 
 @app.post("/api/paper/scenarios")
 async def post_paper_scenario(req: Request):
     """Create a new scenario. Body: {name, cash (from-scratch starting cash, ignored if seed given),
-    seed: {tickers: [...]|'all', cash, basis: 'current'|'real'} | omitted for from-scratch}.
-    Enforces MAX_ACTIVE_SCENARIOS — a new scenario always starts active."""
+    seed: {tickers: [...]|'all', cash, basis: 'current'|'real'} | omitted for from-scratch,
+    kind: 'ai'|'user' (default 'ai'), risk_profile: 'conservative'|'moderate'|'aggressive'
+    (kind='ai' only, default 'moderate')}. Enforces the cap for whichever kind is being created —
+    MAX_ACTIVE_SCENARIOS for 'ai', MAX_USER_SCENARIOS for 'user' — separately from each other, so
+    creating your one manual ledger never competes with the AI scenario slots or vice versa."""
     body = await req.json()
+    kind = str(body.get("kind") or "ai").lower()
+    if kind not in ("ai", "user"):
+        kind = "ai"
     reg = _read_registry()
-    if len(_active_scenarios(reg)) >= MAX_ACTIVE_SCENARIOS:
-        return JSONResponse({"error": f"scenario cap reached ({MAX_ACTIVE_SCENARIOS} active max) — "
-                                       "archive or delete an existing scenario first"}, status_code=400)
-    name = str(body.get("name") or "").strip()[:80] or f"Scenario {len(reg.get('scenarios') or {}) + 1}"
+    cap = MAX_ACTIVE_SCENARIOS if kind == "ai" else MAX_USER_SCENARIOS
+    label = "AI scenario" if kind == "ai" else "your ledger"
+    if len(_active_scenarios(reg, kind=kind)) >= cap:
+        return JSONResponse({"error": f"{label} cap reached ({cap} active max) — "
+                                       f"archive or delete an existing {'scenario' if kind=='ai' else 'ledger'} first"},
+                            status_code=400)
+    name = str(body.get("name") or "").strip()[:80] or (f"Scenario {len(reg.get('scenarios') or {}) + 1}"
+                                                          if kind == "ai" else "My Ledger")
     seed = body.get("seed")
     seed_meta = None
     if isinstance(seed, dict):
@@ -8469,7 +8508,12 @@ async def post_paper_scenario(req: Request):
         fields = _empty_scenario_fields(cash)
     sid = _new_scenario_id()
     ts = int(time.time())
-    scenario = dict(fields, id=sid, name=name, status="active", created=ts)
+    risk_profile = None
+    if kind == "ai":
+        risk_profile = str(body.get("risk_profile") or "moderate").lower()
+        if risk_profile not in RISK_PROFILES:
+            risk_profile = "moderate"
+    scenario = dict(fields, id=sid, name=name, status="active", created=ts, kind=kind, risk_profile=risk_profile)
     reg.setdefault("scenarios", {})[sid] = scenario
     _write_registry(reg)
     out = {"ok": True, "scenario": _paper_marked(scenario)}
@@ -8480,8 +8524,10 @@ async def post_paper_scenario(req: Request):
 
 @app.post("/api/paper/scenarios/{scenario_id}/archive")
 def post_paper_archive(scenario_id: str):
-    """Freeze a scenario (no more trades/Strategist reviews) and free its active slot. History
-    stays intact and viewable — this is not a delete."""
+    """Freeze a scenario (no more trades — AI reviews for an 'ai' scenario, manual trades for a
+    'user' ledger) and free its active slot. History stays intact and viewable — this is not a
+    delete. For a 'user' ledger this is the "disable to save compute" action (it also stops the
+    valuation/mark-to-market work `/api/paper/scenarios` does on every load)."""
     reg = _read_registry()
     s = (reg.get("scenarios") or {}).get(scenario_id)
     if not s:
@@ -8493,14 +8539,17 @@ def post_paper_archive(scenario_id: str):
 
 @app.post("/api/paper/scenarios/{scenario_id}/activate")
 def post_paper_activate(scenario_id: str):
-    """Reactivate an archived scenario — subject to the same MAX_ACTIVE_SCENARIOS cap as creation."""
+    """Reactivate an archived scenario — subject to the same per-kind cap as creation."""
     reg = _read_registry()
     s = (reg.get("scenarios") or {}).get(scenario_id)
     if not s:
         return JSONResponse({"error": "scenario not found"}, status_code=404)
-    if s["status"] != "active" and len(_active_scenarios(reg)) >= MAX_ACTIVE_SCENARIOS:
-        return JSONResponse({"error": f"scenario cap reached ({MAX_ACTIVE_SCENARIOS} active max) — "
-                                       "archive another active scenario first"}, status_code=400)
+    kind = s.get("kind", "ai")
+    cap = MAX_ACTIVE_SCENARIOS if kind == "ai" else MAX_USER_SCENARIOS
+    if s["status"] != "active" and len(_active_scenarios(reg, kind=kind)) >= cap:
+        label = "AI scenario" if kind == "ai" else "ledger"
+        return JSONResponse({"error": f"{label} cap reached ({cap} active max) — "
+                                       f"archive another active {label} first"}, status_code=400)
     s["status"] = "active"
     _write_registry(reg)
     return {"ok": True, "scenario": _paper_marked(s)}
@@ -8508,17 +8557,43 @@ def post_paper_activate(scenario_id: str):
 
 @app.post("/api/paper/scenarios/{scenario_id}/delete")
 def post_paper_delete(scenario_id: str):
-    """Permanently remove a scenario. Blocked if it's the only one left — the registry always
-    keeps at least one scenario so implicit (no scenario_id) calls have somewhere to land."""
+    """Permanently remove a scenario. Blocked only if it's the LAST remaining AI-kind scenario —
+    the registry always keeps at least one AI scenario so implicit (no scenario_id) calls have
+    somewhere to land. A 'user' ledger has no such floor: delete it freely, down to zero, since
+    nothing implicitly depends on it existing (Jason, 2026-07-23: "should be able to delete... if
+    they want to save the compute demands")."""
     reg = _read_registry()
     scens = reg.get("scenarios") or {}
-    if scenario_id not in scens:
+    target = scens.get(scenario_id)
+    if not target:
         return JSONResponse({"error": "scenario not found"}, status_code=404)
-    if len(scens) <= 1:
-        return JSONResponse({"error": "can't delete the only remaining scenario"}, status_code=400)
+    if target.get("kind", "ai") == "ai":
+        ai_count = sum(1 for s in scens.values() if s.get("kind", "ai") == "ai")
+        if ai_count <= 1:
+            return JSONResponse({"error": "can't delete the only remaining AI scenario"}, status_code=400)
     scens.pop(scenario_id, None)
     _write_registry(reg)
     return {"ok": True, "remaining": len(scens)}
+
+
+@app.post("/api/paper/scenarios/{scenario_id}/risk_profile")
+async def post_paper_risk_profile(scenario_id: str, req: Request):
+    """Change an AI scenario's risk mandate (conservative/moderate/aggressive) without resetting
+    its ledger — takes effect on its NEXT weekly review. This is the practical lever that
+    differentiates two AI scenarios from each other (Jason, 2026-07-23)."""
+    body = await req.json()
+    rp = str(body.get("risk_profile") or "").lower()
+    if rp not in RISK_PROFILES:
+        return JSONResponse({"error": f"risk_profile must be one of {', '.join(RISK_PROFILES)}"}, status_code=400)
+    reg = _read_registry()
+    s = (reg.get("scenarios") or {}).get(scenario_id)
+    if not s:
+        return JSONResponse({"error": "scenario not found"}, status_code=404)
+    if s.get("kind", "ai") != "ai":
+        return JSONResponse({"error": "risk profile only applies to AI-managed scenarios"}, status_code=400)
+    s["risk_profile"] = rp
+    _write_registry(reg)
+    return {"ok": True, "scenario": _paper_marked(s)}
 
 
 def _exec_trade(action, ticker, dollars=None, shares=None, scenario_id=None):
@@ -8572,11 +8647,21 @@ def _exec_trade(action, ticker, dollars=None, shares=None, scenario_id=None):
 
 @app.post("/api/paper/trade")
 async def paper_trade(req: Request):
-    """Execute a HYPOTHETICAL trade. Body: {action: buy|sell, ticker, dollars|shares, scenario_id}.
-    Omit scenario_id for the default scenario. Paper only."""
+    """Execute a HYPOTHETICAL MANUAL trade — this is the user's own hand on the ticket, not the
+    Strategist. Body: {action: buy|sell, ticker, dollars|shares, scenario_id}. Omit scenario_id
+    for the default 'ai' scenario, BUT that will then be rejected (see below) — manual trades are
+    only allowed on a 'user'-kind ledger, so the two trading sources never mix in one scenario's
+    history. Paper only."""
     body = await req.json()
+    scenario_id = body.get("scenario_id")
+    reg = _read_registry()
+    sid_resolved = scenario_id or _default_scenario_id(reg, kind="user")
+    target = (reg.get("scenarios") or {}).get(sid_resolved)
+    if target and target.get("kind", "ai") != "user":
+        return JSONResponse({"error": "manual trades aren't allowed on AI-managed scenarios — "
+                                       "trade in your own ledger instead"}, status_code=400)
     res, err = _exec_trade(body.get("action"), body.get("ticker"), body.get("dollars"), body.get("shares"),
-                           scenario_id=body.get("scenario_id"))
+                           scenario_id=sid_resolved)
     return res if res else JSONResponse({"error": err}, status_code=400)
 
 
@@ -8591,7 +8676,8 @@ async def paper_reset(req: Request):
     existing = (reg.get("scenarios") or {}).get(sid) or {}
     fields = _empty_scenario_fields(cash)
     scenario = dict(fields, id=sid, name=existing.get("name", "Default"),
-                    status=existing.get("status", "active"), created=int(time.time()))
+                    status=existing.get("status", "active"), created=int(time.time()),
+                    kind=existing.get("kind", "ai"), risk_profile=existing.get("risk_profile"))
     reg.setdefault("scenarios", {})[sid] = scenario
     _write_registry(reg)
     return {"ok": True, "starting_cash": cash, "scenario_id": sid}
@@ -8616,7 +8702,8 @@ async def paper_seed(req: Request):
     sid = body.get("scenario_id") or _default_scenario_id(reg)
     existing = (reg.get("scenarios") or {}).get(sid) or {}
     scenario = dict(fields, id=sid, name=existing.get("name", "Default"),
-                    status=existing.get("status", "active"), created=int(time.time()))
+                    status=existing.get("status", "active"), created=int(time.time()),
+                    kind=existing.get("kind", "ai"), risk_profile=existing.get("risk_profile"))
     reg.setdefault("scenarios", {})[sid] = scenario
     _write_registry(reg)
     return {"ok": True, "scenario_id": sid, "basis_mode": basis_mode,
@@ -8737,14 +8824,36 @@ def _sys(prompt):
 # the loop runs to completion under OUR iteration cap (no OWUI pass-through,
 # no per-turn tool-call limit). HYPOTHETICAL paper account only — no real money.
 # ---------------------------------------------------------------------------
+
+# Per-scenario risk mandate injected into STRATEGIST_PROMPT via {risk_guidance} -- this is what
+# gives two AI scenarios a PRACTICAL reason to coexist (Jason, 2026-07-23): they run under
+# genuinely different marching orders, not the same strategy twice. Kept short/directive since
+# it's competing for attention with a long prompt already.
+_RISK_PROFILE_GUIDANCE = {
+    "conservative": "Your mandate for THIS scenario is CONSERVATIVE (capital-preservation-first): "
+        "favor larger, established, lower-volatility names and quality/dividend compounders; keep a "
+        "meaningful cash buffer rather than staying fully invested; avoid speculative or highly "
+        "volatile names; size positions smaller. Prioritize not losing money over chasing upside.",
+    "moderate": "Your mandate for THIS scenario is MODERATE / balanced growth: blend established "
+        "compounders with a modest allocation to higher-conviction growth ideas; diversify across "
+        "sectors; avoid both extreme concentration and excessive cash-hoarding.",
+    "aggressive": "Your mandate for THIS scenario is AGGRESSIVE / growth-maximizing: seek "
+        "higher-conviction, higher-upside names (including smaller-cap or higher-volatility growth "
+        "stories) and size them meaningfully; you may run a more concentrated book and hold less "
+        "idle cash than a conservative mandate would. Still require a real thesis per position — "
+        "aggressive means higher risk tolerance, not speculation for its own sake.",
+}
+
 STRATEGIST_PROMPT = (
     "You are the Strategist — an autonomous portfolio manager running a HYPOTHETICAL paper-trading "
     "account (a SIMULATION; no real money, no real orders are ever placed). Your job is to grow a small "
     "starting balance through disciplined, well-reasoned buy/sell decisions and to report honestly.\n"
-    "You are managing the '{scenario_name}' scenario specifically — {user} may have more than one paper "
-    "scenario running in parallel with different starting conditions; every tool call in this run reads "
-    "and writes ONLY this one scenario's ledger, so decide and report as if it's the only book that exists "
-    "for this session.\n"
+    "You are managing the '{scenario_name}' scenario specifically — {user} may have more than one AI "
+    "scenario running in parallel, each with a DIFFERENT risk mandate and different starting conditions "
+    "on purpose (that's the point of running more than one); every tool call in this run reads and writes "
+    "ONLY this one scenario's ledger, so decide and report as if it's the only book that exists for this "
+    "session.\n"
+    "{risk_guidance}\n"
     "ACCOUNT TOOLS: get_paper_portfolio (your cash, positions, P/L, return vs. start — call this FIRST); "
     "paper_buy(ticker, dollars); paper_sell(ticker, shares — omit shares to sell the whole position); "
     "log_report(summary — call this LAST, exactly once).\n"
@@ -8920,20 +9029,23 @@ def _strategist_dispatch(name, args, scenario_id=None):
         return {"error": f"{name} failed: {e}"}
 
 
-def _do_strategist_one(scenario_id, scenario_name, max_iter):
-    """One full ReAct pass against ONE scenario. Returns the run's telemetry dict. Caller (below)
-    holds `_strat_lock` for the whole multi-scenario job and drives one of these per active
-    scenario, sequentially — never in parallel, so this never adds concurrent GPU load beyond the
-    single existing `_gpu_slot()` serialization point."""
+def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moderate"):
+    """One full ReAct pass against ONE AI-kind scenario. Returns the run's telemetry dict. Caller
+    (below) holds `_strat_lock` for the whole multi-scenario job, only ever iterates 'ai'-kind
+    ACTIVE scenarios (a 'user' ledger is never passed here — see `_do_strategist`), and drives one
+    of these per scenario, sequentially — never in parallel, so this never adds concurrent GPU
+    load beyond the single existing `_gpu_slot()` serialization point."""
     _t0 = time.time()
     telem = {"ts": int(_t0), "scenario_id": scenario_id, "scenario_name": scenario_name,
-             "max_iter": max_iter, "iterations": 0, "tool_calls": {},
+             "risk_profile": risk_profile, "max_iter": max_iter, "iterations": 0, "tool_calls": {},
              "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
     try:
+        risk_guidance = _RISK_PROFILE_GUIDANCE.get(risk_profile, _RISK_PROFILE_GUIDANCE["moderate"])
+        prompt = STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name).replace("{risk_guidance}", risk_guidance)
         messages = [
-            {"role": "system", "content": _sys(STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name))},
+            {"role": "system", "content": _sys(prompt)},
             {"role": "user", "content": f"Perform your weekly review of the '{scenario_name}' scenario now: "
              "call get_paper_portfolio, research a few opportunities, make any buy/sell trades you judge "
              "worthwhile, then call log_report with your summary. Be efficient — don't deep-dive every name."},
@@ -9046,24 +9158,29 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter):
 
 
 def _do_strategist(max_iter=20):
-    """Weekly Strategist review — runs once per ACTIVE scenario, SEQUENTIALLY (never in parallel;
-    each pass is a separate full ReAct loop under the same single `_gpu_slot()` serialization
-    everything else on the box already respects). Jason, 2026-07-23: capped at MAX_ACTIVE_SCENARIOS
-    active scenarios specifically so this job's total GPU time scales with a small, bounded number,
-    not with however many scenarios a user creates. A brand-new/legacy install always has exactly
-    one scenario (post-migration), so this reduces to the original single-ledger behavior."""
+    """Weekly Strategist review — runs once per ACTIVE 'ai'-kind scenario, SEQUENTIALLY (never in
+    parallel; each pass is a separate full ReAct loop under the same single `_gpu_slot()`
+    serialization everything else on the box already respects). Jason, 2026-07-23: capped at
+    MAX_ACTIVE_SCENARIOS active AI scenarios specifically so this job's total GPU time scales with
+    a small, bounded number, not with however many scenarios a user creates. A brand-new/legacy
+    install always has exactly one AI scenario (post-migration), so this reduces to the original
+    single-ledger behavior. 2026-07-23b: explicitly filtered to kind='ai' — a 'user'-kind ledger
+    (traded by hand via /api/paper/trade) is NEVER included here, by construction, not just by
+    convention; that's what makes it safe for the user to trade it themselves without the
+    Strategist fighting them over it."""
     if not _strat_lock.acquire(blocking=False):
         return
     try:
         reg = _read_registry()
-        active = _active_scenarios(reg)
-        if not active:      # defensive — migration guarantees at least one scenario exists
-            active = [{"id": _default_scenario_id(reg), "name": "Default"}]
+        active = _active_scenarios(reg, kind="ai")
+        if not active:      # defensive — migration guarantees at least one AI scenario exists
+            active = [{"id": _default_scenario_id(reg, kind="ai"), "name": "Default", "risk_profile": "moderate"}]
         _strat_state.update(status="running", iterations=0, started=int(time.time()), finished=0,
                             scenarios_total=len(active), scenarios_done=0, scenario=None)
         for idx, s in enumerate(active):
             _strat_state.update(scenario=s.get("name"), scenario_id=s.get("id"), iterations=0)
-            telem = _do_strategist_one(s["id"], s.get("name") or s["id"], max_iter)
+            telem = _do_strategist_one(s["id"], s.get("name") or s["id"], max_iter,
+                                       risk_profile=s.get("risk_profile") or "moderate")
             _log_strategist_run(telem)
             _strat_state["scenarios_done"] = idx + 1
         _strat_state.update(status="idle", finished=int(time.time()), scenario=None)

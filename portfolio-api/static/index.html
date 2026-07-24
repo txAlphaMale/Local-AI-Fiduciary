@@ -316,7 +316,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
 // generation. CS(persona) returns that persona's {msgs,sid,streaming,abort,reqId,streamId}.
@@ -613,6 +613,13 @@ async function load(refresh, bg){
     if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
       CURRENT_SCENARIO_ID=STRAT.id; try{ localStorage.setItem('fidScenarioId', CURRENT_SCENARIO_ID); }catch(_){}
     }
+    // YOUR LEDGER (2026-07-23b) — the single user-kind scenario, if one exists yet. Fetched as its
+    // own follow-up (can't be part of the Promise.all batch above — we don't know its id until
+    // SCENARIOS comes back) exactly like the pattern already used below for tax defaults/prompts.
+    try{
+      const ul=(SCENARIOS&&SCENARIOS.scenarios||[]).find(s=>s.kind==='user');
+      USER_LEDGER = ul ? await gj('/api/paper?scenario_id='+encodeURIComponent(ul.id)) : null;
+    }catch(_){ USER_LEDGER=null; }
     if(TAX_INCOME==null){ const ra=(RETIRE&&!RETIRE.error&&RETIRE.assumptions)||{}; TAX_INCOME=(ra.annual_expenses!=null?Math.round(ra.annual_expenses):0)||0;
       if(TAX_INCOME>0){ try{ const rt=await fetch(`/api/tax?gross_ordinary=${TAX_INCOME}&ltcg=${TAX_LTCG||0}`); TAX=await rt.json(); }catch(_){} } }
     try{ const rc=await gj('/api/research-cache?history=1'); if(rc && !rc.error){ RESEARCH_CACHE={recent:rc.recent||[], items:rc.items||{}}; } }catch(_){}
@@ -4169,16 +4176,28 @@ function scenarioCreate(){
   if(SCENARIOS && SCENARIOS.active_count>=SCENARIOS.max_active){
     alert('Scenario cap reached ('+SCENARIOS.max_active+' active max) — archive or delete one first.'); return;
   }
-  const name=(prompt('Name for the new scenario:')||'').trim();
+  const name=(prompt('Name for the new AI scenario:')||'').trim();
   if(!name) return;
   const cash=parseFloat(prompt('Starting cash ($):','2000'))||2000;
+  let rp=(prompt('Risk mandate for this scenario — conservative / moderate / aggressive:\n'+
+    '(this is what gives running two scenarios a practical point — give them different mandates)','moderate')||'moderate').trim().toLowerCase();
+  if(['conservative','moderate','aggressive'].indexOf(rp)<0) rp='moderate';
   fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:name,cash:cash})})
+    body:JSON.stringify({kind:'ai', name:name, cash:cash, risk_profile:rp})})
     .then(r=>r.json()).then(d=>{
       if(d&&d.error){ alert('Create failed: '+d.error); return; }
       scenarioSwitch(d.scenario.id);
       _scenariosRefresh();
     }).catch(e=>alert('Create failed: '+e));
+}
+function scenarioSetRiskProfile(sid, rp){
+  // optimistic — same fix as everywhere else this session: mutate the local copy + render NOW,
+  // reconcile from the server after.
+  if(SCENARIOS && SCENARIOS.scenarios){ const s=SCENARIOS.scenarios.find(x=>x.id===sid); if(s){ s.risk_profile=rp; if(TAB==='strategist') render(); } }
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/risk_profile',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({risk_profile:rp})})
+    .then(r=>r.json()).then(d=>{ if(d&&d.error) alert('Update failed: '+d.error); _scenariosRefresh(); })
+    .catch(e=>alert('Update failed: '+e));
 }
 function scenarioArchive(sid,name){
   if(!confirm('Archive "'+name+'"? It stops getting weekly Strategist reviews and frees an active slot, but its history stays viewable — this does not delete it.')) return;
@@ -4207,8 +4226,9 @@ function scenarioSwitcher(){
   const wrap=el('div'); wrap.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);';
   const sc=SCENARIOS;
   if(!sc || !sc.scenarios){ wrap.appendChild(el('div','muted','Scenario list unavailable.')); return wrap; }
+  const aiScens=sc.scenarios.filter(s=>(s.kind||'ai')==='ai');   // 'user' ledger has its own panel below
   const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-2);';
-  head.appendChild(el('span','ph','SCENARIOS'));
+  head.appendChild(el('span','ph','AI SCENARIOS'));
   const cnt=el('span','muted'); cnt.style.fontSize='var(--font-size-sm)';
   cnt.textContent=sc.active_count+' of '+sc.max_active+' active slots used';
   head.appendChild(cnt);
@@ -4217,24 +4237,33 @@ function scenarioSwitcher(){
   head.appendChild(addBtn);
   wrap.appendChild(head);
   const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);';
-  sc.scenarios.forEach(s=>{
+  const rps=sc.risk_profiles||['conservative','moderate','aggressive'];
+  aiScens.forEach(s=>{
     const active=s.id===CURRENT_SCENARIO_ID;
     const archived=s.status==='archived';
     const card=el('div'); card.style.cssText=`border:1px solid ${active?'var(--color-accent)':'var(--color-border)'};border-radius:var(--radius-md);`+
-      `padding:var(--space-2) var(--space-3);min-width:150px;${archived?'opacity:0.6;':''}`;
+      `padding:var(--space-2) var(--space-3);min-width:170px;${archived?'opacity:0.6;':''}`;
     const nm=el('div'); nm.style.cssText='cursor:pointer;font-size:var(--font-size-md);letter-spacing:0.5px;'+`color:${active?'var(--color-accent)':'var(--color-text)'};`;
     nm.textContent=(archived?'⏸ ':(active?'▸ ':''))+s.name; nm.onclick=()=>scenarioSwitch(s.id);
     card.appendChild(nm);
     const st=el('div','muted'); st.style.fontSize='var(--font-size-sm)';
     st.innerHTML=usd(s.total_value)+' <span class="'+cls(s.return_pct)+'">'+(s.return_pct!=null?((s.return_pct>0?'+':'')+s.return_pct+'%'):'—')+'</span>'+(archived?' · archived':'');
     card.appendChild(st);
+    // risk mandate — inline-editable, this is the practical thing differentiating one AI scenario
+    // from another (Jason, 2026-07-23): different marching orders, not the same strategy twice.
+    const rpRow=el('div'); rpRow.style.cssText='margin-top:2px;font-size:var(--font-size-sm);';
+    const rpSel=el('select'); rpSel.style.cssText='background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);font-size:var(--font-size-sm);';
+    rps.forEach(p=>{ const o=el('option',null,p); o.value=p; if((s.risk_profile||'moderate')===p) o.selected=true; rpSel.appendChild(o); });
+    rpSel.onchange=()=>scenarioSetRiskProfile(s.id, rpSel.value);
+    rpRow.appendChild(rpSel);
+    card.appendChild(rpRow);
     const acts=el('div'); acts.style.cssText='margin-top:4px;display:flex;gap:8px;font-size:var(--font-size-sm);';
     if(archived){
       const a1=el('span',null,'reactivate'); a1.style.cssText='cursor:pointer;color:var(--color-accent);'; a1.onclick=()=>scenarioActivate(s.id,s.name); acts.appendChild(a1);
     } else {
       const a1=el('span',null,'archive'); a1.style.cssText='cursor:pointer;color:var(--color-text-muted);'; a1.onclick=()=>scenarioArchive(s.id,s.name); acts.appendChild(a1);
     }
-    if(sc.scenarios.length>1){ const a2=el('span',null,'delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
+    if(aiScens.length>1){ const a2=el('span',null,'delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
     card.appendChild(acts);
     row.appendChild(card);
   });
@@ -4378,7 +4407,7 @@ function taxContent(bracket, audit){
 function stratContent(r){
   const wrap=el('div');
   wrap.appendChild(scenarioSwitcher());
-  if(!r || r.error){ wrap.appendChild(el('div','muted','Paper portfolio unavailable.')); return wrap; }
+  if(!r || r.error){ wrap.appendChild(el('div','muted','Paper portfolio unavailable.')); wrap.appendChild(userLedgerPanel()); return wrap; }
   const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);';
   sub.textContent=`${r.name||'HYPOTHETICAL'} · ${r.status==='archived'?'ARCHIVED — read-only history · ':''}no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
@@ -4440,6 +4469,211 @@ function stratContent(r){
     rb.textContent=`${new Date(last.ts*1000).toLocaleString()} · value ${u2(last.total_value)} (${last.return_pct>0?'+':''}${last.return_pct}%)\n\n${last.summary||'(no summary)'}`;
     wrap.appendChild(rb);
   }
+  if(r.transactions && r.transactions.length){
+    const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
+    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${x.ticker}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
+  }
+  wrap.appendChild(userLedgerPanel());
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// YOUR LEDGER (2026-07-23b) — a SEPARATE, single-slot, user-traded paper ledger. Distinct from
+// the AI scenarios above in every direction that matters: the Strategist never runs against it
+// (server-enforced via kind='ai' filtering in _do_strategist, not just UI convention), trades are
+// placed BY HAND via /api/paper/trade (which itself now rejects any attempt to manually trade an
+// 'ai'-kind scenario, so the two trading sources can never mix in one ledger's history), and it's
+// capped at MAX_USER_SCENARIOS (1) rather than MAX_ACTIVE_SCENARIOS (2) — Jason's explicit ask:
+// "limit them to one paper ledger so the whole platform isn't overwhelmed." Disable (archive) or
+// delete are both available per his ask to be able to cut the compute cost of this at will.
+// ---------------------------------------------------------------------------
+function ledgerPost(path, body, label){
+  return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})})
+    .then(r=>r.json()).then(async d=>{
+      if(d&&d.error){ alert(label+' failed: '+d.error); return d; }
+      // same optimistic-refetch-and-render-now fix as stratPost() — see notes there.
+      try{
+        const sid=(d&&d.scenario_id)||(USER_LEDGER&&USER_LEDGER.id);
+        if(sid){
+          const fresh=await (await fetch('/api/paper?scenario_id='+encodeURIComponent(sid))).json();
+          if(fresh && !fresh.error){ USER_LEDGER=fresh; if(TAB==='strategist') render(); }
+        }
+      }catch(_){}
+      _scenariosRefresh();
+      return d;
+    })
+    .catch(e=>alert(label+' failed: '+e));
+}
+function ledgerBuy(){
+  if(!USER_LEDGER || !USER_LEDGER.id){ alert('Create your ledger first.'); return; }
+  const t=(document.getElementById('ledger-ticker').value||'').trim().toUpperCase();
+  const d=parseFloat(document.getElementById('ledger-dollars').value);
+  if(!t){ alert('Enter a ticker.'); return; }
+  if(!d||d<=0){ alert('Enter a positive dollar amount.'); return; }
+  ledgerPost('/api/paper/trade',{action:'buy',ticker:t,dollars:d,scenario_id:USER_LEDGER.id},'Buy');
+}
+function ledgerSell(){
+  if(!USER_LEDGER || !USER_LEDGER.id){ alert('Create your ledger first.'); return; }
+  const t=(document.getElementById('ledger-ticker').value||'').trim().toUpperCase();
+  const shRaw=document.getElementById('ledger-shares').value;
+  if(!t){ alert('Enter a ticker.'); return; }
+  ledgerPost('/api/paper/trade',{action:'sell',ticker:t,shares:(shRaw?parseFloat(shRaw):null),scenario_id:USER_LEDGER.id},'Sell');
+}
+function ledgerContribute(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  const a=parseFloat(document.getElementById('ledger-add').value);
+  if(!a||a<=0){ alert('Enter a positive amount to add.'); return; }
+  ledgerPost('/api/paper/contribute',{amount:a,scenario_id:USER_LEDGER.id},'Contribute');
+}
+function ledgerRecurring(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  const a=parseFloat(document.getElementById('ledger-rec').value);
+  const cad=document.getElementById('ledger-cad').value;
+  if(!a||a<=0){ alert('Enter a positive recurring amount.'); return; }
+  ledgerPost('/api/paper/recurring',{amount:a,cadence:cad,scenario_id:USER_LEDGER.id},'Set recurring');
+}
+function ledgerStopRecurring(){ if(USER_LEDGER&&USER_LEDGER.id) ledgerPost('/api/paper/recurring',{amount:0,scenario_id:USER_LEDGER.id},'Stop recurring'); }
+function ledgerReset(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  const c=parseFloat(document.getElementById('ledger-reset').value)||2000;
+  if(!confirm('Reset your ledger to $'+c.toLocaleString()+'? This wipes its positions, history, and any recurring contribution.')) return;
+  ledgerPost('/api/paper/reset',{starting_cash:c,scenario_id:USER_LEDGER.id},'Reset');
+}
+function ledgerSeedToggle(){ const p=document.getElementById('ledger-seedpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none'); }
+function ledgerSeedAll(v){ document.querySelectorAll('.lseedck').forEach(x=>{ x.checked=v; }); }
+function ledgerSeed(){
+  const tickers=[...document.querySelectorAll('.lseedck')].filter(x=>x.checked).map(x=>x.getAttribute('data-ticker'));
+  if(!tickers.length){ alert('Select at least one holding to seed.'); return; }
+  const basis=document.getElementById('lseed-basis').value;
+  const cash=parseFloat(document.getElementById('lseed-cash').value)||0;
+  if(!confirm('Reset your ledger and seed it with '+tickers.length+' of your holdings ('+basis+' basis)? This wipes its current paper positions.')) return;
+  ledgerPost('/api/paper/seed',{tickers:tickers,cash:cash,basis:basis,scenario_id:USER_LEDGER.id},'Seed');
+}
+function ledgerCreate(){
+  if(SCENARIOS && SCENARIOS.user_ledger_count>=SCENARIOS.max_user_ledgers){
+    alert('You already have your ledger limit ('+SCENARIOS.max_user_ledgers+') — disable or delete it first.'); return;
+  }
+  const cash=parseFloat(prompt('Starting cash for your ledger ($):','2000'))||2000;
+  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({kind:'user', name:'My Ledger', cash:cash})})
+    .then(r=>r.json()).then(d=>{
+      if(d&&d.error){ alert('Create failed: '+d.error); return; }
+      USER_LEDGER=d.scenario; if(TAB==='strategist') render();   // optimistic — same fix as elsewhere
+      _scenariosRefresh();
+    }).catch(e=>alert('Create failed: '+e));
+}
+function ledgerArchive(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  if(!confirm('Disable your ledger? This stops it being tracked/updated (saves compute) but keeps its history — re-enable any time.')) return;
+  const sid=USER_LEDGER.id;
+  USER_LEDGER=Object.assign({},USER_LEDGER,{status:'archived'}); if(TAB==='strategist') render();
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/archive',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error) alert('Disable failed: '+d.error);
+    load(false);
+  }).catch(e=>{ alert('Disable failed: '+e); load(false); });
+}
+function ledgerActivate(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  const sid=USER_LEDGER.id;
+  USER_LEDGER=Object.assign({},USER_LEDGER,{status:'active'}); if(TAB==='strategist') render();
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/activate',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error) alert('Re-enable failed: '+d.error);
+    load(false);
+  }).catch(e=>{ alert('Re-enable failed: '+e); load(false); });
+}
+function ledgerDelete(){
+  if(!USER_LEDGER||!USER_LEDGER.id) return;
+  if(!confirm('PERMANENTLY delete your ledger? This cannot be undone — its whole history goes with it. Disable instead if you just want it out of the way.')) return;
+  const sid=USER_LEDGER.id;
+  USER_LEDGER=null; if(TAB==='strategist') render();
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/delete',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d&&d.error) alert('Delete failed: '+d.error);
+    load(false);
+  }).catch(e=>{ alert('Delete failed: '+e); load(false); });
+}
+function ledgerBuySellForm(){
+  const wrap=el('div'); wrap.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
+  wrap.innerHTML=
+    `<span>Ticker <input id="ledger-ticker" type="text" placeholder="AAPL" style="width:70px;text-transform:uppercase;"/></span>`+
+    `<span>$<input id="ledger-dollars" type="number" placeholder="500" style="width:80px;"/> <button onclick="ledgerBuy()">BUY</button></span>`+
+    `<span class="muted">|</span>`+
+    `<span>Shares (blank = all) <input id="ledger-shares" type="number" placeholder="" style="width:70px;"/> <button onclick="ledgerSell()">SELL</button></span>`;
+  return wrap;
+}
+function userLedgerPanel(){
+  const wrap=el('div'); wrap.style.cssText='margin-top:var(--space-5);padding-top:var(--space-4);border-top:2px solid var(--color-border-strong);';
+  const head=el('div'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2);flex-wrap:wrap;';
+  head.appendChild(el('span','ph','YOUR LEDGER'));
+  const note=el('span','muted'); note.style.fontSize='var(--font-size-sm)';
+  note.textContent='a separate HYPOTHETICAL ledger YOU trade by hand — the Strategist never touches this one';
+  head.appendChild(note);
+  wrap.appendChild(head);
+  const r=USER_LEDGER;
+  const cap=(SCENARIOS&&SCENARIOS.max_user_ledgers)||1;
+  if(!r){
+    const p=el('div'); p.style.cssText='border:1px dashed var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3);';
+    const b=el('button',null,'+ CREATE YOUR LEDGER'); b.onclick=ledgerCreate; p.appendChild(b);
+    const d=el('div','muted'); d.style.cssText='font-size:var(--font-size-sm);margin-top:6px;';
+    d.textContent='Limited to '+cap+' ledger — you can disable or delete it any time to save compute.';
+    p.appendChild(d);
+    wrap.appendChild(p);
+    return wrap;
+  }
+  const archived=r.status==='archived';
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-2);';
+  sub.textContent=`${r.name||'My Ledger'} · ${archived?'DISABLED — read-only history · ':''}no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
+  wrap.appendChild(sub);
+  if(archived){
+    const p=el('div'); p.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;gap:var(--space-3);align-items:center;';
+    p.appendChild(el('span','muted','Disabled — not being tracked or updated.'));
+    const rb=el('button',null,'↺ RE-ENABLE'); rb.onclick=ledgerActivate; p.appendChild(rb);
+    const db=el('button',null,'✕ DELETE'); db.style.color='var(--color-negative)'; db.onclick=ledgerDelete; p.appendChild(db);
+    wrap.appendChild(p);
+  } else {
+    wrap.appendChild(ledgerBuySellForm());
+    const rec=r.recurring;
+    const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
+    ctrl.innerHTML=
+      `<span>Reset $<input id="ledger-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="ledgerReset()">↺ RESET</button> <button onclick="ledgerSeedToggle()">⊕ SEED</button></span>`+
+      `<span class="muted">|</span>`+
+      `<span>Add $<input id="ledger-add" type="number" placeholder="500" style="width:74px;"/> <button onclick="ledgerContribute()">+ CASH</button></span>`+
+      `<span class="muted">|</span>`+
+      `<span>Recurring $<input id="ledger-rec" type="number" placeholder="${rec?rec.amount:'100'}" style="width:64px;"/> `+
+        `<select id="ledger-cad" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+        `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
+        `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
+        `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
+        `<button onclick="ledgerRecurring()">SET</button>${rec?' <button onclick="ledgerStopRecurring()">STOP</button>':''}</span>`+
+      `<span class="muted">|</span>`+
+      `<span><button onclick="ledgerArchive()">⏸ DISABLE</button> <button onclick="ledgerDelete()" style="color:var(--color-negative)">✕ DELETE</button></span>`;
+    wrap.appendChild(ctrl);
+    const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
+    let boxes='';
+    seedable.forEach(c=>{ boxes+=`<label style="display:inline-flex;align-items:center;gap:var(--space-1);margin:2px 12px 2px 0;font-size:var(--font-size-base);white-space:nowrap;"><input type="checkbox" class="lseedck" data-ticker="${c.ticker}" checked/> <span style="color:var(--color-accent)">${c.ticker}</span> <span class="muted">${usd(c.value)}</span></label>`; });
+    const seedPanel=el('div'); seedPanel.id='ledger-seedpanel'; seedPanel.style.cssText='display:none;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);margin-bottom:var(--space-3);';
+    seedPanel.innerHTML=
+      `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">SEED FROM MY HOLDINGS</div>`+
+      `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="lseed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="lseed-cash" type="number" value="0" style="width:80px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS your ledger.</div>`+
+      `<div><button onclick="ledgerSeed()">✓ SEED &amp; RESET</button> <button onclick="ledgerSeedAll(true)">all</button> <button onclick="ledgerSeedAll(false)">none</button> <button onclick="ledgerSeedToggle()">cancel</button></div>`;
+    wrap.appendChild(seedPanel);
+    if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; ri.innerHTML=`<span style="color:var(--color-accent)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
+  }
+  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':''); wrap.appendChild(ci); }
+  const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const stats=el('div'); stats.style.cssText='display:flex;gap:var(--space-7);flex-wrap:wrap;margin-bottom:var(--space-3);';
+  const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
+  stats.innerHTML=st('TOTAL VALUE',u2(r.total_value))+
+    st('RETURN',(r.return_pct!=null?(r.return_pct>0?'+':'')+r.return_pct+'%':'—'),cls(r.return_pct))+
+    st('P/L',sgn(r.total_return),cls(r.total_return))+st('CASH',u2(r.cash))+st('START',u2(r.starting_cash));
+  wrap.appendChild(stats);
+  wrap.appendChild(el('div','ph','YOUR POSITIONS'));
+  if(r.positions && r.positions.length){
+    const t=el('table'); const h=el('tr'); h.innerHTML='<th class="l">SYM</th><th>SHARES</th><th>AVG</th><th>PX</th><th>VALUE</th><th>P/L</th><th>P/L%</th>'; t.appendChild(h);
+    r.positions.forEach(p=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${p.ticker}</td><td>${(+p.shares).toFixed(3)}</td><td>${p.avg_cost!=null?'$'+(+p.avg_cost).toFixed(2):'—'}</td><td>${p.price!=null?'$'+(+p.price).toFixed(2):'—'}</td><td>${usd(p.value)}</td><td class="${cls(p.gain)}">${sgn(p.gain)}</td><td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`; t.appendChild(tr); });
+    wrap.appendChild(t);
+  } else { wrap.appendChild(el('div','muted','All cash — no positions yet.')); }
   if(r.transactions && r.transactions.length){
     const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
     [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${x.ticker}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
