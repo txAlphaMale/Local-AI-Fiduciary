@@ -96,11 +96,21 @@ def get_user_by_username(username):
 
 def public_user(user):
     """Never includes password_hash, totp_secret, or backup_codes_json — those never leave
-    this module. Mirrors the write-only convention the /api/secrets endpoints already use."""
+    this module. Mirrors the write-only convention the /api/secrets endpoints already use.
+    `backup_codes_remaining` (2026-07-24) is a count derived from the already-loaded row, not a
+    second query — surfaced in SETTINGS -> SECURITY so a user gets a warning before they're down
+    to their last backup code, instead of discovering it locked out (RESUME-TRACKER.md
+    2026-07-24 gap: mfa_backup_codes_remaining() existed but nothing called it)."""
     if not user:
         return None
+    backup_remaining = None
+    if user.get("totp_enabled"):
+        try:
+            backup_remaining = len(json.loads(user.get("backup_codes_json") or "[]"))
+        except Exception:
+            backup_remaining = None
     return {"id": user["id"], "username": user["username"], "mfa_enabled": bool(user["totp_enabled"]),
-            "created": user["created"]}
+            "backup_codes_remaining": backup_remaining, "created": user["created"]}
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +149,37 @@ def set_password(uid, new_password):
     ph = _ph.hash(new_password)
     with _conn() as c:
         c.execute("UPDATE users SET password_hash=?, updated=? WHERE id=?", (ph, int(time.time()), uid))
+
+
+def set_username(uid, new_username):
+    """Rename the account (2026-07-24 backlog — Jason's "change the name of the single user
+    account" case). Uniqueness check is defensive, not load-bearing today: create_user() refuses
+    a 2nd account entirely, so there is currently never a second row to collide with — but this
+    keeps the function correct if that single-account restriction is ever relaxed later (the
+    hardening plan already floats "a 2nd household member is a small manual addition later")."""
+    new_username = (new_username or "").strip()
+    if not new_username:
+        raise ValueError("username required")
+    if len(new_username) > 64:
+        raise ValueError("username must be 64 characters or fewer")
+    with _conn() as c:
+        clash = c.execute("SELECT id FROM users WHERE username=? AND id<>?", (new_username, uid)).fetchone()
+        if clash:
+            raise ValueError("that username is already in use")
+        c.execute("UPDATE users SET username=?, updated=? WHERE id=?", (new_username, int(time.time()), uid))
+
+
+def delete_user(uid):
+    """Deletes the account row entirely — auth.has_any_user() goes back to False if this was the
+    only account, so the app returns to the first-run "CREATE YOUR ACCOUNT" screen on next load.
+    2026-07-24 (Jason): an AUTHENTICATED, in-app reset of auth.db specifically (e.g. to re-test
+    onboarding, or rename the account by recreating it) — deliberately scoped to ONLY this table.
+    Distinct from the still-unbuilt Account Recovery Tier 2 (`--wipe-all`), which is an
+    UNAUTHENTICATED host-CLI fallback gated on a separate offline recovery key and is far more
+    destructive (also clears store.db/chat.db/the knowledge index). The caller (app.py) is
+    responsible for clearing request.session after this returns."""
+    with _conn() as c:
+        c.execute("DELETE FROM users WHERE id=?", (uid,))
 
 
 # ---------------------------------------------------------------------------

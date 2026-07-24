@@ -374,6 +374,10 @@ const TOUR_TARGETS = {
   k401_pretax:'bn-pre', k401_biweekly:'bn-bw', isr_status:'bn-isr', hsa_contribution:'bn-hsa',
   mortgage_rate:'cd-mr', refi_rate:'cd-rr', deposit_yield:'cd-dy', debt_rates:'cd-dr',
   aca_slcsp:'ret-slcsp', policy_targets:'pol-sleeve-sum', position_caps:'pol-caps',
+  // 2026-07-24: MFA promoted to a critical checklist item (SETUP_FIELDS in app.py) — this is the
+  // first entry that targets the SETTINGS tab rather than PLAN/INSIGHTS, exercising the same
+  // generic setSubtab()/panelSubtabs() machinery those already use.
+  mfa_enrolled:'sec-mfa-setup-btn',
 };
 let TOUR_DONE=false; try{ TOUR_DONE = localStorage.getItem('fidTourDone')==='1'; }catch(_){ TOUR_DONE=false; }
 function _tourMarkDone(){ TOUR_DONE=true; try{ localStorage.setItem('fidTourDone','1'); }catch(_){} }
@@ -2556,6 +2560,17 @@ function securityContent(){
   wrap.appendChild(acctRow);
   const logoutBtn=el('button',null,'LOG OUT'); logoutBtn.style.marginBottom='var(--space-4)'; logoutBtn.onclick=authLogout; wrap.appendChild(logoutBtn);
 
+  // Rename account (2026-07-24 backlog — Jason: "if I wanted to change the name of the single
+  // user account"). Password-gated the same way as change-password, below.
+  wrap.appendChild(el('div','ph','RENAME ACCOUNT'));
+  const renWrap=el('div'); renWrap.style.cssText='margin-bottom:var(--space-4);';
+  renWrap.innerHTML=
+    `<div style="margin-bottom:6px;">New username <input id="sec-newuser" type="text" style="width:220px;" value="${u.username}" autocomplete="username"/></div>`+
+    `<div style="margin-bottom:6px;">Current password <input id="sec-renpass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
+    `<div id="sec-ren-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
+    `<button onclick="securityRenameAccount()">↳ RENAME</button>`;
+  wrap.appendChild(renWrap);
+
   wrap.appendChild(el('div','ph','CHANGE PASSWORD'));
   const pwWrap=el('div'); pwWrap.style.cssText='margin-bottom:var(--space-4);';
   pwWrap.innerHTML=
@@ -2574,6 +2589,24 @@ function securityContent(){
   if(!TLS_STATUS){ certWrap.appendChild(el('div','muted','Loading certificate status…')); _tlsRefreshStatus(); }
   else { certWrap.appendChild(_certPanel(TLS_STATUS)); }
   wrap.appendChild(certWrap);
+
+  // Reset account / auth.db (2026-07-24 backlog — Jason: "reset the auth.db from within the
+  // settings if I'm already authenticated... to simply test out the new changes"). Deliberately
+  // scoped to ONLY the users row in auth.db — financial config, chat history, and the knowledge
+  // index are all untouched; this just deletes the login/MFA and returns the app to the
+  // first-run "CREATE YOUR ACCOUNT" screen. NOT the same thing as the still-unbuilt Account
+  // Recovery Tier 2 (`auth.py --wipe-all`) — that one is for when you're locked out with no
+  // session at all; this is a deliberate, already-authenticated reset. Two confirmations
+  // required (password + typing the username back) since there's no undo from the UI.
+  wrap.appendChild(el('div','ph','⚠ RESET ACCOUNT (advanced)'));
+  const resetWrap=el('div'); resetWrap.style.cssText='margin-bottom:var(--space-2);';
+  resetWrap.innerHTML=
+    `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Deletes ONLY the login/MFA record in <code>auth.db</code> and returns this app to the first-run account-creation screen. Your financial config, chat history, and knowledge index are NOT touched by this — this is for re-testing onboarding, or starting over with a fresh account. This cannot be undone from here.</div>`+
+    `<div style="margin-bottom:6px;">Current password <input id="sec-reset-pass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
+    `<div style="margin-bottom:6px;">Type your username (<code>${u.username}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
+    `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
+    `<button onclick="securityResetAccount()">⚠ DELETE ACCOUNT &amp; RESET</button>`;
+  wrap.appendChild(resetWrap);
   return wrap;
 }
 function _tlsRefreshStatus(){
@@ -2793,6 +2826,16 @@ function _securityMfaBlock(u){
     const p=el('div'); p.style.cssText='margin-bottom:var(--space-2);';
     p.innerHTML='<span class="pos">✓ MFA is ON</span> — an authenticator code is required at login.';
     box.appendChild(p);
+    // Backup-codes-remaining (2026-07-24): auth.mfa_backup_codes_remaining() existed server-side
+    // but nothing surfaced it — a user had no warning before running out. Low-count gets a
+    // visible warning color rather than blending into the muted account-info text.
+    if(u.backup_codes_remaining!=null){
+      const bc=el('div'); bc.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
+      const low=u.backup_codes_remaining<=2;
+      bc.innerHTML=(low?'<span class="neg">':'<span class="muted">')+u.backup_codes_remaining+' backup code'+(u.backup_codes_remaining===1?'':'s')+' remaining</span>'+
+        (low?' — disable and re-enable MFA below to issue a fresh set of 10 before you run out.':'');
+      box.appendChild(bc);
+    }
     const dis=el('div');
     dis.innerHTML='Password to confirm <input id="sec-mfa-disable-pass" type="password" style="width:200px;" autocomplete="current-password"/>';
     box.appendChild(dis);
@@ -2800,9 +2843,9 @@ function _securityMfaBlock(u){
     const err=el('div','neg'); err.id='sec-mfa-err'; err.style.cssText='font-size:var(--font-size-sm);min-height:16px;margin-top:4px;'; box.appendChild(err);
   } else {
     const p=el('div','muted'); p.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
-    p.textContent='Not enabled. Recommended — adds a rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) on top of your password.';
+    p.textContent='Not enabled. This app manages your full financial picture, so MFA is treated as a core setup step, not just optional hardening — adds a rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) on top of your password.';
     box.appendChild(p);
-    const btn=el('button',null,'SET UP MFA'); btn.onclick=securityMfaSetup; box.appendChild(btn);
+    const btn=el('button',null,'SET UP MFA'); btn.id='sec-mfa-setup-btn'; btn.onclick=()=>securityMfaSetup('sec-mfa-setup-area'); box.appendChild(btn);
     const setupArea=el('div'); setupArea.id='sec-mfa-setup-area'; setupArea.style.marginTop='var(--space-3)'; box.appendChild(setupArea);
   }
   return box;
@@ -2821,40 +2864,79 @@ async function securityChangePassword(){
     alert('Password updated.');
   }catch(e){ err.textContent='Request failed: '+e; }
 }
-async function securityMfaSetup(){
+async function securityRenameAccount(){
+  const nu=(document.getElementById('sec-newuser').value||'').trim();
+  const pass=document.getElementById('sec-renpass').value;
+  const err=document.getElementById('sec-ren-err'); err.textContent='';
+  if(!nu){ err.textContent='Enter a username.'; return; }
+  try{
+    const r=await fetch('/api/auth/change-username',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({new_username:nu,password:pass})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    AUTH_STATUS.user=d.user;
+    document.getElementById('sec-renpass').value='';
+    render();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function securityResetAccount(){
+  const pass=document.getElementById('sec-reset-pass').value;
+  const confirmUser=(document.getElementById('sec-reset-confirm').value||'').trim();
+  const err=document.getElementById('sec-reset-err'); err.textContent='';
+  if(!confirm('This deletes your login/MFA record and returns this app to the first-run screen. Your financial data is not touched, but this specific account cannot be recovered. Continue?')) return;
+  try{
+    const r=await fetch('/api/auth/reset-account',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pass,confirm_username:confirmUser})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    location.reload();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+// securityMfaSetup/securityMfaVerify take an explicit containerId (2026-07-24, parameterized so
+// the first-run "enroll now" interstitial — renderFirstRunMfaPrompt() below — can drive the same
+// QR/verify/backup-codes flow into its own container instead of duplicating this code). The
+// SETTINGS -> SECURITY call site passes 'sec-mfa-setup-area' explicitly (NOT a bare function
+// reference — `btn.onclick=securityMfaSetup` would hand the click Event itself in as
+// containerId). A container tagged data-onboarding="1" gets a different "DONE" action (finishes
+// account creation instead of re-rendering the Settings panel) — see _frMfaSetupDone() below.
+async function securityMfaSetup(containerId){
+  containerId = containerId || 'sec-mfa-setup-area';
   try{
     const r=await fetch('/api/auth/mfa/setup',{method:'POST'});
     const d=await r.json();
     if(d.error){ alert('Setup failed: '+d.error); return; }
-    const area=document.getElementById('sec-mfa-setup-area'); if(!area) return;
+    const area=document.getElementById(containerId); if(!area) return;
     const secretMatch=(d.otpauth_uri||'').match(/secret=([^&]+)/);
     area.innerHTML=
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Scan this with your authenticator app, then enter the 6-digit code it shows:</div>`+
       `<img src="${d.qr_data_uri}" style="width:180px;height:180px;border-radius:var(--radius-md);margin-bottom:8px;display:block;"/>`+
       (secretMatch?`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Can't scan? Enter this key manually: <code>${secretMatch[1]}</code></div>`:'')+
-      `<input id="sec-mfa-code" type="text" placeholder="123456" style="width:120px;"/> <button onclick="securityMfaVerify()">✓ VERIFY &amp; ENABLE</button>`+
-      `<div id="sec-mfa-verify-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+      `<input id="${containerId}-code" type="text" placeholder="123456" style="width:120px;"/> <button onclick="securityMfaVerify('${containerId}')">✓ VERIFY &amp; ENABLE</button>`+
+      `<div id="${containerId}-verify-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
   }catch(e){ alert('Setup failed: '+e); }
 }
-async function securityMfaVerify(){
-  const code=(document.getElementById('sec-mfa-code').value||'').trim();
-  const err=document.getElementById('sec-mfa-verify-err'); err.textContent='';
+async function securityMfaVerify(containerId){
+  containerId = containerId || 'sec-mfa-setup-area';
+  const codeEl=document.getElementById(containerId+'-code');
+  const code=(codeEl?codeEl.value:'').trim();
+  const errEl=document.getElementById(containerId+'-verify-err'); if(errEl) errEl.textContent='';
   try{
     const r=await fetch('/api/auth/mfa/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code})});
     const d=await r.json();
-    if(d.error){ err.textContent=d.error; return; }
+    if(d.error){ if(errEl) errEl.textContent=d.error; return; }
     // Update in-memory state but do NOT render() yet — the backup codes below must stay
     // visible until the user explicitly acknowledges them (shown exactly once, never again).
-    if(AUTH_STATUS && AUTH_STATUS.user) AUTH_STATUS.user.mfa_enabled=true;
-    const area=document.getElementById('sec-mfa-setup-area');
+    if(AUTH_STATUS && AUTH_STATUS.user){ AUTH_STATUS.user.mfa_enabled=true; AUTH_STATUS.user.backup_codes_remaining=(d.backup_codes||[]).length; }
+    const area=document.getElementById(containerId);
     if(area){
+      const onboarding=area.getAttribute('data-onboarding')==='1';
       area.innerHTML=
         `<div class="pos" style="margin-bottom:6px;">✓ MFA enabled.</div>`+
         `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
         `<div style="font-family:monospace;font-size:var(--font-size-md);line-height:1.6;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">${d.backup_codes.join('<br/>')}</div>`+
-        `<button onclick="render()">✓ I'VE SAVED THESE — DONE</button>`;
+        `<button onclick="${onboarding?'_frMfaSetupDone()':'render()'}">✓ I'VE SAVED THESE — DONE</button>`;
     }
-  }catch(e){ err.textContent='Request failed: '+e; }
+  }catch(e){ if(errEl) errEl.textContent='Request failed: '+e; }
 }
 async function securityMfaDisable(){
   const pass=document.getElementById('sec-mfa-disable-pass').value;
@@ -5502,6 +5584,10 @@ function renderFirstRun(){
     `<div style="margin-bottom:var(--space-3);">Username<br/><input id="fr-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
     `<div style="margin-bottom:var(--space-3);">Password (min 8 characters)<br/><input id="fr-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
     `<div style="margin-bottom:var(--space-3);">Confirm password<br/><input id="fr-pass2" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
+    // MFA-enrollment checkbox (2026-07-24 backlog) — defaults CHECKED. MFA is now a critical
+    // checklist item (SETUP_FIELDS "mfa_enrolled"), so the default here should match: opting out
+    // is a deliberate uncheck, not the default path.
+    `<div style="margin-bottom:var(--space-3);font-size:var(--font-size-sm);"><label><input type="checkbox" id="fr-mfa-now" checked/> Enroll in multi-factor authentication (MFA) now <span class="muted">— recommended, this app manages your full financial picture</span></label></div>`+
     `<div id="fr-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
     `<button onclick="authFirstRunSubmit()" style="width:100%;">CREATE ACCOUNT</button>`;
   wrap.appendChild(form);
@@ -5511,6 +5597,7 @@ function renderFirstRun(){
 async function authFirstRunSubmit(){
   const u=(document.getElementById('fr-user').value||'').trim();
   const p=document.getElementById('fr-pass').value, p2=document.getElementById('fr-pass2').value;
+  const wantsMfa=document.getElementById('fr-mfa-now').checked;
   const err=document.getElementById('fr-err'); err.textContent='';
   if(!u){ err.textContent='Enter a username.'; return; }
   if(p.length<8){ err.textContent='Password must be at least 8 characters.'; return; }
@@ -5519,10 +5606,32 @@ async function authFirstRunSubmit(){
     const r=await fetch('/api/auth/first-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
+    // first-run already establishes request.session['uid'] server-side (app.py auth_first_run),
+    // so the account is authenticated at this point — the MFA setup/verify endpoints (session-
+    // gated, no separate login step) can be called immediately.
     AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
-    authInitApp();
+    if(wantsMfa) renderFirstRunMfaPrompt(); else authInitApp();
   }catch(e){ err.textContent='Request failed: '+e; }
 }
+// Guided MFA enrollment immediately after account creation (2026-07-24 backlog). Reuses
+// securityMfaSetup()/securityMfaVerify() (parameterized by containerId, see the SECURITY panel
+// section below) rather than duplicating the QR/verify/backup-codes markup — this container is
+// tagged data-onboarding="1" so securityMfaVerify()'s "DONE" button calls _frMfaSetupDone()
+// (finish onboarding into the dashboard) instead of render() (redraw the Settings panel, which
+// doesn't exist yet on this screen).
+function renderFirstRunMfaPrompt(){
+  const body=document.getElementById('body'); body.innerHTML='';
+  const wrap=_authFormShell('SET UP MULTI-FACTOR AUTHENTICATION','Scan the QR code with any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.), then enter the 6-digit code it shows.');
+  const area=el('div'); area.id='fr-mfa-setup-area'; area.setAttribute('data-onboarding','1');
+  wrap.appendChild(area);
+  const skip=el('div'); skip.style.cssText='margin-top:var(--space-4);text-align:center;';
+  skip.innerHTML=`<a href="#" onclick="_frMfaSetupSkip();return false;" class="muted" style="font-size:var(--font-size-sm);">Skip for now — set this up later in SETTINGS → SECURITY</a>`;
+  wrap.appendChild(skip);
+  body.appendChild(wrap);
+  securityMfaSetup('fr-mfa-setup-area');
+}
+function _frMfaSetupSkip(){ authInitApp(); }
+function _frMfaSetupDone(){ authInitApp(); }
 function renderLogin(mfaRequired){
   const body=document.getElementById('body'); body.innerHTML='';
   const wrap=_authFormShell('SIGN IN', null);
@@ -5534,6 +5643,14 @@ function renderLogin(mfaRequired){
     `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
     `<button onclick="authLoginSubmit()" style="width:100%;">SIGN IN</button>`;
   wrap.appendChild(form);
+  // Account Recovery Tier 1 (2026-07-24 backlog, design from RESUME-TRACKER.md 2026-07-23f) —
+  // forgot-password via a still-working authenticator/backup code. Only useful if MFA is
+  // enabled on the account; the link itself doesn't know that in advance (asking would leak
+  // account existence pre-login) — /api/auth/recovery/start gives the same generic error either
+  // way if MFA isn't actually enabled.
+  const forgot=el('div'); forgot.style.cssText='margin-top:var(--space-3);text-align:center;';
+  forgot.innerHTML=`<a href="#" onclick="renderRecovery();return false;" class="muted" style="font-size:var(--font-size-sm);">Forgot password? (requires MFA)</a>`;
+  wrap.appendChild(forgot);
   body.appendChild(wrap);
   const focusEl=document.getElementById(mfaRequired?'li-code':'li-user'); if(focusEl) focusEl.focus();
   const lastField=document.getElementById(mfaRequired?'li-code':'li-pass');
@@ -5554,6 +5671,56 @@ async function authLoginSubmit(){
     }
     AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
     authInitApp();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+// Account Recovery Tier 1 (2026-07-24) — two-step, mirrors the MFA setup/verify pattern above:
+// step 1 re-authenticates with a TOTP/backup code (POST /recovery/start, which sets a 5-minute
+// session-bound "recovery_uid" marker server-side — see app.py); step 2 sets the new password
+// (POST /recovery/reset, authorized by that marker, not by a code/token in the request body).
+function renderRecovery(){
+  const body=document.getElementById('body'); body.innerHTML='';
+  const wrap=_authFormShell('RESET PASSWORD','Verify with your authenticator app or a saved backup code, then set a new password. This account must already have MFA enabled — if it doesn\'t, this app\'s owner needs host access to reset it instead.');
+  const area=el('div'); area.id='rec-area';
+  area.innerHTML=
+    `<div style="margin-bottom:var(--space-3);">Username<br/><input id="rec-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
+    `<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="rec-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`+
+    `<div id="rec-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+    `<button onclick="authRecoveryStart()" style="width:100%;">VERIFY &amp; CONTINUE</button>`;
+  wrap.appendChild(area);
+  const back=el('div'); back.style.cssText='margin-top:var(--space-4);text-align:center;';
+  back.innerHTML=`<a href="#" onclick="renderLogin(false);return false;" class="muted" style="font-size:var(--font-size-sm);">← Back to sign in</a>`;
+  wrap.appendChild(back);
+  body.appendChild(wrap);
+}
+async function authRecoveryStart(){
+  const u=(document.getElementById('rec-user').value||'').trim();
+  const code=(document.getElementById('rec-code').value||'').trim();
+  const err=document.getElementById('rec-err'); err.textContent='';
+  if(!u || !code){ err.textContent='Enter your username and a code.'; return; }
+  try{
+    const r=await fetch('/api/auth/recovery/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,code:code})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    const area=document.getElementById('rec-area');
+    area.innerHTML=
+      `<div class="pos" style="margin-bottom:8px;">✓ Verified. Set a new password (this recovery step expires in 5 minutes):</div>`+
+      `<div style="margin-bottom:var(--space-3);">New password (min 8 characters)<br/><input id="rec-newpass" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
+      `<div style="margin-bottom:var(--space-3);">Confirm password<br/><input id="rec-newpass2" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
+      `<div id="rec-err2" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+      `<button onclick="authRecoveryReset()" style="width:100%;">SET NEW PASSWORD</button>`;
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function authRecoveryReset(){
+  const p=document.getElementById('rec-newpass').value, p2=document.getElementById('rec-newpass2').value;
+  const err=document.getElementById('rec-err2'); err.textContent='';
+  if(p.length<8){ err.textContent='Password must be at least 8 characters.'; return; }
+  if(p!==p2){ err.textContent='Passwords do not match.'; return; }
+  try{
+    const r=await fetch('/api/auth/recovery/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({new_password:p})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    alert('Password reset. Sign in with your new password.');
+    renderLogin(false);
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 function authInitApp(){

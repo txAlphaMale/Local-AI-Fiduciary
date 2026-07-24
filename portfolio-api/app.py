@@ -393,7 +393,14 @@ _cache = {"ts": 0.0, "data": None}
 # when unauthenticated, so no actual page CONTENT is exposed pre-auth despite the route being
 # technically reachable. Every other route — including FastAPI's own /docs, /openapi.json —
 # is gated by omission (deny unless explicitly whitelisted), not by an exclude-list.
-_AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run", "/api/auth/login"}
+_AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run", "/api/auth/login",
+                       # Account Recovery Tier 1 (RESUME-TRACKER.md 2026-07-23f design, built
+                       # 2026-07-24): forgot-password via a valid MFA code, necessarily reachable
+                       # pre-login. Neither endpoint grants a real "uid" session -- /start only
+                       # sets a short-lived "recovery_uid" marker (checked explicitly by /reset,
+                       # not by this gate), so being public here does not widen what an
+                       # unauthenticated caller can actually do.
+                       "/api/auth/recovery/start", "/api/auth/recovery/reset"}
 
 
 def _https_active():
@@ -562,6 +569,100 @@ async def auth_mfa_disable(request: Request):
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-username")
+async def auth_change_username(request: Request):
+    """Rename the account (2026-07-24 backlog). Password-gated the same way as
+    change-password/mfa-disable — an already-authenticated session alone isn't treated as
+    sufficient for an identity change without re-proving the password."""
+    uid = _require_uid(request)
+    user = auth.get_user_by_id(uid)
+    body = await request.json()
+    if not auth.verify_password(user, body.get("password") or ""):
+        return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    try:
+        auth.set_username(uid, body.get("new_username") or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "user": auth.public_user(auth.get_user_by_id(uid))}
+
+
+@app.post("/api/auth/reset-account")
+async def auth_reset_account(request: Request):
+    """Authenticated, in-app reset of auth.db ONLY (2026-07-24 backlog — Jason: "reset the
+    auth.db... to simply test out the new changes, or if I wanted to change the name of the
+    single user account"). Deliberately narrow: deletes just this account's row via
+    auth.delete_user(), leaving store.db/chat.db/the knowledge index/all financial config
+    untouched — the app returns to the first-run screen, not a blank app. This is NOT the same
+    thing as the still-unbuilt Account Recovery Tier 2 `--wipe-all` host CLI (see
+    RESUME-TRACKER.md) — that one is for when you're LOCKED OUT (no session, no password, no
+    MFA); this one is for when you're already logged in and want a clean-slate account on
+    purpose. Two independent confirmations required since it's irreversible from the UI: the
+    current password, AND typing the username back exactly (guards against a stray/accidental
+    click doing something a "are you sure?" dialog alone is too easy to click through)."""
+    uid = _require_uid(request)
+    user = auth.get_user_by_id(uid)
+    body = await request.json()
+    if not auth.verify_password(user, body.get("password") or ""):
+        return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    if (body.get("confirm_username") or "").strip() != user["username"]:
+        return JSONResponse({"error": "typed username does not match — type it exactly to confirm"},
+                             status_code=400)
+    auth.delete_user(uid)
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.post("/api/auth/recovery/start")
+async def auth_recovery_start(request: Request):
+    """Account Recovery Tier 1 (RESUME-TRACKER.md 2026-07-23f design, built 2026-07-24):
+    self-service password reset for a user who still has their authenticator app or a saved
+    backup code, but forgot the password. Re-uses auth.mfa_check_code() — the same primitive
+    that already validates a TOTP/backup code at login — as the re-authentication factor. Public
+    by necessity (this runs pre-login), so it's rate-limited by IP using the same bucket as
+    normal login attempts, and the error message is identical whether the username doesn't
+    exist, exists without MFA enabled, or the code is wrong — doesn't confirm or deny account
+    existence/MFA status to an unauthenticated caller."""
+    ip = request.client.host if request.client else "unknown"
+    if auth.rate_limited(ip):
+        return JSONResponse({"error": "too many attempts — wait a minute and try again"}, status_code=429)
+    body = await request.json()
+    user = auth.get_user_by_username(body.get("username") or "")
+    generic_error = {"error": "invalid username or code, or MFA is not enabled on this account "
+                               "(account recovery requires MFA — contact whoever manages this "
+                               "deployment if MFA was never set up)"}
+    if not user or not user["totp_enabled"]:
+        auth.record_login_attempt(ip)
+        return JSONResponse(generic_error, status_code=401)
+    if not auth.mfa_check_code(user["id"], body.get("code") or ""):
+        auth.record_login_attempt(ip)
+        return JSONResponse(generic_error, status_code=401)
+    # A short-lived marker distinct from the real "uid" session key -- this alone grants nothing
+    # except the ability to call /recovery/reset once, within 5 minutes. The global auth gate
+    # only ever checks "uid", never "recovery_uid", so this cannot be used to reach any other
+    # endpoint.
+    request.session["recovery_uid"] = user["id"]
+    request.session["recovery_exp"] = int(time.time()) + 300
+    return {"ok": True}
+
+
+@app.post("/api/auth/recovery/reset")
+async def auth_recovery_reset(request: Request):
+    ruid = request.session.get("recovery_uid")
+    rexp = request.session.get("recovery_exp") or 0
+    if not ruid or time.time() > rexp:
+        request.session.pop("recovery_uid", None)
+        request.session.pop("recovery_exp", None)
+        return JSONResponse({"error": "recovery session expired — verify your code again"}, status_code=401)
+    body = await request.json()
+    try:
+        auth.set_password(ruid, body.get("new_password") or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    request.session.pop("recovery_uid", None)
+    request.session.pop("recovery_exp", None)
     return {"ok": True}
 
 
@@ -7032,6 +7133,17 @@ async def post_secrets(req: Request):
 # benefit, aca_slcsp pre only relevant pre-Medicare, policies/debt_rates/position_caps/estate_*
 # explicitly "optional" in their own notes already).
 SETUP_FIELDS = [
+    # ---- Tier 1: account security (auth.db, not a config file -- 2026-07-24 backlog) ----
+    # MFA is deliberately CRITICAL here, not optional -- 2026-07-24, Jason: "mark the MFA
+    # enrollment as a critical/core step in the new user setup checklist & guides." Placed first
+    # in Tier 1 so it's the first thing both the checklist card and the guided tour surface, ahead
+    # of the financial-config fields -- this app manages a household's full financial picture, so
+    # account-takeover risk is treated as at least as foundational as any single config value.
+    {"id": "mfa_enrolled", "tier": 1, "group": "Multi-factor authentication (MFA)", "cfg": "auth",
+     "key": "mfa_enabled", "jump": ("settings", "security"), "severity": "critical",
+     "note": "A rotating code from any authenticator app (Google Authenticator, Authy, 1Password, "
+             "Bitwarden, etc.) on top of your password. Set up in SETTINGS -> SECURITY -- or right "
+             "after creating your account, if you ticked \"enroll now\" on that screen."},
     # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
     {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
      "key": "state_of_residence", "jump": ("plan", "assumptions"), "severity": "critical",
@@ -7132,11 +7244,15 @@ SETUP_FIELDS = [
 ]
 
 
-def _setup_field_filled(spec, retire, insurance, policy, secrets_set):
+def _setup_field_filled(spec, retire, insurance, policy, secrets_set, mfa_enabled=False):
     """True if `spec`'s value counts as provided. `secrets_set` is the set of secret keys that
-    are set (env-locked OR saved) -- same definition /api/secrets itself uses."""
+    are set (env-locked OR saved) -- same definition /api/secrets itself uses. `mfa_enabled`
+    (2026-07-24) covers the single cfg=="auth" entry -- MFA status lives in auth.db, not any of
+    the JSON/SQLite config stores the other three cfg branches read."""
     if spec["cfg"] == "secret":
         return spec["key"] in secrets_set
+    if spec["cfg"] == "auth":
+        return bool(mfa_enabled)
     cfg = {"retire": retire, "insurance": insurance, "policy": policy}.get(spec["cfg"]) or {}
     val = cfg.get(spec["key"])
     kind = spec.get("kind", "scalar")
@@ -7163,12 +7279,13 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set):
     return val not in (None, "")
 
 
-def _setup_progress():
+def _setup_progress(mfa_enabled=False):
     """Compute the full onboarding completeness model: every SETUP_FIELDS entry checked against
     the LIVE config, grouped by tier, with an honest X-of-N that only counts fields where
     "blank" really means "not yet provided" for THIS household (married-only fields are excluded
     from a single filer's denominator; already-reasonable-default fields are shown but never
-    counted -- see SETUP_FIELDS' docstring)."""
+    counted -- see SETUP_FIELDS' docstring). `mfa_enabled` (2026-07-24) is read from the caller's
+    session/auth.db, not any of the JSON config stores this function otherwise reads."""
     retire = _read_retire()
     insurance = _read_insurance_cfg()
     policy = _read_policy()
@@ -7180,7 +7297,7 @@ def _setup_progress():
     tiers = {}
     for spec in SETUP_FIELDS:
         applicable = not (spec.get("required_if") == "mfj" and not married)
-        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set)
+        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set, mfa_enabled)
         scored = applicable and spec.get("scored", True)
         severity = spec.get("severity", "optional")
         # "done" (drives the % bar / X-of-N counts) != "filled" (drives the ✓/△/! glyph). A blank
@@ -7208,8 +7325,10 @@ def _setup_progress():
 
 
 @app.get("/api/setup-progress")
-def get_setup_progress():
-    return _setup_progress()
+def get_setup_progress(request: Request):
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    return _setup_progress(mfa_enabled=bool(user and user.get("totp_enabled")))
 
 
 def _dividend_drip_split():
