@@ -316,6 +316,7 @@ function runJob(url, btn, queuedLabel){
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
+let AUTH_STATUS=null;
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
@@ -1202,6 +1203,7 @@ function render(){
   else if(TAB==='settings'){
     tc.appendChild(panelSubtabs('settings',[
       {key:'theme',label:'THEME',build:()=>themeContent()},
+      {key:'security',label:'SECURITY',build:()=>securityContent()},
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
       {key:'prompts',label:'PERSONA PROMPTS',build:()=>promptsContent()},
@@ -2526,6 +2528,126 @@ function themeContent(){
   wrap.appendChild(row);
   return wrap;
 }
+// ---------------------------------------------------------------------------
+// SECURITY panel (2026-07-23c) — LOCAL-HOSTING-HARDENING-PLAN.md §2/§3: account password
+// change, TOTP MFA setup/disable, logout. The account itself is created via the first-run
+// flow at the bottom of this file (authFirstRunSubmit), not here — this panel only manages
+// an EXISTING account.
+// ---------------------------------------------------------------------------
+function _authRefreshStatus(){
+  return fetch('/api/auth/status').then(r=>r.json()).then(d=>{ AUTH_STATUS=d; if(TAB==='settings') render(); }).catch(()=>{});
+}
+function securityContent(){
+  const wrap=el('div');
+  const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Account & session security for this deployment — single local login, optional authenticator-app MFA. No data leaves this server for any of this.';
+  wrap.appendChild(sub);
+  if(!u){ wrap.appendChild(el('div','muted','Loading account…')); _authRefreshStatus(); return wrap; }
+
+  wrap.appendChild(el('div','ph','ACCOUNT'));
+  const acctRow=el('div'); acctRow.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-2);';
+  acctRow.innerHTML=`Signed in as <b>${u.username}</b> · account created ${u.created?new Date(u.created*1000).toLocaleDateString():'—'}`;
+  wrap.appendChild(acctRow);
+  const logoutBtn=el('button',null,'LOG OUT'); logoutBtn.style.marginBottom='var(--space-4)'; logoutBtn.onclick=authLogout; wrap.appendChild(logoutBtn);
+
+  wrap.appendChild(el('div','ph','CHANGE PASSWORD'));
+  const pwWrap=el('div'); pwWrap.style.cssText='margin-bottom:var(--space-4);';
+  pwWrap.innerHTML=
+    `<div style="margin-bottom:6px;">Current password <input id="sec-curpass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
+    `<div style="margin-bottom:6px;">New password (min 8 characters) <input id="sec-newpass" type="password" style="width:220px;" autocomplete="new-password"/></div>`+
+    `<div id="sec-pw-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
+    `<button onclick="securityChangePassword()">↳ UPDATE PASSWORD</button>`;
+  wrap.appendChild(pwWrap);
+
+  wrap.appendChild(el('div','ph','TWO-FACTOR AUTHENTICATION (TOTP)'));
+  const mfaWrap=el('div'); mfaWrap.id='sec-mfa-wrap'; mfaWrap.appendChild(_securityMfaBlock(u));
+  wrap.appendChild(mfaWrap);
+  return wrap;
+}
+function _securityMfaBlock(u){
+  const box=el('div');
+  if(u.mfa_enabled){
+    const p=el('div'); p.style.cssText='margin-bottom:var(--space-2);';
+    p.innerHTML='<span class="pos">✓ MFA is ON</span> — an authenticator code is required at login.';
+    box.appendChild(p);
+    const dis=el('div');
+    dis.innerHTML='Password to confirm <input id="sec-mfa-disable-pass" type="password" style="width:200px;" autocomplete="current-password"/>';
+    box.appendChild(dis);
+    const btn=el('button',null,'DISABLE MFA'); btn.style.marginTop='6px'; btn.onclick=securityMfaDisable; box.appendChild(btn);
+    const err=el('div','neg'); err.id='sec-mfa-err'; err.style.cssText='font-size:var(--font-size-sm);min-height:16px;margin-top:4px;'; box.appendChild(err);
+  } else {
+    const p=el('div','muted'); p.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
+    p.textContent='Not enabled. Recommended — adds a rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) on top of your password.';
+    box.appendChild(p);
+    const btn=el('button',null,'SET UP MFA'); btn.onclick=securityMfaSetup; box.appendChild(btn);
+    const setupArea=el('div'); setupArea.id='sec-mfa-setup-area'; setupArea.style.marginTop='var(--space-3)'; box.appendChild(setupArea);
+  }
+  return box;
+}
+async function securityChangePassword(){
+  const cur=document.getElementById('sec-curpass').value;
+  const nw=document.getElementById('sec-newpass').value;
+  const err=document.getElementById('sec-pw-err'); err.textContent='';
+  if(nw.length<8){ err.textContent='New password must be at least 8 characters.'; return; }
+  try{
+    const r=await fetch('/api/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_password:cur,new_password:nw})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    document.getElementById('sec-curpass').value=''; document.getElementById('sec-newpass').value='';
+    alert('Password updated.');
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function securityMfaSetup(){
+  try{
+    const r=await fetch('/api/auth/mfa/setup',{method:'POST'});
+    const d=await r.json();
+    if(d.error){ alert('Setup failed: '+d.error); return; }
+    const area=document.getElementById('sec-mfa-setup-area'); if(!area) return;
+    const secretMatch=(d.otpauth_uri||'').match(/secret=([^&]+)/);
+    area.innerHTML=
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Scan this with your authenticator app, then enter the 6-digit code it shows:</div>`+
+      `<img src="${d.qr_data_uri}" style="width:180px;height:180px;border-radius:var(--radius-md);margin-bottom:8px;display:block;"/>`+
+      (secretMatch?`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Can't scan? Enter this key manually: <code>${secretMatch[1]}</code></div>`:'')+
+      `<input id="sec-mfa-code" type="text" placeholder="123456" style="width:120px;"/> <button onclick="securityMfaVerify()">✓ VERIFY &amp; ENABLE</button>`+
+      `<div id="sec-mfa-verify-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+  }catch(e){ alert('Setup failed: '+e); }
+}
+async function securityMfaVerify(){
+  const code=(document.getElementById('sec-mfa-code').value||'').trim();
+  const err=document.getElementById('sec-mfa-verify-err'); err.textContent='';
+  try{
+    const r=await fetch('/api/auth/mfa/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    // Update in-memory state but do NOT render() yet — the backup codes below must stay
+    // visible until the user explicitly acknowledges them (shown exactly once, never again).
+    if(AUTH_STATUS && AUTH_STATUS.user) AUTH_STATUS.user.mfa_enabled=true;
+    const area=document.getElementById('sec-mfa-setup-area');
+    if(area){
+      area.innerHTML=
+        `<div class="pos" style="margin-bottom:6px;">✓ MFA enabled.</div>`+
+        `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
+        `<div style="font-family:monospace;font-size:var(--font-size-md);line-height:1.6;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">${d.backup_codes.join('<br/>')}</div>`+
+        `<button onclick="render()">✓ I'VE SAVED THESE — DONE</button>`;
+    }
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function securityMfaDisable(){
+  const pass=document.getElementById('sec-mfa-disable-pass').value;
+  const err=document.getElementById('sec-mfa-err'); err.textContent='';
+  try{
+    const r=await fetch('/api/auth/mfa/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    await _authRefreshStatus();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+function authLogout(){
+  fetch('/api/auth/logout',{method:'POST'}).then(()=>location.reload()).catch(()=>location.reload());
+}
+
 function settingsContent(){
   const wrap=el('div'); const s=SETTINGS_CFG;
   if(!s || !s.settings){ wrap.appendChild(el('div','muted','Settings unavailable.')); return wrap; }
@@ -4172,23 +4294,67 @@ function scenarioSwitch(sid){
 async function _scenariosRefresh(){
   try{ const d=await (await fetch('/api/paper/scenarios')).json(); if(d && !d.error){ SCENARIOS=d; if(TAB==='strategist') render(); } }catch(_){}
 }
-function scenarioCreate(){
+// Shared by both the AI-scenario create panel and the user-ledger create panel (2026-07-23c fix —
+// Jason: the old prompt()-chain create flow (a) never offered seeding from real holdings, only a
+// cash amount, and (b) asked for risk profile via a free-text prompt() with no indication of valid
+// values. Both fixed by a real inline panel (same show/hide pattern as the existing ⊕ SEED panels)
+// with an actual <select> for risk profile and a from-scratch/seed-from-holdings toggle up front.
+function _seedTickerBoxes(cls){
+  const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
+  let boxes='';
+  seedable.forEach(c=>{ boxes+=`<label style="display:inline-flex;align-items:center;gap:var(--space-1);margin:2px 12px 2px 0;font-size:var(--font-size-base);white-space:nowrap;"><input type="checkbox" class="${cls}" data-ticker="${c.ticker}" checked/> <span style="color:var(--color-accent)">${c.ticker}</span> <span class="muted">${usd(c.value)}</span></label>`; });
+  return boxes || '<span class="muted">No tradable holdings found.</span>';
+}
+function scenarioCreateToggle(){
   if(SCENARIOS && SCENARIOS.active_count>=SCENARIOS.max_active){
     alert('Scenario cap reached ('+SCENARIOS.max_active+' active max) — archive or delete one first.'); return;
   }
-  const name=(prompt('Name for the new AI scenario:')||'').trim();
-  if(!name) return;
-  const cash=parseFloat(prompt('Starting cash ($):','2000'))||2000;
-  let rp=(prompt('Risk mandate for this scenario — conservative / moderate / aggressive:\n'+
-    '(this is what gives running two scenarios a practical point — give them different mandates)','moderate')||'moderate').trim().toLowerCase();
-  if(['conservative','moderate','aggressive'].indexOf(rp)<0) rp='moderate';
-  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({kind:'ai', name:name, cash:cash, risk_profile:rp})})
+  const p=document.getElementById('scenario-createpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none');
+}
+function scenarioCreateModeToggle(){
+  const seed=document.getElementById('sc-mode').value==='seed';
+  const sf=document.getElementById('sc-scratch-fields'); if(sf) sf.style.display=seed?'none':'block';
+  const ef=document.getElementById('sc-seed-fields'); if(ef) ef.style.display=seed?'block':'none';
+}
+function scenarioCreateSubmit(){
+  const name=(document.getElementById('sc-name').value||'').trim();
+  if(!name){ alert('Enter a name for the scenario.'); return; }
+  const rp=document.getElementById('sc-risk').value;
+  const body={kind:'ai', name:name, risk_profile:rp};
+  if(document.getElementById('sc-mode').value==='seed'){
+    const tickers=[...document.querySelectorAll('.sc-seedck')].filter(x=>x.checked).map(x=>x.getAttribute('data-ticker'));
+    if(!tickers.length){ alert('Select at least one holding to seed, or switch to "start from scratch".'); return; }
+    body.seed={tickers:tickers, cash:parseFloat(document.getElementById('sc-seed-cash').value)||0, basis:document.getElementById('sc-seed-basis').value};
+  } else {
+    body.cash=parseFloat(document.getElementById('sc-cash').value)||2000;
+  }
+  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       if(d&&d.error){ alert('Create failed: '+d.error); return; }
+      const p=document.getElementById('scenario-createpanel'); if(p) p.style.display='none';
       scenarioSwitch(d.scenario.id);
       _scenariosRefresh();
     }).catch(e=>alert('Create failed: '+e));
+}
+function scenarioCreatePanel(){
+  const rps=(SCENARIOS&&SCENARIOS.risk_profiles)||['conservative','moderate','aggressive'];
+  const wrap=el('div'); wrap.id='scenario-createpanel'; wrap.style.cssText='display:none;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3);margin-bottom:var(--space-3);';
+  const rpOpts=rps.map(p=>`<option value="${p}"${p==='moderate'?' selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('');
+  wrap.innerHTML=
+    `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">NEW AI SCENARIO</div>`+
+    `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Name <input id="sc-name" type="text" placeholder="e.g. Aggro Growth" style="width:180px;"/> `+
+    `&nbsp; Risk mandate <select id="sc-risk" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${rpOpts}</select></div>`+
+    `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Start `+
+    `<select id="sc-mode" onchange="scenarioCreateModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<option value="scratch">from scratch (cash only)</option><option value="seed">seeded from my real holdings</option></select></div>`+
+    `<div id="sc-scratch-fields" style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Starting cash $<input id="sc-cash" type="number" value="2000" style="width:90px;"/></div>`+
+    `<div id="sc-seed-fields" style="display:none;margin-bottom:var(--space-2);">`+
+      `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="sc-seed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="sc-seed-cash" type="number" value="0" style="width:80px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('sc-seedck')}</div>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
+    `</div>`+
+    `<div><button onclick="scenarioCreateSubmit()">✓ CREATE</button> <button onclick="scenarioCreateToggle()">cancel</button></div>`;
+  return wrap;
 }
 function scenarioSetRiskProfile(sid, rp){
   // optimistic — same fix as everywhere else this session: mutate the local copy + render NOW,
@@ -4232,10 +4398,11 @@ function scenarioSwitcher(){
   const cnt=el('span','muted'); cnt.style.fontSize='var(--font-size-sm)';
   cnt.textContent=sc.active_count+' of '+sc.max_active+' active slots used';
   head.appendChild(cnt);
-  const addBtn=el('button',null,'+ NEW SCENARIO'); addBtn.style.marginLeft='auto'; addBtn.onclick=scenarioCreate;
+  const addBtn=el('button',null,'+ NEW SCENARIO'); addBtn.style.marginLeft='auto'; addBtn.onclick=scenarioCreateToggle;
   if(sc.active_count>=sc.max_active) addBtn.title='Cap reached — archive or delete one first';
   head.appendChild(addBtn);
   wrap.appendChild(head);
+  wrap.appendChild(scenarioCreatePanel());
   const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);';
   const rps=sc.risk_profiles||['conservative','moderate','aggressive'];
   aiScens.forEach(s=>{
@@ -4549,18 +4716,51 @@ function ledgerSeed(){
   if(!confirm('Reset your ledger and seed it with '+tickers.length+' of your holdings ('+basis+' basis)? This wipes its current paper positions.')) return;
   ledgerPost('/api/paper/seed',{tickers:tickers,cash:cash,basis:basis,scenario_id:USER_LEDGER.id},'Seed');
 }
-function ledgerCreate(){
+function ledgerCreateToggle(){
   if(SCENARIOS && SCENARIOS.user_ledger_count>=SCENARIOS.max_user_ledgers){
     alert('You already have your ledger limit ('+SCENARIOS.max_user_ledgers+') — disable or delete it first.'); return;
   }
-  const cash=parseFloat(prompt('Starting cash for your ledger ($):','2000'))||2000;
-  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({kind:'user', name:'My Ledger', cash:cash})})
+  const p=document.getElementById('ledger-createpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none');
+}
+function ledgerCreateModeToggle(){
+  const seed=document.getElementById('lc-mode').value==='seed';
+  const sf=document.getElementById('lc-scratch-fields'); if(sf) sf.style.display=seed?'none':'block';
+  const ef=document.getElementById('lc-seed-fields'); if(ef) ef.style.display=seed?'block':'none';
+}
+function ledgerCreateSubmit(){
+  const name=(document.getElementById('lc-name').value||'').trim()||'My Ledger';
+  const body={kind:'user', name:name};
+  if(document.getElementById('lc-mode').value==='seed'){
+    const tickers=[...document.querySelectorAll('.lc-seedck')].filter(x=>x.checked).map(x=>x.getAttribute('data-ticker'));
+    if(!tickers.length){ alert('Select at least one holding to seed, or switch to "start from scratch".'); return; }
+    body.seed={tickers:tickers, cash:parseFloat(document.getElementById('lc-seed-cash').value)||0, basis:document.getElementById('lc-seed-basis').value};
+  } else {
+    body.cash=parseFloat(document.getElementById('lc-cash').value)||2000;
+  }
+  fetch('/api/paper/scenarios',{method:'POST',headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       if(d&&d.error){ alert('Create failed: '+d.error); return; }
+      const p=document.getElementById('ledger-createpanel'); if(p) p.style.display='none';
       USER_LEDGER=d.scenario; if(TAB==='strategist') render();   // optimistic — same fix as elsewhere
       _scenariosRefresh();
     }).catch(e=>alert('Create failed: '+e));
+}
+function ledgerCreatePanel(){
+  const wrap=el('div'); wrap.id='ledger-createpanel'; wrap.style.cssText='display:none;border:1px dashed var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3);margin-top:var(--space-2);';
+  wrap.innerHTML=
+    `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">NEW LEDGER</div>`+
+    `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Name <input id="lc-name" type="text" placeholder="My Ledger" style="width:180px;"/></div>`+
+    `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Start `+
+    `<select id="lc-mode" onchange="ledgerCreateModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<option value="scratch">from scratch (cash only)</option><option value="seed">seeded from my real holdings</option></select></div>`+
+    `<div id="lc-scratch-fields" style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Starting cash $<input id="lc-cash" type="number" value="2000" style="width:90px;"/></div>`+
+    `<div id="lc-seed-fields" style="display:none;margin-bottom:var(--space-2);">`+
+      `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="lc-seed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="lc-seed-cash" type="number" value="0" style="width:80px;"/></div>`+
+      `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('lc-seedck')}</div>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
+    `</div>`+
+    `<div><button onclick="ledgerCreateSubmit()">✓ CREATE</button> <button onclick="ledgerCreateToggle()">cancel</button></div>`;
+  return wrap;
 }
 function ledgerArchive(){
   if(!USER_LEDGER||!USER_LEDGER.id) return;
@@ -4612,10 +4812,11 @@ function userLedgerPanel(){
   const cap=(SCENARIOS&&SCENARIOS.max_user_ledgers)||1;
   if(!r){
     const p=el('div'); p.style.cssText='border:1px dashed var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3);';
-    const b=el('button',null,'+ CREATE YOUR LEDGER'); b.onclick=ledgerCreate; p.appendChild(b);
+    const b=el('button',null,'+ CREATE YOUR LEDGER'); b.onclick=ledgerCreateToggle; p.appendChild(b);
     const d=el('div','muted'); d.style.cssText='font-size:var(--font-size-sm);margin-top:6px;';
     d.textContent='Limited to '+cap+' ledger — you can disable or delete it any time to save compute.';
     p.appendChild(d);
+    p.appendChild(ledgerCreatePanel());
     wrap.appendChild(p);
     return wrap;
   }
@@ -5059,10 +5260,98 @@ function userBusy(){
   const ta=document.getElementById('chat-input');          // an unsent chat draft on the CHAT tab
   return !!(TAB==='chat' && ta && ta.value.trim()!=='');
 }
-document.getElementById('refresh').onclick=()=>load(true);
-document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
-load(false);
-setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-poll every 5 min (server caches); bg=true preserves scroll
+// ============================================================================
+// AUTH GATE (2026-07-23c) — LOCAL-HOSTING-HARDENING-PLAN.md §2/§3. The server now rejects
+// every API call without a session (see app.py's _security_and_auth_gate), so the app can no
+// longer just call load() on page load — it has to establish who's asking first. Reuses the
+// existing #body mount + el()/render() machinery rather than a separate login page/template.
+// ============================================================================
+function _authFormShell(title, sub){
+  const wrap=el('div'); wrap.style.cssText='max-width:380px;margin:80px auto;padding:var(--space-6);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);';
+  wrap.appendChild(el('div','ph',title));
+  if(sub){ const s=el('div','muted'); s.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-4);line-height:1.4;'; s.textContent=sub; wrap.appendChild(s); }
+  return wrap;
+}
+function renderFirstRun(){
+  const body=document.getElementById('body'); body.innerHTML='';
+  const wrap=_authFormShell('WELCOME — CREATE YOUR ACCOUNT','This is a single-user, self-hosted app — you\'re setting up the one account for this deployment.');
+  const form=el('div');
+  form.innerHTML=
+    `<div style="margin-bottom:var(--space-3);">Username<br/><input id="fr-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
+    `<div style="margin-bottom:var(--space-3);">Password (min 8 characters)<br/><input id="fr-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
+    `<div style="margin-bottom:var(--space-3);">Confirm password<br/><input id="fr-pass2" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
+    `<div id="fr-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+    `<button onclick="authFirstRunSubmit()" style="width:100%;">CREATE ACCOUNT</button>`;
+  wrap.appendChild(form);
+  body.appendChild(wrap);
+  const p2=document.getElementById('fr-pass2'); if(p2) p2.onkeydown=e=>{ if(e.key==='Enter') authFirstRunSubmit(); };
+}
+async function authFirstRunSubmit(){
+  const u=(document.getElementById('fr-user').value||'').trim();
+  const p=document.getElementById('fr-pass').value, p2=document.getElementById('fr-pass2').value;
+  const err=document.getElementById('fr-err'); err.textContent='';
+  if(!u){ err.textContent='Enter a username.'; return; }
+  if(p.length<8){ err.textContent='Password must be at least 8 characters.'; return; }
+  if(p!==p2){ err.textContent='Passwords do not match.'; return; }
+  try{
+    const r=await fetch('/api/auth/first-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
+    authInitApp();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+function renderLogin(mfaRequired){
+  const body=document.getElementById('body'); body.innerHTML='';
+  const wrap=_authFormShell('SIGN IN', null);
+  const form=el('div');
+  form.innerHTML=
+    `<div style="margin-bottom:var(--space-3);">Username<br/><input id="li-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
+    `<div style="margin-bottom:var(--space-3);">Password<br/><input id="li-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="current-password"/></div>`+
+    (mfaRequired?`<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="li-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`:'')+
+    `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+    `<button onclick="authLoginSubmit()" style="width:100%;">SIGN IN</button>`;
+  wrap.appendChild(form);
+  body.appendChild(wrap);
+  const focusEl=document.getElementById(mfaRequired?'li-code':'li-user'); if(focusEl) focusEl.focus();
+  const lastField=document.getElementById(mfaRequired?'li-code':'li-pass');
+  if(lastField) lastField.onkeydown=e=>{ if(e.key==='Enter') authLoginSubmit(); };
+}
+async function authLoginSubmit(){
+  const u=(document.getElementById('li-user').value||'').trim();
+  const p=document.getElementById('li-pass').value;
+  const codeEl=document.getElementById('li-code');
+  const code=codeEl?codeEl.value.trim():'';
+  const err=document.getElementById('li-err'); err.textContent='';
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,code:code})});
+    const d=await r.json();
+    if(d.error){
+      if(d.mfa_required && !codeEl){ renderLogin(true); return; }
+      err.textContent=d.error; return;
+    }
+    AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
+    authInitApp();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+function authInitApp(){
+  document.getElementById('refresh').onclick=()=>load(true);
+  document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
+  load(false);
+  setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-poll every 5 min (server caches); bg=true preserves scroll
+}
+async function authCheckAndInit(){
+  try{
+    AUTH_STATUS=await (await fetch('/api/auth/status')).json();
+  }catch(e){
+    document.getElementById('body').innerHTML='<div class="err">Could not reach the server: '+e+'</div>';
+    return;
+  }
+  if(!AUTH_STATUS.has_user) renderFirstRun();
+  else if(!AUTH_STATUS.authenticated) renderLogin(false);
+  else authInitApp();
+}
+authCheckAndInit();
 
 // Serial job-queue badge (Increment B): poll /api/jobs and show running/queued depth
 // in the header. Independent of the 5-min load so it updates live during a run. Idle = blank.

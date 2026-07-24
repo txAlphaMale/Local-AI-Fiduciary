@@ -77,6 +77,13 @@ services:
       - INTERNAL_SCHEDULER=${INTERNAL_SCHEDULER:-1}
       - ANALYSIS_FILE=/data/analysis.json
       - ANALYSIS_TOKEN=${ANALYSIS_TOKEN}
+      # Session login (2026-07-23c) — real username/password + optional TOTP MFA now gates the
+      # whole app; AUTH_DB lands in the same /data volume already mounted below, no new volume
+      # needed. Set SESSION_SECRET in .env for a real deployment — left blank, one is generated
+      # and persisted to /data automatically so sessions still survive a restart.
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - SESSION_MAX_AGE_DAYS=${SESSION_MAX_AGE_DAYS:-30}
+      - SESSION_HTTPS_ONLY=${SESSION_HTTPS_ONLY:-0}
       - FINNHUB_API_KEY=${FINNHUB_API_KEY}
       # Ollama runs on the HOST (prerequisite), reached over the host gateway.
       - OLLAMA_BASE_URL=http://host.docker.internal:11434

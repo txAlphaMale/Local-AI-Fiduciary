@@ -21,10 +21,12 @@ import re
 import datetime
 import threading
 import queue
+import uuid
 
 import requests
 from fastapi import FastAPI, Request, Header
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -53,6 +55,7 @@ import bizacq       # small-business acquisition underwriter (G11) — SDE mult/
 import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical return sequences
 import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
+import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -358,6 +361,183 @@ def _gpu_release_visible():
 
 app = FastAPI(title="portfolio-terminal", version="0.1.0")
 _cache = {"ts": 0.0, "data": None}
+
+
+# ============================================================================
+# SESSION AUTH + SECURITY HEADERS (2026-07-23c — LOCAL-HOSTING-HARDENING-PLAN.md §2/§3,
+# Priority 1). Replaces the old trust model: previously only 23 of 127 endpoints checked
+# ANALYSIS_TOKEN, and even that token was handed to the client by the page it's meant to
+# protect (see index() below) — so it protected nothing once the page itself was reachable.
+# Now EVERY route except a tiny public whitelist requires a real session. The old
+# ANALYSIS_TOKEN checks are left in place for now (harmless, redundant) rather than ripped
+# out in this pass — see LOCAL-HOSTING-HARDENING-PLAN.md's follow-on note.
+#
+# Middleware order matters and is COUNTERINTUITIVE in Starlette: add_middleware() inserts at
+# the FRONT of the internal list, so the LAST middleware added ends up OUTERMOST (runs first
+# on the way in). Verified empirically, not just by reading the docs — an earlier version of
+# this code added SessionMiddleware first and the gate second, which put the gate OUTSIDE
+# SessionMiddleware and crashed every request with "SessionMiddleware must be installed to
+# access request.session". Fix: define the gate FIRST (below), add SessionMiddleware LAST
+# (further down), so SessionMiddleware is outermost and has already parsed the cookie into
+# request.session by the time the gate — running just inside it — reads that value.
+# ============================================================================
+
+# "/" stays public — it only ever serves the static shell + JS, never data. The JS itself
+# calls /api/auth/status on load and renders a first-run/login form instead of the dashboard
+# when unauthenticated, so no actual page CONTENT is exposed pre-auth despite the route being
+# technically reachable. Every other route — including FastAPI's own /docs, /openapi.json —
+# is gated by omission (deny unless explicitly whitelisted), not by an exclude-list.
+_AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run", "/api/auth/login"}
+
+
+@app.middleware("http")
+async def _security_and_auth_gate(request: Request, call_next):
+    if request.url.path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    if os.environ.get("SESSION_HTTPS_ONLY", "0") == "1":
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
+
+
+def _session_secret():
+    """SESSION_SECRET should be set explicitly in .env for a real deployment (see
+    .env.example). If it isn't, generate one and PERSIST it next to the data volume so
+    sessions survive a restart instead of silently invalidating every time the container
+    restarts — better default behavior for a local single-user app than forcing the env var."""
+    env = os.environ.get("SESSION_SECRET")
+    if env:
+        return env
+    path = os.environ.get("SESSION_SECRET_FILE", "/data/.session_secret")
+    try:
+        with open(path, encoding="utf-8") as f:
+            v = f.read().strip()
+            if v:
+                return v
+    except Exception:
+        pass
+    v = uuid.uuid4().hex + uuid.uuid4().hex
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(v)
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+    return v
+
+
+app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
+                    max_age=auth.SESSION_MAX_AGE_DAYS * 86400, same_site="strict",
+                    https_only=os.environ.get("SESSION_HTTPS_ONLY", "0") == "1")
+
+auth.init_db()
+
+
+def _require_uid(request: Request):
+    """The global gate above already guarantees this is set for any route that reaches a
+    handler at all — this just gives auth-scoped handlers a clean, obviously-named read."""
+    return request.session.get("uid")
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    has_user = auth.has_any_user()
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    return {"has_user": has_user, "authenticated": bool(user),
+            "user": auth.public_user(user) if user else None}
+
+
+@app.post("/api/auth/first-run")
+async def auth_first_run(request: Request):
+    """Creates the ONE account this deployment will have. Refuses once any account exists —
+    this is a bootstrap-only endpoint, not a general signup form (no multi-tenancy; a 2nd
+    household member is a small manual addition later, not a self-serve flow)."""
+    if auth.has_any_user():
+        return JSONResponse({"error": "an account already exists — use /api/auth/login"}, status_code=400)
+    body = await request.json()
+    try:
+        uid = auth.create_user(body.get("username"), body.get("password"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    request.session["uid"] = uid
+    return {"ok": True, "user": auth.public_user(auth.get_user_by_id(uid))}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    if auth.rate_limited(ip):
+        return JSONResponse({"error": "too many attempts — wait a minute and try again"}, status_code=429)
+    body = await request.json()
+    user = auth.get_user_by_username(body.get("username") or "")
+    if not user or not auth.verify_password(user, body.get("password") or ""):
+        auth.record_login_attempt(ip)
+        return JSONResponse({"error": "invalid username or password"}, status_code=401)
+    if user["totp_enabled"]:
+        if not auth.mfa_check_code(user["id"], body.get("code") or ""):
+            auth.record_login_attempt(ip)
+            return JSONResponse({"error": "invalid or missing authenticator code", "mfa_required": True},
+                                status_code=401)
+    request.session["uid"] = user["id"]
+    return {"ok": True, "user": auth.public_user(user)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-password")
+async def auth_change_password(request: Request):
+    uid = _require_uid(request)
+    user = auth.get_user_by_id(uid)
+    body = await request.json()
+    if not auth.verify_password(user, body.get("current_password") or ""):
+        return JSONResponse({"error": "current password is incorrect"}, status_code=401)
+    try:
+        auth.set_password(uid, body.get("new_password") or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/auth/mfa/setup")
+def auth_mfa_setup(request: Request):
+    """Generates a new TOTP secret (NOT yet enabled — see /verify) and a QR code any RFC
+    6238 authenticator app can scan (Google Authenticator, Authy, 1Password, Bitwarden, ...).
+    Calling this again before /verify simply replaces the pending, not-yet-active secret."""
+    secret, uri, qr = auth.mfa_provision(_require_uid(request))
+    return {"ok": True, "otpauth_uri": uri, "qr_data_uri": qr}
+
+
+@app.post("/api/auth/mfa/verify")
+async def auth_mfa_verify(request: Request):
+    """Confirms the authenticator app is actually producing valid codes, THEN enables MFA and
+    returns 10 single-use backup codes — shown here exactly once, never retrievable again."""
+    body = await request.json()
+    ok, codes = auth.mfa_verify_and_enable(_require_uid(request), body.get("code") or "")
+    if not ok:
+        return JSONResponse({"error": "incorrect code — check your authenticator app and try again"},
+                            status_code=400)
+    return {"ok": True, "backup_codes": codes,
+            "note": "Save these now — shown only once. Each works one time if you lose your authenticator."}
+
+
+@app.post("/api/auth/mfa/disable")
+async def auth_mfa_disable(request: Request):
+    uid = _require_uid(request)
+    user = auth.get_user_by_id(uid)
+    body = await request.json()
+    if not auth.verify_password(user, body.get("password") or ""):
+        return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    auth.mfa_disable(uid)
+    return {"ok": True}
 
 
 # ============================================================================

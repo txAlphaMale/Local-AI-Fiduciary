@@ -3,3 +3,7 @@ uvicorn[standard]
 requests
 pypdf                  # extract text from PDF knowledge docs for the RAG index (N12)
 snaptrade-python-sdk   # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)
+itsdangerous            # session-cookie signing (starlette.middleware.sessions.SessionMiddleware)
+argon2-cffi             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
+pyotp                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
+qrcode[pil]             # renders the TOTP QR code for MFA setup (auth.py)
