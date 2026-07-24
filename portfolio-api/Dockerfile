@@ -1,28 +1,29 @@
 FROM python:3.12-slim
 WORKDIR /app
 
-# curl: fetches the acme.sh installer below. socat: acme.sh's --standalone HTTP-01 challenge
-# listener needs it. Both are also needed at RUNTIME (acme.sh shells out to them), not just at
-# build time, so they stay installed rather than being removed after the install step.
-RUN apt-get update && apt-get install -y --no-install-recommends curl socat ca-certificates \
+# curl: fetches acme.sh below. tar: extracts it. socat: acme.sh's --standalone HTTP-01 challenge
+# listener needs it. All three are also needed at RUNTIME (acme.sh shells out to them), not just
+# at build time, so they stay installed rather than being removed after the install step.
+RUN apt-get update && apt-get install -y --no-install-recommends curl tar socat ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Vendored acme.sh (2026-07-23f) — the built-in Let's Encrypt / ACME client tls.py shells out to.
-# Deliberately invoked with ZERO flags (2026-07-23h, second fix — a real deploy proved the FIRST
-# fix's --nocron alone still broke with "Unknown parameter: ----nocron": get.acme.sh's installer
-# doubles a leading "--" on ANY flag when invoked as `sh savedfile.sh --whatever`, not just
-# --home — so the only invocation immune to that bug is passing nothing at all). This means it
-# installs to its plain default location (~/.acme.sh -> /root/.acme.sh, since this RUN executes
-# as root) and may register its own default cron entry — both harmless here: (1) this container
-# has no init system/cron daemon actually running to ever fire that entry, and (2) even if it
-# somehow did, it would operate on /root/.acme.sh as the data dir, completely separate from the
-# ACME_HOME (/data/acme, under the persistent volume) tls.py always passes explicitly via --home
-# on every REAL issue/renew call it makes at runtime — a totally different, well-documented
-# per-command usage of that flag that was never the problem. Renewal is driven by tls.py's own
-# background thread (app.py's tls.start_renewal_thread()) regardless.
-RUN curl -fsSL https://get.acme.sh -o /tmp/acme-install.sh \
-    && sh /tmp/acme-install.sh \
-    && rm -f /tmp/acme-install.sh
+# Third fix, 2026-07-23h — a real deploy walked through 2 prior attempts that both failed on the
+# convenience `curl get.acme.sh | sh -s <flags>` one-liner: it turns out THAT wrapper script
+# doubles a leading "--" on ANY flag forwarded through it this way ("--home" and separately
+# "--nocron" both broke with "Unknown parameter: ----X"), and even with zero flags it then hard-
+# refuses to install without a `cron` package present ("Please add '--force' and try install
+# again... ./acme.sh --install --force" — its own error message, which is quoting acme.sh's REAL
+# install script's OWN argument syntax, not the wrapper's). So: skip the flaky get.acme.sh wrapper
+# entirely and do what it does internally, ourselves — fetch the same GitHub source tarball
+# directly and invoke the real ./acme.sh --install with real flags, matching exactly the command
+# acme.sh's own error output confirmed works. --force: no cron package in this slim image, and
+# none needed — renewal is driven by tls.py's own background thread (app.py's
+# tls.start_renewal_thread()), not a crontab entry.
+RUN curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz -o /tmp/acme.tar.gz \
+    && mkdir -p /tmp/acme-src && tar -xzf /tmp/acme.tar.gz -C /tmp/acme-src --strip-components=1 \
+    && (cd /tmp/acme-src && ./acme.sh --install --force) \
+    && rm -rf /tmp/acme.tar.gz /tmp/acme-src
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
