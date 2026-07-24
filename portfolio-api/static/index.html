@@ -2556,14 +2556,23 @@ function saveSettings(){
   document.querySelectorAll('.cfg-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
-      if(d && d.restart_required && d.restart_required.length){ alert('Saved. Model config applies on the next portfolio-api restart.'); }
+      if(d && d.restart_required && d.restart_required.length){
+        let msg='Saved. Model config applies on the next portfolio-api restart.';
+        if(d.staged_behind_env && d.staged_behind_env.length){
+          msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '
+              +'them from .env — they\'re just staged and ready for when you do.';
+        }
+        alert(msg);
+      }
       // optimistic: patch SETTINGS_CFG's items in place from what we just posted and re-render NOW —
       // otherwise load()'s ~40-endpoint batch hasn't refetched /api/settings yet, so the intervening
       // render (fired as soon as /api/portfolio alone returns) paints the OLD cached values and the
       // field you just saved appears to revert for several seconds before the real refetch lands
       if(d && d.ok && SETTINGS_CFG){
+        const stagedSet=new Set(d.staged_behind_env||[]);
         (SETTINGS_CFG.settings||[]).concat(SETTINGS_CFG.config||[]).forEach(it=>{
-          if(!(it.key in body) || it.env_locked) return;
+          if(!(it.key in body)) return;
+          if(it.env_locked){ if(stagedSet.has(it.key)) it.staged_behind_env=true; return; }
           const v=body[it.key];
           if(v===''||v==null){ it.value=it.default; it.source='default'; }
           else{ it.value=v; it.source='settings'; }
@@ -3125,16 +3134,21 @@ function settingsContent(){
           inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
           inp.value=(it.value!=null?it.value:'');
         }
-        inp.style.cssText='width:200px;'; if(it.env_locked) inp.disabled=true;
+        inp.style.cssText='width:200px;';
+        // 2026-07-24: no longer disabled when env_locked -- you can stage a replacement value
+        // here while .env still wins, so swapping off .env only takes ONE restart (remove the
+        // .env line + restart) instead of restart-then-save-then-restart-again.
         const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
-        meta.textContent=it.env_locked?('· set by env '+it.key+' (edit .env)'):('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
+        meta.textContent = it.env_locked
+          ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + restart to activate it'+(it.staged_behind_env?' (already staged)':''))
+          : ('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
         row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
       });
     });
   }
   const btn=el('button',null,'↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-4);line-height:1.45;';
-  foot.textContent='API keys, portfolio provider, and model/host settings are still configured in .env (a masked-secret editor is planned). Values marked "set by env" are overridden by an environment variable and shown read-only.';
+  foot.textContent='Model / AI-provider config here is DB-backed and restart-to-apply, same as the SECRETS tab (which is also encrypted at rest). A real .env value always wins over a saved one while both exist.';
   wrap.appendChild(foot);
   return wrap;
 }
@@ -3144,12 +3158,25 @@ function saveSecrets(){
   if(!Object.keys(body).length){ alert('No new secret values entered.'); return; }
   fetch('/api/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
-      alert('Saved: '+((d.saved||[]).join(', ')||'(none)')+(d.restart_required?'\n\nRestart portfolio-api to apply.':''));
+      const specByKey={}; (SECRETS_CFG&&SECRETS_CFG.secrets||[]).forEach(it=>specByKey[it.key]=it);
+      const mcpoRestart=(d.saved||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
+      const apiRestart=(d.saved||[]).some(k=>!specByKey[k]||specByKey[k].scope!=='mcpo-file');
+      let msg='Saved: '+((d.saved||[]).join(', ')||'(none)');
+      if(apiRestart) msg+='\n\nRestart portfolio-api to apply.';
+      if(mcpoRestart) msg+='\n\nRestart mcpo (docker compose restart mcpo) to apply.';
+      if(d.staged_behind_env && d.staged_behind_env.length){
+        msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '
+            +'them from .env — they\'re just staged and ready for when you do.';
+      }
+      alert(msg);
       // optimistic: flip the just-saved keys' status badge to "saved" immediately, instead of it
       // sitting on "not set" until load()'s batch re-fetches /api/secrets a few seconds later
       if(d && d.saved && d.saved.length && SECRETS_CFG){
-        const saved=new Set(d.saved);
-        (SECRETS_CFG.secrets||[]).forEach(it=>{ if(saved.has(it.key)){ it.source='saved'; it.set=true; } });
+        const saved=new Set(d.saved), staged=new Set(d.staged_behind_env||[]);
+        (SECRETS_CFG.secrets||[]).forEach(it=>{
+          if(saved.has(it.key)){ it.set=true; if(!it.env_locked) it.source='saved'; }
+          if(staged.has(it.key)) it.staged_behind_env=true;
+        });
         if(TAB==='settings') render();
       }
       load(false);
@@ -3174,17 +3201,22 @@ function secretsContent(){
         const inp=document.createElement('input'); inp.type='password'; inp.className='sec-inp'; inp.dataset.key=it.key;
         inp.autocomplete='new-password'; inp.placeholder=(it.source==='saved'?'enter to replace · blank keeps':'enter value');
         inp.style.cssText='width:210px;'; row.appendChild(inp);
-        if(it.scope==='mcpo-file'){
-          // Distinct from the page footer's generic "next portfolio-api restart" note (2026-07-24)
-          // -- this one saves to the app's own DB same as any other secret, but only takes effect
-          // once the SEPARATE mcpo container is restarted, not portfolio-api.
+        // 2026-07-24: a key can be SAVED (staged) here even while env_locked -- it just has no
+        // effect until the .env line is removed AND the relevant service restarted. Collapses
+        // what used to be a restart-then-save-then-restart-again dance into one restart.
+        if(it.env_locked){
+          const svc = it.scope==='mcpo-file' ? 'mcpo' : 'portfolio-api';
+          const lnote=el('span','muted'); lnote.style.cssText='font-size:var(--font-size-sm);';
+          lnote.textContent='· .env wins for now — remove it there + restart '+svc+' to activate'+(it.staged_behind_env?' (already staged)':'');
+          row.appendChild(lnote);
+        } else if(it.scope==='mcpo-file'){
           const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
           mnote.textContent='· applies on next mcpo restart, not portfolio-api\'s';
           row.appendChild(mnote);
         }
       } else {
         const note=el('span','muted'); note.style.cssText='font-size:var(--font-size-sm);';
-        note.textContent = it.scope==='mcpo' ? '· used by mcpo — set in .env + restart' : '· locked by .env — edit .env to change';
+        note.textContent='· used by mcpo — a startup CLI flag, no UI/file-bridge possible for this one';
         row.appendChild(note);
       }
       wrap.appendChild(row);
@@ -3192,7 +3224,7 @@ function secretsContent(){
   });
   const btn=el('button',null,'↳ SAVE SECRETS'); btn.style.marginTop='12px'; btn.onclick=saveSecrets; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
-  foot.textContent='Write-only: stored values are never shown or sent to the browser. Saved app-secrets apply on the next portfolio-api restart. This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
+  foot.textContent='Write-only and encrypted at rest (Fernet, secrets_crypto.py) — stored values are never shown or sent back to the browser. Saved app-secrets apply on the next portfolio-api restart; Monarch/Tavily on mcpo\'s next restart. This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
   wrap.appendChild(foot);
   return wrap;
 }

@@ -62,6 +62,7 @@ import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — 
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
+import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
 # _boot_merge two lines down) — store.py itself does no work at import time, so this is the
@@ -7134,18 +7135,24 @@ def get_settings():
     for spec in CONFIG_SPECS:
         k = spec["key"]
         env_locked = k in _ENV_SECRETS_AT_BOOT
+        staged = stored.get(k) not in (None, "")
         if env_locked:
             val, source = os.environ.get(k), "env"
-        elif stored.get(k) not in (None, ""):
+        elif staged:
             val, source = stored.get(k), "settings"
         else:
             val, source = spec["default"], "default"
+        # 2026-07-24: editable no longer requires NOT env_locked (see post_settings) -- you can
+        # stage a new value while .env still wins, so migrating off .env is one restart, not two.
         cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": val,
                         "default": spec["default"], "source": source, "env_locked": env_locked,
-                        "editable": not env_locked, "applies": "restart", "options": spec.get("options")})
+                        "staged_behind_env": bool(env_locked and staged),
+                        "editable": True, "applies": "restart", "options": spec.get("options")})
     return {"settings": out, "config": cfg_out,
-            "note": "Analysis knobs apply at request time (no restart). Model config applies on the next "
-                    "RESTART. ENV vars always win. API keys / provider credentials live in the SECRETS tab / .env."}
+            "note": "Analysis knobs apply at request time (no restart). Model config saves here and applies "
+                    "on the next RESTART. A real .env value always wins over a saved one while both exist — "
+                    "remove the .env line, then restart, to activate a value you've already saved here. API "
+                    "keys / provider credentials live in the SECRETS tab instead (also DB-backed, encrypted)."}
 
 
 @app.post("/api/settings")
@@ -7170,14 +7177,14 @@ async def post_settings(req: Request):
                 applied.append(key)
             except (TypeError, ValueError):
                 continue
-    # Non-secret model/infra config (stored under ENV name; applies on RESTART).
+    # Non-secret model/infra config (stored under ENV name; applies on RESTART). 2026-07-24: a
+    # key can now be SAVED here even while env_locked (staged) -- it just has no effect until the
+    # real .env value is removed and portfolio-api is restarted (collapses what used to be a
+    # restart-then-save-then-restart-again dance into one restart).
     cfg_keys = {s["key"] for s in CONFIG_SPECS}
-    restart_needed = []
+    restart_needed, staged_behind_env = [], []
     for key, val in (body or {}).items():
         if key not in cfg_keys:
-            continue
-        if key in _ENV_SECRETS_AT_BOOT:
-            ignored.append(key)   # real .env wins
             continue
         if val in (None, ""):
             stored.pop(key, None)
@@ -7185,9 +7192,11 @@ async def post_settings(req: Request):
             stored[key] = str(val)
         applied.append(key)
         restart_needed.append(key)
+        if key in _ENV_SECRETS_AT_BOOT:
+            staged_behind_env.append(key)
     store.write_json(SETTINGS_FILE, stored)
     return {"ok": True, "applied": applied, "ignored_env_locked": ignored,
-            "restart_required": restart_needed, "settings": stored}
+            "staged_behind_env": staged_behind_env, "restart_required": restart_needed, "settings": stored}
 
 
 # ---- Secrets editor (N6 Phase 2): write-only, masked. Values are NEVER returned. ----
@@ -7235,10 +7244,27 @@ SECRET_SPECS = [
 
 
 def _read_secrets():
+    """Decrypts every value on the way out (secrets_crypto.decrypt_or_legacy falls back to
+    returning a value as-is if it doesn't decrypt as a Fernet token -- i.e. it predates
+    2026-07-24's encryption-at-rest change -- so nothing already saved is silently lost;
+    _write_secrets() below re-encrypts it properly the next time anything here is saved)."""
     try:
-        return store.read_json_strict(SECRETS_FILE) or {}
+        raw = store.read_json_strict(SECRETS_FILE) or {}
     except Exception:
         return {}
+    return {k: secrets_crypto.decrypt_or_legacy(v) for k, v in raw.items()}
+
+
+def _write_secrets(stored):
+    """Encrypts every value before it reaches store.write_json -- the ONLY place SECRETS_FILE is
+    ever written. store.py itself stays unaware of encryption; it just sees longer strings."""
+    enc = {k: secrets_crypto.encrypt(v) for k, v in stored.items() if v}
+    store.write_json(SECRETS_FILE, enc)
+
+
+_write_secrets(_read_secrets())   # one-time-per-boot upgrade pass: re-encrypts any legacy
+                                  # plaintext values found (no-op, just a fresh ciphertext, for
+                                  # anything already properly encrypted) -- see _read_secrets().
 
 
 # ---- mcpo-scope secrets bridge (2026-07-24) -----------------------------------------------
@@ -7279,7 +7305,11 @@ _write_mcpo_secrets_file()   # regenerate on every portfolio-api boot too, not j
 @app.get("/api/secrets")
 def get_secrets():
     """Status ONLY — never returns secret VALUES. Per secret: whether it's set and from where
-    (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable here."""
+    (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable
+    here. 2026-07-24: editable no longer requires NOT env_locked -- you can stage a replacement
+    value into the DB while the old .env value is still active, so migrating off .env only takes
+    ONE restart (remove the .env line + restart, instead of restart-then-save-then-restart-again).
+    A staged value has zero effect until the .env entry is actually removed."""
     stored = _read_secrets()
     out = []
     for spec in SECRET_SPECS:
@@ -7289,29 +7319,34 @@ def get_secrets():
         source = "env" if env_locked else ("saved" if in_file else "unset")
         out.append({"key": k, "label": spec["label"], "group": spec["group"], "scope": spec["scope"],
                     "set": bool(env_locked or in_file), "source": source, "env_locked": env_locked,
-                    "editable": (spec["scope"] in ("app", "mcpo-file")) and not env_locked})
+                    "staged_behind_env": bool(env_locked and in_file),
+                    "editable": spec["scope"] in ("app", "mcpo-file")})
     return {"secrets": out,
-            "note": "Write-only — values are never shown. 'app' secrets you set here save to a gitignored "
-                    "secrets.json and apply on the NEXT portfolio-api RESTART (real .env vars always win). "
-                    "Monarch / Tavily secrets save the same way but apply on mcpo's NEXT RESTART instead "
-                    "(docker compose restart mcpo) — they're used by that separate container. The mcpo API "
-                    "key itself stays .env-only (it's passed as a startup CLI flag, not a runtime value)."}
+            "note": "Write-only — values are never shown, and encrypted at rest (secrets_crypto.py). "
+                    "'app' secrets you set here save to the DB and apply on the NEXT portfolio-api "
+                    "RESTART; Monarch/Tavily secrets save the same way but apply on mcpo's NEXT "
+                    "RESTART instead (docker compose restart mcpo) — used by that separate container. "
+                    "A real .env value always wins over a saved one while both exist — remove the "
+                    ".env line, then restart, to activate a value you've already saved here. The mcpo "
+                    "API key itself stays .env-only (it's a startup CLI flag, not a runtime value)."}
 
 
 @app.post("/api/secrets")
 async def post_secrets(req: Request):
-    """Set portfolio-api 'app' secrets and mcpo-bridged 'mcpo-file' secrets (write-only ->
-    gitignored secrets.json, 0600; mcpo-file additionally rewrites ./mcpo-secrets/mcpo.env).
-    Ignores env-locked and 'mcpo'-scope (env-only) keys. Blank clears. Applies on next restart —
-    portfolio-api's for 'app' keys, mcpo's for 'mcpo-file' keys. Values never echoed."""
+    """Set portfolio-api 'app' secrets and mcpo-bridged 'mcpo-file' secrets (write-only, encrypted
+    at rest; mcpo-file additionally rewrites ./mcpo-secrets/mcpo.env for any key NOT currently
+    env-locked). Ignores 'mcpo'-scope (env-only) keys and unknown keys. Blank clears. A key that's
+    currently env_locked can still be SAVED here (staged) -- it just has no effect until the real
+    .env value is removed and the relevant service is restarted (portfolio-api for 'app', mcpo for
+    'mcpo-file'). Values never echoed back."""
     body = await req.json()
     stored = _read_secrets()
     by_key = {s["key"]: s for s in SECRET_SPECS}
-    saved, ignored = [], []
+    saved, ignored, staged_behind_env = [], [], []
     mcpo_file_touched = False
     for k, v in (body or {}).items():
         spec = by_key.get(k)
-        if not spec or spec["scope"] not in ("app", "mcpo-file") or k in _ENV_SECRETS_AT_BOOT:
+        if not spec or spec["scope"] not in ("app", "mcpo-file"):
             ignored.append(k)
             continue
         if v in (None, ""):
@@ -7319,13 +7354,16 @@ async def post_secrets(req: Request):
         else:
             stored[k] = str(v)
         saved.append(k)
+        if k in _ENV_SECRETS_AT_BOOT:
+            staged_behind_env.append(k)
         if spec["scope"] == "mcpo-file":
             mcpo_file_touched = True
-    store.write_json(SECRETS_FILE, stored)   # store.py's DB is chmod 0600 at init; the legacy
-                                              # SECRETS_FILE path is no longer written to
+    _write_secrets(stored)   # encrypted at rest — see secrets_crypto.py
     if mcpo_file_touched:
         _write_mcpo_secrets_file()   # regenerate ./mcpo-secrets/mcpo.env from the just-saved DB state
-    return {"ok": True, "saved": saved, "ignored": ignored, "restart_required": bool(saved)}
+                                      # (still correctly excludes any key that's env_locked)
+    return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
+            "restart_required": bool(saved)}
 
 
 # ============ Persistent setup-progress checklist card (RESUME-TRACKER "START HERE NEXT

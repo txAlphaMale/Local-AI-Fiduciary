@@ -108,3 +108,15 @@ typed `http://` URL still gets you there automatically instead of a connection e
 > 2026-07-24 — no `.env` editing needed to enable it. See `NEW-USER-SETUP-GUIDE.md`'s "AI
 > provider" section before turning it on (a claude.ai Pro/Max subscription does NOT cover this
 > — it needs a separate, pay-per-token API key).
+>
+> **Values in the DB (SECRETS/SETTINGS panels) are encrypted at rest** (Fernet, via
+> `portfolio-api/secrets_crypto.py`) — a key auto-generated at `/data/secrets.key` on first use,
+> same bootstrap pattern as `SESSION_SECRET`. Back that key file up alongside your data volume;
+> losing it makes every already-saved value permanently unrecoverable.
+>
+> **Migrating a value OFF `.env` and into the UI now takes exactly one restart:** you can save
+> the new value from SETTINGS/SECRETS *while the old `.env` line is still active* — it's staged,
+> not applied yet (the panel will say so). Then remove that line from `.env` and restart the
+> relevant service (portfolio-api, or `docker compose restart mcpo` for Monarch/Tavily) — the
+> staged value activates immediately, no second restart, no gap where the feature is briefly
+> unconfigured.
