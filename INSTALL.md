@@ -62,6 +62,26 @@ curl -s http://localhost:8097/health          # -> {"ok":true,...}
 - Open the **CHAT** tab and ask the Fiduciary "what's my net worth?" — it should call a
   tool and answer.
 
+## HTTPS (recommended before exposing this beyond a trusted LAN)
+
+By default the dashboard is plain HTTP on port 8097 — fine on a trusted home LAN, not fine
+otherwise. Set it up from **SETTINGS → SECURITY → Certificate** in the dashboard itself, no
+command-line work required. Three built-in methods:
+
+- **Self-signed** — instant, zero prerequisites. Browsers warn until you trust the cert once.
+- **Let's Encrypt / ACME** *(preferred, when available)* — a real, browser-trusted certificate
+  that renews itself automatically. Needs either a public DNS name with port 80 reachable from
+  the internet (HTTP-01), or your DNS provider's API credentials (DNS-01, no public
+  reachability needed). If you'll use HTTP-01, uncomment the port-80 mapping in
+  `docker-compose.yml` first.
+- **Manual (CSR)** — the app generates a CSR you take to any CA (or an internal CA for a
+  LAN-only deployment); paste the signed certificate back in.
+
+Whichever you pick, the app restarts itself in place a couple seconds later to apply it — the
+page will briefly go unresponsive, then reload at `https://<host>:8443` (the `HTTPS_PORT`
+in `.env`, default 8443; the plain-HTTP port stops answering once HTTPS is active). See the
+in-app WIKI (Getting started → "HTTPS / certificates") for the full walkthrough of each method.
+
 > After the first run you can manage most config from the **⚙ Settings gear** (top-right):
 > advanced knobs, model config, and a masked write-only editor for the app's own keys
 > (Finnhub / SEC user-agent / SnapTrade). Anything already set in `.env` wins and shows

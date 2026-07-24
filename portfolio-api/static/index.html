@@ -317,6 +317,7 @@ function runJob(url, btn, queuedLabel){
 }
 
 let AUTH_STATUS=null;
+let TLS_STATUS=null;
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null;
 // Chat state is per-persona (RESUME-TRACKER 2026-07-18l fix): switching persona/session/tab
 // must only change what's DISPLAYED, never cancel or wipe the OTHER persona's in-flight
@@ -664,6 +665,10 @@ W('scheduler','Getting started','Automated jobs (Task Schedule)',
   'The recurring agents run on a built-in scheduler inside the app (no external service). Each job fires at a set time and is enqueued into the serial job queue.',
   'Settings to Task Schedule lists every automated job, its cadence (daily, weekly on a given day, or monthly), and its time in 24-hour clock. Times run in the app timezone shown at the top of that panel.',
   'Edit a job time and Save to override the default (applies within a minute, no restart); Reset restores the default. Turn the whole scheduler off with INTERNAL_SCHEDULER=0 to trigger everything by hand.');
+W('https-cert','Getting started','HTTPS / certificates (SETTINGS → SECURITY → Certificate)',
+  'By default this app serves plain HTTP — fine on a trusted home LAN, not fine once anything is reachable beyond it. SETTINGS → SECURITY → Certificate sets up real encrypted HTTPS with no command-line work: three built-in methods, pick whichever fits your deployment.',
+  '**Self-signed** (instant): generate a key pair right here, no prerequisites at all — browsers show a "not trusted" warning until you manually trust the certificate once, but nothing else needs to be set up. Best for a pure local-LAN install. **Let\'s Encrypt / ACME** (preferred, when available): a real, browser-trusted certificate the app renews for you automatically — needs either a public DNS name with port 80 reachable from the internet (HTTP-01) or API credentials for your DNS provider (DNS-01, no public reachability needed). **Manual (CSR)**: the app generates a private key + certificate signing request you take to any Certificate Authority (or an internal CA for a LAN-only deployment); paste the signed certificate back in to install it — the private key never leaves this server.',
+  'After setting one up, the app restarts itself in place within a couple seconds to switch modes — the current page will go unresponsive for a moment; that\'s expected, reload at the new address (the HTTPS port, default 8443, once a certificate is active; the plain-HTTP port, default 8097, if you REMOVE one). If you\'re on Let\'s Encrypt, auto-renew is on by default and needs no attention; a "renew now" button covers testing or renewing early.');
 
 W('net-worth','Dashboard','Net worth',
   'Every account value signed by type: assets add, liabilities (credit cards, loans, mortgage) subtract. It includes non-brokerage assets your provider tracks, such as a Zillow-valued home.',
@@ -2563,7 +2568,198 @@ function securityContent(){
   wrap.appendChild(el('div','ph','TWO-FACTOR AUTHENTICATION (TOTP)'));
   const mfaWrap=el('div'); mfaWrap.id='sec-mfa-wrap'; mfaWrap.appendChild(_securityMfaBlock(u));
   wrap.appendChild(mfaWrap);
+
+  wrap.appendChild(el('div','ph','CERTIFICATE (HTTPS)'));
+  const certWrap=el('div'); certWrap.id='sec-cert-wrap';
+  if(!TLS_STATUS){ certWrap.appendChild(el('div','muted','Loading certificate status…')); _tlsRefreshStatus(); }
+  else { certWrap.appendChild(_certPanel(TLS_STATUS)); }
+  wrap.appendChild(certWrap);
   return wrap;
+}
+function _tlsRefreshStatus(){
+  return fetch('/api/tls/status').then(r=>r.json()).then(d=>{ TLS_STATUS=d; if(TAB==='settings') render(); }).catch(()=>{});
+}
+function _tlsMethodLabel(m){ return {self_signed:'Self-signed',acme:"Let's Encrypt / ACME",manual:'Manual (CSR)'}[m] || 'none'; }
+function _certPanel(st){
+  const box=el('div');
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Encrypts traffic to this dashboard. Three ways to set it up — self-signed (instant, browser will warn until you trust it), Let\'s Encrypt / ACME (preferred — a real browser-trusted certificate, auto-renews), or manual (generate a CSR here, get it signed by any CA, paste the certificate back in).';
+  box.appendChild(sub);
+
+  if(st.active){
+    const s=el('div'); s.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);line-height:1.7;';
+    const expiredBadge=st.expired?' <span class="neg">EXPIRED</span>':(st.days_remaining!=null&&st.days_remaining<=14?' <span class="neg">expiring soon</span>':'');
+    s.innerHTML=
+      `<span class="pos">✓ HTTPS certificate active</span> — method: <b>${_tlsMethodLabel(st.method)}</b>${expiredBadge}<br/>`+
+      `Common name: <b>${st.common_name||'—'}</b>${st.sans&&st.sans.length>1?' · SANs: '+st.sans.join(', '):''}<br/>`+
+      `Issuer: ${st.issuer||'—'}${st.self_issued?' (self-issued)':''}<br/>`+
+      (st.expires_at?`Expires: ${new Date(st.expires_at*1000).toLocaleDateString()} (${st.days_remaining!=null?st.days_remaining+' days remaining':'—'})<br/>`:'')+
+      (st.method==='acme'?`Auto-renew: <label><input type="checkbox" id="cert-autorenew" ${st.auto_renew?'checked':''} onchange="certToggleAutoRenew()"/> on</label> `+
+        `<button onclick="certAcmeRenew()">↻ RENEW NOW</button><br/>`:'')+
+      (st.restart_required?`<span class="muted">Applying — the server is restarting itself in place; if this dashboard was loaded over plain HTTP, browse to the HTTPS address next.</span><br/>`:'');
+    box.appendChild(s);
+    const clearBtn=el('button',null,'REMOVE CERTIFICATE (revert to plain HTTP)');
+    clearBtn.onclick=certClear;
+    box.appendChild(clearBtn);
+    box.appendChild(el('div',null,'')).style.marginBottom='var(--space-3)';
+  } else {
+    const s=el('div','muted'); s.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+    s.textContent='No certificate configured — this dashboard is served over plain HTTP.';
+    box.appendChild(s);
+  }
+
+  const modeWrap=el('div');
+  modeWrap.innerHTML=`Set up <select id="cert-mode" onchange="certModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<option value="self">Self-signed (instant)</option>`+
+    `<option value="acme">Let's Encrypt / ACME (preferred)</option>`+
+    `<option value="manual">Manual — generate CSR</option></select>`;
+  box.appendChild(modeWrap);
+
+  const selfBox=el('div'); selfBox.id='cert-self-fields'; selfBox.style.marginTop='var(--space-2);';
+  selfBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Every LAN IP/hostname you use to reach this box, comma-separated (e.g. 192.168.1.50, fiduciary.lan, localhost):</div>`+
+    `<input id="cert-self-hosts" type="text" placeholder="192.168.1.50, fiduciary.lan, localhost" style="width:340px;"/> <button onclick="certGenSelfSigned()">GENERATE</button>`+
+    `<div id="cert-self-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+  box.appendChild(selfBox);
+
+  const acmeBox=el('div'); acmeBox.id='cert-acme-fields'; acmeBox.style.cssText='display:none;margin-top:var(--space-2);';
+  const acmeNote=st.acme_available?'':' — <span class="neg">acme.sh not found in this image; self-signed and manual certificates still work</span>';
+  acmeBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Needs a real public DNS name pointed at this host${acmeNote}.</div>`+
+    `<div style="margin-bottom:6px;">Domain <input id="cert-acme-domain" type="text" placeholder="dashboard.example.com" style="width:220px;"/></div>`+
+    `<div style="margin-bottom:6px;">Challenge <select id="cert-acme-challenge" onchange="certAcmeChallengeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+      `<option value="http-01">HTTP-01 (needs port 80 reachable from the internet)</option>`+
+      `<option value="dns-01">DNS-01 (no public reachability needed, needs DNS provider API credentials)</option></select></div>`+
+    `<div id="cert-acme-dns-fields" style="display:none;margin-bottom:6px;">`+
+      `Provider hook <input id="cert-acme-dns-provider" type="text" placeholder="dns_cf (see acme.sh's DNS API list)" style="width:220px;"/><br/>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin:4px 0;">Credentials, one KEY=value per line (exactly the variable names that provider's acme.sh hook expects):</div>`+
+      `<textarea id="cert-acme-dns-creds" rows="3" style="width:340px;" placeholder="CF_Token=...\nCF_Account_ID=..."></textarea>`+
+    `</div>`+
+    `<label style="font-size:var(--font-size-sm);"><input type="checkbox" id="cert-acme-staging"/> use staging CA (untrusted test cert, for verifying this works first)</label><br/>`+
+    `<button onclick="certAcmeEnroll()" style="margin-top:6px;">ENROLL</button>`+
+    `<div id="cert-acme-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+  box.appendChild(acmeBox);
+
+  const manualBox=el('div'); manualBox.id='cert-manual-fields'; manualBox.style.cssText='display:none;margin-top:var(--space-2);';
+  if(st.pending_csr){
+    manualBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">A CSR is pending. Paste the signed certificate you received back (and the CA's chain, if given separately) to install it:</div>`+
+      `<div style="margin-bottom:6px;">Certificate (PEM)<br/><textarea id="cert-import-cert" rows="6" style="width:400px;"></textarea></div>`+
+      `<div style="margin-bottom:6px;">Chain (PEM, optional)<br/><textarea id="cert-import-chain" rows="4" style="width:400px;"></textarea></div>`+
+      `<button onclick="certImportCert()">INSTALL CERTIFICATE</button> <button onclick="certGenCsrReset()">start a new CSR instead</button>`+
+      `<div id="cert-manual-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+  } else {
+    manualBox.innerHTML=`<div style="margin-bottom:6px;">Common name <input id="cert-csr-cn" type="text" placeholder="dashboard.example.com" style="width:220px;"/></div>`+
+      `<div style="margin-bottom:6px;">Extra SANs, comma-separated (optional) <input id="cert-csr-sans" type="text" style="width:220px;"/></div>`+
+      `<button onclick="certGenCsr()">GENERATE CSR</button>`+
+      `<div id="cert-manual-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`+
+      `<div id="cert-csr-out" style="margin-top:8px;"></div>`;
+  }
+  box.appendChild(manualBox);
+  return box;
+}
+function certModeToggle(){
+  const m=document.getElementById('cert-mode').value;
+  document.getElementById('cert-self-fields').style.display=(m==='self')?'block':'none';
+  document.getElementById('cert-acme-fields').style.display=(m==='acme')?'block':'none';
+  document.getElementById('cert-manual-fields').style.display=(m==='manual')?'block':'none';
+}
+function certAcmeChallengeToggle(){
+  const c=document.getElementById('cert-acme-challenge').value;
+  document.getElementById('cert-acme-dns-fields').style.display=(c==='dns-01')?'block':'none';
+}
+async function certGenSelfSigned(){
+  const raw=(document.getElementById('cert-self-hosts').value||'').trim();
+  const err=document.getElementById('cert-self-err'); err.textContent='';
+  const hosts=raw.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!hosts.length){ err.textContent='At least one hostname or IP is required.'; return; }
+  try{
+    const r=await fetch('/api/tls/self-signed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hostnames:hosts})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    TLS_STATUS=d.status; render();
+    alert('Self-signed certificate generated. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address (port '+ (window.__HTTPS_PORT||'8443') +').');
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function certGenCsr(){
+  const cn=(document.getElementById('cert-csr-cn').value||'').trim();
+  const sansRaw=(document.getElementById('cert-csr-sans').value||'').trim();
+  const err=document.getElementById('cert-manual-err'); err.textContent='';
+  if(!cn){ err.textContent='Common name is required.'; return; }
+  const sans=sansRaw?sansRaw.split(',').map(s=>s.trim()).filter(Boolean):[];
+  try{
+    const r=await fetch('/api/tls/csr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({common_name:cn,sans:sans})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    const out=document.getElementById('cert-csr-out');
+    out.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:4px;">${d.note}</div>`+
+      `<textarea readonly rows="10" style="width:400px;font-family:monospace;font-size:12px;">${d.csr_pem}</textarea>`;
+    TLS_STATUS=null; _tlsRefreshStatus();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function certGenCsrReset(){
+  // Regenerating a CSR discards any prior pending one server-side (generate_csr() overwrites it) —
+  // just re-render into the "no pending CSR" form.
+  TLS_STATUS=null; _tlsRefreshStatus();
+}
+async function certImportCert(){
+  const cert=(document.getElementById('cert-import-cert').value||'').trim();
+  const chain=(document.getElementById('cert-import-chain').value||'').trim();
+  const err=document.getElementById('cert-manual-err'); err.textContent='';
+  if(!cert){ err.textContent='Paste the signed certificate.'; return; }
+  try{
+    const r=await fetch('/api/tls/import-cert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cert_pem:cert,chain_pem:chain||null})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    TLS_STATUS=d.status; render();
+    alert('Certificate installed. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address.');
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function certAcmeEnroll(){
+  const domain=(document.getElementById('cert-acme-domain').value||'').trim();
+  const challenge=document.getElementById('cert-acme-challenge').value;
+  const staging=document.getElementById('cert-acme-staging').checked;
+  const err=document.getElementById('cert-acme-err'); err.textContent='';
+  if(!domain){ err.textContent='Domain is required.'; return; }
+  let dns_provider=null, dns_creds=null;
+  if(challenge==='dns-01'){
+    dns_provider=(document.getElementById('cert-acme-dns-provider').value||'').trim();
+    if(!dns_provider){ err.textContent='DNS provider hook name is required for DNS-01.'; return; }
+    const raw=(document.getElementById('cert-acme-dns-creds').value||'').trim();
+    dns_creds={};
+    raw.split('\n').forEach(line=>{ const i=line.indexOf('='); if(i>0) dns_creds[line.slice(0,i).trim()]=line.slice(i+1).trim(); });
+  }
+  try{
+    const r=await fetch('/api/tls/acme/enroll',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({domain,challenge,dns_provider,dns_creds,staging})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    TLS_STATUS=d.status; render();
+    alert('Certificate issued. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address.');
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function certAcmeRenew(){
+  try{
+    const r=await fetch('/api/tls/acme/renew',{method:'POST'});
+    const d=await r.json();
+    if(d.error){ alert('Renew failed: '+d.error); return; }
+    TLS_STATUS=d.status; render();
+    alert('Certificate renewed. The server is restarting itself in place to apply it.');
+  }catch(e){ alert('Renew failed: '+e); }
+}
+async function certToggleAutoRenew(){
+  const enabled=document.getElementById('cert-autorenew').checked;
+  try{
+    const r=await fetch('/api/tls/auto-renew',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    const d=await r.json();
+    if(d.error){ alert('Update failed: '+d.error); return; }
+    TLS_STATUS=d.status;
+  }catch(e){ alert('Update failed: '+e); }
+}
+async function certClear(){
+  if(!confirm('Remove the active certificate and revert to plain HTTP? The server will restart itself in place — if this dashboard was loaded over HTTPS, browse back to the plain HTTP address afterward.')) return;
+  try{
+    const r=await fetch('/api/tls/clear',{method:'POST'});
+    const d=await r.json();
+    TLS_STATUS=d.status; render();
+  }catch(e){ alert('Failed: '+e); }
 }
 function _securityMfaBlock(u){
   const box=el('div');

@@ -84,6 +84,16 @@ services:
       - SESSION_SECRET=${SESSION_SECRET:-}
       - SESSION_MAX_AGE_DAYS=${SESSION_MAX_AGE_DAYS:-30}
       - SESSION_HTTPS_ONLY=${SESSION_HTTPS_ONLY:-0}
+      # In-app HTTPS (2026-07-23f) — self-signed / Let's Encrypt (ACME) / manual CSR, all set up
+      # from SETTINGS -> SECURITY -> Certificate, no redeploy needed to switch methods. HTTPS_PORT
+      # is only actually listening once a certificate exists; until then the app serves plain
+      # HTTP on DASH_PORT as it always has. ACME_EMAIL is optional but recommended (Let's
+      # Encrypt account contact, used for expiry-warning emails if renewal ever silently stops
+      # working). ACME_STAGING=1 uses Let's Encrypt's staging CA (untrusted certs, but no rate
+      # limits) — handy the first time you're testing ACME issuance end to end.
+      - HTTPS_PORT=${HTTPS_PORT:-8443}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+      - ACME_STAGING=${ACME_STAGING:-0}
       - FINNHUB_API_KEY=${FINNHUB_API_KEY}
       # Ollama runs on the HOST (prerequisite), reached over the host gateway.
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
@@ -106,6 +116,14 @@ services:
       - ./knowledge:/knowledge:ro   # user-populated Knowledge folder (host-editable; container reads)
     ports:
       - "${DASH_PORT:-8097}:8097"
+      - "${HTTPS_PORT:-8443}:8443"
+      # Only needed for ACME's http-01 challenge (SETTINGS -> SECURITY -> Certificate -> Let's
+      # Encrypt -> HTTP-01). acme.sh briefly binds this port ONLY during issuance/renewal, then
+      # releases it — nothing else in the app ever listens here. Leave commented out if you're
+      # using dns-01 instead (no public reachability needed) or the self-signed/manual-CSR
+      # methods (neither needs any inbound port beyond DASH_PORT/HTTPS_PORT above). Uncomment
+      # and set ACME_HTTP01_PORT if 80 is already taken by something else on this host.
+      # - "${ACME_HTTP01_PORT:-80}:80"
 
 volumes:
   portfolio-data:

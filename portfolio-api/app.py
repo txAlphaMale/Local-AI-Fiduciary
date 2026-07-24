@@ -57,6 +57,7 @@ import insider      # SEC Form 4 insider-transaction signal (G15) — context-on
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
+import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
 # _boot_merge two lines down) — store.py itself does no work at import time, so this is the
@@ -395,6 +396,16 @@ _cache = {"ts": 0.0, "data": None}
 _AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run", "/api/auth/login"}
 
 
+def _https_active():
+    """True once this process is actually serving HTTPS. Auto-follows tls.py's own state (an
+    active cert means run_server.py chose the HTTPS branch for THIS process — see
+    tls.mark_applied()) OR the manual SESSION_HTTPS_ONLY override, for a deployment fronted by
+    an external TLS-terminating reverse proxy this app doesn't manage itself. Either flips the
+    session cookie's Secure attribute and the HSTS header — no separate manual toggle needed
+    once one of the 3 in-app certificate methods is set up (2026-07-23f)."""
+    return os.environ.get("SESSION_HTTPS_ONLY", "0") == "1" or tls.has_active_cert()
+
+
 @app.middleware("http")
 async def _security_and_auth_gate(request: Request, call_next):
     if request.url.path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
@@ -403,7 +414,7 @@ async def _security_and_auth_gate(request: Request, call_next):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
-    if os.environ.get("SESSION_HTTPS_ONLY", "0") == "1":
+    if _https_active():
         resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return resp
 
@@ -437,9 +448,18 @@ def _session_secret():
 
 app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
                     max_age=auth.SESSION_MAX_AGE_DAYS * 86400, same_site="strict",
-                    https_only=os.environ.get("SESSION_HTTPS_ONLY", "0") == "1")
+                    https_only=_https_active())
 
 auth.init_db()
+
+# Whatever certificate exists on disk right now is, by definition, what run_server.py just chose
+# to serve for THIS process (see tls.py / run_server.py) — clears any stale "restart needed" flag
+# left over from the operation that installed it, and starts the background thread that checks
+# (every TLS_RENEWAL_CHECK_INTERVAL_S) whether an ACME-issued cert with auto-renew on needs
+# renewing. A no-op in every other case (no cert, or a self-signed/manual cert with no renewal
+# concept).
+tls.mark_applied()
+tls.start_renewal_thread()
 
 
 def _require_uid(request: Request):
@@ -543,6 +563,138 @@ async def auth_mfa_disable(request: Request):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
     return {"ok": True}
+
+
+# ============================================================================
+#  In-app HTTPS certificate management (2026-07-23f) — SETTINGS -> SECURITY -> Certificate.
+#  All 3 methods converge on tls.py's status()/CERT_PATH/KEY_PATH; every mutating call here
+#  triggers an automatic in-place restart (tls.restart_to_apply()) a couple seconds later so the
+#  new certificate takes effect without a separate manual step. Gated by the same global auth
+#  middleware as everything else — nothing here is in _AUTH_PUBLIC_PATHS.
+# ============================================================================
+@app.get("/api/tls/status")
+def tls_status():
+    return tls.status()
+
+
+@app.post("/api/tls/self-signed")
+async def tls_self_signed(req: Request):
+    """Body: {"hostnames": ["192.168.1.50", "fiduciary.lan", ...]} — every LAN IP/hostname you
+    actually use to reach this box, so the browser doesn't warn about a SAN mismatch on top of
+    the expected self-signed trust warning. At least one entry required."""
+    body = await req.json()
+    hosts = [str(h).strip() for h in (body.get("hostnames") or []) if str(h).strip()]
+    if not hosts:
+        return JSONResponse({"error": "at least one hostname or IP is required (e.g. this "
+                                       "box's LAN IP, a hostname you use to reach it, or "
+                                       "'localhost')"}, status_code=400)
+    try:
+        return {"ok": True, "status": tls.generate_self_signed(hosts)}
+    except Exception as e:
+        return JSONResponse({"error": f"self-signed generation failed: {e}"}, status_code=500)
+
+
+@app.post("/api/tls/csr")
+async def tls_csr(req: Request):
+    """Body: {"common_name": "dashboard.example.com", "sans": [...]}. Generates a NEW private
+    key (stays on this server) + a CSR you can take to any Certificate Authority. Submit the
+    returned PEM; once you have the signed certificate, POST it to /api/tls/import-cert."""
+    body = await req.json()
+    cn = str(body.get("common_name") or "").strip()
+    if not cn:
+        return JSONResponse({"error": "common_name is required"}, status_code=400)
+    sans = [str(s).strip() for s in (body.get("sans") or []) if str(s).strip()]
+    try:
+        csr_pem = tls.generate_csr(cn, sans)
+        return {"ok": True, "csr_pem": csr_pem,
+                "note": "Submit this CSR to any Certificate Authority (or an internal/self-"
+                        "signed CA for a LAN-only deployment). Once you have the signed "
+                        "certificate back, POST it to /api/tls/import-cert to install it — the "
+                        "private key never leaves this server."}
+    except Exception as e:
+        return JSONResponse({"error": f"CSR generation failed: {e}"}, status_code=500)
+
+
+@app.post("/api/tls/import-cert")
+async def tls_import_cert(req: Request):
+    """Body: {"cert_pem": "...", "chain_pem": "..." (optional)}. Pairs the signed certificate
+    with the pending CSR's private key — rejected with a clear error if they don't actually
+    match, so a wrong/unrelated certificate can never get installed silently."""
+    body = await req.json()
+    cert_pem = body.get("cert_pem")
+    if not cert_pem:
+        return JSONResponse({"error": "cert_pem is required"}, status_code=400)
+    try:
+        return {"ok": True, "status": tls.import_signed_certificate(cert_pem, body.get("chain_pem"))}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"certificate import failed: {e}"}, status_code=400)
+
+
+@app.post("/api/tls/acme/enroll")
+async def tls_acme_enroll(req: Request):
+    """Body: {"domain": "dashboard.example.com", "challenge": "http-01"|"dns-01",
+    "extra_domains": [...], "dns_provider": "dns_cf", "dns_creds": {"CF_Token": "..."},
+    "staging": bool}. http-01 needs a real public DNS name pointed at this host with port 80
+    reachable from the internet; dns-01 needs no public reachability but needs `dns_provider`
+    (acme.sh's own hook name — see https://github.com/acmesh-official/acme.sh/wiki/dnsapi) and
+    the credentials THAT provider's hook expects in `dns_creds`. Installs + turns on auto-renew
+    on success."""
+    body = await req.json()
+    domain = str(body.get("domain") or "").strip()
+    if not domain:
+        return JSONResponse({"error": "domain is required"}, status_code=400)
+    dns_creds = body.get("dns_creds") if isinstance(body.get("dns_creds"), dict) else None
+    extra_domains = body.get("extra_domains") if isinstance(body.get("extra_domains"), list) else None
+    try:
+        res = tls.acme_enroll(domain, challenge=(body.get("challenge") or "http-01"),
+                               dns_provider=body.get("dns_provider"), dns_creds=dns_creds,
+                               extra_domains=extra_domains, staging=body.get("staging"))
+        return {"ok": True, "status": res}
+    except tls.AcmeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"ACME enrollment failed: {e}"}, status_code=500)
+
+
+@app.post("/api/tls/acme/renew")
+def tls_acme_renew():
+    """Manual 'renew now' — the background thread already does this automatically once the
+    active ACME certificate is within TLS_RENEWAL_THRESHOLD_DAYS of expiring and auto_renew is
+    on; this is for testing or renewing early on demand."""
+    try:
+        return {"ok": True, "status": tls.acme_renew()}
+    except tls.AcmeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": f"renew failed: {e}"}, status_code=500)
+
+
+@app.post("/api/tls/auto-renew")
+async def tls_set_auto_renew(req: Request):
+    body = await req.json()
+    return {"ok": True, "status": tls.set_auto_renew(bool(body.get("enabled")))}
+
+
+@app.post("/api/tls/clear")
+def tls_clear():
+    """Removes the active certificate — reverts to plain HTTP on the next (self-triggered)
+    restart. Doesn't touch a prior ACME enrollment's account/renewal state, so re-enrolling
+    later doesn't start over."""
+    return {"ok": True, "status": tls.clear_active_cert()}
+
+
+@app.post("/api/tls/restart")
+def tls_restart():
+    """Manually re-applies whatever certificate state is currently on disk — the mutating
+    endpoints above already do this automatically, this is only for recovering from an edge
+    case (e.g. a cert file dropped in by hand outside the app)."""
+    tls.restart_to_apply()
+    return {"ok": True, "note": "restarting now to apply the certificate configuration — this "
+                                 "page will briefly disconnect"}
 
 
 # ============================================================================

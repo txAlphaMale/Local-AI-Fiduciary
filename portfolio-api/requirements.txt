@@ -7,3 +7,4 @@ itsdangerous            # session-cookie signing (starlette.middleware.sessions.
 argon2-cffi             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
 pyotp                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
 qrcode[pil]             # renders the TOTP QR code for MFA setup (auth.py)
+cryptography            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
