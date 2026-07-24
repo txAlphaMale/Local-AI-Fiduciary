@@ -711,6 +711,10 @@ W('https-cert','Getting started','HTTPS / certificates (SETTINGS → SECURITY �
   'By default this app serves plain HTTP — fine on a trusted home LAN, not fine once anything is reachable beyond it. SETTINGS → SECURITY → Certificate sets up real encrypted HTTPS with no command-line work: three built-in methods, pick whichever fits your deployment.',
   '**Self-signed** (instant): generate a key pair right here, no prerequisites at all — browsers show a "not trusted" warning until you manually trust the certificate once, but nothing else needs to be set up. Best for a pure local-LAN install. **Let\'s Encrypt / ACME** (preferred, when available): a real, browser-trusted certificate the app renews for you automatically — needs either a public DNS name with port 80 reachable from the internet (HTTP-01) or API credentials for your DNS provider (DNS-01, no public reachability needed). **Manual (CSR)**: the app generates a private key + certificate signing request you take to any Certificate Authority (or an internal CA for a LAN-only deployment); paste the signed certificate back in to install it — the private key never leaves this server.',
   'After setting one up, the app restarts itself in place within a couple seconds to switch modes — the current page will go unresponsive for a moment; that\'s expected, reload at the new address (the HTTPS port, default 8443, once a certificate is active; the plain-HTTP port, default 8097, if you REMOVE one). If you\'re on Let\'s Encrypt, auto-renew is on by default and needs no attention; a "renew now" button covers testing or renewing early.');
+W('ai-provider','Getting started','AI provider (SETTINGS → AI / LLM PROVIDER): local Ollama vs. hosted Claude',
+  'Every LLM-backed feature — chat, the weekly Strategist run, cash-deployment advice, the Dashboard narrative, and every research brief\'s JSON synthesis — routes through one swappable backend, set in SETTINGS → AI / LLM PROVIDER. The default is your own local Ollama models (zero marginal cost, fully private, bounded by these two 1080 Tis). Optionally, chat/analysis alone can point at Anthropic\'s Claude API instead — a separate, metered, pay-per-token service, added 2026-07-24.',
+  'Two model tiers exist for the Claude path: an "everyday" model (chat + the Dashboard narrative) and a "Strategist" model (the autonomous weekly paper-trading run + the on-demand cash-deployment planner), since those two run longer, tool-heavier ReAct loops that can justify a stronger/pricier model — set separately so a quick chat question doesn\'t pay Opus-tier cost every turn. Embeddings (the Knowledge/RAG index that lets chat cite your own documents) CANNOT run on Claude — Anthropic sells no embeddings API at all — so they stay on local Ollama regardless of the chat provider, unless "Knowledge/RAG embeddings provider" is separately pointed at an OpenAI-compatible embeddings host. Retrieval quality is unaffected either way: Claude only ever sees the already-retrieved passages as plain text, same as Ollama does today. **Important:** a claude.ai Pro/Max chat subscription does NOT include API access — the key this needs comes from a separate console.anthropic.com account with its own pay-per-token billing, unrelated to a Pro subscription\'s usage.',
+  'Enter the provider, host URL (blank = provider default), and model names under SETTINGS → AI / LLM PROVIDER; the LLM and embeddings API keys live in the SECRETS panel (masked, write-only, never shown again once saved). Everything here applies on the NEXT portfolio-api restart, same as every other Model config field — there is no live swap. Leaving the provider on "ollama" (the default) changes nothing about how this app already behaves.');
 W('mfa','Getting started','Multi-factor authentication (MFA) & backup codes',
   'A rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) required at login on top of your password. Since this app manages your full financial picture, MFA is treated as a CRITICAL setup step — it shows a ! on the setup checklist and a stop on the guided tour, not an optional extra.',
   'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → SECURITY → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → SECURITY also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
@@ -3101,15 +3105,31 @@ function settingsContent(){
     });
   });
   if(s.config && s.config.length){
-    const ch=el('div','ph','MODEL'); ch.style.marginTop='12px'; wrap.appendChild(ch);
-    s.config.forEach(it=>{
-      const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
-      const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
-      const inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
-      inp.value=(it.value!=null?it.value:''); inp.style.cssText='width:180px;'; if(it.env_locked) inp.disabled=true;
-      const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
-      meta.textContent=it.env_locked?('· set by env '+it.key+' (edit .env)'):('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
-      row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
+    // Grouped like the knobs above (2026-07-24: was one hardcoded "MODEL" header for all of
+    // CONFIG_SPECS -- now that AI/LLM-provider config lives alongside the original 3 Ollama
+    // knobs, group by it.group so they don't all pile under one confusing heading).
+    const cfgGroups={}; s.config.forEach(it=>{ (cfgGroups[it.group]=cfgGroups[it.group]||[]).push(it); });
+    Object.keys(cfgGroups).forEach(g=>{
+      const ch=el('div','ph',g); ch.style.marginTop='12px'; wrap.appendChild(ch);
+      cfgGroups[g].forEach(it=>{
+        const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
+        const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
+        let inp;
+        if(it.options && it.options.length){
+          // Dropdown for enum-like fields (e.g. LLM_API_DIALECT) instead of free text — avoids
+          // a typo silently falling through to the ollama default with no visible error.
+          inp=document.createElement('select'); inp.className='cfg-inp'; inp.dataset.key=it.key;
+          it.options.forEach(o=>{ const op=document.createElement('option'); op.value=o; op.textContent=o;
+            if((it.value||it.default)===o) op.selected=true; inp.appendChild(op); });
+        } else {
+          inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
+          inp.value=(it.value!=null?it.value:'');
+        }
+        inp.style.cssText='width:200px;'; if(it.env_locked) inp.disabled=true;
+        const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
+        meta.textContent=it.env_locked?('· set by env '+it.key+' (edit .env)'):('· applies on restart'+(it.source==='settings'?' · customized':' · default '+it.default));
+        row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
+      });
     });
   }
   const btn=el('button',null,'↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);

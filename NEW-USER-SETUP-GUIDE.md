@@ -87,6 +87,41 @@ Same household-register file again.
 | IPS policy targets (by asset type + by sleeve) | INSIGHTS → POLICY · DRIFT (edit via the policy form) | Drift-band alerts | Ships with a reasonable default (70/10/15/5 US-equity/Intl/Bond/Cash) — only edit if your actual target allocation differs |
 | Position caps per ticker | Same panel | Per-name concentration alerts | |
 | API keys (Finnhub, Tavily) | `.env` (see `INSTALL.md`) | Research briefs, news alerts, opportunity scanning | Infra-level, not a UI form — mentioned here only because it gates a lot of Research/Ideas |
+| AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |
+
+---
+
+## AI provider — local Ollama vs. hosted Claude (optional)
+
+Everything AI-driven in this app — chat, the weekly Strategist run, cash-deployment advice, the
+Dashboard narrative, and every research brief's synthesis — defaults to your own local Ollama
+models, run on your own GPUs at zero marginal cost. **You don't need to read this section for the
+app to work.** It documents an *optional* alternative: pointing chat/analysis at Anthropic's
+Claude API instead, added 2026-07-24.
+
+**Before enabling this:** a claude.ai Pro or Max chat subscription does **not** include API
+access. The key this needs comes from a separate [console.anthropic.com](https://console.anthropic.com)
+account with its own pay-per-token billing — check [platform.claude.com/docs/pricing](https://platform.claude.com/docs/pricing)
+for current rates before turning this on, especially for the Strategist tier below, which can
+burn meaningfully more tokens per run than everyday chat.
+
+**What moves, what doesn't:**
+- Chat, the Dashboard narrative, and research-brief JSON synthesis can run on an "everyday"
+  Claude model.
+- The autonomous weekly Strategist run and the on-demand cash-deployment advice planner — both
+  longer, tool-heavier ReAct loops — can independently use a stronger "Strategist" Claude model,
+  so a quick chat question doesn't pay that tier's cost every turn.
+- **Knowledge/RAG embeddings cannot move to Claude at all** — Anthropic has no embeddings API.
+  They stay on local Ollama regardless of what the chat provider is set to (unless you separately
+  point the embeddings provider at an OpenAI-compatible embeddings host). This doesn't affect
+  retrieval quality either way — Claude only ever sees the already-retrieved passages as plain
+  text, exactly like Ollama does today.
+
+**Where to set it up:** SETTINGS → AI / LLM PROVIDER for the provider/host/model fields, SETTINGS
+→ SECRETS for the API key(s) (masked, write-only — never shown again once saved). Like the other
+Model config fields, changes apply on the **next portfolio-api restart**, not live. Full detail —
+including exactly which app features fall into which tier — is in the in-app **WIKI → Getting
+started → "AI provider (SETTINGS → AI / LLM PROVIDER)"** entry.
 
 ---
 

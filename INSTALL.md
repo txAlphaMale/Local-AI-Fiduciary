@@ -91,3 +91,8 @@ typed `http://` URL still gets you there automatically instead of a connection e
 > advanced knobs, model config, and a masked write-only editor for the app's own keys
 > (Finnhub / SEC user-agent / SnapTrade). Anything already set in `.env` wins and shows
 > read-only. Monarch / Tavily keys stay in `.env` (they're used by the mcpo container).
+>
+> The same mechanism covers the optional Claude (Anthropic) provider added 2026-07-24 — no
+> `.env` editing needed to enable it. See `NEW-USER-SETUP-GUIDE.md`'s "AI provider" section
+> before turning it on (a claude.ai Pro/Max subscription does NOT cover this — it needs a
+> separate, pay-per-token API key).

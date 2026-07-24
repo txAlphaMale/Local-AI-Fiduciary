@@ -39,6 +39,12 @@ Chat.
 > GPU pinning is host-specific. Keeping Ollama on the host avoids duplicating the model
 > and lets you manage GPUs your own way. The app reaches it at `host.docker.internal:11434`.
 
+> **Optional: hosted Claude instead of local Ollama (2026-07-24).** Chat/analysis can
+> alternatively route through Anthropic's Claude API — swappable from SETTINGS → AI / LLM
+> PROVIDER, no `.env` editing required. Local Ollama stays the default and needs nothing
+> changed to keep working exactly as before; Knowledge/RAG embeddings always stay local
+> regardless (Anthropic has no embeddings API). See `NEW-USER-SETUP-GUIDE.md`.
+
 ---
 
 ## Prerequisites

@@ -78,7 +78,13 @@ SECRETS_FILE = os.environ.get("SECRETS_FILE", "/data/secrets.json")
 _SETTINGS_FILE_BOOT = os.environ.get("SETTINGS_FILE", "/data/settings.json")
 # Non-secret config (read as module constants below) that the SETTINGS tab can manage;
 # applied on RESTART via this boot-merge. Numeric analysis knobs are handled separately (live).
-_CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE")
+# 2026-07-24: added the 6 LLM-provider/Claude keys alongside the original 3 -- anything added to
+# CONFIG_SPECS below MUST also be listed here, or a UI-saved value silently never reaches
+# os.environ at boot (CONFIG_SPECS itself is display/edit metadata only; THIS tuple is what
+# _boot_merge actually consults).
+_CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE",
+                    "LLM_API_DIALECT", "LLM_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_STRATEGIST_MODEL",
+                    "EMBED_API_DIALECT", "EMBED_BASE_URL")
 # Keys present in the REAL environment at boot (from .env / compose). Used so the UI can
 # honestly mark those "env-locked" — env wins and the UI must not pretend to override it.
 _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
@@ -306,6 +312,21 @@ CONFIG_SPECS = [
     {"key": "ANALYSIS_MODEL", "label": "Analysis / Strategist model (Ollama tag)", "group": "Model", "default": "qwen3.6:27b"},
     {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
     {"key": "LLM_KEEP_ALIVE", "label": "Keep model resident (e.g. 30m)",           "group": "Model", "default": "30m"},
+    # ---- AI / LLM provider (2026-07-24, Claude integration) ----
+    # "options" is a UI-only hint (settingsContent() renders a <select> instead of a free-text
+    # input when present) -- ignored by the backend, which just stores/returns a plain string.
+    {"key": "LLM_API_DIALECT", "label": "Chat/analysis provider", "group": "AI / LLM provider",
+     "default": "ollama", "options": ["ollama", "openai", "anthropic"]},
+    {"key": "LLM_BASE_URL", "label": "Chat/analysis host URL (blank = provider default)",
+     "group": "AI / LLM provider", "default": ""},
+    {"key": "ANTHROPIC_MODEL", "label": "Claude model — everyday (chat, narrative)",
+     "group": "AI / LLM provider", "default": "claude-sonnet-5"},
+    {"key": "ANTHROPIC_STRATEGIST_MODEL", "label": "Claude model — Strategist + advice (deeper reasoning)",
+     "group": "AI / LLM provider", "default": "claude-opus-5"},
+    {"key": "EMBED_API_DIALECT", "label": "Knowledge/RAG embeddings provider (Claude has none — stays local)",
+     "group": "AI / LLM provider", "default": "ollama", "options": ["ollama", "openai"]},
+    {"key": "EMBED_BASE_URL", "label": "Embeddings host URL (blank = provider default)",
+     "group": "AI / LLM provider", "default": ""},
 ]
 
 
@@ -365,6 +386,26 @@ LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pas
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
 ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "16384"))   # fit full fundamentals+valuation+news without truncation
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
+# ---- Claude (Anthropic) integration, 2026-07-24 -- two-tier model selection ------------------
+# Only consulted when llm.DIALECT == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
+# in .env). ANALYSIS_MODEL above is untouched and still governs every ollama/openai-dialect call
+# site exactly as before -- this is purely an additional branch for the anthropic dialect, not a
+# replacement. Two tiers, not one: the autonomous weekly Strategist run + the on-demand cash-
+# deployment advice planner (both long, multi-step, tool-heavy ReAct loops) can use a stronger/
+# pricier model than everyday chat + narrative/brief generation, which are shorter and more
+# frequent. See llm._text_model below and NEW-USER-SETUP-GUIDE.md for the cost rationale.
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+ANTHROPIC_STRATEGIST_MODEL = os.environ.get("ANTHROPIC_STRATEGIST_MODEL", "claude-opus-5")
+
+
+def _text_model(strategist=False):
+    """Model tag for a text-generation call site. Ollama/OpenAI dialects: unchanged, always
+    ANALYSIS_MODEL (no behavior change from before this function existed). Anthropic dialect:
+    ANTHROPIC_STRATEGIST_MODEL for the weekly Strategist run + advice deployment planner,
+    ANTHROPIC_MODEL for everything else (chat personas, narrative, single-shot JSON extraction)."""
+    if llm.DIALECT == "anthropic":
+        return ANTHROPIC_STRATEGIST_MODEL if strategist else ANTHROPIC_MODEL
+    return ANALYSIS_MODEL
 # Chat image input (RESUME-TRACKER 2026-07-18j): a SEPARATE small multimodal model, not a
 # replacement for ANALYSIS_MODEL (text-only, no vision support). qwen2.5vl:7b is confirmed to fit
 # even an 8GB test-user card at 4-bit and comfortably fits Jason's dual 1080 Tis; pull it once via
@@ -4495,7 +4536,7 @@ def _ollama_generate(prompt):
         prompt = prompt + "\n/no_think"
     try:
         with _gpu_slot():   # serialize qwen-27b generation across all features
-            res = llm._llm_chat([{"role": "user", "content": prompt}], ANALYSIS_MODEL,
+            res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(),
                                 format_json=True, think=ANALYSIS_THINK, temperature=0.3,
                                 num_ctx=ANALYSIS_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, timeout=LLM_TIMEOUT)
     except Exception as e:
@@ -5354,7 +5395,7 @@ def _do_narrative():
     try:
         with _gpu_slot():
             gpu_wait_s = round(time.time() - t_submit, 1)
-            res = llm._llm_chat(messages, ANALYSIS_MODEL, temperature=0.4, num_ctx=ANALYSIS_NUM_CTX,
+            res = llm._llm_chat(messages, _text_model(), temperature=0.4, num_ctx=ANALYSIS_NUM_CTX,
                                 keep_alive=LLM_KEEP_ALIVE, timeout=NARR_LLM_TIMEOUT)
         if not res.ok:
             err = (f"Ollama returned HTTP {res.status_code}: {res.error}" if res.status_code
@@ -7101,7 +7142,7 @@ def get_settings():
             val, source = spec["default"], "default"
         cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": val,
                         "default": spec["default"], "source": source, "env_locked": env_locked,
-                        "editable": not env_locked, "applies": "restart"})
+                        "editable": not env_locked, "applies": "restart", "options": spec.get("options")})
     return {"settings": out, "config": cfg_out,
             "note": "Analysis knobs apply at request time (no restart). Model config applies on the next "
                     "RESTART. ENV vars always win. API keys / provider credentials live in the SECRETS tab / .env."}
@@ -7172,6 +7213,16 @@ SECRET_SPECS = [
     {"key": "FINRA_CLIENT_ID",       "label": "FINRA API client ID (short interest)",     "group": "Market data", "scope": "app"},
     {"key": "FINRA_CLIENT_SECRET",   "label": "FINRA API client secret (short interest)", "group": "Market data", "scope": "app"},
     {"key": "RENTCAST_API_KEY",      "label": "RentCast API key (home AVM, free 50/mo)",  "group": "Market data", "scope": "app"},
+    # ---- AI / LLM provider (2026-07-24, Claude integration) ----
+    # portfolio-api makes these calls directly (unlike Monarch/Tavily/mcpo below) — no separate
+    # container involved, so this is a normal "app" scope secret: DB-backed, UI-editable, applies
+    # on the next portfolio-api restart. Anthropic Pro (claude.ai) subscriptions do NOT include
+    # API access — this key comes from a separate console.anthropic.com account with its own
+    # pay-per-token billing. See NEW-USER-SETUP-GUIDE.md.
+    {"key": "LLM_API_KEY",   "label": "LLM provider API key (Anthropic/OpenAI-compatible — blank for local Ollama)",
+     "group": "AI / LLM provider", "scope": "app"},
+    {"key": "EMBED_API_KEY", "label": "Embeddings provider API key (blank = same as above, or local Ollama)",
+     "group": "AI / LLM provider", "scope": "app"},
 ]
 
 
@@ -9550,7 +9601,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                     "summary on this turn."})
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
-                    res = llm._llm_chat(messages, ANALYSIS_MODEL, tools=STRATEGIST_TOOLS,
+                    res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_TOOLS,
                                         temperature=0.4, num_ctx=STRAT_NUM_CTX,
                                         keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
@@ -9780,7 +9831,7 @@ def _do_advice(amount, question, max_iter=None):
                     "Stop researching now and write your final deployment plan on this turn."})
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
-                    res = llm._llm_chat(messages, ANALYSIS_MODEL, tools=STRATEGIST_ADVICE_TOOLS,
+                    res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_ADVICE_TOOLS,
                                         temperature=0.4, num_ctx=STRAT_NUM_CTX,
                                         keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
@@ -10131,9 +10182,9 @@ STRATEGIST_CHAT_PROMPT = (
 
 PERSONAS = {
     "fiduciary": {"prompt": FIDUCIARY_PROMPT, "tools": FIDUCIARY_TOOLS,
-                  "dispatch": _fiduciary_dispatch, "model": ANALYSIS_MODEL, "temp": 0.3},
+                  "dispatch": _fiduciary_dispatch, "model": _text_model(), "temp": 0.3},
     "strategist": {"prompt": STRATEGIST_CHAT_PROMPT, "tools": STRATEGIST_ADVICE_TOOLS,
-                   "dispatch": _advice_dispatch, "model": ANALYSIS_MODEL, "temp": 0.4},
+                   "dispatch": _advice_dispatch, "model": _text_model(), "temp": 0.4},
 }
 
 # --- Customizable persona prompts + user reference (2026-07-22) ----------------------------------
@@ -10702,7 +10753,9 @@ def chat_session_delete(sid: str):
 @app.get("/health")
 def health():
     return {"ok": True, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
-            "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL}
+            "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL,
+            "llm_dialect": llm.DIALECT, "llm_model": _text_model(),
+            "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm.EMBED_DIALECT}
 
 
 @app.get("/")
