@@ -7301,7 +7301,16 @@ def _write_mcpo_secrets_file():
         if v:
             lines.append(f"{spec['key']}={str(v).replace(chr(10), ' ').replace(chr(13), ' ')}")
     try:
-        store.atomic_write_text(MCPO_SECRETS_FILE, "\n".join(lines) + "\n", mode=0o600)
+        # mode 0644, NOT 0600 (2026-07-24 fix): this container runs as root (no USER in the
+        # Dockerfile), so on the bind-mounted host path this file lands owned by root. At 0600
+        # only root can read it -- but `docker compose` itself runs as whatever unprivileged host
+        # user invokes it, and it reads EVERY service's env_file (including mcpo's) to compute
+        # config hashes even when a command targets just one service. Result: any `docker compose
+        # up`/`ps`/etc as that host user fails with "permission denied" reading this file the
+        # instant portfolio-api regenerates it. 0644 keeps it out of other users' write access but
+        # lets the host's own compose invocation read it -- no worse than the file already being
+        # plaintext-by-necessity for Compose's env_file mechanism (see mcpo.env.example).
+        store.atomic_write_text(MCPO_SECRETS_FILE, "\n".join(lines) + "\n", mode=0o644)
     except Exception:
         pass   # best-effort -- a write failure here shouldn't break the /api/secrets response
 

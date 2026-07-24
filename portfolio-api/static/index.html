@@ -643,11 +643,24 @@ async function load(refresh, bg){
     try{ r = await fetch('/api/portfolio'+(refresh?'?refresh=1':''), {signal:ctl.signal}); }
     finally{ clearTimeout(to); }
     const d = await r.json();
-    if(d.error){ document.getElementById('body').innerHTML='<div class="err">'+d.error+'</div>'; return; }
-    DATA=d;
-    render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const gj=async(u)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),25000);
       try{ return await (await fetch(u,{signal:c.signal})).json(); }catch(_){ return null; }finally{ clearTimeout(t); } };
+    if(d.error){
+      // 2026-07-24 fix: a failing portfolio provider (e.g. Monarch/mcpo down) used to leave
+      // SETTINGS_CFG/SECRETS_CFG unfetched AND DATA undefined -- render() dereferences DATA
+      // unconditionally, so the very first line it runs threw the instant the gear icon was
+      // clicked, silently no-op'ing the click. That locked the user out of the one panel
+      // (SETTINGS) that could actually fix the failing provider. Fetch settings/secrets here,
+      // independently of portfolio health, so SETTINGS/SECRETS stay reachable regardless.
+      DATA=null;
+      const [setg,secg]=await Promise.all([gj('/api/settings'), gj('/api/secrets')]);
+      SETTINGS_CFG=setg; SECRETS_CFG=secg;
+      document.getElementById('body').innerHTML='<div class="err">'+d.error
+        +'<br><br><span class="muted" style="font-size:var(--font-size-sm);">Portfolio data is unavailable, but SETTINGS (⚙, top right) still works — use it to fix the provider config.</span></div>';
+      return;
+    }
+    DATA=d;
+    render();   // show core dashboard immediately — never block the page on a slow secondary panel
     const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
       gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress')]);
@@ -1127,7 +1140,11 @@ function buildWiki(box){
 }
 
 function render(){
-  const d=DATA;
+  // DATA can be null when the portfolio provider itself is down (see load()'s d.error branch,
+  // 2026-07-24) -- `|| {}` keeps every d.field below as undefined (all read through null-safe
+  // usd()/sgn()/pct()/cls() helpers) instead of throwing here and silently killing gear-click
+  // navigation into SETTINGS.
+  const d=DATA||{};
   document.getElementById('meta').textContent =
     ` · ${d.investment_account_count} brokerage accts · ${d.position_count} positions`;
   const age = d.cached_age_s||0;
