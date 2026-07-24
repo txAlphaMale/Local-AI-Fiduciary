@@ -10,8 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl socat ca-c
 # Vendored acme.sh (2026-07-23f) — the built-in Let's Encrypt / ACME client tls.py shells out to.
 # --nocron: renewal is driven by tls.py's own background thread (app.py's
 # tls.start_renewal_thread()), not acme.sh's usual crontab entry — one renewal mechanism, not two.
+# Deliberately NOT passing --home here (2026-07-23h fix — a real deploy hit "Unknown parameter:
+# ----home", acme.sh's installer doubles a leading "--" when invoked this way): the installer's
+# job is just putting the acme.sh SCRIPT on disk, which is stateless and fine at its default
+# location (~/.acme.sh -> /root/.acme.sh, since this RUN executes as root). Where acme.sh keeps
+# actual CERTIFICATE/ACCOUNT STATE is a completely separate, well-documented `--home` flag passed
+# at RUNTIME on every real acme.sh invocation (see ACME_HOME in tls.py, under the persistent
+# /data volume) — that one was never the problem.
 RUN curl -fsSL https://get.acme.sh -o /tmp/acme-install.sh \
-    && sh /tmp/acme-install.sh --home /opt/acme.sh --nocron --no-color \
+    && sh /tmp/acme-install.sh --nocron \
     && rm -f /tmp/acme-install.sh
 
 COPY requirements.txt .

@@ -61,7 +61,10 @@ PENDING_KEY_PATH = os.path.join(TLS_DIR, "pending_csr_key.pem")
 PENDING_CSR_PATH = os.path.join(TLS_DIR, "pending.csr")
 TLS_META_FILE = os.environ.get("TLS_META_FILE", "/data/tls_meta.json")
 
-ACME_SH = os.environ.get("ACME_SH_PATH", "/opt/acme.sh/acme.sh")
+# /root/.acme.sh/acme.sh — acme.sh's own default install location when its installer runs as
+# root (the Dockerfile RUN step that installs it isn't given a USER, so it's root; see the
+# 2026-07-23h note there about why we don't override this with --home at install time).
+ACME_SH = os.environ.get("ACME_SH_PATH", "/root/.acme.sh/acme.sh")
 ACME_HOME = os.environ.get("ACME_HOME", "/data/acme")
 ACME_EMAIL = os.environ.get("ACME_EMAIL", "")
 ACME_STAGING = os.environ.get("ACME_STAGING", "0").lower() in ("1", "true", "yes", "on")
