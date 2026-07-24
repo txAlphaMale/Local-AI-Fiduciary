@@ -382,7 +382,11 @@ def acme_enroll(domain, challenge="http-01", dns_provider=None, dns_creds=None,
     staging = ACME_STAGING if staging is None else bool(staging)
     domains = [domain] + [d.strip() for d in (extra_domains or []) if d and d.strip() and d != domain]
 
-    cmd = [ACME_SH, "--home", ACME_HOME, "--issue"]
+    cmd = [ACME_SH, "--home", ACME_HOME, "--issue", "--debug", "2"]   # --debug 2: without it,
+    # acme.sh withholds the actual failure reason and just tells you to add --debug yourself —
+    # useless for a headless caller like this one, so we always ask for it and surface whatever
+    # comes back (found 2026-07-23h debugging a real deploy: a private/non-public domain failed
+    # with a bare "exit 1" and no detail until this was added).
     for d in domains:
         cmd += ["-d", d]
     if challenge == "dns-01":
@@ -412,7 +416,7 @@ def acme_enroll(domain, challenge="http-01", dns_provider=None, dns_creds=None,
     # both mean "there is now a good certificate", the only two we treat as success.
     if proc.returncode not in (0, 2):
         raise AcmeError(f"acme.sh --issue failed (exit {proc.returncode}): "
-                         f"{(proc.stderr or proc.stdout or '').strip()[-2000:]}")
+                         f"{(proc.stderr or proc.stdout or '').strip()[-4000:]}")
     return _acme_install(domain, challenge, dns_provider, staging)
 
 
@@ -436,14 +440,14 @@ def acme_renew(domain=None):
         raise AcmeError("no ACME domain on record — run acme_enroll() first")
     if not acme_available():
         raise AcmeError(f"acme.sh not found at {ACME_SH}")
-    cmd = [ACME_SH, "--home", ACME_HOME, "--renew", "-d", domain, "--force"]
+    cmd = [ACME_SH, "--home", ACME_HOME, "--renew", "-d", domain, "--force", "--debug", "2"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
         raise AcmeError("acme.sh --renew did not finish within 300s")
     if proc.returncode not in (0, 2):
         raise AcmeError(f"acme.sh --renew failed (exit {proc.returncode}): "
-                         f"{(proc.stderr or proc.stdout or '').strip()[-2000:]}")
+                         f"{(proc.stderr or proc.stdout or '').strip()[-4000:]}")
     return _acme_install(domain, meta.get("challenge"), meta.get("dns_provider"), meta.get("staging"))
 
 
