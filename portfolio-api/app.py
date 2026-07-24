@@ -7326,14 +7326,19 @@ SETUP_FIELDS = [
      "key": "estate_home_basis", "jump": ("plan", "estate"),
      "note": "Purchase price + capital improvements on your primary residence."},
 
-    # ---- Tier 2: PLAN -> INSURANCE (insurance.json) ----
+    # ---- Tier 2: PLAN -> ASSUMPTIONS (still stored in insurance.json -- 2026-07-25: the UI fields
+    # moved here from PLAN -> INSURANCE because Jason found them non-intuitive to hunt for on the
+    # INSURANCE tab; storage/endpoint (_read_insurance_cfg()/POST /api/insurance-config) is
+    # untouched, since insurance.py, get_benefits(), and this very checklist all read it from
+    # there already -- only the "cfg"/data-source label below stays "insurance" for that reason,
+    # even though the "jump" target is now the ASSUMPTIONS subtab. ----
     {"id": "income_self", "tier": 2, "group": "Your income", "cfg": "insurance",
-     "key": "income_self", "kind": "income", "jump": ("plan", "insurance"), "severity": "critical",
-     "note": "Nothing on the INSURANCE page computes without at least one income entered. $0/blank "
-             "counts on its own if the other income is a real number -- tick \"no income "
-             "(unemployed/retired)\" only if BOTH incomes are $0."},
+     "key": "income_self", "kind": "income", "jump": ("plan", "assumptions"), "severity": "critical",
+     "note": "Nothing on the INSURANCE page (or the ACA/tax MAGI calcs) computes without at least "
+             "one income entered. $0/blank counts on its own if the other income is a real number "
+             "-- tick \"no income (unemployed/retired)\" only if BOTH incomes are $0."},
     {"id": "income_spouse", "tier": 2, "group": "Spouse income", "cfg": "insurance",
-     "key": "income_spouse", "kind": "income", "required_if": "mfj", "jump": ("plan", "insurance"),
+     "key": "income_spouse", "kind": "income", "required_if": "mfj", "jump": ("plan", "assumptions"),
      "severity": "critical",
      "note": "$0/blank counts on its own if the other income is a real number -- tick \"no income "
              "(unemployed/retired)\" only if BOTH incomes are $0."},

@@ -404,7 +404,9 @@ const TOUR_TARGETS = {
   target_age:'ret-tage', annual_expenses:'ret-exp', annual_savings:'ret-sav', household_size:'ret-hh',
   birth_year:'ret-by', spouse_birth_year:'ret-sby', ss_benefit:'ret-ssb',
   estate_donees:'est-donees', estate_home_basis:'est-homebasis',
-  income_self:'ins-inc-s', income_spouse:'ins-inc-sp', policies:'ins-name', home_value_override:'ins-homeval',
+  // income_self/income_spouse moved to PLAN->ASSUMPTIONS 2026-07-25 (see SETUP_FIELDS in app.py) --
+  // element ids updated to match; policies/home_value_override stay on PLAN->INSURANCE.
+  income_self:'ret-inc-s', income_spouse:'ret-inc-sp', policies:'ins-name', home_value_override:'ins-homeval',
   k401_pretax:'bn-pre', k401_biweekly:'bn-bw', isr_status:'bn-isr', hsa_contribution:'bn-hsa',
   mortgage_rate:'cd-mr', refi_rate:'cd-rr', deposit_yield:'cd-dy', debt_rates:'cd-dr',
   aca_slcsp:'ret-slcsp', policy_targets:'pol-sleeve-sum', position_caps:'pol-caps',
@@ -2166,8 +2168,17 @@ function saveRetire(){
   opt('ret-sby','spouse_birth_year');
   opt('ret-sca','spouse_ss_claim_age');
   opt('ret-sssb','spouse_ss_estimated_fra_benefit');
-  fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
+  // income_self/income_spouse/no_income moved here from PLAN->INSURANCE (2026-07-25) but are
+  // still stored via /api/insurance-config -- fire both saves together, refresh once both land.
+  const g=id=>document.getElementById(id);
+  const incBody={};
+  if(g('ret-inc-s')) incBody.income_self=numOrNull(g('ret-inc-s').value);
+  if(g('ret-inc-sp')) incBody.income_spouse=numOrNull(g('ret-inc-sp').value);
+  if(g('ret-no-income')) incBody.no_income=g('ret-no-income').checked;
+  Promise.all([
+    fetch('/api/retirement-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),
+    fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(incBody)})
+  ]).then(()=>load(false)).catch(e=>alert('Save failed: '+e));
 }
 
 function ssWhatif(){
@@ -2212,8 +2223,15 @@ function planContent(r){
 
   const assumptionsSec=()=>{
     const wrap=el('div');
+    const h=(INS&&INS.household)||{};
+    const incNeeded=!!(INS&&INS.setup_needed);
+    const incHi=incNeeded?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-sm);':'';
     const ed=el('div'); ed.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-4);';
     ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">ASSUMPTIONS · EDIT</div>`+
+      `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Gross income — self <input id="ret-inc-s" type="number" step="1000" value="${h.income_self!=null?h.income_self:''}" style="width:90px;${incHi}"/> `+
+        `spouse <input id="ret-inc-sp" type="number" step="1000" value="${h.income_spouse!=null?h.income_spouse:''}" style="width:90px;${incHi}"/> `+
+        `<label style="cursor:pointer;" title="Only needed if BOTH incomes are $0 — entering 0 for just one of the two (with a real number on the other side) is already accepted without this. Tick it if the whole household is unemployed/retired with no income on either side."><input id="ret-no-income" type="checkbox" ${h.no_income?'checked':''}/> no income (unemployed/retired)</label> `+
+        `<span class="muted" style="font-size:var(--font-size-sm);">(drives ACA/tax MAGI calcs and the PLAN→INSURANCE need-sizing)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Withdrawal rate <input id="ret-wr" type="number" step="0.1" value="${pv(a.withdrawal_rate_pct)}" style="width:54px;"/>% &nbsp; Real return <input id="ret-rr" type="number" step="0.1" value="${pv(a.expected_real_return_pct)}" style="width:54px;"/>% &nbsp; Optimistic <input id="ret-opt" type="number" step="0.1" value="${pv(a.optimistic_real_return_pct)}" placeholder="8" style="width:54px;"/>% &nbsp; Volatility <input id="ret-vol" type="number" step="0.5" value="${pv(a.volatility_pct)}" placeholder="16" style="width:54px;"/>% <span class="muted" style="font-size:var(--font-size-sm);">(Monte Carlo)</span> &nbsp; Needs <input id="ret-needs" type="number" step="5" min="0" max="100" value="${pv(a.needs_pct_of_expenses)}" placeholder="65" style="width:54px;"/>% <span class="muted" style="font-size:var(--font-size-sm);">(essential share of spending — funded ratio)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(current age is derived from birth year below — no longer entered separately)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Annual expenses <input id="ret-exp" type="number" value="${a.expenses_source==='override'?Math.round(a.annual_expenses):''}" placeholder="${a.expenses_source==='monarch_cashflow'?'Monarch '+Math.round(a.annual_expenses):'set target $'}" style="width:120px;"/> &nbsp; Annual savings <input id="ret-sav" type="number" value="" placeholder="${a.annual_savings!=null?Math.round(a.annual_savings):'set $'}" style="width:120px;"/></div>`+
@@ -3642,7 +3660,7 @@ function insuranceContent(){
   const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   if(r.setup_needed){
     const w=el('div'); w.style.cssText='font-size:var(--font-size-base);color:var(--color-accent);margin-bottom:var(--space-2);';
-    w.appendChild(document.createTextNode('⚠ Enter household incomes below — the NEED column is income-driven; without it this page can only size the umbrella and P&C lines. '));
+    w.appendChild(document.createTextNode('⚠ Enter household incomes on PLAN→ASSUMPTIONS — the NEED column is income-driven; without it this page can only size the umbrella and P&C lines. '));
     w.appendChild(wikiLink('setup-guide')); wrap.appendChild(w); }
   // ---- alerts ----
   (r.alerts||[]).forEach(a2=>{ const w=el('div');
@@ -3677,15 +3695,12 @@ function insuranceContent(){
   const cfgH=el('div','ph','HOUSEHOLD INPUTS & POLICY REGISTER · EDIT'); cfgH.style.marginTop='14px'; wrap.appendChild(cfgH);
   const h=r.household||{};
   const ed=el('div'); ed.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);';
-  const incHi=r.setup_needed?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-sm);':'';
-  ed.innerHTML=`<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Gross income — self <input id="ins-inc-s" type="number" step="1000" value="${h.income_self!=null?h.income_self:''}" style="width:90px;${incHi}"/> `+
-    `spouse <input id="ins-inc-sp" type="number" step="1000" value="${h.income_spouse!=null?h.income_spouse:''}" style="width:90px;${incHi}"/> `+
-    `<label style="cursor:pointer;" title="Only needed if BOTH incomes are $0 — entering 0 for just one of the two (with a real number on the other side) is already accepted without this. Tick it if the whole household is unemployed/retired with no income on either side."><input id="ins-no-income" type="checkbox" ${h.no_income?'checked':''}/> no income (unemployed/retired)</label> `+
+  ed.innerHTML=`<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">`+
     `children <input id="ins-kids" type="number" step="1" min="0" value="${h.children!=null?h.children:0}" style="width:44px;"/> `+
     `home address <input id="ins-addr" value="${esc(h.home_address||'')}" placeholder="street, city, ST zip" style="width:200px;" title="optional — enables the RentCast AVM second opinion in PLAN→REAL ESTATE (free tier, needs RENTCAST_API_KEY in secrets)"/><br/>`+
     `Home value override <input id="ins-homeval" type="number" step="1000" value="${h.home_value_override!=null?h.home_value_override:''}" placeholder="${h.home_value?('auto: $'+Math.round(h.home_value).toLocaleString()):'unset'}" style="width:110px;"/> `+
     `<span class="muted" style="font-size:var(--font-size-sm);">only needed if your home isn't tracked via Monarch/Zillow — leave blank to keep using the auto-detected balance</span> `+
-    `<span class="muted" style="font-size:var(--font-size-sm);">(ages come from PLAN→ASSUMPTIONS; balance sheet from the live feed)</span></div>`;
+    `<span class="muted" style="font-size:var(--font-size-sm);">(income & ages come from PLAN→ASSUMPTIONS; balance sheet from the live feed)</span></div>`;
   const pl=el('div'); pl.id='ins-pols'; ed.appendChild(pl);
   wrap._pols = (INS_POLS!=null?INS_POLS:(r.policies_echo||[])).slice();
   function renderPols(){
@@ -3711,10 +3726,7 @@ function insuranceContent(){
       g('ins-cov').value=''; g('ins-prem').value=''; g('ins-name').value=''; renderPols(); };
     if(g('ins-save')) g('ins-save').onclick=async()=>{ INS_POLS=wrap._pols;
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({income_self:numOrNull(g('ins-inc-s').value),
-                             income_spouse:numOrNull(g('ins-inc-sp').value),
-                             no_income:g('ins-no-income').checked,
-                             children:parseInt(g('ins-kids').value)||0,
+        body:JSON.stringify({children:parseInt(g('ins-kids').value)||0,
                              home_address:(g('ins-addr')&&g('ins-addr').value)||null,
                              home_value_override:numOrNull(g('ins-homeval').value),
                              policies:wrap._pols})});
