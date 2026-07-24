@@ -56,6 +56,12 @@ import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical 
 import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
+import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
+
+# store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
+# _boot_merge two lines down) — store.py itself does no work at import time, so this is the
+# single earliest safe point to call it.
+store.init_db()
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -74,15 +80,15 @@ _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, 
 
 
 def _boot_merge(_path, _only=None):
-    """Fill env GAPS from a JSON store BEFORE the config constants read os.environ. Real env
-    always wins (we never overwrite a set var). _only restricts to a key allow-list."""
+    """Fill env GAPS from the store (Stage A, 2026-07-23e — was a raw JSON file read directly)
+    BEFORE the config constants below read os.environ. Real env always wins (we never overwrite
+    a set var). _only restricts to a key allow-list."""
     try:
-        with open(_path, encoding="utf-8") as _bf:
-            for _k, _v in (json.load(_bf) or {}).items():
-                if _only is not None and _k not in _only:
-                    continue
-                if _v not in (None, "") and not os.environ.get(_k):
-                    os.environ[_k] = str(_v)
+        for _k, _v in (store.read_json_strict(_path) or {}).items():
+            if _only is not None and _k not in _only:
+                continue
+            if _v not in (None, "") and not os.environ.get(_k):
+                os.environ[_k] = str(_v)
     except Exception:
         pass
 
@@ -227,8 +233,7 @@ CONFIG_SPECS = [
 
 def _read_settings():
     try:
-        with open(SETTINGS_FILE, encoding="utf-8") as f:
-            return json.load(f) or {}
+        return store.read_json_strict(SETTINGS_FILE) or {}
     except Exception:
         return {}
 
@@ -719,8 +724,7 @@ def _read_schedule():
     """Defaults with saved hour/minute overrides merged on top (validated 0-23 / 0-59)."""
     over = {}
     try:
-        with open(SCHEDULE_FILE, encoding="utf-8") as f:
-            over = json.load(f) or {}
+        over = store.read_json_strict(SCHEDULE_FILE) or {}
     except Exception:
         over = {}
     out = {}
@@ -781,8 +785,7 @@ async def post_schedule(req: Request):
     or {"reset": "<kind>"} to restore a job's default. Config only — no money action."""
     body = await req.json()
     try:
-        with open(SCHEDULE_FILE, encoding="utf-8") as f:
-            cur = json.load(f) or {}
+        cur = store.read_json_strict(SCHEDULE_FILE) or {}
     except Exception:
         cur = {}
     if isinstance(body, dict) and body.get("reset") in _SCHEDULE_DEFAULTS:
@@ -803,9 +806,7 @@ async def post_schedule(req: Request):
             except (TypeError, ValueError):
                 pass
             cur[k] = entry
-    os.makedirs(os.path.dirname(SCHEDULE_FILE) or ".", exist_ok=True)
-    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cur, f, indent=2)
+    store.write_json(SCHEDULE_FILE, cur)
     return {"ok": True, "schedule": get_schedule()}
 
 
@@ -1307,8 +1308,7 @@ RISK_MIN_DAYS = int(os.environ.get("RISK_MIN_DAYS", "20"))
 
 def _read_value_history():
     try:
-        with open(VALUE_HISTORY_FILE, encoding="utf-8") as f:
-            return json.load(f) or []
+        return store.read_json_strict(VALUE_HISTORY_FILE) or []
     except Exception:
         return []
 
@@ -1318,8 +1318,7 @@ SHARELOG_FILE = os.environ.get("SHARELOG_FILE", "/data/share_log.json")
 
 def _read_sharelog():
     try:
-        with open(SHARELOG_FILE, encoding="utf-8") as f:
-            return json.load(f) or {}
+        return store.read_json_strict(SHARELOG_FILE) or {}
     except Exception:
         return {}
 
@@ -1336,9 +1335,7 @@ def _snapshot_shares(d):
         if not q:
             return
         log = washsale.append_snapshot(_read_sharelog(), q)
-        os.makedirs(os.path.dirname(SHARELOG_FILE) or ".", exist_ok=True)
-        with open(SHARELOG_FILE, "w", encoding="utf-8") as f:
-            json.dump(log, f)
+        store.write_json(SHARELOG_FILE, log)
     except Exception:
         pass
 
@@ -1367,9 +1364,7 @@ def _snapshot_value(d):
         else:
             hist.append(row)
         hist = hist[-2500:]
-        os.makedirs(os.path.dirname(VALUE_HISTORY_FILE) or ".", exist_ok=True)
-        with open(VALUE_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(hist, f)
+        store.write_json(VALUE_HISTORY_FILE, hist)
     except Exception:
         pass
 
@@ -1680,8 +1675,7 @@ def _fetch_ken_french():
         pass
     if merged:
         try:
-            with open(FF_FACTORS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"fetched": int(time.time()), "factors": merged}, f)
+            store.write_json(FF_FACTORS_FILE, {"fetched": int(time.time()), "factors": merged})
         except Exception:
             pass
     return merged
@@ -1690,8 +1684,7 @@ def _fetch_ken_french():
 def _read_ff():
     """Merged FF factor map, from cache when fresh else refetched. {} if never obtained."""
     try:
-        with open(FF_FACTORS_FILE, encoding="utf-8") as f:
-            c = json.load(f)
+        c = store.read_json_strict(FF_FACTORS_FILE)
         if time.time() - (c.get("fetched") or 0) < FF_MAX_AGE * 86400 and c.get("factors"):
             return c["factors"]
     except Exception:
@@ -1813,8 +1806,7 @@ def _risk_suite():
 
 def _read_risk_suite():
     try:
-        with open(RISK_SUITE_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(RISK_SUITE_FILE)
     except Exception:
         return None
 
@@ -1824,9 +1816,7 @@ def _do_risk_suite():
         return
     try:
         res = _risk_suite()
-        os.makedirs(os.path.dirname(RISK_SUITE_FILE) or ".", exist_ok=True)
-        with open(RISK_SUITE_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(RISK_SUITE_FILE, res)
     except Exception:
         pass
     finally:
@@ -1957,8 +1947,7 @@ def _attribution():
 
 def _read_attrib():
     try:
-        with open(ATTRIB_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(ATTRIB_FILE)
     except Exception:
         return None
 
@@ -1968,9 +1957,7 @@ def _do_attrib():
         return
     try:
         res = _attribution()
-        os.makedirs(os.path.dirname(ATTRIB_FILE) or ".", exist_ok=True)
-        with open(ATTRIB_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(ATTRIB_FILE, res)
     except Exception:
         pass
     finally:
@@ -2097,8 +2084,7 @@ def _sizing():
 
 def _read_sizing():
     try:
-        with open(SIZING_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(SIZING_FILE)
     except Exception:
         return None
 
@@ -2108,9 +2094,7 @@ def _do_sizing():
         return
     try:
         res = _sizing()
-        os.makedirs(os.path.dirname(SIZING_FILE) or ".", exist_ok=True)
-        with open(SIZING_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(SIZING_FILE, res)
     except Exception:
         pass
     finally:
@@ -2317,8 +2301,7 @@ def _leverage():
 
 def _read_leverage():
     try:
-        with open(LEVERAGE_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(LEVERAGE_FILE)
     except Exception:
         return None
 
@@ -2328,9 +2311,7 @@ def _do_leverage():
         return
     try:
         res = _leverage()
-        os.makedirs(os.path.dirname(LEVERAGE_FILE) or ".", exist_ok=True)
-        with open(LEVERAGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(LEVERAGE_FILE, res)
     except Exception:
         pass
     finally:
@@ -2445,16 +2426,13 @@ _theses_lock = threading.Lock()
 
 def _read_theses():
     try:
-        with open(THESES_FILE, encoding="utf-8") as f:
-            return json.load(f) or {}
+        return store.read_json_strict(THESES_FILE) or {}
     except Exception:
         return {}
 
 
 def _write_theses(reg):
-    os.makedirs(os.path.dirname(THESES_FILE) or ".", exist_ok=True)
-    with open(THESES_FILE, "w", encoding="utf-8") as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    store.write_json(THESES_FILE, reg)
 
 
 def _thesis_metrics(sym):
@@ -2514,8 +2492,7 @@ def _evaluate_theses():
 
 def _read_theses_eval():
     try:
-        with open(THESES_EVAL_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(THESES_EVAL_FILE)
     except Exception:
         return None
 
@@ -2525,9 +2502,7 @@ def _do_theses_eval():
         return
     try:
         res = _evaluate_theses()
-        os.makedirs(os.path.dirname(THESES_EVAL_FILE) or ".", exist_ok=True)
-        with open(THESES_EVAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(THESES_EVAL_FILE, res)
     except Exception:
         pass
     finally:
@@ -2657,8 +2632,7 @@ def get_realestate():
     """Last underwrite (if any) + existing real-estate holdings + grounded default inputs."""
     last = None
     try:
-        with open(REALESTATE_FILE, encoding="utf-8") as f:
-            last = json.load(f)
+        last = store.read_json_strict(REALESTATE_FILE)
     except Exception:
         last = None
     holdings, total = _realestate_holdings()
@@ -2688,9 +2662,7 @@ async def post_realestate(req: Request):
         return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
     rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
     try:
-        os.makedirs(os.path.dirname(REALESTATE_FILE) or ".", exist_ok=True)
-        with open(REALESTATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(rec, f)
+        store.write_json(REALESTATE_FILE, rec)
     except Exception:
         pass
     return rec
@@ -2714,8 +2686,7 @@ def _biz_defaults():
 def get_business():
     last = None
     try:
-        with open(BUSINESS_FILE, encoding="utf-8") as f:
-            last = json.load(f)
+        last = store.read_json_strict(BUSINESS_FILE)
     except Exception:
         last = None
     return {"last": last, "defaults": _biz_defaults(),
@@ -2736,9 +2707,7 @@ async def post_business(req: Request):
         return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
     rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
     try:
-        os.makedirs(os.path.dirname(BUSINESS_FILE) or ".", exist_ok=True)
-        with open(BUSINESS_FILE, "w", encoding="utf-8") as f:
-            json.dump(rec, f)
+        store.write_json(BUSINESS_FILE, rec)
     except Exception:
         pass
     return rec
@@ -2762,8 +2731,7 @@ def _earnings_calendar_rows():
     if not FINNHUB:
         return []
     try:
-        with open(EARNINGS_CAL_FILE, encoding="utf-8") as f:
-            cache = json.load(f) or {}
+        cache = store.read_json_strict(EARNINGS_CAL_FILE) or {}
         if time.time() - (cache.get("ts") or 0) < EARNINGS_CAL_TTL:
             return cache.get("rows") or []
     except Exception:
@@ -2784,9 +2752,7 @@ def _earnings_calendar_rows():
                                  "hour": e.get("hour"),
                                  "eps_estimate": e.get("epsEstimate")})
         rows.sort(key=lambda x: x.get("date") or "")
-        os.makedirs(os.path.dirname(EARNINGS_CAL_FILE) or ".", exist_ok=True)
-        with open(EARNINGS_CAL_FILE, "w", encoding="utf-8") as f:
-            json.dump({"ts": int(time.time()), "rows": rows}, f)
+        store.write_json(EARNINGS_CAL_FILE, {"ts": int(time.time()), "rows": rows})
     except Exception:
         pass
     return rows
@@ -2806,8 +2772,7 @@ EARNINGS_TRIGGERED_FILE = os.environ.get("EARNINGS_TRIGGERED_FILE", "/data/earni
 
 def _read_earnings_triggered():
     try:
-        with open(EARNINGS_TRIGGERED_FILE, encoding="utf-8") as f:
-            return json.load(f) or {}
+        return store.read_json_strict(EARNINGS_TRIGGERED_FILE) or {}
     except Exception:
         return {}
 
@@ -2823,9 +2788,7 @@ def _mark_earnings_triggered(tickers):
     cutoff = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
     trig = {k: v for k, v in trig.items() if v >= cutoff}
     try:
-        os.makedirs(os.path.dirname(EARNINGS_TRIGGERED_FILE) or ".", exist_ok=True)
-        with open(EARNINGS_TRIGGERED_FILE, "w", encoding="utf-8") as f:
-            json.dump(trig, f)
+        store.write_json(EARNINGS_TRIGGERED_FILE, trig)
     except Exception:
         pass
 
@@ -2866,8 +2829,7 @@ def _alert_key(a):
 
 def _read_alerts_seen():
     try:
-        with open(ALERTS_SEEN_FILE, encoding="utf-8") as f:
-            return set(json.load(f).get("keys") or [])
+        return set(store.read_json_strict(ALERTS_SEEN_FILE).get("keys") or [])
     except Exception:
         return set()
 
@@ -3057,9 +3019,7 @@ def ack_alerts():
     list, so a stale client can't accidentally mark something unseen as seen."""
     keys = [_alert_key(a) for a in (_alerts_digest().get("alerts") or [])]
     try:
-        os.makedirs(os.path.dirname(ALERTS_SEEN_FILE) or ".", exist_ok=True)
-        with open(ALERTS_SEEN_FILE, "w", encoding="utf-8") as f:
-            json.dump({"keys": keys, "acked_at": int(time.time())}, f)
+        store.write_json(ALERTS_SEEN_FILE, {"keys": keys, "acked_at": int(time.time())})
     except Exception:
         return JSONResponse({"error": "could not persist ack"}, status_code=500)
     return {"ok": True, "acked": len(keys)}
@@ -3081,17 +3041,14 @@ def _log_rating(ticker, llm):
             return
         today = datetime.date.today().isoformat()
         try:
-            with open(RATING_LOG_FILE, encoding="utf-8") as f:
-                log = json.load(f) or []
+            log = store.read_json_strict(RATING_LOG_FILE) or []
         except Exception:
             log = []
         log = [e for e in log if not (e.get("ticker") == ticker and e.get("date") == today)]
         log.append({"date": today, "ts": int(time.time()), "ticker": ticker, "rating": rating,
                     "confidence": (llm or {}).get("confidence"), "price": round(px, 4)})
         log = log[-5000:]
-        os.makedirs(os.path.dirname(RATING_LOG_FILE) or ".", exist_ok=True)
-        with open(RATING_LOG_FILE, "w", encoding="utf-8") as f:
-            json.dump(log, f)
+        store.write_json(RATING_LOG_FILE, log)
     except Exception:
         pass
 
@@ -3101,8 +3058,7 @@ def _scorecard(min_age_days=None):
     current price, aggregated by rating and by confidence. Read-only, educational."""
     min_age = int(min_age_days or os.environ.get("SCORECARD_MIN_AGE_DAYS", "14"))
     try:
-        with open(RATING_LOG_FILE, encoding="utf-8") as f:
-            log = json.load(f) or []
+        log = store.read_json_strict(RATING_LOG_FILE) or []
     except Exception:
         log = []
     if not log:
@@ -3206,14 +3162,11 @@ def _do_backtest():
         return
     try:
         try:
-            with open(RATING_LOG_FILE, encoding="utf-8") as f:
-                log = json.load(f) or []
+            log = store.read_json_strict(RATING_LOG_FILE) or []
         except Exception:
             log = []
         res = backtest_mod.run(log, _read_paper(), _stooq_daily)
-        os.makedirs(os.path.dirname(BACKTEST_FILE) or ".", exist_ok=True)
-        with open(BACKTEST_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(BACKTEST_FILE, res)
     except Exception:
         pass
     finally:
@@ -3224,8 +3177,7 @@ def _do_backtest():
 def get_backtest():
     """Decision backtest, CACHED (first build fetches per-ticker daily history in the background)."""
     try:
-        with open(BACKTEST_FILE, encoding="utf-8") as f:
-            cached = json.load(f)
+        cached = store.read_json_strict(BACKTEST_FILE)
     except Exception:
         cached = None
     fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < BACKTEST_TTL)
@@ -3629,8 +3581,7 @@ _RESEARCH_CACHE_MAX = 20   # keep the last N on-demand tickers
 
 def _read_research_cache():
     try:
-        with open(RESEARCH_CACHE_FILE, encoding="utf-8") as f:
-            d = json.load(f) or {}
+        d = store.read_json_strict(RESEARCH_CACHE_FILE) or {}
     except Exception:
         d = {}
     if not isinstance(d, dict):
@@ -3650,9 +3601,7 @@ def _save_research_result(t, result):
         keep = d["order"][:_RESEARCH_CACHE_MAX]
         d["order"] = keep
         d["items"] = {k: v for k, v in d["items"].items() if k in keep}
-        os.makedirs(os.path.dirname(RESEARCH_CACHE_FILE) or ".", exist_ok=True)
-        with open(RESEARCH_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f)
+        store.write_json(RESEARCH_CACHE_FILE, d)
     except Exception:
         pass   # cache is best-effort; never fail the request over it
 
@@ -3735,8 +3684,7 @@ def post_knowledge_reindex():
 
 def _read_analysis():
     try:
-        with open(ANALYSIS_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(ANALYSIS_FILE)
     except Exception:
         return {"updated_at": None, "briefs": {}}
 
@@ -3770,9 +3718,7 @@ async def post_analysis(req: Request, x_analysis_token: str = Header(default="")
     else:
         return JSONResponse({"error": "expected {ticker,...} or {briefs:{...}}"}, status_code=400)
     out = {"updated_at": int(time.time()), "briefs": briefs}
-    os.makedirs(os.path.dirname(ANALYSIS_FILE) or ".", exist_ok=True)
-    with open(ANALYSIS_FILE, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+    store.write_json(ANALYSIS_FILE, out)
     return {"ok": True, "count": len(briefs)}
 
 
@@ -3967,8 +3913,7 @@ _MGR13F_CACHE = {}   # cik -> (ts, [filings])
 def _read_managers():
     """Watched-manager registry {cik: label}. Seeds a small default set on first run (editable)."""
     try:
-        with open(MANAGERS_FILE, encoding="utf-8") as f:
-            m = json.load(f)
+        m = store.read_json_strict(MANAGERS_FILE)
         if isinstance(m, dict) and m:
             return {str(k).zfill(10): v for k, v in m.items()}
     except Exception:
@@ -3977,9 +3922,7 @@ def _read_managers():
 
 
 def _write_managers(reg):
-    os.makedirs(os.path.dirname(MANAGERS_FILE) or ".", exist_ok=True)
-    with open(MANAGERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    store.write_json(MANAGERS_FILE, reg)
 
 
 def _holdings_for_inst():
@@ -4035,8 +3978,7 @@ def _institutional():
 
 def _read_institutional():
     try:
-        with open(INSTITUTIONAL_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(INSTITUTIONAL_FILE)
     except Exception:
         return None
 
@@ -4046,9 +3988,7 @@ def _do_institutional():
         return
     try:
         res = _institutional()
-        os.makedirs(os.path.dirname(INSTITUTIONAL_FILE) or ".", exist_ok=True)
-        with open(INSTITUTIONAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(INSTITUTIONAL_FILE, res)
     except Exception:
         pass
     finally:
@@ -4353,15 +4293,12 @@ def _log_verifier(ticker, llm, ver):
                "reason": ver.get("reason")}
         lines = []
         try:
-            with open(VERIFIER_LOG_FILE, encoding="utf-8") as f:
-                lines = f.read().splitlines()
+            lines = store.read_lines_strict(VERIFIER_LOG_FILE)
         except Exception:
             pass
         lines.append(json.dumps(row))
         lines = lines[-VERIFIER_LOG_MAX:]
-        os.makedirs(os.path.dirname(VERIFIER_LOG_FILE) or ".", exist_ok=True)
-        with open(VERIFIER_LOG_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        store.write_lines(VERIFIER_LOG_FILE, lines)
     except Exception:
         pass
 
@@ -4370,8 +4307,7 @@ def _verifier_summary(recent=10):
     """Aggregate judge behavior from the verdict log: volume, average groundedness, downgrade
     rate, failure rate — the 'is the judge itself sane?' dashboard (G13b)."""
     try:
-        with open(VERIFIER_LOG_FILE, encoding="utf-8") as f:
-            rows = [json.loads(x) for x in f.read().splitlines() if x.strip()]
+        rows = [json.loads(x) for x in store.read_lines_strict(VERIFIER_LOG_FILE) if x.strip()]
     except Exception:
         rows = []
     if not rows:
@@ -4527,9 +4463,7 @@ def _do_analysis(limit, tickers=None):
                 briefs[c["ticker"]] = _cit_brief(c)
                 _run_state["analyzed"] += 1
                 out = {"updated_at": int(time.time()), "briefs": briefs}
-                os.makedirs(os.path.dirname(ANALYSIS_FILE) or ".", exist_ok=True)
-                with open(ANALYSIS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(out, f, ensure_ascii=False, indent=2)
+                store.write_json(ANALYSIS_FILE, out)
                 continue
             g = _grounded(c["ticker"])
             news = _news(c["ticker"], c["name"])
@@ -4542,9 +4476,7 @@ def _do_analysis(limit, tickers=None):
             _log_rating(c["ticker"], llm)   # record rating+price for the AI scorecard
             _run_state["analyzed"] += 1
             out = {"updated_at": int(time.time()), "briefs": briefs}
-            os.makedirs(os.path.dirname(ANALYSIS_FILE) or ".", exist_ok=True)
-            with open(ANALYSIS_FILE, "w", encoding="utf-8") as f:  # write incrementally
-                json.dump(out, f, ensure_ascii=False, indent=2)
+            store.write_json(ANALYSIS_FILE, out)   # write incrementally
         _run_state["status"] = "idle"
     finally:
         _run_lock.release()
@@ -4596,8 +4528,7 @@ def _read_policy():
     """Investment policy: target allocation by asset type, per-position cap, drift band.
     Set it via POST /api/policy. Missing keys fall back to defaults."""
     try:
-        with open(POLICY_FILE, encoding="utf-8") as f:
-            return {**DEFAULT_POLICY, **(json.load(f) or {})}
+        return {**DEFAULT_POLICY, **(store.read_json_strict(POLICY_FILE) or {})}
     except Exception:
         return dict(DEFAULT_POLICY)
 
@@ -4614,9 +4545,7 @@ async def post_policy(req: Request):
     drift_threshold_pct, and position_caps (per-ticker overrides, e.g. {"PLTR":40,"RKLB":40})."""
     body = await req.json()
     pol = {**_read_policy(), **{k: v for k, v in body.items() if k in DEFAULT_POLICY}}
-    os.makedirs(os.path.dirname(POLICY_FILE) or ".", exist_ok=True)
-    with open(POLICY_FILE, "w", encoding="utf-8") as f:
-        json.dump(pol, f, indent=2)
+    store.write_json(POLICY_FILE, pol)
     return {"ok": True, "policy": pol}
 
 
@@ -4789,9 +4718,7 @@ def _rebalance():
                    "dividends aren't available to rebalance). Consider tax impact (esp. in taxable accounts) "
                    "and transaction costs before acting; consult a licensed professional for decisions."}
     try:
-        os.makedirs(os.path.dirname(INSIGHTS_FILE) or ".", exist_ok=True)
-        with open(INSIGHTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(out, f, indent=2)
+        store.write_json(INSIGHTS_FILE, out)
     except Exception:
         pass
     return out
@@ -4822,8 +4749,7 @@ def run_rebalance_ep(x_analysis_token: str = Header(default="")):
 # ---------------- Retirement / FIRE Planner (proactive, read-only, informational) ----------------
 def _read_retire():
     try:
-        with open(RETIRE_FILE, encoding="utf-8") as f:
-            return {**DEFAULT_RETIRE, **(json.load(f) or {})}
+        return {**DEFAULT_RETIRE, **(store.read_json_strict(RETIRE_FILE) or {})}
     except Exception:
         return dict(DEFAULT_RETIRE)
 
@@ -4909,9 +4835,7 @@ async def post_retire_config(req: Request):
     annual_expenses_override, annual_savings_override, current_age, target_age, exclude_account_types."""
     body = await req.json()
     cfg = {**_read_retire(), **{k: v for k, v in body.items() if k in DEFAULT_RETIRE}}
-    os.makedirs(os.path.dirname(RETIRE_FILE) or ".", exist_ok=True)
-    with open(RETIRE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    store.write_json(RETIRE_FILE, cfg)
     return {"ok": True, "config": cfg}
 
 
@@ -4972,16 +4896,14 @@ def _narrative_context():
     except Exception:
         pass
     try:
-        with open(BACKTEST_FILE, encoding="utf-8") as f:
-            bt = json.load(f) or {}
+        bt = store.read_json_strict(BACKTEST_FILE) or {}
         h12 = ((bt.get("ratings") or {}).get("by_horizon") or {}).get("12m") or {}
         ctx["backtest_12m_hit_pct"] = h12.get("hit_rate_pct")
         ctx["paper_excess_vs_spy_pct"] = ((bt.get("paper") or {}).get("weighted_excess_pct"))
     except Exception:
         pass
     try:
-        with open(PERF_FILE, encoding="utf-8") as f:
-            pf = json.load(f) or {}
+        pf = store.read_json_strict(PERF_FILE) or {}
         ytd = (pf.get("periods") or {}).get("YTD") or {}
         ctx["ytd_portfolio_pct"] = ytd.get("portfolio_pct")
         ctx["ytd_excess_vs_policy_pct"] = ytd.get("excess_vs_policy_pct")
@@ -5002,16 +4924,13 @@ def _write_narrative_error(msg):
     so the job silently finished 'done' with nothing written and no trace anywhere. Doesn't
     touch the `letters` history — only this one status field."""
     try:
-        with open(NARRATIVE_FILE, encoding="utf-8") as f:
-            store = json.load(f) or {}
+        nd = store.read_json_strict(NARRATIVE_FILE) or {}
     except Exception:
-        store = {}
-    store["last_error"] = msg
-    store["last_error_at"] = int(time.time())
+        nd = {}
+    nd["last_error"] = msg
+    nd["last_error_at"] = int(time.time())
     try:
-        os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
-        with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False)
+        store.write_json(NARRATIVE_FILE, nd)
     except Exception:
         pass
 
@@ -5068,31 +4987,27 @@ def _do_narrative():
         _write_narrative_error(err)
         raise RuntimeError(err)   # _gpu_slot() still releases correctly on unwind
     try:
-        with open(NARRATIVE_FILE, encoding="utf-8") as f:
-            store = json.load(f) or {}
+        nd = store.read_json_strict(NARRATIVE_FILE) or {}
     except Exception:
-        store = {}
-    rows = (store.get("letters") or [])
+        nd = {}
+    rows = (nd.get("letters") or [])
     # gpu_wait_s persists on SUCCESSFUL runs too (not just the error path above) so Jason can see
     # typical GPU-queue delay over time in /api/narrative's history — useful for judging whether
     # NARR_LLM_TIMEOUT is comfortably sized without needing to reproduce an actual failure.
     rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx, "gpu_wait_s": gpu_wait_s})
-    store = {"letters": rows[-NARRATIVE_KEEP:], "last_error": None, "last_error_at": None}
-    os.makedirs(os.path.dirname(NARRATIVE_FILE) or ".", exist_ok=True)
-    with open(NARRATIVE_FILE, "w", encoding="utf-8") as f:
-        json.dump(store, f, ensure_ascii=False)
+    nd = {"letters": rows[-NARRATIVE_KEEP:], "last_error": None, "last_error_at": None}
+    store.write_json(NARRATIVE_FILE, nd)
 
 
 @app.get("/api/narrative")
 def get_narrative():
     try:
-        with open(NARRATIVE_FILE, encoding="utf-8") as f:
-            store = json.load(f) or {}
+        nd = store.read_json_strict(NARRATIVE_FILE) or {}
     except Exception:
-        store = {}
-    rows = store.get("letters") or []
+        nd = {}
+    rows = nd.get("letters") or []
     return {"latest": rows[-1] if rows else None, "count": len(rows),
-            "last_error": store.get("last_error"), "last_error_at": store.get("last_error_at"),
+            "last_error": nd.get("last_error"), "last_error_at": nd.get("last_error_at"),
             "note": ("Weekly plain-language composition of every module's cached headline — the "
                      "cockpit as a story, with one recommended focus. Educational, not advice.")}
 
@@ -5161,9 +5076,7 @@ def _do_hedging():
                "note": ("Delayed chains; premiums are mid-quotes and thin markets widen fast — "
                         "treat numbers as sizing guides, verify live quotes before any order. "
                         "Educational; assignment/collars carry tax consequences on appreciated lots.")}
-        os.makedirs(os.path.dirname(HEDGING_FILE) or ".", exist_ok=True)
-        with open(HEDGING_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(HEDGING_FILE, res)
     except Exception:
         pass
     finally:
@@ -5173,8 +5086,7 @@ def _do_hedging():
 @app.get("/api/hedging")
 def get_hedging():
     try:
-        with open(HEDGING_FILE, encoding="utf-8") as f:
-            cached = json.load(f)
+        cached = store.read_json_strict(HEDGING_FILE)
     except Exception:
         cached = None
     fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < HEDGING_TTL)
@@ -5205,8 +5117,7 @@ def _rentcast_avm(address):
     if not key or not address:
         return None
     try:
-        with open(RENTCAST_FILE, encoding="utf-8") as f:
-            cache = json.load(f) or {}
+        cache = store.read_json_strict(RENTCAST_FILE) or {}
     except Exception:
         cache = {}
     rec = cache.get(address)
@@ -5226,9 +5137,7 @@ def _rentcast_avm(address):
                           "high": j.get("priceRangeHigh") or j.get("rentRangeHigh")}
         if out.get("value") or out.get("rent"):
             cache[address] = out
-            os.makedirs(os.path.dirname(RENTCAST_FILE) or ".", exist_ok=True)
-            with open(RENTCAST_FILE, "w", encoding="utf-8") as f:
-                json.dump(cache, f)
+            store.write_json(RENTCAST_FILE, cache)
             return out
     except Exception:
         pass
@@ -5258,9 +5167,7 @@ def _do_performance():
                               _stooq_daily,
                               _read_value_history())
         res["generated_at"] = int(time.time())
-        os.makedirs(os.path.dirname(PERF_FILE) or ".", exist_ok=True)
-        with open(PERF_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(PERF_FILE, res)
     except Exception:
         pass
     finally:
@@ -5270,8 +5177,7 @@ def _do_performance():
 @app.get("/api/performance")
 def get_performance():
     try:
-        with open(PERF_FILE, encoding="utf-8") as f:
-            cached = json.load(f)
+        cached = store.read_json_strict(PERF_FILE)
     except Exception:
         cached = None
     fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < PERF_TTL)
@@ -5334,8 +5240,7 @@ def _tbill_yield():
     to the `tbill_fallback_pct` knob. Same pattern as _tips_real_yield."""
     today = datetime.date.today()
     try:
-        with open(TBILL_CACHE_FILE, encoding="utf-8") as f:
-            c = json.load(f) or {}
+        c = store.read_json_strict(TBILL_CACHE_FILE) or {}
         if c.get("fetched") == today.isoformat() and c.get("yield_pct") is not None:
             return c["yield_pct"], c.get("source") or f"FRED {TBILL_SERIES}"
     except Exception:
@@ -5350,10 +5255,8 @@ def _tbill_yield():
             vals = [(d, v) for d, v in rows if v not in (".", "", None)]
             if vals:
                 y = round(float(vals[-1][1]), 2)
-                os.makedirs(os.path.dirname(TBILL_CACHE_FILE) or ".", exist_ok=True)
-                with open(TBILL_CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump({"fetched": today.isoformat(), "yield_pct": y,
-                               "source": f"FRED {TBILL_SERIES}"}, f)
+                store.write_json(TBILL_CACHE_FILE, {"fetched": today.isoformat(), "yield_pct": y,
+                               "source": f"FRED {TBILL_SERIES}"})
                 return y, f"FRED {TBILL_SERIES}"
     except Exception:
         pass
@@ -5518,8 +5421,7 @@ ESTATE_DOC_TYPES = ("will", "durable_poa", "healthcare_directive", "trust", "ben
 
 def _read_insurance_cfg():
     try:
-        with open(INSURANCE_FILE, encoding="utf-8") as f:
-            cfg = json.load(f) or {}
+        cfg = store.read_json_strict(INSURANCE_FILE) or {}
     except Exception:
         cfg = {}
     return {**DEFAULT_INSURANCE, **{k: cfg.get(k) for k in DEFAULT_INSURANCE if k in cfg}}
@@ -5611,9 +5513,7 @@ async def post_insurance_config(req: Request):
     if isinstance(body.get("policies"), list):
         cfg["policies"] = [{k: p.get(k) for k in _INS_POLICY_KEYS}
                            for p in body["policies"] if isinstance(p, dict) and p.get("kind")][:50]
-    os.makedirs(os.path.dirname(INSURANCE_FILE) or ".", exist_ok=True)
-    with open(INSURANCE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    store.write_json(INSURANCE_FILE, cfg)
     return {"ok": True, "config": cfg}
 
 
@@ -6217,8 +6117,7 @@ def _tips_real_yield():
     knob when FRED is unreachable. Returns (yield_pct, source, observation_date)."""
     today = datetime.date.today()
     try:
-        with open(TIPS_CACHE_FILE, encoding="utf-8") as f:
-            c = json.load(f) or {}
+        c = store.read_json_strict(TIPS_CACHE_FILE) or {}
         if c.get("fetched") == today.isoformat() and c.get("yield_pct") is not None:
             return c["yield_pct"], c.get("source") or f"FRED {TIPS_SERIES}", c.get("obs_date")
     except Exception:
@@ -6237,10 +6136,8 @@ def _tips_real_yield():
         if obs:
             dt, y = obs[-1]
             try:
-                os.makedirs(os.path.dirname(TIPS_CACHE_FILE) or ".", exist_ok=True)
-                with open(TIPS_CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump({"fetched": today.isoformat(), "yield_pct": y,
-                               "obs_date": dt, "source": f"FRED {TIPS_SERIES}"}, f)
+                store.write_json(TIPS_CACHE_FILE, {"fetched": today.isoformat(), "yield_pct": y,
+                               "obs_date": dt, "source": f"FRED {TIPS_SERIES}"})
             except Exception:
                 pass
             return y, f"FRED {TIPS_SERIES}", dt
@@ -6308,9 +6205,7 @@ def _snapshot_funded(fr):
         today = datetime.date.today().isoformat()
         if hist and hist[-1].get("date") == today:
             hist[-1]["funded_ratio"] = fr
-            os.makedirs(os.path.dirname(VALUE_HISTORY_FILE) or ".", exist_ok=True)
-            with open(VALUE_HISTORY_FILE, "w", encoding="utf-8") as f:
-                json.dump(hist, f)
+            store.write_json(VALUE_HISTORY_FILE, hist)
     except Exception:
         pass
 
@@ -6711,8 +6606,7 @@ def get_income_plan():
 # ---------------- Opportunity Scanner (proactive, read-only, research ideas only) ----------------
 def _read_scanner():
     try:
-        with open(SCANNER_FILE, encoding="utf-8") as f:
-            cfg = {**DEFAULT_SCANNER, **(json.load(f) or {})}
+        cfg = {**DEFAULT_SCANNER, **(store.read_json_strict(SCANNER_FILE) or {})}
         cfg["criteria"] = {**DEFAULT_SCANNER["criteria"], **(cfg.get("criteria") or {})}
         return cfg
     except Exception:
@@ -6732,17 +6626,14 @@ async def post_scanner_config(req: Request):
     cfg = {**_read_scanner(), **{k: v for k, v in body.items() if k in DEFAULT_SCANNER}}
     if "criteria" in body and isinstance(body["criteria"], dict):
         cfg["criteria"] = {**DEFAULT_SCANNER["criteria"], **body["criteria"]}
-    os.makedirs(os.path.dirname(SCANNER_FILE) or ".", exist_ok=True)
-    with open(SCANNER_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    store.write_json(SCANNER_FILE, cfg)
     return {"ok": True, "config": cfg}
 
 
 def _read_accounts_cfg():
     """Per-account settings: {"defaults": {drip, fractional_ok}, "accounts": {name: {...}}}."""
     try:
-        with open(ACCOUNTS_FILE, encoding="utf-8") as f:
-            cfg = json.load(f) or {}
+        cfg = store.read_json_strict(ACCOUNTS_FILE) or {}
     except Exception:
         cfg = {}
     return {"defaults": {**DEFAULT_ACCOUNT_FLAGS, **(cfg.get("defaults") or {})},
@@ -6801,9 +6692,7 @@ async def post_accounts_config(req: Request):
                 if k in v:
                     cur[k] = bool(v[k])
             cfg["accounts"][nm] = cur
-    os.makedirs(os.path.dirname(ACCOUNTS_FILE) or ".", exist_ok=True)
-    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    store.write_json(ACCOUNTS_FILE, cfg)
     return {"ok": True, "config": cfg}
 
 
@@ -6874,9 +6763,7 @@ async def post_settings(req: Request):
             stored[key] = str(val)
         applied.append(key)
         restart_needed.append(key)
-    os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(stored, f, indent=2)
+    store.write_json(SETTINGS_FILE, stored)
     return {"ok": True, "applied": applied, "ignored_env_locked": ignored,
             "restart_required": restart_needed, "settings": stored}
 
@@ -6906,8 +6793,7 @@ SECRET_SPECS = [
 
 def _read_secrets():
     try:
-        with open(SECRETS_FILE, encoding="utf-8") as f:
-            return json.load(f) or {}
+        return store.read_json_strict(SECRETS_FILE) or {}
     except Exception:
         return {}
 
@@ -6951,13 +6837,8 @@ async def post_secrets(req: Request):
         else:
             stored[k] = str(v)
         saved.append(k)
-    os.makedirs(os.path.dirname(SECRETS_FILE) or ".", exist_ok=True)
-    with open(SECRETS_FILE, "w", encoding="utf-8") as f:
-        json.dump(stored, f, indent=2)
-    try:
-        os.chmod(SECRETS_FILE, 0o600)
-    except Exception:
-        pass
+    store.write_json(SECRETS_FILE, stored)   # store.py's DB is chmod 0600 at init; the legacy
+                                              # SECRETS_FILE path is no longer written to
     return {"ok": True, "saved": saved, "ignored": ignored, "restart_required": bool(saved)}
 
 
@@ -7342,8 +7223,7 @@ _opp_lock = threading.Lock()
 
 def _read_opps():
     try:
-        with open(OPPORTUNITIES_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(OPPORTUNITIES_FILE)
     except Exception:
         return None
 
@@ -7354,9 +7234,7 @@ def _do_opportunities():
         return
     try:
         res = _opportunities()
-        os.makedirs(os.path.dirname(OPPORTUNITIES_FILE) or ".", exist_ok=True)
-        with open(OPPORTUNITIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(OPPORTUNITIES_FILE, res)
     except Exception:
         pass
     finally:
@@ -7744,8 +7622,7 @@ def _fee_liquidity():
 
 def _read_fl():
     try:
-        with open(FL_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(FL_FILE)
     except Exception:
         return None
 
@@ -7755,9 +7632,7 @@ def _do_fl():
         return
     try:
         res = _fee_liquidity()
-        os.makedirs(os.path.dirname(FL_FILE) or ".", exist_ok=True)
-        with open(FL_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(FL_FILE, res)
     except Exception:
         pass
     finally:
@@ -7944,8 +7819,7 @@ def _exposure():
 
 def _read_exp():
     try:
-        with open(EXP_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(EXP_FILE)
     except Exception:
         return None
 
@@ -7955,9 +7829,7 @@ def _do_exp():
         return
     try:
         res = _exposure()
-        os.makedirs(os.path.dirname(EXP_FILE) or ".", exist_ok=True)
-        with open(EXP_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(EXP_FILE, res)
     except Exception:
         pass
     finally:
@@ -8155,8 +8027,7 @@ def _lookthrough():
 
 def _read_lt():
     try:
-        with open(LT_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(LT_FILE)
     except Exception:
         return None
 
@@ -8166,9 +8037,7 @@ def _do_lt():
         return
     try:
         res = _lookthrough()
-        os.makedirs(os.path.dirname(LT_FILE) or ".", exist_ok=True)
-        with open(LT_FILE, "w", encoding="utf-8") as f:
-            json.dump(res, f)
+        store.write_json(LT_FILE, res)
     except Exception:
         pass
     finally:
@@ -8362,9 +8231,7 @@ def _do_discovery():
                "alerts": _holdings_alerts(d, cfg.get("alert_holdings_limit") or 15),
                "discovered": _discover(d, cfg.get("criteria") or {}),
                "note": "News-discovered ideas + material-news alerts on holdings. Read-only research, not advice."}
-        os.makedirs(os.path.dirname(DISCOVERY_FILE) or ".", exist_ok=True)
-        with open(DISCOVERY_FILE, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
+        store.write_json(DISCOVERY_FILE, out)
         _disc_state["status"] = "idle"
     finally:
         _disc_lock.release()
@@ -8374,8 +8241,7 @@ def _do_discovery():
 def get_discovery():
     """Stored news-discovery report: ideas found from the newsfeed + material-news alerts on holdings."""
     try:
-        with open(DISCOVERY_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        return store.read_json_strict(DISCOVERY_FILE)
     except Exception:
         return {"generated_at": None, "discovered": [], "alerts": [],
                 "note": "No discovery run yet — POST /api/run-discovery (or wait for the scheduled job)."}
@@ -8497,8 +8363,7 @@ def _seeded_scenario_fields(sel, cash, basis_mode):
 
 def _read_registry():
     try:
-        with open(PAPER_FILE, encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = store.read_json_strict(PAPER_FILE)
     except Exception:
         raw = None
     if isinstance(raw, dict) and isinstance(raw.get("scenarios"), dict) and raw["scenarios"]:
@@ -8521,9 +8386,7 @@ def _read_registry():
 
 
 def _write_registry(reg):
-    os.makedirs(os.path.dirname(PAPER_FILE) or ".", exist_ok=True)
-    with open(PAPER_FILE, "w", encoding="utf-8") as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    store.write_json(PAPER_FILE, reg)
 
 
 def _active_scenarios(reg, kind=None):
@@ -9141,16 +9004,13 @@ STRAT_RUN_LOG_MAX = int(os.environ.get("STRAT_RUN_LOG_MAX", "200"))
 
 def _log_strategist_run(rec):
     try:
-        os.makedirs(os.path.dirname(STRAT_RUN_LOG_FILE) or ".", exist_ok=True)
         try:
-            with open(STRAT_RUN_LOG_FILE, encoding="utf-8") as f:
-                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            lines = [ln for ln in store.read_lines_strict(STRAT_RUN_LOG_FILE) if ln.strip()]
         except Exception:
             lines = []
         lines.append(json.dumps(rec, default=str))
         lines = lines[-STRAT_RUN_LOG_MAX:]
-        with open(STRAT_RUN_LOG_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        store.write_lines(STRAT_RUN_LOG_FILE, lines)
     except Exception:
         pass
 
@@ -9178,8 +9038,7 @@ def _strategist_dispatch(name, args, scenario_id=None):
             return _opportunities()
         if name == "get_discovery":
             try:
-                with open(DISCOVERY_FILE, encoding="utf-8") as f:
-                    return json.load(f)
+                return store.read_json_strict(DISCOVERY_FILE)
             except Exception:
                 return {"discovered": [], "alerts": []}
         if name == "get_fundamentals":
@@ -9390,8 +9249,7 @@ def strategist_runs(limit: int = 50):
     converging, wandering, or hitting the step cap?). Read-only. `summary` aggregates the window so
     'does it wander?' is answerable at a glance; `runs` is the newest-first per-run detail."""
     try:
-        with open(STRAT_RUN_LOG_FILE, encoding="utf-8") as f:
-            rows = [json.loads(x) for x in f.read().splitlines() if x.strip()]
+        rows = [json.loads(x) for x in store.read_lines_strict(STRAT_RUN_LOG_FILE) if x.strip()]
     except Exception:
         rows = []
     rows = rows[-max(1, min(limit, STRAT_RUN_LOG_MAX)):][::-1]
@@ -9798,8 +9656,7 @@ def _fiduciary_dispatch(name, args):
         if name == "get_opportunities":   return _opportunities()
         if name == "get_discovery":
             try:
-                with open(DISCOVERY_FILE, encoding="utf-8") as f:
-                    return json.load(f)
+                return store.read_json_strict(DISCOVERY_FILE)
             except Exception:
                 return {"discovered": [], "alerts": []}
         if name == "get_fundamentals":    return edgar.fundamentals(str(args.get("ticker") or "").upper())
@@ -9862,8 +9719,7 @@ PERSONA_LABELS = {"fiduciary": "Fiduciary", "strategist": "Strategist"}
 
 def _read_prompts_store():
     try:
-        with open(PROMPTS_FILE, encoding="utf-8") as f:
-            d = json.load(f) or {}
+        d = store.read_json_strict(PROMPTS_FILE) or {}
     except Exception:
         d = {}
     if not isinstance(d, dict):
@@ -9873,13 +9729,8 @@ def _read_prompts_store():
     return d
 
 def _write_prompts_store(d):
-    os.makedirs(os.path.dirname(PROMPTS_FILE) or ".", exist_ok=True)
-    with open(PROMPTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f)
-    try:
-        os.chmod(PROMPTS_FILE, 0o600)   # may embed the user's name — keep it private
-    except Exception:
-        pass
+    store.write_json(PROMPTS_FILE, d)   # store.py's DB is chmod 0600 at init — this may embed
+                                         # the user's name, kept private the same as before
 
 def _user_ref():
     v = (_read_prompts_store().get("user_ref") or "").strip()
@@ -9888,8 +9739,8 @@ def _user_ref():
 def _resolve_persona_prompt(key):
     """The system prompt actually sent for persona `key`: the user's override if set, else the coded
     default, with the `{user}` token filled in from the configured user reference."""
-    store = _read_prompts_store()
-    tmpl = store["prompts"].get(key) or DEFAULT_PERSONA_PROMPTS.get(key, "")
+    pd = _read_prompts_store()
+    tmpl = pd["prompts"].get(key) or DEFAULT_PERSONA_PROMPTS.get(key, "")
     return tmpl.replace("{user}", _user_ref())
 
 
@@ -9898,8 +9749,8 @@ def get_prompts():
     """Current persona-prompt configuration for the SETTINGS editor: the user reference plus, per
     persona, the coded default, the effective current text (override or default), whether it's
     customized, and a preview with `{user}` already substituted."""
-    store = _read_prompts_store()
-    overrides = store["prompts"]
+    pd = _read_prompts_store()
+    overrides = pd["prompts"]
     ref = _user_ref()
     personas = {}
     for key, default in DEFAULT_PERSONA_PROMPTS.items():
@@ -9912,7 +9763,7 @@ def get_prompts():
             "resolved_preview": cur.replace("{user}", ref),
         }
     return {"user_ref": ref, "user_ref_default": DEFAULT_USER_REF,
-            "user_ref_is_custom": bool((store.get("user_ref") or "").strip()),
+            "user_ref_is_custom": bool((pd.get("user_ref") or "").strip()),
             "token": "{user}", "personas": personas}
 
 
@@ -9926,21 +9777,21 @@ async def post_prompts(req: Request):
         body = await req.json()
     except Exception:
         body = {}
-    store = _read_prompts_store()
+    pd = _read_prompts_store()
     if "user_ref" in body:
-        store["user_ref"] = str(body.get("user_ref") or "").strip()
+        pd["user_ref"] = str(body.get("user_ref") or "").strip()
     persona = body.get("persona")
     if persona in DEFAULT_PERSONA_PROMPTS:
         if body.get("reset"):
-            store["prompts"].pop(persona, None)
+            pd["prompts"].pop(persona, None)
         elif "prompt" in body:
             txt = str(body.get("prompt") or "").strip()
             if txt and txt != DEFAULT_PERSONA_PROMPTS[persona]:
-                store["prompts"][persona] = txt
+                pd["prompts"][persona] = txt
             else:
-                store["prompts"].pop(persona, None)   # identical to default or blank → treat as reset
+                pd["prompts"].pop(persona, None)   # identical to default or blank → treat as reset
     try:
-        _write_prompts_store(store)
+        _write_prompts_store(pd)
     except Exception as e:
         return JSONResponse({"error": f"could not save prompts: {e}"}, status_code=500)
     return get_prompts()
