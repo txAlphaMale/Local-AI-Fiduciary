@@ -347,22 +347,34 @@ def mfa_backup_codes_remaining(uid):
 
 
 # ---------------------------------------------------------------------------
-# Login rate limiting — simple in-process sliding window. Deliberately not backed by a
-# shared store (Redis etc.): this is a single-instance local app, so in-memory state is fine
-# and resets harmlessly on restart.
+# Rate limiting — simple in-process sliding window, one independent bucket per use (so hammering
+# a job-trigger button can't lock you out of logging in, and vice versa). Deliberately not backed
+# by a shared store (Redis etc.): this is a single-instance local app, so in-memory state is fine
+# and resets harmlessly on restart. 2026-07-24: generalized from a login-only single bucket
+# (`_login_attempts`) to a named-bucket version so `app.py`'s auth gate can also rate-limit the
+# heavy job-trigger endpoints (`/api/run-*`, `/api/knowledge/reindex`, `/api/strategist/advise`) —
+# `rate_limited(ip)`/`record_login_attempt(ip)`'s original signatures still work unchanged
+# (default bucket "login", default limit LOGIN_RATE_LIMIT_PER_MIN), so neither existing call site
+# needed to change.
 # ---------------------------------------------------------------------------
-_login_attempts = {}   # ip -> [unix ts, ...]
+_rate_buckets = {}   # bucket -> {ip: [unix ts, ...]}
 
 
-def rate_limited(ip):
+def rate_limited(ip, bucket="login", limit=None):
+    lim = LOGIN_RATE_LIMIT_PER_MIN if limit is None else limit
     now = time.time()
-    hist = [t for t in _login_attempts.get(ip, []) if now - t < 60]
-    _login_attempts[ip] = hist
-    return len(hist) >= LOGIN_RATE_LIMIT_PER_MIN
+    ips = _rate_buckets.setdefault(bucket, {})
+    hist = [t for t in ips.get(ip, []) if now - t < 60]
+    ips[ip] = hist
+    return len(hist) >= lim
+
+
+def record_attempt(ip, bucket="login"):
+    _rate_buckets.setdefault(bucket, {}).setdefault(ip, []).append(time.time())
 
 
 def record_login_attempt(ip):
-    _login_attempts.setdefault(ip, []).append(time.time())
+    record_attempt(ip, bucket="login")
 
 
 # ============================================================================

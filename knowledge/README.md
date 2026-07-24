@@ -9,8 +9,11 @@ Drop reference documents in **this folder** and the Fiduciary chat can search th
   tool runs after a change.
 - **Remove content:** delete the file → reindex → it drops out.
 - **How it works:** each doc's text is chunked and embedded with Ollama **`bge-m3`** (pull it:
-  `ollama pull bge-m3`); the query is embedded and matched by cosine similarity. Vectors are
-  cached in `/data/knowledge_index.json`. No cloud, all local.
+  `ollama pull bge-m3`); the query is embedded and matched by cosine similarity. Content is
+  imported into `store.db` (SQLite), keyed by a hash of each file's bytes — the same content
+  under two filenames is only embedded once. No cloud, all local. Removing a file from this
+  folder no longer drops it from the index by itself — use the DELETE button next to a document
+  in SETTINGS → KNOWLEDGE to actually retire it (see that panel for detail).
 
 Everything you add here is **git-ignored** (this README is the only committed file), because your
 docs may be personal (e.g. your Investment Policy Statement). On the host they live in

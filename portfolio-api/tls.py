@@ -286,11 +286,11 @@ def generate_csr(common_name, sans=None):
     key_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                  serialization.NoEncryption())
     csr_pem = csr.public_bytes(serialization.Encoding.PEM)
-    with open(PENDING_KEY_PATH, "wb") as f:
-        f.write(key_pem)
-    os.chmod(PENDING_KEY_PATH, 0o600)
-    with open(PENDING_CSR_PATH, "wb") as f:
-        f.write(csr_pem)
+    # atomic (2026-07-24, CLOUD-PORTABILITY-ROADMAP.md Phase 2) -- matches _write_active's
+    # existing .tmp+os.replace pattern below, for the same reason (never leave a half-written
+    # key/CSR pair behind a killed-mid-write process).
+    store.atomic_write_bytes(PENDING_KEY_PATH, key_pem, mode=0o600)
+    store.atomic_write_bytes(PENDING_CSR_PATH, csr_pem)
     return csr_pem.decode()
 
 

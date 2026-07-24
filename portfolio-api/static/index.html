@@ -338,19 +338,15 @@ function copyBtn(text, title){
 // including 0. (Bug found 2026-07-23: spouse income of 0 wouldn't save/clear the setup checklist.)
 const numOrNull = v => { if(v===''||v==null) return null; const n=parseFloat(v); return isNaN(n)?null:n; };
 
-// Analysis token (guards /api/run-*, /api/knowledge/reindex): server injects the real value at
-// GET / time (see app.py's index() — string-substitutes this placeholder), empty when the
-// ANALYSIS_TOKEN secret isn't configured. Diagnosed 2026-07-17: every manual trigger button below
-// used to POST with no header at all, so a configured token made them silently 401 while the
-// button text still claimed "queued…" — the scheduler's own runs were unaffected since they call
-// _enqueue() directly in Python, never over HTTP.
-const ANALYSIS_TOKEN = "__ANALYSIS_TOKEN__";
-// Fire a manual job-trigger POST with the token attached, plus real failure surfacing (a 401,
-// a downed API, or a network error now shows in the button instead of a silent no-op).
+// Fire a manual job-trigger POST, plus real failure surfacing (a 401, a downed API, or a network
+// error now shows in the button instead of a silent no-op). 2026-07-24: no longer attaches an
+// ANALYSIS_TOKEN header — that whole mechanism was retired as redundant now that the session
+// cookie (sent automatically with every same-origin request) is the only auth check anywhere in
+// the app, including these job-trigger endpoints.
 function runJob(url, btn, queuedLabel){
   if(btn){ btn.textContent = queuedLabel || 'queued…'; btn.disabled = true; }
-  return fetch(url, {method:'POST', headers: ANALYSIS_TOKEN ? {'X-Analysis-Token': ANALYSIS_TOKEN} : {}})
-    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' — check ANALYSIS_TOKEN':'')); return r.json().catch(()=>({})); })
+  return fetch(url, {method:'POST'})
+    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json().catch(()=>({})); })
     .catch(e => { if(btn){ btn.textContent = 'failed: '+e.message; btn.disabled = false; } console.error('runJob', url, e); });
 }
 
@@ -3182,8 +3178,8 @@ function _knPollTick(){
 function _knStartPoll(){ if(_knPollTimer) return; _knPollTimer=setInterval(_knPollTick, 1000); _knPollTick(); }
 function reindexKnowledge(){
   const btn=document.getElementById('kn-reindex'); if(btn){ btn.disabled=true; btn.textContent='⏳ queuing…'; }
-  fetch('/api/knowledge/reindex',{method:'POST', headers: ANALYSIS_TOKEN ? {'X-Analysis-Token': ANALYSIS_TOKEN} : {}})
-    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' — check ANALYSIS_TOKEN':'')); return r.json(); })
+  fetch('/api/knowledge/reindex',{method:'POST'})
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
     .then(()=>_knStartPoll())
     .catch(e=>{ alert('Reindex failed: '+e); if(btn){ btn.disabled=false; btn.textContent='↻ REINDEX'; } });
 }

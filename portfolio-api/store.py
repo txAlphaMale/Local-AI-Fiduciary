@@ -32,6 +32,35 @@ _lock = threading.Lock()   # SQLite handles its own file locking, but this keeps
                            # idempotent-safe if ever called from more than one thread at once
 
 
+# ============================================================================
+# Atomic flat-file writes (CLOUD-PORTABILITY-ROADMAP.md Phase 2, 2026-07-24) -- for the handful
+# of files that are STILL plain files by design rather than SQLite rows (the session-secret
+# bootstrap, the per-ticker price-history cache, TLS pending-CSR scratch files): write to a
+# `.tmp` sibling then `os.replace()` it into place, so a killed-mid-write process can never leave
+# a half-written, corrupt file where a good (or absent) one was expected. Cheap insurance the
+# roadmap explicitly calls out as worth doing regardless of whether/when a cloud move happens --
+# rolling/restarted deployments make a torn write a real possibility, not just a theoretical one.
+# ============================================================================
+def atomic_write_text(path, text, mode=None):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def atomic_write_bytes(path, data, mode=None):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
 def _conn():
     os.makedirs(os.path.dirname(STORE_DB) or ".", exist_ok=True)
     c = sqlite3.connect(STORE_DB, timeout=30)

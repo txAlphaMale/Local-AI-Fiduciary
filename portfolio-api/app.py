@@ -24,9 +24,12 @@ import queue
 import uuid
 
 import requests
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, Dict, List
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -151,6 +154,79 @@ DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
                   "ss_pia_monthly": None, "ss_aime": None,           # alternative PIA inputs
                   "spouse_birth_year": None, "spouse_ss_claim_age": None,
                   "spouse_ss_estimated_fra_benefit": None, "spouse_ss_pia_monthly": None}
+
+
+# ============================================================================
+# Pydantic request models (API hardening, 2026-07-24 -- CLOUD-PORTABILITY-ROADMAP.md /
+# LOCAL-HOSTING-HARDENING-PLAN.md follow-on item: "Pydantic request validation on
+# config-mutating POSTs -- still ad hoc await req.json() + manual coercion everywhere; do
+# incrementally, highest-traffic endpoints first"). Two of the config-mutating POST endpoints
+# converted this pass -- /api/policy and /api/retirement-config -- as the first, most
+# representative slice: both previously did `{k: v for k, v in body.items() if k in DEFAULT_X}`
+# with ZERO type/range checking, so a wrong-shaped value (a string where a percentage was
+# expected, a negative age, an out-of-range allocation target) would silently persist into the
+# stored config and only surface as a confusing failure somewhere else downstream (the Monte
+# Carlo, the tax engine, the rebalance drift calc). The remaining config-mutating endpoints
+# (insurance-config, accounts-config, settings, secrets) are intentionally left on their existing
+# ad hoc validation for now -- their bodies are more dynamically shaped (bulk/defaults/single-item
+# variants, or genuinely open-ended settings/secrets registries) and are a reasonable next
+# increment, not skipped by oversight.
+#
+# `exclude_unset=True` at each call site (not `exclude_none`) preserves the ORIGINAL merge
+# semantics exactly: a key the client didn't send is left alone (old value persists), but a key
+# explicitly sent as `null` DOES apply (clearing an override back to None) -- matching the old
+# `if k in body` check, which triggered on presence, not on truthiness.
+# ============================================================================
+class PolicyUpdate(BaseModel):
+    targets_by_type: Optional[Dict[str, float]] = None
+    max_position_pct: Optional[float] = Field(None, gt=0, le=100)
+    drift_threshold_pct: Optional[float] = Field(None, gt=0, le=100)
+    position_caps: Optional[Dict[str, float]] = None
+    targets_by_sleeve: Optional[Dict[str, float]] = None
+    intl_tickers: Optional[Dict[str, bool]] = None
+
+    @field_validator("targets_by_type", "targets_by_sleeve", "position_caps")
+    @classmethod
+    def _pct_map_in_range(cls, v):
+        if v is None:
+            return v
+        for k, val in v.items():
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or not (0 <= val <= 100):
+                raise ValueError(f"{k!r}: expected a percentage between 0 and 100, got {val!r}")
+        return v
+
+
+class RetirementConfigUpdate(BaseModel):
+    withdrawal_rate_pct: Optional[float] = Field(None, ge=0, le=25)
+    expected_real_return_pct: Optional[float] = Field(None, ge=-20, le=30)
+    annual_expenses_override: Optional[float] = Field(None, ge=0)
+    annual_savings_override: Optional[float] = Field(None, ge=0)
+    current_age: Optional[int] = Field(None, ge=0, le=120)
+    target_age: Optional[int] = Field(None, ge=0, le=120)
+    exclude_account_types: Optional[List[str]] = None
+    income_target_yield_pct: Optional[float] = Field(None, ge=0, le=25)
+    optimistic_real_return_pct: Optional[float] = Field(None, ge=-20, le=30)
+    volatility_pct: Optional[float] = Field(None, ge=0, le=100)
+    needs_pct_of_expenses: Optional[float] = Field(None, ge=0, le=100)
+    estate_donees: Optional[float] = Field(None, ge=0)
+    estate_home_basis: Optional[float] = Field(None, ge=0)
+    state_of_residence: Optional[str] = None
+    filing_status: Optional[str] = None
+    spouse_age: Optional[int] = Field(None, ge=0, le=120)
+    convert_fill_to_rate: Optional[float] = Field(None, ge=0, le=1)
+    household_size: Optional[int] = Field(None, ge=1, le=20)
+    aca_slcsp_annual: Optional[float] = Field(None, ge=0)
+    birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    ss_claim_age: Optional[int] = Field(None, ge=62, le=70)
+    ss_estimated_fra_benefit: Optional[float] = Field(None, ge=0)
+    ss_pia_monthly: Optional[float] = Field(None, ge=0)
+    ss_aime: Optional[float] = Field(None, ge=0)
+    spouse_birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    spouse_ss_claim_age: Optional[int] = Field(None, ge=62, le=70)
+    spouse_ss_estimated_fra_benefit: Optional[float] = Field(None, ge=0)
+    spouse_ss_pia_monthly: Optional[float] = Field(None, ge=0)
+
+
 MC_RUNS = int(os.environ.get("MC_RUNS", "3000"))                        # Monte Carlo simulation paths
 MC_VOLATILITY_PCT = float(os.environ.get("MC_VOLATILITY_PCT", "16.0"))  # annual real-return std dev (equity-heavy)
 MC_END_AGE = int(os.environ.get("MC_END_AGE", "95"))                    # money must last to this age
@@ -278,7 +354,9 @@ DEFAULT_SCANNER = {"watchlist": [], "include_holding_peers": False,
 # into the SAME security; fractional_ok = broker supports fractional-share buys.
 ACCOUNTS_FILE = os.environ.get("ACCOUNTS_FILE", "/data/accounts.json")
 DEFAULT_ACCOUNT_FLAGS = {"drip": False, "fractional_ok": True}
-ANALYSIS_TOKEN = os.environ.get("ANALYSIS_TOKEN", "")
+# ANALYSIS_TOKEN constant removed 2026-07-24 -- retired along with its 23 endpoint checks and the
+# page-injection mechanism; the session auth gate is now the sole guard on every route. If a
+# deployment still has ANALYSIS_TOKEN set in its .env, it's simply ignored now (harmless).
 FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
 OLLAMA = llm.BASE_URL   # RESUME-TRACKER 2026-07-24: kept as an alias (used only in log/error text
                         # below) -- the actual HTTP calls now all go through llm._llm_chat/_llm_embed.
@@ -377,9 +455,10 @@ _cache = {"ts": 0.0, "data": None}
 # Priority 1). Replaces the old trust model: previously only 23 of 127 endpoints checked
 # ANALYSIS_TOKEN, and even that token was handed to the client by the page it's meant to
 # protect (see index() below) — so it protected nothing once the page itself was reachable.
-# Now EVERY route except a tiny public whitelist requires a real session. The old
-# ANALYSIS_TOKEN checks are left in place for now (harmless, redundant) rather than ripped
-# out in this pass — see LOCAL-HOSTING-HARDENING-PLAN.md's follow-on note.
+# Now EVERY route except a tiny public whitelist requires a real session.
+# 2026-07-24 cleanup: the old ANALYSIS_TOKEN checks (redundant once this gate covers every
+# route anyway) and the token-into-page injection have both been removed — this gate is now
+# the ONLY auth check anywhere in the app. See RESUME-TRACKER.md for the retirement writeup.
 #
 # Middleware order matters and is COUNTERINTUITIVE in Starlette: add_middleware() inserts at
 # the FRONT of the internal list, so the LAST middleware added ends up OUTERMOST (runs first
@@ -405,6 +484,38 @@ _AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run",
                        # unauthenticated caller can actually do.
                        "/api/auth/recovery/start", "/api/auth/recovery/reset"}
 
+# API hardening follow-up (2026-07-24): rate limiting was login-only until now -- extended to the
+# heavy job-trigger endpoints too (every /api/run-* scheduled-job trigger, the knowledge reindex,
+# and the Strategist advisory run), since a session already being authenticated doesn't mean it
+# should be able to fire an unbounded number of GPU/network-heavy background jobs per minute.
+# Uses the same in-process sliding-window limiter as login (auth.rate_limited/record_attempt),
+# just in its own named "jobs" bucket so this can never lock a session out of logging back in,
+# and vice versa. All 22 matching endpoints are covered centrally here rather than repeating a
+# check in each one.
+JOB_RATE_LIMIT_PER_MIN = int(os.environ.get("JOB_RATE_LIMIT_PER_MIN", "20"))
+_JOB_RATE_LIMIT_EXACT = {"/api/knowledge/reindex", "/api/strategist/advise"}
+
+
+def _is_job_trigger_path(path):
+    return path.startswith("/api/run-") or path in _JOB_RATE_LIMIT_EXACT
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """API hardening (2026-07-24): as config-mutating POST endpoints incrementally move from ad
+    hoc `await req.json()` + manual coercion to typed Pydantic request models (see PolicyUpdate/
+    RetirementConfigUpdate below), a malformed body now 422s with FastAPI's default
+    `{"detail": [...]}` shape instead of silently accepting garbage. The rest of this API's error
+    responses are uniformly `{"error": "..."}`, and the frontend's error-display logic (`d.error`)
+    only ever checks that shape -- this handler reformats Pydantic's validation errors into the
+    same shape so a bad save surfaces a real, readable message in the UI instead of nothing."""
+    msgs = []
+    for e in exc.errors():
+        loc = ".".join(str(p) for p in e.get("loc", []) if p != "body")
+        msgs.append(f"{loc}: {e.get('msg')}" if loc else e.get("msg"))
+    return JSONResponse({"error": "invalid request — " + "; ".join(msgs), "detail": exc.errors()},
+                        status_code=422)
+
 
 def _https_active():
     """True once this process is actually serving HTTPS. Auto-follows tls.py's own state (an
@@ -418,8 +529,15 @@ def _https_active():
 
 @app.middleware("http")
 async def _security_and_auth_gate(request: Request, call_next):
-    if request.url.path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
+    path = request.url.path
+    if path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    if request.method == "POST" and _is_job_trigger_path(path):
+        ip = request.client.host if request.client else "unknown"
+        if auth.rate_limited(ip, bucket="jobs", limit=JOB_RATE_LIMIT_PER_MIN):
+            return JSONResponse({"error": "too many job triggers — wait a minute and try again"},
+                                status_code=429)
+        auth.record_attempt(ip, bucket="jobs")
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
@@ -447,10 +565,11 @@ def _session_secret():
         pass
     v = uuid.uuid4().hex + uuid.uuid4().hex
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(v)
-        os.chmod(path, 0o600)
+        # atomic (2026-07-24, CLOUD-PORTABILITY-ROADMAP.md Phase 2): a torn write here on a
+        # killed-mid-boot container would leave a corrupt-but-non-empty secret, which the read
+        # branch above would then happily accept, silently invalidating every session on the
+        # next restart instead of failing loudly.
+        store.atomic_write_text(path, v, mode=0o600)
     except Exception:
         pass
     return v
@@ -1892,9 +2011,11 @@ def _stooq_daily(sym):
         keep = years * 252 + 10
         series = series[-keep:]
         try:
-            os.makedirs(PRICE_HIST_DIR, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"fetched": int(time.time()), "series": series, "source": source}, f)
+            # atomic (2026-07-24, CLOUD-PORTABILITY-ROADMAP.md Phase 2) -- cheap insurance against
+            # a torn write leaving a corrupt cache file; on failure the except below just means
+            # this ticker re-fetches next time, same as any other cache-write failure already did.
+            store.atomic_write_text(path, json.dumps({"fetched": int(time.time()), "series": series,
+                                                      "source": source}))
         except Exception:
             pass
         return series
@@ -2121,9 +2242,7 @@ def get_risk_suite():
 
 
 @app.post("/api/run-risk-suite")
-def run_risk_suite(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_risk_suite():
     threading.Thread(target=_do_risk_suite, daemon=True).start()
     return {"status": "started"}
 
@@ -2262,9 +2381,7 @@ def get_attribution():
 
 
 @app.post("/api/run-attribution")
-def run_attribution(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_attribution():
     threading.Thread(target=_do_attrib, daemon=True).start()
     return {"status": "started"}
 
@@ -2399,9 +2516,7 @@ def get_sizing():
 
 
 @app.post("/api/run-sizing")
-def run_sizing(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_sizing():
     threading.Thread(target=_do_sizing, daemon=True).start()
     return {"status": "started"}
 
@@ -2616,9 +2731,7 @@ def get_leverage():
 
 
 @app.post("/api/run-leverage")
-def run_leverage(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_leverage():
     threading.Thread(target=_do_leverage, daemon=True).start()
     return {"status": "started"}
 
@@ -2867,9 +2980,7 @@ async def delete_theses(req: Request):
 
 
 @app.post("/api/run-theses")
-def run_theses(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_theses():
     threading.Thread(target=_do_theses_eval, daemon=True).start()
     return {"status": "started"}
 
@@ -3473,9 +3584,7 @@ def get_backtest():
 
 
 @app.post("/api/run-backtest")
-def run_backtest_ep(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_backtest_ep():
     threading.Thread(target=_do_backtest, daemon=True).start()
     return {"status": "started"}
 
@@ -3781,14 +3890,12 @@ def securities():
 
 
 @app.get("/api/raw-holdings")
-def raw_holdings(token: str = "", account_id: str = "", limit: int = 2,
-                 x_analysis_token: str = Header(default="")):
+def raw_holdings(account_id: str = "", limit: int = 2):
     """DIAGNOSTIC (read-only): dump untrimmed Monarch aggregateHoldings node fields so
-    we can verify cost-basis semantics (is `basis` per-share or a total?). Token-guarded.
+    we can verify cost-basis semantics (is `basis` per-share or a total?). Session-gated like
+    every other endpoint (the global auth middleware) -- the old separate ANALYSIS_TOKEN check
+    was retired 2026-07-24 as redundant, see app.py's SESSION AUTH block docstring.
     Compare each node's basis vs totalValue vs security.currentPrice * quantity."""
-    tok = token or x_analysis_token
-    if ANALYSIS_TOKEN and tok != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     try:
         accts = [a for a in _accounts(_post("get_accounts", {})) if (a.get("holdingsCount") or 0) > 0]
     except Exception as e:
@@ -3812,12 +3919,11 @@ def raw_holdings(token: str = "", account_id: str = "", limit: int = 2,
 
 
 @app.get("/api/raw-accounts")
-def raw_accounts(token: str = "", x_analysis_token: str = Header(default="")):
+def raw_accounts():
     """DIAGNOSTIC (read-only): untrimmed account fields to debug the net-worth math —
-    shows includeBalanceInNetWorth, isAsset, and the displayBalance sign for liabilities."""
-    tok = token or x_analysis_token
-    if ANALYSIS_TOKEN and tok != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    shows includeBalanceInNetWorth, isAsset, and the displayBalance sign for liabilities.
+    Session-gated like every other endpoint; the old separate ANALYSIS_TOKEN check was retired
+    2026-07-24 as redundant, see app.py's SESSION AUTH block docstring."""
     out = []
     try:
         accts_raw = _accounts(_post("get_accounts", {}))
@@ -4003,12 +4109,10 @@ def get_analysis():
 
 
 @app.post("/api/analysis")
-async def post_analysis(req: Request, x_analysis_token: str = Header(default="")):
+async def post_analysis(req: Request):
     """External-writer endpoint for briefs (kept for API compatibility). Body:
     {"ticker": "...", "grounded": {...}, "llm": {...}} (one) or {"briefs": {ticker: {...}}}
     (bulk). Merges into the stored file. The internal analysis job writes briefs directly."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await req.json()
     briefs = (_read_analysis().get("briefs") or {})
     if isinstance(body.get("briefs"), dict):
@@ -4316,9 +4420,7 @@ def get_institutional():
 
 
 @app.post("/api/run-institutional")
-def run_institutional(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_institutional():
     threading.Thread(target=_do_institutional, daemon=True).start()
     return {"status": "started"}
 
@@ -4786,22 +4888,18 @@ def _do_earnings_brief():
 
 
 @app.post("/api/run-earnings-brief")
-def run_earnings_brief(x_analysis_token: str = Header(default="")):
+def run_earnings_brief():
     """Manually force the post-earnings brief check (normally event-driven — the scheduler checks
     once daily at 08:15 local and only enqueues when something's actually due)."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("earnings_brief", source="api")
     return {"ok": True, "status": "queued" if created else "already queued/running",
             "job_id": jid, "due_now": _earnings_due_tickers()}
 
 
 @app.post("/api/run-analysis")
-def run_analysis(x_analysis_token: str = Header(default=""), limit: int = 0):
+def run_analysis(limit: int = 0):
     """Trigger the daily research run. The internal scheduler enqueues this daily; you can
     also POST here on demand. Both funnel through the serial job queue (deduped)."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not FINNHUB:
         return JSONResponse({"error": "FINNHUB_API_KEY not set"}, status_code=400)
     jid, created = _enqueue("analysis", source="api")   # serial queue + dedup (Increment B)
@@ -4830,12 +4928,13 @@ def get_policy():
 
 
 @app.post("/api/policy")
-async def post_policy(req: Request):
+async def post_policy(body: PolicyUpdate):
     """Set the investment policy (local config, not a money action — editable from the dashboard).
     Body may include targets_by_type (e.g. {"Stock":60,"Mutual Fund":35,"Cash":5}), max_position_pct,
-    drift_threshold_pct, and position_caps (per-ticker overrides, e.g. {"PLTR":40,"RKLB":40})."""
-    body = await req.json()
-    pol = {**_read_policy(), **{k: v for k, v in body.items() if k in DEFAULT_POLICY}}
+    drift_threshold_pct, and position_caps (per-ticker overrides, e.g. {"PLTR":40,"RKLB":40}).
+    Pydantic-validated (2026-07-24): percentages must be 0-100, maps must have numeric values."""
+    updates = body.model_dump(exclude_unset=True)
+    pol = {**_read_policy(), **{k: v for k, v in updates.items() if k in DEFAULT_POLICY}}
     store.write_json(POLICY_FILE, pol)
     return {"ok": True, "policy": pol}
 
@@ -5025,14 +5124,12 @@ def get_rebalance():
 
 
 @app.post("/api/run-rebalance")
-def run_rebalance_ep(x_analysis_token: str = Header(default="")):
+def run_rebalance_ep():
     """Manual trigger for the 'Rebalance / drift refresh' scheduled job (RESUME-TRACKER: Task
     Schedule RUN NOW buttons — this kind previously had no manual endpoint, only the internal
     cron scheduler could enqueue it via _enqueue(); GET /api/rebalance already recomputes fresh
     on every call, so this mainly gives it job-queue visibility (/api/jobs) + dedup parity with
     the other 5 scheduled kinds. Token-guarded like every other /api/run-* endpoint."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("rebalance", source="api")
     return {"ok": True, "job_id": jid, "created": created}
 
@@ -5121,11 +5218,12 @@ def get_retire_config():
 
 
 @app.post("/api/retirement-config")
-async def post_retire_config(req: Request):
+async def post_retire_config(body: RetirementConfigUpdate):
     """Set retirement assumptions (local config). Keys: withdrawal_rate_pct, expected_real_return_pct,
-    annual_expenses_override, annual_savings_override, current_age, target_age, exclude_account_types."""
-    body = await req.json()
-    cfg = {**_read_retire(), **{k: v for k, v in body.items() if k in DEFAULT_RETIRE}}
+    annual_expenses_override, annual_savings_override, current_age, target_age, exclude_account_types.
+    Pydantic-validated (2026-07-24): ages 0-120, percentages/rates range-checked, SS claim age 62-70."""
+    updates = body.model_dump(exclude_unset=True)
+    cfg = {**_read_retire(), **{k: v for k, v in updates.items() if k in DEFAULT_RETIRE}}
     store.write_json(RETIRE_FILE, cfg)
     return {"ok": True, "config": cfg}
 
@@ -5304,9 +5402,7 @@ def get_narrative():
 
 
 @app.post("/api/run-narrative")
-def run_narrative_ep(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_narrative_ep():
     jid, created = _enqueue("narrative", source="manual")
     return {"status": "queued" if created else "duplicate", "job_id": jid}
 
@@ -5390,9 +5486,7 @@ def get_hedging():
 
 
 @app.post("/api/run-hedging")
-def run_hedging(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_hedging():
     threading.Thread(target=_do_hedging, daemon=True).start()
     return {"status": "started"}
 
@@ -5481,9 +5575,7 @@ def get_performance():
 
 
 @app.post("/api/run-performance")
-def run_performance_ep(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_performance_ep():
     threading.Thread(target=_do_performance, daemon=True).start()
     return {"status": "started"}
 
@@ -6804,11 +6896,9 @@ def get_retirement():
 
 
 @app.post("/api/run-retirement")
-def run_retirement_ep(x_analysis_token: str = Header(default="")):
+def run_retirement_ep():
     """Manual trigger for the 'Retirement projection' scheduled job — see run_rebalance_ep's
     docstring above for why this endpoint was missing and what it's for (Task Schedule RUN NOW)."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("retirement", source="api")
     return {"ok": True, "job_id": jid, "created": created}
 
@@ -7065,7 +7155,10 @@ async def post_settings(req: Request):
 SECRET_SPECS = [
     {"key": "FINNHUB_API_KEY",       "label": "Finnhub API key",                 "group": "Market data",            "scope": "app"},
     {"key": "SEC_USER_AGENT",        "label": "SEC EDGAR User-Agent (your email)", "group": "Market data",          "scope": "app"},
-    {"key": "ANALYSIS_TOKEN",        "label": "Analysis token (guards /api/run-*)", "group": "Internal",            "scope": "app"},
+    # ANALYSIS_TOKEN entry removed 2026-07-24 -- the session auth gate is now the only guard on
+    # /api/run-* (and every other route); the token stopped doing anything real once that gate
+    # covered every endpoint, so surfacing it here would just mislead someone into thinking it
+    # still matters.
     {"key": "SNAPTRADE_CLIENT_ID",   "label": "SnapTrade client ID",             "group": "Portfolio (SnapTrade)",  "scope": "app"},
     {"key": "SNAPTRADE_CONSUMER_KEY","label": "SnapTrade consumer key",          "group": "Portfolio (SnapTrade)",  "scope": "app"},
     {"key": "SNAPTRADE_USER_ID",     "label": "SnapTrade user ID",               "group": "Portfolio (SnapTrade)",  "scope": "app"},
@@ -7581,10 +7674,8 @@ def get_opportunities():
 
 
 @app.post("/api/run-opportunities")
-def run_opportunities(x_analysis_token: str = Header(default="")):
+def run_opportunities():
     """Recompute + cache the opportunity scan (the weekly scheduled scan). Token-guarded."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if _opp_lock.locked():
         return {"ok": True, "status": "already running"}
     threading.Thread(target=_do_opportunities, daemon=True).start()
@@ -7977,10 +8068,8 @@ def get_fees_liquidity():
 
 
 @app.post("/api/run-fees-liquidity")
-def run_fees_liquidity(x_analysis_token: str = Header(default="")):
+def run_fees_liquidity():
     """Recompute + cache the fees/liquidity audit (for a scheduled refresh). Token-guarded."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if _fl_lock.locked():
         return {"ok": True, "status": "already running"}
     threading.Thread(target=_do_fl, daemon=True).start()
@@ -8173,9 +8262,7 @@ def get_exposure():
 
 
 @app.post("/api/run-exposure")
-def run_exposure(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_exposure():
     if _exp_lock.locked():
         return {"ok": True, "status": "already running"}
     threading.Thread(target=_do_exp, daemon=True).start()
@@ -8381,9 +8468,7 @@ def get_lookthrough():
 
 
 @app.post("/api/run-lookthrough")
-def run_lookthrough(x_analysis_token: str = Header(default="")):
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+def run_lookthrough():
     if _lt_lock.locked():
         return {"ok": True, "status": "already running"}
     threading.Thread(target=_do_lt, daemon=True).start()
@@ -8571,10 +8656,8 @@ def get_discovery():
 
 
 @app.post("/api/run-discovery")
-def run_discovery(x_analysis_token: str = Header(default="")):
+def run_discovery():
     """Trigger the background news discovery + holdings-alerts run (the internal scheduler runs this daily)."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("discovery", source="api")   # serial queue + dedup (Increment B)
     return {"ok": True, "status": "queued" if created else "already queued/running",
             "job_id": jid, **_disc_state}
@@ -9577,11 +9660,9 @@ def _do_strategist(max_iter=20):
 
 
 @app.post("/api/run-strategist")
-def run_strategist(x_analysis_token: str = Header(default="")):
+def run_strategist():
     """Kick off the autonomous weekly Strategist run (server-side tool loop). Token-guarded; returns
     immediately and runs in the background. Poll /api/run-strategist/status or /api/paper for results."""
-    if ANALYSIS_TOKEN and x_analysis_token != ANALYSIS_TOKEN:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
     jid, created = _enqueue("strategist", source="api")   # serial queue + dedup (Increment B)
     return {"ok": True, "status": "queued" if created else "already queued/running",
             "job_id": jid, **_strat_state}
@@ -10621,17 +10702,11 @@ def health():
 
 @app.get("/")
 def index():
-    """Serves the dashboard. Diagnosed 2026-07-17: every manual "GENERATE NOW"/"REBUILD"/
-    "REFRESH" button in the UI POSTs to a /api/run-* (or /api/knowledge/reindex) endpoint that
-    is guarded by ANALYSIS_TOKEN, but the front-end JS never sent the header — so with a token
-    configured, every one of those buttons silently 401'd while looking like it queued (the
-    scheduler's own runs were unaffected since it calls _enqueue() directly in-process, not over
-    HTTP). Fix: inject the server's own token into the page so its own buttons can authenticate
-    themselves; unrelated callers still need the real header value. Empty string when the
-    ANALYSIS_TOKEN secret isn't set, matching the "guard is off" behavior everywhere else.
-    """
+    """Serves the dashboard. 2026-07-24: no longer injects an ANALYSIS_TOKEN into the page --
+    that whole mechanism (a shared secret handed to the client by the very page it was meant to
+    protect) was retired as redundant now that the session auth gate above covers every route,
+    including the /api/run-*/knowledge-reindex endpoints this used to patch around. See
+    RESUME-TRACKER.md for the retirement writeup."""
     path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     with open(path, encoding="utf-8") as f:
-        html = f.read()
-    html = html.replace("__ANALYSIS_TOKEN__", ANALYSIS_TOKEN.replace("\\", "\\\\").replace('"', '\\"'))
-    return HTMLResponse(html)
+        return HTMLResponse(f.read())
