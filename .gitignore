@@ -20,6 +20,10 @@ mcpo/data/
 !**/config.json.example
 !mcpo/config.json.example
 
+# ---- mcpo secrets bridge (2026-07-24) — portfolio-api-written, holds real Monarch/Tavily creds ----
+mcpo-secrets/mcpo.env
+!mcpo-secrets/mcpo.env.example
+
 # ---- REAL personal / financial data (Monarch dumps, diagnostics) ----
 monarch-*-sample.json
 *-sample.json

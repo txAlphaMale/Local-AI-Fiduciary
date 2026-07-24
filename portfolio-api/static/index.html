@@ -3174,6 +3174,14 @@ function secretsContent(){
         const inp=document.createElement('input'); inp.type='password'; inp.className='sec-inp'; inp.dataset.key=it.key;
         inp.autocomplete='new-password'; inp.placeholder=(it.source==='saved'?'enter to replace · blank keeps':'enter value');
         inp.style.cssText='width:210px;'; row.appendChild(inp);
+        if(it.scope==='mcpo-file'){
+          // Distinct from the page footer's generic "next portfolio-api restart" note (2026-07-24)
+          // -- this one saves to the app's own DB same as any other secret, but only takes effect
+          // once the SEPARATE mcpo container is restarted, not portfolio-api.
+          const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
+          mnote.textContent='· applies on next mcpo restart, not portfolio-api\'s';
+          row.appendChild(mnote);
+        }
       } else {
         const note=el('span','muted'); note.style.cssText='font-size:var(--font-size-sm);';
         note.textContent = it.scope==='mcpo' ? '· used by mcpo — set in .env + restart' : '· locked by .env — edit .env to change';

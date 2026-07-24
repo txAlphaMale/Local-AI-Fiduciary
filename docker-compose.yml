@@ -35,14 +35,22 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    env_file: .env
-    environment:
-      # mcpo merges its own env into every server it spawns, so these reach the
-      # Monarch / Tavily MCP servers without living in config.json.
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - MONARCH_EMAIL=${MONARCH_EMAIL}
-      - MONARCH_PASSWORD=${MONARCH_PASSWORD}
-      - MONARCH_MFA_SECRET=${MONARCH_MFA_SECRET}
+    # 2026-07-24: TAVILY_API_KEY/MONARCH_* moved OFF the hardcoded `environment:` block below and
+    # onto a second env_file instead, so they can be managed from the dashboard's SETTINGS ->
+    # SECRETS panel (portfolio-api writes ./mcpo-secrets/mcpo.env) instead of requiring .env edits
+    # on the docker host. `.env` is listed SECOND so it still wins for anyone who sets these
+    # directly there (matches this app's "real env always wins" rule everywhere else) --
+    # portfolio-api's own write logic never puts an already-.env-set key into mcpo.env in the
+    # first place, so the two files are never actually fighting over the same key in practice;
+    # the list order here is just defense-in-depth. mcpo.env MUST exist before the first
+    # `docker compose up` (same requirement as config.json below) -- `cp mcpo-secrets/mcpo.env.example
+    # mcpo-secrets/mcpo.env`. MCPO_API_KEY is NOT part of this -- it's passed via the `--api-key`
+    # CLI flag below, which Compose resolves from the TOP-LEVEL .env only (env_file entries can't
+    # feed command-line variable substitution), so it stays a genuine .env-only, restart-to-change
+    # value, same as before.
+    env_file:
+      - ./mcpo-secrets/mcpo.env
+      - .env
     volumes:
       - ./mcpo/config.json:/app/config.json:ro   # MUST exist (cp from the .example) or mcpo crash-loops
       - ./mcpo/data:/root/.mcpo                   # OAuth/session persistence (Monarch login)
@@ -114,6 +122,8 @@ services:
     volumes:
       - portfolio-data:/data
       - ./knowledge:/knowledge:ro   # user-populated Knowledge folder (host-editable; container reads)
+      - ./mcpo-secrets:/mcpo-secrets   # portfolio-api WRITES mcpo.env here (SETTINGS -> SECRETS);
+                                       # mcpo reads the same host path via its own env_file above
     ports:
       - "${DASH_PORT:-8097}:8097"
       - "${HTTPS_PORT:-8443}:8443"

@@ -8,6 +8,8 @@ and scheduling is built into `portfolio-api` (no separate scheduler container). 
 
 - `portfolio-api/` — the brain (dashboard, REST API, every agent, the data providers, the built-in chat, the job scheduler)
 - `mcpo/config.json.example` — time + tavily (+ monarch only if you use it)
+- `mcpo-secrets/mcpo.env.example` — REQUIRED before first up (2026-07-24); portfolio-api writes the
+  real Monarch/Tavily credentials here once you set them from SETTINGS -> SECRETS
 - `docker-compose.yml`, `.env.example`, `holdings.csv.example`, `snaptrade_register.py`, `setup.py`
 - `docs/DEPENDENCIES.md`
 
@@ -19,10 +21,14 @@ and scheduling is built into `portfolio-api` (no separate scheduler container). 
 # 2. Clone + configure
 git clone https://github.com/txAlphaMale/Local-AI-Fiduciary.git
 cd Local-AI-Fiduciary
-cp .env.example .env                          # fill FINNHUB, TAVILY, SEC_USER_AGENT,
-                                              # MCPO_API_KEY, ANALYSIS_TOKEN (+ provider vars, step 4)
+cp .env.example .env                          # fill SEC_USER_AGENT, MCPO_API_KEY, ANALYSIS_TOKEN
+                                              # (+ provider vars, step 4) -- Finnhub/Tavily/Monarch
+                                              # keys are better set from the dashboard after first
+                                              # boot (SETTINGS -> SECRETS) than typed here, see below
 cp mcpo/config.json.example mcpo/config.json  # REQUIRED before first up
 #   ^ if you're NOT using Monarch, delete the "monarch" block from mcpo/config.json
+cp mcpo-secrets/mcpo.env.example mcpo-secrets/mcpo.env  # ALSO REQUIRED before first up (2026-07-24)
+#   ^ starts empty -- fill Monarch/Tavily creds from the dashboard once it's running, not here
 
 # 3. Pull the models (on the host)
 ollama pull qwen3.6:27b     # analysis + Strategist
@@ -89,10 +95,16 @@ typed `http://` URL still gets you there automatically instead of a connection e
 
 > After the first run you can manage most config from the **⚙ Settings gear** (top-right):
 > advanced knobs, model config, and a masked write-only editor for the app's own keys
-> (Finnhub / SEC user-agent / SnapTrade). Anything already set in `.env` wins and shows
-> read-only. Monarch / Tavily keys stay in `.env` (they're used by the mcpo container).
+> (Finnhub / SEC user-agent / SnapTrade / the AI-provider keys below). Anything already set
+> in `.env` wins and shows read-only.
 >
-> The same mechanism covers the optional Claude (Anthropic) provider added 2026-07-24 — no
-> `.env` editing needed to enable it. See `NEW-USER-SETUP-GUIDE.md`'s "AI provider" section
-> before turning it on (a claude.ai Pro/Max subscription does NOT cover this — it needs a
-> separate, pay-per-token API key).
+> Monarch and Tavily credentials (2026-07-24) are ALSO editable from the same SECRETS panel now
+> — portfolio-api writes them to `mcpo-secrets/mcpo.env`, which the mcpo container reads on its
+> own next restart (`docker compose restart mcpo`), same "restart to apply" story as everything
+> else here. Only the mcpo API key itself stays `.env`-only (it's a startup CLI flag, not
+> something a running container can pick up from a file).
+>
+> The same SECRETS/SETTINGS mechanism covers the optional Claude (Anthropic) provider added
+> 2026-07-24 — no `.env` editing needed to enable it. See `NEW-USER-SETUP-GUIDE.md`'s "AI
+> provider" section before turning it on (a claude.ai Pro/Max subscription does NOT cover this
+> — it needs a separate, pay-per-token API key).
