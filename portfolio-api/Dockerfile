@@ -31,7 +31,8 @@ COPY . .
 
 # 8097 = plain HTTP (default, no certificate configured yet). 8443 = HTTPS, once one of the 3
 # in-app certificate methods (SETTINGS -> SECURITY -> Certificate) is set up — run_server.py
-# picks whichever applies at every (re)start, see tls.py. Only one is actually listening at a
-# time; the other's mapped host port simply refuses connections until you switch modes.
+# picks whichever applies at every (re)start, see tls.py. Once HTTPS is active, 8097 stops
+# serving the app itself but stays open as a 307 redirect to the same path on 8443 (2026-07-24),
+# so an old bookmark/typed URL on 8097 lands you somewhere instead of going dark.
 EXPOSE 8097 8443
 CMD ["python", "run_server.py"]

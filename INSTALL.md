@@ -79,8 +79,13 @@ command-line work required. Three built-in methods:
 
 Whichever you pick, the app restarts itself in place a couple seconds later to apply it — the
 page will briefly go unresponsive, then reload at `https://<host>:8443` (the `HTTPS_PORT`
-in `.env`, default 8443; the plain-HTTP port stops answering once HTTPS is active). See the
-in-app WIKI (Getting started → "HTTPS / certificates") for the full walkthrough of each method.
+in `.env`, default 8443; the plain-HTTP port stops serving the app once HTTPS is active, but
+keeps answering with a redirect to 8443 — see below). See the in-app WIKI (Getting started →
+"HTTPS / certificates") for the full walkthrough of each method.
+
+Once HTTPS is active, the old plain-HTTP port (8097 by default) doesn't go dark: it stays open
+just to 307-redirect any request to the same address on `HTTPS_PORT`, so an old bookmark or
+typed `http://` URL still gets you there automatically instead of a connection error.
 
 > After the first run you can manage most config from the **⚙ Settings gear** (top-right):
 > advanced knobs, model config, and a masked write-only editor for the app's own keys
