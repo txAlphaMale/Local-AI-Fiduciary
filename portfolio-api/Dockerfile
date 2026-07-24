@@ -8,17 +8,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl socat ca-c
     && rm -rf /var/lib/apt/lists/*
 
 # Vendored acme.sh (2026-07-23f) — the built-in Let's Encrypt / ACME client tls.py shells out to.
-# --nocron: renewal is driven by tls.py's own background thread (app.py's
-# tls.start_renewal_thread()), not acme.sh's usual crontab entry — one renewal mechanism, not two.
-# Deliberately NOT passing --home here (2026-07-23h fix — a real deploy hit "Unknown parameter:
-# ----home", acme.sh's installer doubles a leading "--" when invoked this way): the installer's
-# job is just putting the acme.sh SCRIPT on disk, which is stateless and fine at its default
-# location (~/.acme.sh -> /root/.acme.sh, since this RUN executes as root). Where acme.sh keeps
-# actual CERTIFICATE/ACCOUNT STATE is a completely separate, well-documented `--home` flag passed
-# at RUNTIME on every real acme.sh invocation (see ACME_HOME in tls.py, under the persistent
-# /data volume) — that one was never the problem.
+# Deliberately invoked with ZERO flags (2026-07-23h, second fix — a real deploy proved the FIRST
+# fix's --nocron alone still broke with "Unknown parameter: ----nocron": get.acme.sh's installer
+# doubles a leading "--" on ANY flag when invoked as `sh savedfile.sh --whatever`, not just
+# --home — so the only invocation immune to that bug is passing nothing at all). This means it
+# installs to its plain default location (~/.acme.sh -> /root/.acme.sh, since this RUN executes
+# as root) and may register its own default cron entry — both harmless here: (1) this container
+# has no init system/cron daemon actually running to ever fire that entry, and (2) even if it
+# somehow did, it would operate on /root/.acme.sh as the data dir, completely separate from the
+# ACME_HOME (/data/acme, under the persistent volume) tls.py always passes explicitly via --home
+# on every REAL issue/renew call it makes at runtime — a totally different, well-documented
+# per-command usage of that flag that was never the problem. Renewal is driven by tls.py's own
+# background thread (app.py's tls.start_renewal_thread()) regardless.
 RUN curl -fsSL https://get.acme.sh -o /tmp/acme-install.sh \
-    && sh /tmp/acme-install.sh --nocron \
+    && sh /tmp/acme-install.sh \
     && rm -f /tmp/acme-install.sh
 
 COPY requirements.txt .
