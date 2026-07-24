@@ -2665,6 +2665,29 @@ function certAcmeChallengeToggle(){
   const c=document.getElementById('cert-acme-challenge').value;
   document.getElementById('cert-acme-dns-fields').style.display=(c==='dns-01')?'block':'none';
 }
+function _certRedirectBanner(protocol, port, msg){
+  // A dismissible alert() is the wrong tool here — 2026-07-23h, a real deploy hit exactly this
+  // confusion twice (tried the OLD origin after the server had already switched protocol/port
+  // out from under it). This instead: (1) shows a banner that STAYS on screen (not dismissible
+  // by accident), with the exact clickable target URL — never guessed/hardcoded, always built
+  // from what the server itself just reported it's about to bind — and (2) auto-navigates there
+  // after a delay long enough to cover the ~2s internal restart delay plus uvicorn's own startup.
+  const url=`${protocol}://${location.hostname}:${port}/`;
+  const old=document.getElementById('cert-redirect-banner'); if(old) old.remove();
+  const b=el('div'); b.id='cert-redirect-banner';
+  b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--color-panel);'+
+    'border-bottom:2px solid var(--color-accent, #d4a537);padding:var(--space-3);text-align:center;'+
+    'font-size:var(--font-size-md);box-shadow:0 2px 12px rgba(0,0,0,0.5);';
+  let secs=6;
+  b.innerHTML=`${msg} The dashboard is moving to <a href="${url}" style="color:var(--color-accent, #d4a537);font-weight:bold;">${url}</a> `+
+    `— redirecting automatically in <span id="cert-redirect-secs">${secs}</span>s, or click the link now.`;
+  document.body.appendChild(b);
+  const iv=setInterval(()=>{
+    secs--;
+    const s=document.getElementById('cert-redirect-secs'); if(s) s.textContent=String(Math.max(secs,0));
+    if(secs<=0){ clearInterval(iv); location.href=url; }
+  }, 1000);
+}
 async function certGenSelfSigned(){
   const raw=(document.getElementById('cert-self-hosts').value||'').trim();
   const err=document.getElementById('cert-self-err'); err.textContent='';
@@ -2675,7 +2698,7 @@ async function certGenSelfSigned(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     TLS_STATUS=d.status; render();
-    alert('Self-signed certificate generated. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address (port '+ (window.__HTTPS_PORT||'8443') +').');
+    _certRedirectBanner('https', d.status.https_port, 'Self-signed certificate generated — the server is restarting itself in place to apply it (browser will warn about the cert; that\'s expected, trust it manually).');
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 async function certGenCsr(){
@@ -2709,7 +2732,7 @@ async function certImportCert(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     TLS_STATUS=d.status; render();
-    alert('Certificate installed. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address.');
+    _certRedirectBanner('https', d.status.https_port, 'Certificate installed — the server is restarting itself in place to apply it.');
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 async function certAcmeEnroll(){
@@ -2732,7 +2755,7 @@ async function certAcmeEnroll(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     TLS_STATUS=d.status; render();
-    alert('Certificate issued. The server is restarting itself in place to apply it — if this page goes unresponsive in a few seconds, that\'s expected; reload at the HTTPS address.');
+    _certRedirectBanner('https', d.status.https_port, 'Certificate issued — the server is restarting itself in place to apply it.');
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 async function certAcmeRenew(){
@@ -2741,7 +2764,9 @@ async function certAcmeRenew(){
     const d=await r.json();
     if(d.error){ alert('Renew failed: '+d.error); return; }
     TLS_STATUS=d.status; render();
-    alert('Certificate renewed. The server is restarting itself in place to apply it.');
+    // Same host:port as before a renewal (it's the SAME cert method, just fresh dates) — no
+    // origin change, so a banner/redirect isn't needed here, just a quiet confirmation.
+    alert('Certificate renewed. The server is restarting itself in place to apply it — this page may briefly disconnect.');
   }catch(e){ alert('Renew failed: '+e); }
 }
 async function certToggleAutoRenew(){
@@ -2754,11 +2779,12 @@ async function certToggleAutoRenew(){
   }catch(e){ alert('Update failed: '+e); }
 }
 async function certClear(){
-  if(!confirm('Remove the active certificate and revert to plain HTTP? The server will restart itself in place — if this dashboard was loaded over HTTPS, browse back to the plain HTTP address afterward.')) return;
+  if(!confirm('Remove the active certificate and revert to plain HTTP? The server will restart itself in place.')) return;
   try{
     const r=await fetch('/api/tls/clear',{method:'POST'});
     const d=await r.json();
     TLS_STATUS=d.status; render();
+    _certRedirectBanner('http', d.status.http_port, 'Certificate removed — the server is restarting itself in place to revert to plain HTTP.');
   }catch(e){ alert('Failed: '+e); }
 }
 function _securityMfaBlock(u){

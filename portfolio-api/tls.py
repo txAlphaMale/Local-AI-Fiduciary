@@ -182,6 +182,12 @@ def status():
         "pending_csr": os.path.isfile(PENDING_CSR_PATH),
         "restart_required": bool(meta.get("restart_required")),
         "acme_available": acme_available(),
+        # So the UI can tell the user (and auto-navigate to) the EXACT right address instead of
+        # guessing/hardcoding a port — 2026-07-23h, after a real deploy hit this exact confusion
+        # twice with a dismissible alert() that hardcoded "8443". These are what run_server.py
+        # itself reads to decide which port to bind, so they can never drift from reality.
+        "http_port": os.environ.get("PORT", "8097"),
+        "https_port": os.environ.get("HTTPS_PORT", "8443"),
         "note": ("HTTPS is served once a certificate exists AND the server has (re)started to "
                  "pick it up. That restart is automatic — the app restarts itself in place a "
                  "couple seconds after installing a new/renewed/imported certificate, so no "
