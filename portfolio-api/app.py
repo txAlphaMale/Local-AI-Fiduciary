@@ -57,6 +57,7 @@ import insider      # SEC Form 4 insider-transaction signal (G15) — context-on
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
+import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
@@ -260,6 +261,7 @@ def _knob(key):
 DISCOVERY_FILE = os.environ.get("DISCOVERY_FILE", "/data/discovery.json")
 PAPER_FILE = os.environ.get("PAPER_FILE", "/data/paper.json")
 DEFAULT_PAPER_CASH = float(os.environ.get("PAPER_STARTING_CASH", "2000"))
+store.ensure_paper_migrated(PAPER_FILE)   # Storage Stage B (2026-07-24) -- one-time import of every scenario's transactions/reports arrays into real tables, no-ops after the first run
 DEFAULT_SCANNER = {"watchlist": [], "include_holding_peers": False,
                    "criteria": {"min_rev_growth_pct": 15.0, "min_fcf_margin_pct": 0.0,
                                 "max_pe_forward": 60.0, "min_analyst_buy_pct": 60.0,
@@ -278,7 +280,8 @@ ACCOUNTS_FILE = os.environ.get("ACCOUNTS_FILE", "/data/accounts.json")
 DEFAULT_ACCOUNT_FLAGS = {"drip": False, "fractional_ok": True}
 ANALYSIS_TOKEN = os.environ.get("ANALYSIS_TOKEN", "")
 FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
-OLLAMA = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434").rstrip("/")
+OLLAMA = llm.BASE_URL   # RESUME-TRACKER 2026-07-24: kept as an alias (used only in log/error text
+                        # below) -- the actual HTTP calls now all go through llm._llm_chat/_llm_embed.
 ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "qwen3.6:27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
@@ -1585,11 +1588,16 @@ def _data():
 # ---------------- Daily value snapshot -> realized risk metrics (accrues over time) ----------------
 VALUE_HISTORY_FILE = os.environ.get("VALUE_HISTORY_FILE", "/data/value_history.json")
 RISK_MIN_DAYS = int(os.environ.get("RISK_MIN_DAYS", "20"))
+store.ensure_value_history_migrated(VALUE_HISTORY_FILE)   # Storage Stage B (2026-07-24) -- one-time import from the Stage-A JSON blob into the real `value_history` table, no-ops after the first run
 
 
 def _read_value_history():
+    """Ascending by date. Storage Stage B (2026-07-24): now backed by store.py's `value_history`
+    table (real SQLite rows, no 2500-entry cap) instead of one growing JSON blob -- name/shape
+    unchanged so every consumer (_risk_metrics, _vol_regime_signal, performance.py, the
+    Portfolio-vs-SPY chart via /api/value-history) needed zero changes."""
     try:
-        return store.read_json_strict(VALUE_HISTORY_FILE) or []
+        return store.value_history_read_all()
     except Exception:
         return []
 
@@ -1622,30 +1630,24 @@ def _snapshot_shares(d):
 
 
 def _snapshot_value(d):
-    """Append one {date, net_worth, invested_value} row per calendar day so a real return history
-    accrues for realized volatility / max-drawdown / Sharpe. Idempotent per day (updates today's row)."""
+    """Upsert one {date, net_worth, invested_value, spy} row per calendar day so a real return
+    history accrues for realized volatility / max-drawdown / Sharpe. Idempotent per day (updates
+    today's row). Storage Stage B (2026-07-24): queries just today's row instead of reading the
+    whole history to check the cached SPY close -- behaviorally identical, cheaper. No cap on the
+    stored history anymore (the old `hist[-2500:]` trim is gone; SQL has no reason to discard
+    years-old rows just to bound a JSON blob's parse cost)."""
     if not d:
         return
     try:
         today = datetime.date.today().isoformat()
-        hist = _read_value_history()
         # benchmark close (SPY), fetched at most once/day (reuse today's if already stored)
-        spy = None
-        if hist and hist[-1].get("date") == today and hist[-1].get("spy"):
-            spy = hist[-1].get("spy")
-        else:
+        spy = store.value_history_today_spy(today)
+        if not spy:
             try:
                 spy = _price(os.environ.get("BENCHMARK_TICKER", "SPY"))
             except Exception:
                 spy = None
-        row = {"date": today, "net_worth": d.get("net_worth"),
-               "invested_value": d.get("invested_value"), "spy": spy}
-        if hist and hist[-1].get("date") == today:
-            hist[-1] = row
-        else:
-            hist.append(row)
-        hist = hist[-2500:]
-        store.write_json(VALUE_HISTORY_FILE, hist)
+        store.value_history_upsert_today(today, d.get("net_worth"), d.get("invested_value"), spy)
     except Exception:
         pass
 
@@ -4362,36 +4364,27 @@ def _parse_json_obj(raw):
 
 
 def _ollama_generate(prompt):
-    """Call Ollama, returning the raw text. Disables the reasoning channel so the
-    JSON answer lands in `response` (gpt-oss & other reasoning models otherwise
-    return an empty `response` with everything in `thinking`). Falls back gracefully
-    for Ollama builds that reject the `think` field."""
+    """Call the configured LLM backend, returning the raw text. Disables the reasoning channel so
+    the JSON answer lands in `content` (gpt-oss & other reasoning models otherwise return nothing
+    usable there with everything in `thinking`). Falls back gracefully for backends that reject
+    the `think` field. RESUME-TRACKER 2026-07-24: routed through llm._llm_chat (LLM-agnostic
+    adapter) — dialect-switchable via LLM_API_DIALECT — instead of a raw requests.post to Ollama's
+    /api/generate; the retry-without-`think` behavior now lives in llm._ollama_chat."""
     # Qwen3 family: soft-switch off the <think> channel so the JSON isn't buried in reasoning
     # (unless ANALYSIS_THINK is enabled — then let it reason for deeper, better-calibrated briefs).
     if "qwen3" in ANALYSIS_MODEL.lower() and not ANALYSIS_THINK:
         prompt = prompt + "\n/no_think"
-    base = {"model": ANALYSIS_MODEL, "prompt": prompt, "format": "json", "stream": False,
-            "keep_alive": LLM_KEEP_ALIVE,
-            "options": {"temperature": 0.3, "num_ctx": ANALYSIS_NUM_CTX}}
-    for body in ({**base, "think": ANALYSIS_THINK}, base):
-        try:
-            with _gpu_slot():   # serialize qwen-27b generation across all features
-                r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=LLM_TIMEOUT)
-        except Exception as e:
-            return None, f"request failed: {e}"
-        if r.status_code >= 400:
-            # a 400 about `think` -> retry without it; otherwise report
-            if "think" in r.text.lower() and body.get("think") is False:
-                continue
-            return None, f"ollama {r.status_code}: {r.text[:300]}"
-        data = r.json()
-        if isinstance(data, dict) and data.get("error"):
-            if "think" in str(data["error"]).lower() and body.get("think") is False:
-                continue
-            return None, str(data["error"])
-        raw = ((data.get("response") or "").strip() or (data.get("thinking") or "").strip())
-        return raw, None
-    return None, "no response"
+    try:
+        with _gpu_slot():   # serialize qwen-27b generation across all features
+            res = llm._llm_chat([{"role": "user", "content": prompt}], ANALYSIS_MODEL,
+                                format_json=True, think=ANALYSIS_THINK, temperature=0.3,
+                                num_ctx=ANALYSIS_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, timeout=LLM_TIMEOUT)
+    except Exception as e:
+        return None, f"request failed: {e}"
+    if not res.ok:
+        return None, res.error
+    raw = (res.content.strip() or res.thinking.strip())
+    return raw, None
 
 
 RDCF_DISCOUNT = float(os.environ.get("RDCF_DISCOUNT_PCT", "10")) / 100.0
@@ -5229,9 +5222,7 @@ def _do_narrative():
         "Close with: 'Educational, not advice.'\n\nDATA:\n" + json.dumps(ctx))
     if "qwen3" in ANALYSIS_MODEL.lower() and not ANALYSIS_THINK:
         prompt += "\n/no_think"
-    body = {"model": ANALYSIS_MODEL, "prompt": prompt, "stream": False,
-            "keep_alive": LLM_KEEP_ALIVE,
-            "options": {"temperature": 0.4, "num_ctx": ANALYSIS_NUM_CTX}}
+    messages = [{"role": "user", "content": prompt}]
     # Every failure mode below used to collapse into `letter = ""` and a silent `return` — the
     # job queue then marked it "done" (no exception raised) with zero trace anywhere. Now each
     # branch records WHY, then re-raises so /api/jobs shows a real "error" status + message,
@@ -5248,11 +5239,13 @@ def _do_narrative():
     try:
         with _gpu_slot():
             gpu_wait_s = round(time.time() - t_submit, 1)
-            r = requests.post(f"{OLLAMA}/api/generate", json=body, timeout=NARR_LLM_TIMEOUT)
-        if r.status_code >= 400:
-            err = f"Ollama returned HTTP {r.status_code}: {r.text[:300]}"
+            res = llm._llm_chat(messages, ANALYSIS_MODEL, temperature=0.4, num_ctx=ANALYSIS_NUM_CTX,
+                                keep_alive=LLM_KEEP_ALIVE, timeout=NARR_LLM_TIMEOUT)
+        if not res.ok:
+            err = (f"Ollama returned HTTP {res.status_code}: {res.error}" if res.status_code
+                   else (res.error or "unknown LLM backend error"))
         else:
-            letter = (r.json() or {}).get("response", "").strip()
+            letter = res.content.strip()
             if not letter:
                 err = "Ollama returned an empty response (model may have produced nothing usable)"
     except requests.exceptions.Timeout:
@@ -5261,7 +5254,7 @@ def _do_narrative():
         err = (f"timed out after {NARR_LLM_TIMEOUT}s of generation{wait_note} — model may be "
                "cold-loading, GPU-starved, or the prompt/context too large")
     except requests.exceptions.ConnectionError as e:
-        err = f"could not reach Ollama at {OLLAMA}: {e}"[:300]
+        err = f"could not reach the LLM backend at {OLLAMA}: {e}"[:300]
     except Exception as e:
         err = f"{type(e).__name__}: {e}"[:300]
     if err:
@@ -6478,15 +6471,15 @@ def _funded_ratio(investable, annual_savings, gross_draw, acc_yrs, ret_yrs,
 
 def _snapshot_funded(fr):
     """Merge today's funded ratio into the daily value-history row (idempotent per day),
-    so solvency accrues a history right beside net worth. Best-effort, never raises."""
+    so solvency accrues a history right beside net worth. Best-effort, never raises.
+    Storage Stage B (2026-07-24): a plain UPDATE ... WHERE date=today, which -- same as the
+    original's `if hist[-1].date==today` guard -- silently no-ops if today's value-snapshot row
+    doesn't exist yet (this function only ever patches an existing row, never creates one)."""
     if fr is None:
         return
     try:
-        hist = _read_value_history()
         today = datetime.date.today().isoformat()
-        if hist and hist[-1].get("date") == today:
-            hist[-1]["funded_ratio"] = fr
-            store.write_json(VALUE_HISTORY_FILE, hist)
+        store.value_history_set_funded_ratio(today, fr)
     except Exception:
         pass
 
@@ -8576,10 +8569,12 @@ def run_discovery_status():
 
 
 # ---------------- Paper-trading ledger for the What-If / Strategist agent (HYPOTHETICAL, sandboxed) ----------------
-def _apply_recurring(p):
+def _apply_recurring(p, scenario_id):
     """Lazily apply any due recurring contributions — a self-contained 'cron' that runs on read,
     so recurring deposits work without an external scheduler. Adds cash, tracks contributed capital,
-    logs a deposit transaction per period, and advances the next date."""
+    logs a deposit transaction per period, and advances the next date. Storage Stage B (2026-07-24):
+    each deposit is now a direct SQL insert (store.paper_tx_append), not a list append batched into
+    a later _write_paper -- `scenario_id` is a new required param so the insert can be scoped."""
     rec = p.get("recurring")
     if not rec or not rec.get("amount") or not rec.get("next_ts"):
         return False
@@ -8590,8 +8585,7 @@ def _apply_recurring(p):
         amt = float(rec["amount"])
         p["cash"] = round((p.get("cash") or 0) + amt, 2)
         p["contributed"] = round((p.get("contributed") or 0) + amt, 2)
-        p.setdefault("transactions", []).append({"ts": rec["next_ts"], "action": "deposit",
-            "ticker": "CASH", "shares": 0, "price": 0, "value": round(amt, 2), "recurring": True})
+        store.paper_tx_append(scenario_id, rec["next_ts"], "deposit", "CASH", 0, 0, round(amt, 2), recurring=True)
         rec["next_ts"] += int(rec.get("cadence_days") or 30) * 86400
         n += 1
         changed = True
@@ -8634,25 +8628,31 @@ def _new_scenario_id():
 
 
 def _empty_scenario_fields(cash):
-    """The ledger-only fields (no id/name/status/created) for a from-scratch scenario."""
+    """The ledger-only fields (no id/name/status/created) for a from-scratch scenario.
+    Storage Stage B (2026-07-24): no `transactions`/`reports` keys anymore -- those live in real
+    SQL tables now (see store.py), hydrated fresh by scenario id wherever they're needed
+    (_read_paper, _paper_marked) rather than carried as part of this dict."""
     return {"starting_cash": round(cash, 2), "cash": round(cash, 2), "contributed": 0.0,
-            "seed_basis": 0.0, "seeded_from": None, "positions": {}, "transactions": [],
-            "reports": [], "recurring": None}
+            "seed_basis": 0.0, "seeded_from": None, "positions": {}, "recurring": None}
 
 
-def _seeded_scenario_fields(sel, cash, basis_mode):
+def _seeded_scenario_fields(sel, cash, basis_mode, scenario_id):
     """The ledger-only fields for a scenario seeded from the owner's REAL holdings (real share
     counts). `sel`: list of tickers, or None/'all' for every tradable holding. `basis_mode`:
     'current' (seed at today's price, return starts ~0 — measures forward decisions from here)
     or 'real' (carry actual cost basis, return reflects embedded gains already baked in).
-    Mutual funds and cash are skipped (no live tradable price)."""
+    Mutual funds and cash are skipped (no live tradable price). Storage Stage B (2026-07-24):
+    `scenario_id` is a new required param -- seed transactions are inserted directly into SQL
+    (store.paper_tx_append) as they're computed, rather than collected into a list and returned
+    as part of the fields dict; the CALLER must generate the scenario id before calling this
+    (previously `_new_scenario_id()` ran after this function — see post_paper_scenario)."""
     d = _data()
     by_ticker = {c.get("ticker"): c for c in d.get("consolidated", []) if c.get("ticker")}
     if sel in (None, "all", "ALL", "*"):
         want = [t for t, c in by_ticker.items() if c.get("type") not in ("Cash", "Mutual Fund")]
     else:
         want = [str(t).upper().strip() for t in sel if t]
-    positions, txns, seed_cost, seed_mkt, skipped = {}, [], 0.0, 0.0, []
+    positions, seed_cost, seed_mkt, skipped = {}, 0.0, 0.0, []
     ts = int(time.time())
     for t in want:
         c = by_ticker.get(t)
@@ -8665,11 +8665,10 @@ def _seeded_scenario_fields(sel, cash, basis_mode):
         positions[t] = {"shares": round(qty, 6), "avg_cost": avg}
         seed_cost += qty * avg
         seed_mkt += qty * px
-        txns.append({"ts": ts, "action": "seed", "ticker": t, "shares": round(qty, 6),
-                     "price": round(px, 4), "value": round(qty * px, 2)})
+        store.paper_tx_append(scenario_id, ts, "seed", t, round(qty, 6), round(px, 4), round(qty * px, 2))
     fields = {"starting_cash": round(cash, 2), "cash": round(cash, 2), "contributed": 0.0,
-              "seed_basis": round(seed_cost, 2), "positions": positions, "transactions": txns,
-              "reports": [], "recurring": None, "seeded_from": f"real_holdings ({basis_mode} basis)"}
+              "seed_basis": round(seed_cost, 2), "positions": positions,
+              "recurring": None, "seeded_from": f"real_holdings ({basis_mode} basis)"}
     return fields, {"seeded": len(positions), "skipped": skipped, "seed_market_value": round(seed_mkt, 2),
                     "seed_cost_basis": round(seed_cost, 2)}
 
@@ -8682,6 +8681,10 @@ def _read_registry():
     if isinstance(raw, dict) and isinstance(raw.get("scenarios"), dict) and raw["scenarios"]:
         return raw
     # Migrate a legacy flat ledger (or start fresh on a brand-new install) into one scenario.
+    # Storage Stage B (2026-07-24): no transactions/reports keys here anymore -- if this really
+    # was a pre-multi-scenario flat ledger, store.ensure_paper_migrated() (called once at app
+    # startup, before any request reaches this function) already imported its transactions/
+    # reports into SQL under scenario id "default", matching the id assigned here.
     legacy = raw if isinstance(raw, dict) else {}
     scenario = {"id": "default", "name": "Default", "status": "active",
                 "kind": legacy.get("kind", "ai"), "risk_profile": legacy.get("risk_profile", "moderate"),
@@ -8690,8 +8693,7 @@ def _read_registry():
                 "contributed": legacy.get("contributed", 0.0),
                 "seed_basis": legacy.get("seed_basis", 0.0),
                 "seeded_from": legacy.get("seeded_from"),
-                "positions": legacy.get("positions", {}), "transactions": legacy.get("transactions", []),
-                "reports": legacy.get("reports", []), "recurring": legacy.get("recurring"),
+                "positions": legacy.get("positions", {}), "recurring": legacy.get("recurring"),
                 "created": legacy.get("created", int(time.time()))}
     reg = {"scenarios": {"default": scenario}}
     _write_registry(reg)
@@ -8729,6 +8731,11 @@ def _default_scenario_id(reg=None, kind="ai"):
 
 
 def _read_paper(scenario_id=None):
+    """Storage Stage B (2026-07-24): `transactions`/`reports` are hydrated from SQL (the FULL
+    history, not display-truncated -- _paper_irr and backtest.paper_backtest both need the
+    complete timeline) after any due recurring contributions are applied, so a caller reading
+    `p["transactions"]`/`p["reports"]` right after this returns sees everything, including
+    whatever _apply_recurring just inserted this call."""
     reg = _read_registry()
     scens = reg.setdefault("scenarios", {})
     sid = scenario_id or _default_scenario_id(reg)
@@ -8742,19 +8749,35 @@ def _read_paper(scenario_id=None):
         sid = p["id"]
         scens[sid] = p
         _write_registry(reg)
-    if _apply_recurring(p):
+    if _apply_recurring(p, sid):
         _write_paper(sid, p)
+    p["transactions"] = store.paper_tx_all(sid)
+    p["reports"] = store.paper_reports_all(sid)
     return p
 
 
 def _write_paper(scenario_id, p):
+    """Storage Stage B (2026-07-24): transactions/reports are never persisted into the registry
+    blob -- they live in SQL (see _read_paper's hydration, _paper_marked's own fetch) -- so they're
+    stripped here before the write, rather than round-tripping a (possibly large, definitely
+    redundant) copy back into app_state on every trade/contribution/recurring-application."""
     reg = _read_registry()
-    reg.setdefault("scenarios", {})[scenario_id] = p
+    stored = {k: v for k, v in p.items() if k not in ("transactions", "reports")}
+    reg.setdefault("scenarios", {})[scenario_id] = stored
     _write_registry(reg)
 
 
 def _paper_marked(p):
-    """Mark the hypothetical ledger to current market prices."""
+    """Mark the hypothetical ledger to current market prices. Storage Stage B (2026-07-24):
+    transactions/reports are fetched fresh from SQL by scenario id HERE, rather than trusting
+    whatever (if anything) is already sitting on `p["transactions"]`/`p["reports"]` -- this
+    function is called both on a _read_paper()-hydrated dict (already carries the FULL history)
+    and directly on a raw registry scenario dict (get_paper_scenarios/archive/activate/
+    risk_profile all do this — that raw dict no longer carries these fields post-migration), so
+    self-hydrating here is what makes it correct regardless of which kind of `p` it's given."""
+    sid = p.get("id")
+    recent_tx = store.paper_tx_recent(sid, 40) if sid else []
+    recent_reports = store.paper_reports_recent(sid, 12) if sid else []
     positions, holdings_val = [], 0.0
     for t, pos in (p.get("positions") or {}).items():
         sh = pos.get("shares") or 0
@@ -8785,8 +8808,8 @@ def _paper_marked(p):
             "total_value": total, "total_return": round(total - basis, 2),
             "return_pct": round((total - basis) / basis * 100, 2) if basis else None,
             "recurring": p.get("recurring"),
-            "positions": positions, "transactions": (p.get("transactions") or [])[-40:],
-            "reports": (p.get("reports") or [])[-12:], "created": p.get("created"),
+            "positions": positions, "transactions": recent_tx,
+            "reports": recent_reports, "created": p.get("created"),
             "note": "HYPOTHETICAL paper-trading portfolio — no real money, no real orders. Return is "
                     "measured against invested capital (starting cash + contributions)."}
 
@@ -8847,6 +8870,10 @@ async def post_paper_scenario(req: Request):
                             status_code=400)
     name = str(body.get("name") or "").strip()[:80] or (f"Scenario {len(reg.get('scenarios') or {}) + 1}"
                                                           if kind == "ai" else "My Ledger")
+    # sid generated BEFORE the seed branch (2026-07-24, Storage Stage B) -- _seeded_scenario_fields
+    # now inserts seed transactions directly into SQL as it computes them, so it needs the
+    # scenario's id up front rather than the caller assigning one afterward.
+    sid = _new_scenario_id()
     seed = body.get("seed")
     seed_meta = None
     if isinstance(seed, dict):
@@ -8855,14 +8882,13 @@ async def post_paper_scenario(req: Request):
         except (TypeError, ValueError):
             seed_cash = 0.0
         basis_mode = str(seed.get("basis") or "current").lower()
-        fields, seed_meta = _seeded_scenario_fields(seed.get("tickers"), seed_cash, basis_mode)
+        fields, seed_meta = _seeded_scenario_fields(seed.get("tickers"), seed_cash, basis_mode, sid)
     else:
         try:
             cash = float(body.get("cash") or DEFAULT_PAPER_CASH)
         except (TypeError, ValueError):
             cash = DEFAULT_PAPER_CASH
         fields = _empty_scenario_fields(cash)
-    sid = _new_scenario_id()
     ts = int(time.time())
     risk_profile = None
     if kind == "ai":
@@ -8929,6 +8955,7 @@ def post_paper_delete(scenario_id: str):
             return JSONResponse({"error": "can't delete the only remaining AI scenario"}, status_code=400)
     scens.pop(scenario_id, None)
     _write_registry(reg)
+    store.paper_scenario_wipe(scenario_id)   # Storage Stage B (2026-07-24) -- SQL rows don't vanish for free like a dict-pop did; clean them up explicitly
     return {"ok": True, "remaining": len(scens)}
 
 
@@ -8993,9 +9020,8 @@ def _exec_trade(action, ticker, dollars=None, shares=None, scenario_id=None):
         else:
             positions[t] = pos
         traded = sh
-    p.setdefault("transactions", []).append({"ts": int(time.time()), "action": action, "ticker": t,
-                                             "shares": round(traded, 6), "price": round(px, 4),
-                                             "value": round(traded * px, 2)})
+    store.paper_tx_append(sid, int(time.time()), action, t, round(traded, 6), round(px, 4),
+                          round(traded * px, 2))
     _write_paper(sid, p)
     return {"ok": True, "action": action, "ticker": t, "shares": round(traded, 6),
             "price": px, "cash": p["cash"]}, None
@@ -9036,6 +9062,7 @@ async def paper_reset(req: Request):
                     kind=existing.get("kind", "ai"), risk_profile=existing.get("risk_profile"))
     reg.setdefault("scenarios", {})[sid] = scenario
     _write_registry(reg)
+    store.paper_scenario_wipe(sid)
     return {"ok": True, "starting_cash": cash, "scenario_id": sid}
 
 
@@ -9053,10 +9080,11 @@ async def paper_seed(req: Request):
     except (TypeError, ValueError):
         cash = 0
     basis_mode = str(body.get("basis") or "current").lower()
-    fields, seed_meta = _seeded_scenario_fields(body.get("tickers"), cash, basis_mode)
     reg = _read_registry()
     sid = body.get("scenario_id") or _default_scenario_id(reg)
     existing = (reg.get("scenarios") or {}).get(sid) or {}
+    store.paper_scenario_wipe(sid)
+    fields, seed_meta = _seeded_scenario_fields(body.get("tickers"), cash, basis_mode, sid)
     scenario = dict(fields, id=sid, name=existing.get("name", "Default"),
                     status=existing.get("status", "active"), created=int(time.time()),
                     kind=existing.get("kind", "ai"), risk_profile=existing.get("risk_profile"))
@@ -9072,12 +9100,10 @@ def _log_report(summary, scenario_id=None):
     p = _read_paper(scenario_id)
     sid = p["id"]
     marked = _paper_marked(p)
-    p.setdefault("reports", []).append({"ts": int(time.time()), "total_value": marked["total_value"],
-                                        "return_pct": marked["return_pct"],
-                                        "summary": str(summary or "")[:4000]})
-    p["reports"] = p["reports"][-26:]
-    _write_paper(sid, p)
-    return {"ok": True, "report_count": len(p["reports"]), "scenario_id": sid}
+    ts = int(time.time())
+    store.paper_report_append(sid, ts, marked["total_value"], marked["return_pct"],
+                              str(summary or "")[:4000])
+    return {"ok": True, "report_count": store.paper_reports_count(sid), "scenario_id": sid}
 
 
 @app.post("/api/paper/report")
@@ -9102,8 +9128,7 @@ async def paper_contribute(req: Request):
     sid = p["id"]
     p["cash"] = round((p.get("cash") or 0) + amt, 2)
     p["contributed"] = round((p.get("contributed") or 0) + amt, 2)
-    p.setdefault("transactions", []).append({"ts": int(time.time()), "action": "deposit",
-        "ticker": "CASH", "shares": 0, "price": 0, "value": round(amt, 2)})
+    store.paper_tx_append(sid, int(time.time()), "deposit", "CASH", 0, 0, round(amt, 2))
     _write_paper(sid, p)
     return {"ok": True, "added": round(amt, 2), "cash": p["cash"], "contributed": p["contributed"],
             "scenario_id": sid}
@@ -9312,18 +9337,17 @@ _strat_state = {"status": "idle", "iterations": 0, "started": 0, "finished": 0,
 #     repeated ("wandering") tool calls, trades placed, search-budget burn, per-tool histogram,
 #     duration. Best-effort — never raises, never influences the run. ---
 STRAT_RUN_LOG_FILE = os.environ.get("STRAT_RUN_LOG_FILE", "/data/strategist_runs.jsonl")
+# STRAT_RUN_LOG_MAX (2026-07-24, Storage Stage B): no longer a storage-trimming cap -- the
+# `strategist_runs` table keeps every record forever now. Kept only as the /api/strategist-runs
+# `limit` query param's upper clamp (a display sanity cap, not a data-retention one), so that
+# endpoint's contract is unchanged for existing callers.
 STRAT_RUN_LOG_MAX = int(os.environ.get("STRAT_RUN_LOG_MAX", "200"))
+store.ensure_strategist_runs_migrated(STRAT_RUN_LOG_FILE)   # one-time import from the old .jsonl blob, no-ops after
 
 
 def _log_strategist_run(rec):
     try:
-        try:
-            lines = [ln for ln in store.read_lines_strict(STRAT_RUN_LOG_FILE) if ln.strip()]
-        except Exception:
-            lines = []
-        lines.append(json.dumps(rec, default=str))
-        lines = lines[-STRAT_RUN_LOG_MAX:]
-        store.write_lines(STRAT_RUN_LOG_FILE, lines)
+        store.strategist_run_log(rec)
     except Exception:
         pass
 
@@ -9421,26 +9445,21 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                     "summary on this turn."})
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
-                    r = requests.post(f"{OLLAMA}/api/chat",
-                                      json={"model": ANALYSIS_MODEL, "messages": messages,
-                                            "tools": STRATEGIST_TOOLS, "stream": False,
-                                            "keep_alive": LLM_KEEP_ALIVE,
-                                            "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
-                                      timeout=STRAT_LLM_TIMEOUT)
-                if r.status_code >= 400:
+                    res = llm._llm_chat(messages, ANALYSIS_MODEL, tools=STRATEGIST_TOOLS,
+                                        temperature=0.4, num_ctx=STRAT_NUM_CTX,
+                                        keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
+                if not res.ok:
                     telem["ended"] = "ollama_error"
-                    telem["error"] = f"ollama {r.status_code}"
-                    _strat_state.update(status=f"error: ollama {r.status_code}: {r.text[:200]}",
-                                        finished=int(time.time()))
+                    telem["error"] = res.error
+                    _strat_state.update(status=f"error: {res.error}", finished=int(time.time()))
                     return telem
-                msg = (r.json() or {}).get("message") or {}
             except Exception as e:
                 telem["ended"] = "exception"
                 telem["error"] = str(e)[:200]
                 _strat_state.update(status=f"error: {e}", finished=int(time.time()))
                 return telem
-            tcs = msg.get("tool_calls") or []
-            asst = {"role": "assistant", "content": msg.get("content") or ""}
+            tcs = res.tool_calls
+            asst = {"role": "assistant", "content": res.content}
             if tcs:
                 asst["tool_calls"] = tcs
             messages.append(asst)
@@ -9562,10 +9581,9 @@ def strategist_runs(limit: int = 50):
     converging, wandering, or hitting the step cap?). Read-only. `summary` aggregates the window so
     'does it wander?' is answerable at a glance; `runs` is the newest-first per-run detail."""
     try:
-        rows = [json.loads(x) for x in store.read_lines_strict(STRAT_RUN_LOG_FILE) if x.strip()]
+        rows = store.strategist_runs_read(limit=max(1, min(limit, STRAT_RUN_LOG_MAX)))
     except Exception:
         rows = []
-    rows = rows[-max(1, min(limit, STRAT_RUN_LOG_MAX)):][::-1]
     done = [r for r in rows if r.get("iterations")]
     summary = None
     if done:
@@ -9659,22 +9677,17 @@ def _do_advice(amount, question, max_iter=None):
                     "Stop researching now and write your final deployment plan on this turn."})
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
-                    r = requests.post(f"{OLLAMA}/api/chat",
-                                      json={"model": ANALYSIS_MODEL, "messages": messages,
-                                            "tools": STRATEGIST_ADVICE_TOOLS, "stream": False,
-                                            "keep_alive": LLM_KEEP_ALIVE,
-                                            "options": {"temperature": 0.4, "num_ctx": STRAT_NUM_CTX}},
-                                      timeout=STRAT_LLM_TIMEOUT)
-                if r.status_code >= 400:
-                    _advice_state.update(status=f"error: ollama {r.status_code}: {r.text[:200]}",
-                                         finished=int(time.time()))
+                    res = llm._llm_chat(messages, ANALYSIS_MODEL, tools=STRATEGIST_ADVICE_TOOLS,
+                                        temperature=0.4, num_ctx=STRAT_NUM_CTX,
+                                        keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
+                if not res.ok:
+                    _advice_state.update(status=f"error: {res.error}", finished=int(time.time()))
                     return
-                msg = (r.json() or {}).get("message") or {}
             except Exception as e:
                 _advice_state.update(status=f"error: {e}", finished=int(time.time()))
                 return
-            tcs = msg.get("tool_calls") or []
-            asst = {"role": "assistant", "content": msg.get("content") or ""}
+            tcs = res.tool_calls
+            asst = {"role": "assistant", "content": res.content}
             if tcs:
                 asst["tool_calls"] = tcs
             messages.append(asst)
@@ -10150,15 +10163,11 @@ def _vision_identify_tickers(images, user_msg):
         "describe what you saw instead so the user can clarify."
     )
     try:
-        r = requests.post(f"{OLLAMA}/api/chat",
-                           json={"model": VISION_MODEL,
-                                 "messages": [{"role": "user", "content": prompt, "images": images}],
-                                 "stream": False, "keep_alive": LLM_KEEP_ALIVE,
-                                 "options": {"temperature": 0.1}},
-                           timeout=VISION_LLM_TIMEOUT)
-        if r.status_code >= 400:
-            return {"tickers": [], "note": f"vision model error {r.status_code}: {r.text[:200]}", "error": True}
-        content = ((r.json() or {}).get("message") or {}).get("content") or ""
+        res = llm._llm_chat([{"role": "user", "content": prompt}], VISION_MODEL, images=images,
+                            temperature=0.1, keep_alive=LLM_KEEP_ALIVE, timeout=VISION_LLM_TIMEOUT)
+        if not res.ok:
+            return {"tickers": [], "note": f"vision model error {res.status_code}: {res.error}", "error": True}
+        content = res.content
         parsed = _parse_json_obj(content) or {}
         # `t and str(t).strip()` — checking truthiness of `t` FIRST matters: a JSON `null` in the
         # list parses to Python None, and str(None)=="None" is non-empty, so filtering on the
@@ -10299,40 +10308,25 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                 yield _sse("error", {"error": "GPU still busy after waiting a while — please try again shortly"})
                 return
             try:
-                with requests.post(f"{OLLAMA}/api/chat",
-                                   json={"model": persona["model"], "messages": messages,
-                                         "tools": persona["tools"], "stream": True,
-                                         "keep_alive": LLM_KEEP_ALIVE,
-                                         "options": {"temperature": persona.get("temp", 0.3),
-                                                     "num_ctx": STRAT_NUM_CTX}},
-                                   timeout=STRAT_LLM_TIMEOUT, stream=True) as resp:
-                    if resp.status_code >= 400:
-                        yield _sse("error", {"error": f"ollama {resp.status_code}: {resp.text[:200]}"})
+                for chunk in llm._llm_chat(messages, persona["model"], tools=persona["tools"],
+                                           stream=True, temperature=persona.get("temp", 0.3),
+                                           num_ctx=STRAT_NUM_CTX, keep_alive=LLM_KEEP_ALIVE,
+                                           timeout=STRAT_LLM_TIMEOUT, cancel_check=cancel_event.is_set):
+                    if chunk.get("error"):
+                        yield _sse("error", {"error": chunk["error"]})
                         return
-                    for line in resp.iter_lines():
-                        if cancel_event.is_set():
-                            cancelled = True
-                            try:
-                                resp.close()
-                            except Exception:
-                                pass
-                            break
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                        except Exception:
-                            continue
-                        m = chunk.get("message") or {}
-                        if m.get("thinking"):     # qwen3 reasoning phase — stream as an activity indicator
-                            yield _sse("thinking", {"t": m["thinking"]})
-                        if m.get("content"):
-                            content_buf += m["content"]
-                            yield _sse("token", {"t": m["content"]})
-                        for tc in (m.get("tool_calls") or []):
-                            tool_calls.append(tc)
-                        if chunk.get("done"):
-                            break
+                    if chunk.get("cancelled"):
+                        cancelled = True
+                        break
+                    if chunk.get("thinking"):     # qwen3 reasoning phase — stream as an activity indicator
+                        yield _sse("thinking", {"t": chunk["thinking"]})
+                    if chunk.get("content"):
+                        content_buf += chunk["content"]
+                        yield _sse("token", {"t": chunk["content"]})
+                    if chunk.get("tool_calls"):
+                        tool_calls.extend(chunk["tool_calls"])
+                    if chunk.get("done"):
+                        break
             except Exception as e:
                 yield _sse("error", {"error": f"generation failed: {e}"})
                 return

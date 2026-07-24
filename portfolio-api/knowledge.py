@@ -16,12 +16,12 @@ import math
 import re
 import threading
 import time
-import urllib.request
+
+import llm  # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 
 KNOWLEDGE_DIR = os.environ.get("KNOWLEDGE_DIR", "/knowledge")
 KNOWLEDGE_INDEX = os.environ.get("KNOWLEDGE_INDEX", "/data/knowledge_index.json")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
-OLLAMA = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434").rstrip("/")
 CHUNK_CHARS = int(os.environ.get("KNOWLEDGE_CHUNK_CHARS", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("KNOWLEDGE_CHUNK_OVERLAP", "200"))
 EMBED_TIMEOUT = int(os.environ.get("KNOWLEDGE_EMBED_TIMEOUT", "120"))
@@ -105,11 +105,7 @@ def _chunk(text):
 
 
 def _embed_one(text):
-    body = json.dumps({"model": EMBED_MODEL, "prompt": text}).encode()
-    req = urllib.request.Request(OLLAMA + "/api/embeddings", data=body,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=EMBED_TIMEOUT) as r:
-        return json.loads(r.read().decode()).get("embedding") or []
+    return llm._llm_embed(text, EMBED_MODEL, timeout=EMBED_TIMEOUT)
 
 
 def _cos(a, b):

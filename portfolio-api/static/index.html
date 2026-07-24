@@ -294,6 +294,44 @@ const pct = n => n==null?'—':(n>0?'+':'')+n.toFixed(2)+'%';
 const cls = n => n==null?'muted':(n>=0?'pos':'neg');
 const shortInst = s => (s||'?').split(' - ')[0].replace(' from Morgan Stanley','');
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+// Copy-to-clipboard helper (2026-07-24, Jason: manually highlighting a value like the recovery
+// key risks missed/extraneous characters). `navigator.clipboard` requires a secure context
+// (HTTPS or localhost) -- this app is commonly run over plain HTTP on a home LAN (see the
+// https-cert WIKI entry), so a `document.execCommand('copy')` fallback via a hidden textarea is
+// required, not optional, for this to actually work on a typical deployment.
+async function _copyToClipboard(text){
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); return true; }
+  }catch(e){ /* fall through to the legacy path below */ }
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=text; ta.style.cssText='position:fixed;top:-1000px;left:-1000px;opacity:0;';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok=document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){ return false; }
+}
+// A small clickable clipboard icon that copies `text` (a literal string) or, if `text` is a
+// function, calls it at click-time to get the current value (for content that can change after
+// the button is created, e.g. a streaming chat message). Shows brief "✓ copied" feedback in place
+// of the icon rather than a toast, so it stays legible next to dense monospace secrets.
+function copyBtn(text, title){
+  const b=el('span', null, '📋');
+  b.title = title || 'Copy to clipboard';
+  b.style.cssText='cursor:pointer;user-select:none;margin-left:6px;font-size:var(--font-size-sm);opacity:0.8;';
+  b.onclick=async(e)=>{
+    if(e) e.stopPropagation();
+    const val = (typeof text==='function') ? text() : text;
+    if(!val) return;
+    const ok = await _copyToClipboard(val);
+    const prev=b.textContent;
+    b.textContent = ok ? '✓' : '⚠';
+    b.style.opacity='1';
+    setTimeout(()=>{ b.textContent=prev; b.style.opacity='0.8'; }, 1300);
+  };
+  return b;
+}
 // Parse a numeric form field where 0 is a legitimate value (income, rates, contributions, etc.)
 // — do NOT use `parseFloat(x)||null`, since 0 is falsy in JS and that pattern silently discards
 // a real zero entry back to null/unset. Blank/unparseable -> null; everything else -> the number,
@@ -1404,7 +1442,9 @@ function dashboardContent(){
   // OPP-1: State-of-the-Wealth weekly letter (latest), atop the dashboard
   const nl=(NARR&&NARR.latest)||null;
   const nbox=el('div'); nbox.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);margin-bottom:var(--space-3);';
-  const nh=el('div','ph','STATE OF THE WEALTH · WEEKLY LETTER'); nh.style.cssText+='border:none;padding:0;margin-bottom:var(--space-2);'; nh.appendChild(wikiLink('narrative')); nbox.appendChild(nh);
+  const nh=el('div','ph','STATE OF THE WEALTH · WEEKLY LETTER'); nh.style.cssText+='border:none;padding:0;margin-bottom:var(--space-2);'; nh.appendChild(wikiLink('narrative'));
+  if(nl && nl.letter) nh.appendChild(copyBtn(nl.letter, 'Copy the letter text'));
+  nbox.appendChild(nh);
   if(nl){
     const dt=el('div','muted'); dt.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
     // gpu_wait_s (2026-07-19): how long this run sat queued for the GPU before generation even
@@ -2762,8 +2802,10 @@ async function certGenCsr(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     const out=document.getElementById('cert-csr-out');
-    out.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:4px;">${d.note}</div>`+
+    out.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:4px;">${d.note} <span id="cert-csr-copy"></span></div>`+
       `<textarea readonly rows="10" style="width:400px;font-family:monospace;font-size:12px;">${d.csr_pem}</textarea>`;
+    const cp=document.getElementById('cert-csr-copy');
+    if(cp) cp.appendChild(copyBtn(d.csr_pem, 'Copy CSR'));
     TLS_STATUS=null; _tlsRefreshStatus();
   }catch(e){ err.textContent='Request failed: '+e; }
 }
@@ -2927,9 +2969,15 @@ async function securityMfaSetup(containerId){
     area.innerHTML=
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Scan this with your authenticator app, then enter the 6-digit code it shows:</div>`+
       `<img src="${d.qr_data_uri}" style="width:180px;height:180px;border-radius:var(--radius-md);margin-bottom:8px;display:block;"/>`+
-      (secretMatch?`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Can't scan? Enter this key manually: <code>${secretMatch[1]}</code></div>`:'')+
+      (secretMatch?`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Can't scan? Enter this key manually: <code>${secretMatch[1]}</code><span id="${containerId}-secret-copy"></span></div>`:'')+
       `<input id="${containerId}-code" type="text" placeholder="123456" style="width:120px;"/> <button onclick="securityMfaVerify('${containerId}')">✓ VERIFY &amp; ENABLE</button>`+
       `<div id="${containerId}-verify-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
+    // Copy icon appended programmatically (not string-interpolated into an onclick=""), so the
+    // secret's exact characters never round-trip through HTML-attribute escaping.
+    if(secretMatch){
+      const cp=document.getElementById(containerId+'-secret-copy');
+      if(cp) cp.appendChild(copyBtn(secretMatch[1], 'Copy secret key'));
+    }
   }catch(e){ alert('Setup failed: '+e); }
 }
 async function securityMfaVerify(containerId){
@@ -2950,8 +2998,11 @@ async function securityMfaVerify(containerId){
       area.innerHTML=
         `<div class="pos" style="margin-bottom:6px;">✓ MFA enabled.</div>`+
         `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
+        `<div style="display:flex;align-items:center;margin-bottom:4px;"><span class="muted" style="font-size:var(--font-size-sm);">Backup codes</span><span id="${containerId}-codes-copy"></span></div>`+
         `<div style="font-family:monospace;font-size:var(--font-size-md);line-height:1.6;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">${d.backup_codes.join('<br/>')}</div>`+
         `<button onclick="${onboarding?'_frMfaSetupDone()':'render()'}">✓ I'VE SAVED THESE — DONE</button>`;
+      const cp=document.getElementById(containerId+'-codes-copy');
+      if(cp) cp.appendChild(copyBtn(()=>d.backup_codes.join('\n'), 'Copy all 10 backup codes'));
     }
   }catch(e){ if(errEl) errEl.textContent='Request failed: '+e; }
 }
@@ -3002,8 +3053,12 @@ async function securityRecoveryKeyRegenerate(){
       area.innerHTML=
         `<div class="pos" style="margin-bottom:6px;">✓ New recovery key generated.</div>`+
         `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
-        `<div style="font-family:monospace;font-size:var(--font-size-md);letter-spacing:1px;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;text-align:center;word-break:break-all;">${d.recovery_key}</div>`+
+        `<div style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">`+
+          `<span style="font-family:monospace;font-size:var(--font-size-md);letter-spacing:1px;word-break:break-all;">${d.recovery_key}</span>`+
+          `<span id="sec-rk-copy"></span></div>`+
         `<button onclick="render()">✓ I'VE SAVED THIS — DONE</button>`;
+      const cp=document.getElementById('sec-rk-copy');
+      if(cp) cp.appendChild(copyBtn(d.recovery_key, 'Copy recovery key'));
     }
   }catch(e){ err.textContent='Request failed: '+e; }
 }
@@ -5576,6 +5631,10 @@ function chatContent(){
     if(m.role==='assistant'){
       const tools=el('div','msg-tools'); if(m.streaming) tools.id='chat-live-tools';
       if(m.tools && m.tools.length) tools.innerHTML=m.tools.map(x=>`<span class="tool-chip">${x.done?'✓':'⋯'} ${x.name}</span>`).join('');
+      // Copy button (2026-07-24, Jason: "any other generated text output, including chat
+      // responses") -- only once a message has finished streaming; copies the raw markdown
+      // (m.content), not the rendered HTML, so pasting elsewhere doesn't carry formatting noise.
+      if(!m.streaming && m.content) tools.appendChild(copyBtn(m.content, 'Copy this response'));
       row.appendChild(tools);
       const c=el('div','msg-body');
       if(m.streaming){ c.id='chat-live-content'; c.textContent = m.content || (m.think ? '💭 thinking… '+m.think.slice(-400) : '▍ working…'); }
@@ -5686,11 +5745,15 @@ function renderFirstRunRecoveryKey(recoveryKey, note, wantsMfa){
   const wrap=_authFormShell('SAVE YOUR RECOVERY KEY', note||'This is the only way back into this account if you ever forget your password AND lose your MFA device/backup codes. It is shown once, right now, and never stored anywhere retrievable.');
   const box=el('div');
   box.innerHTML=
-    `<div style="font-family:monospace;font-size:var(--font-size-lg);letter-spacing:1px;background:var(--color-panel-alt);padding:var(--space-3);border-radius:var(--radius-md);margin-bottom:var(--space-3);text-align:center;word-break:break-all;">${recoveryKey}</div>`+
+    `<div style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--color-panel-alt);padding:var(--space-3);border-radius:var(--radius-md);margin-bottom:var(--space-3);">`+
+      `<span style="font-family:monospace;font-size:var(--font-size-lg);letter-spacing:1px;word-break:break-all;">${recoveryKey}</span>`+
+      `<span id="fr-rk-copy"></span></div>`+
     `<label style="font-size:var(--font-size-sm);display:block;margin-bottom:var(--space-3);"><input type="checkbox" id="fr-rk-ack" onchange="document.getElementById('fr-rk-continue').disabled=!this.checked;"/> I've saved this somewhere safe (password manager, or printed and locked away)</label>`+
     `<button id="fr-rk-continue" onclick="_frRecoveryKeyContinue(${wantsMfa?'true':'false'})" style="width:100%;" disabled>CONTINUE</button>`;
   wrap.appendChild(box);
   body.appendChild(wrap);
+  const cp=document.getElementById('fr-rk-copy');
+  if(cp) cp.appendChild(copyBtn(recoveryKey, 'Copy recovery key'));
 }
 function _frRecoveryKeyContinue(wantsMfa){
   if(wantsMfa) renderFirstRunMfaPrompt(); else authInitApp();
