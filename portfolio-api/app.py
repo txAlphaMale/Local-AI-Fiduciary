@@ -493,11 +493,21 @@ async def auth_first_run(request: Request):
         return JSONResponse({"error": "an account already exists — use /api/auth/login"}, status_code=400)
     body = await request.json()
     try:
-        uid = auth.create_user(body.get("username"), body.get("password"))
+        uid, recovery_key = auth.create_user(body.get("username"), body.get("password"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     request.session["uid"] = uid
-    return {"ok": True, "user": auth.public_user(auth.get_user_by_id(uid))}
+    # recovery_key (2026-07-24, Account Recovery Tier 2) is returned ONCE, here, and never again --
+    # only its argon2 hash is stored. This is the host-CLI fallback (`auth.py --reset-credentials`)
+    # for when a user has no working MFA AND forgets the password; without it, host/container
+    # access alone would be the only way back in, which silently grants full access with no second
+    # factor -- see RESUME-TRACKER.md's Account Recovery entry for the full reasoning.
+    return {"ok": True, "user": auth.public_user(auth.get_user_by_id(uid)), "recovery_key": recovery_key,
+            "recovery_key_note": "Save this somewhere safe (a password manager, or printed and "
+                                  "locked away) -- it's the ONLY way back into this account if you "
+                                  "ever forget your password AND lose your MFA device/backup codes. "
+                                  "It is never shown again and never stored anywhere retrievable, "
+                                  "not even by whoever manages this deployment."}
 
 
 @app.post("/api/auth/login")
@@ -570,6 +580,24 @@ async def auth_mfa_disable(request: Request):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
     return {"ok": True}
+
+
+@app.post("/api/auth/recovery-key/regenerate")
+async def auth_recovery_key_regenerate(request: Request):
+    """(Re)issues the Account Recovery Tier 2 host-CLI recovery key (2026-07-24) -- covers both a
+    deliberate rotation and accounts migrated in from before this feature existed
+    (recovery_key_hash starts NULL for those, see auth.init_db()'s migration). Password-gated
+    like the other identity/security-affecting actions (change-password, mfa/disable,
+    change-username). The plaintext key is returned ONCE here and never again."""
+    uid = _require_uid(request)
+    user = auth.get_user_by_id(uid)
+    body = await request.json()
+    if not auth.verify_password(user, body.get("password") or ""):
+        return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    key = auth.set_recovery_key(uid)
+    return {"ok": True, "recovery_key": key,
+            "note": "Save this now -- shown only once, and this immediately replaces any "
+                    "previous recovery key (the old one stops working)."}
 
 
 @app.post("/api/auth/change-username")
@@ -7144,6 +7172,17 @@ SETUP_FIELDS = [
      "note": "A rotating code from any authenticator app (Google Authenticator, Authy, 1Password, "
              "Bitwarden, etc.) on top of your password. Set up in SETTINGS -> SECURITY -- or right "
              "after creating your account, if you ticked \"enroll now\" on that screen."},
+    # Account Recovery Tier 2 (2026-07-24) -- without this, the ONLY way back in after forgetting
+    # the password with no working MFA is host/container access alone (`docker exec` + delete
+    # auth.db), which silently grants full access with zero second factor. New accounts get a key
+    # automatically at creation; accounts migrated in from before this feature existed (including
+    # the owner's own live account) start with NONE and need this flagged loudly, not left silently
+    # unset -- hence critical, not optional, same tier as MFA itself.
+    {"id": "recovery_key_set", "tier": 1, "group": "Host recovery key", "cfg": "auth",
+     "key": "recovery_key_set", "jump": ("settings", "security"), "severity": "critical",
+     "note": "The only way back in via host/container access if you ever forget your password AND "
+             "lose MFA -- without one, that scenario means a full data wipe, not just a login "
+             "reset. Generate it in SETTINGS -> SECURITY; shown once, save it somewhere safe."},
     # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
     {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
      "key": "state_of_residence", "jump": ("plan", "assumptions"), "severity": "critical",
@@ -7244,15 +7283,16 @@ SETUP_FIELDS = [
 ]
 
 
-def _setup_field_filled(spec, retire, insurance, policy, secrets_set, mfa_enabled=False):
+def _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags=None):
     """True if `spec`'s value counts as provided. `secrets_set` is the set of secret keys that
-    are set (env-locked OR saved) -- same definition /api/secrets itself uses. `mfa_enabled`
-    (2026-07-24) covers the single cfg=="auth" entry -- MFA status lives in auth.db, not any of
+    are set (env-locked OR saved) -- same definition /api/secrets itself uses. `auth_flags`
+    (2026-07-24, extended same day to cover 2 cfg=="auth" entries: `mfa_enabled` and
+    `recovery_key_set`) is a small dict keyed by spec["key"] -- both live in auth.db, not any of
     the JSON/SQLite config stores the other three cfg branches read."""
     if spec["cfg"] == "secret":
         return spec["key"] in secrets_set
     if spec["cfg"] == "auth":
-        return bool(mfa_enabled)
+        return bool((auth_flags or {}).get(spec["key"]))
     cfg = {"retire": retire, "insurance": insurance, "policy": policy}.get(spec["cfg"]) or {}
     val = cfg.get(spec["key"])
     kind = spec.get("kind", "scalar")
@@ -7279,12 +7319,12 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set, mfa_enable
     return val not in (None, "")
 
 
-def _setup_progress(mfa_enabled=False):
+def _setup_progress(auth_flags=None):
     """Compute the full onboarding completeness model: every SETUP_FIELDS entry checked against
     the LIVE config, grouped by tier, with an honest X-of-N that only counts fields where
     "blank" really means "not yet provided" for THIS household (married-only fields are excluded
     from a single filer's denominator; already-reasonable-default fields are shown but never
-    counted -- see SETUP_FIELDS' docstring). `mfa_enabled` (2026-07-24) is read from the caller's
+    counted -- see SETUP_FIELDS' docstring). `auth_flags` (2026-07-24) is read from the caller's
     session/auth.db, not any of the JSON config stores this function otherwise reads."""
     retire = _read_retire()
     insurance = _read_insurance_cfg()
@@ -7297,7 +7337,7 @@ def _setup_progress(mfa_enabled=False):
     tiers = {}
     for spec in SETUP_FIELDS:
         applicable = not (spec.get("required_if") == "mfj" and not married)
-        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set, mfa_enabled)
+        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags)
         scored = applicable and spec.get("scored", True)
         severity = spec.get("severity", "optional")
         # "done" (drives the % bar / X-of-N counts) != "filled" (drives the ✓/△/! glyph). A blank
@@ -7328,7 +7368,9 @@ def _setup_progress(mfa_enabled=False):
 def get_setup_progress(request: Request):
     uid = request.session.get("uid")
     user = auth.get_user_by_id(uid) if uid else None
-    return _setup_progress(mfa_enabled=bool(user and user.get("totp_enabled")))
+    auth_flags = {"mfa_enabled": bool(user and user.get("totp_enabled")),
+                  "recovery_key_set": bool(user and user.get("recovery_key_hash"))}
+    return _setup_progress(auth_flags=auth_flags)
 
 
 def _dividend_drip_split():

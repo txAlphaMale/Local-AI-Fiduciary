@@ -26,6 +26,7 @@ import uuid
 import json
 import base64
 import io
+import secrets
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHash
@@ -59,9 +60,19 @@ def init_db():
             totp_secret TEXT,
             totp_enabled INTEGER NOT NULL DEFAULT 0,
             backup_codes_json TEXT,
+            recovery_key_hash TEXT,
             created INTEGER NOT NULL,
             updated INTEGER NOT NULL
         )""")
+        # Migration for databases created before 2026-07-24 (Account Recovery Tier 2) --
+        # CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table, and
+        # an existing live deployment already has a users row from before this column existed.
+        # has_recovery_key()/verify_recovery_key() below treat a NULL hash as "not set" and the
+        # setup checklist (SETUP_FIELDS "recovery_key_set") surfaces that as a critical, unfilled
+        # item so a migrated-in account doesn't silently stay without one.
+        cols = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+        if "recovery_key_hash" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN recovery_key_hash TEXT")
     try:
         os.chmod(AUTH_DB, 0o600)
     except Exception:
@@ -110,13 +121,21 @@ def public_user(user):
         except Exception:
             backup_remaining = None
     return {"id": user["id"], "username": user["username"], "mfa_enabled": bool(user["totp_enabled"]),
-            "backup_codes_remaining": backup_remaining, "created": user["created"]}
+            "backup_codes_remaining": backup_remaining,
+            "recovery_key_set": bool(user.get("recovery_key_hash")), "created": user["created"]}
 
 
 # ---------------------------------------------------------------------------
 # Passwords
 # ---------------------------------------------------------------------------
 def create_user(username, password):
+    """Returns (uid, recovery_key) -- the recovery key (2026-07-24, Account Recovery Tier 2) is
+    generated immediately so every NEW account has one from day one; the caller is responsible
+    for showing it to the user exactly once (same write-only pattern as MFA backup codes) and
+    never logging/persisting the plaintext anywhere. Existing accounts created before this
+    feature existed migrate in with recovery_key_hash=NULL (see init_db()) and only get one once
+    the user explicitly generates it via set_recovery_key() (SETTINGS -> SECURITY, or the
+    "recovery_key_set" critical checklist item nudges them there)."""
     username = (username or "").strip()
     if not username:
         raise ValueError("username required")
@@ -128,7 +147,8 @@ def create_user(username, password):
     with _conn() as c:
         c.execute("INSERT INTO users(id, username, password_hash, totp_enabled, created, updated) "
                   "VALUES(?,?,?,0,?,?)", (uid, username, ph, now, now))
-    return uid
+    recovery_key = set_recovery_key(uid)
+    return uid, recovery_key
 
 
 def verify_password(user, password):
@@ -180,6 +200,66 @@ def delete_user(uid):
     responsible for clearing request.session after this returns."""
     with _conn() as c:
         c.execute("DELETE FROM users WHERE id=?", (uid,))
+
+
+# ---------------------------------------------------------------------------
+# Account Recovery Tier 2 (2026-07-24) — host-CLI recovery key. Tier 1 (recovery/start +
+# recovery/reset in app.py) only helps if MFA is still working; this exists for the strictly
+# worse case Jason flagged directly: MFA was never enabled (or the device AND backup codes are
+# both gone) AND the password is forgotten. Without this, the only "recovery" path left was
+# `docker exec` + `rm /data/auth.db` -- host/container access alone silently granting full access
+# to the whole financial picture with zero second factor and zero trace. This closes that: the
+# host-CLI reset below (`--reset-credentials`) additionally requires a high-entropy secret that
+# only ever existed in the user's own hands (shown once, at generation time, never stored except
+# as an argon2 hash -- not even recoverable by whoever runs this CLI). Host/container access alone
+# now gets you `--wipe-all` only -- a full destructive reset, not a silent takeover of the
+# existing account and its data.
+# ---------------------------------------------------------------------------
+def _gen_recovery_key():
+    """20 random bytes -> 32 base32 characters (uppercase, unpadded) -- same spirit as a TOTP
+    secret's manual-entry form: transcribable by hand, ~100 bits of entropy."""
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+
+
+def set_recovery_key(uid):
+    """(Re)generates the account's recovery key and returns the PLAINTEXT once. Only the argon2
+    hash is stored -- same write-only guarantee as the password and MFA backup codes. Called both
+    from create_user() (every new account gets one immediately) and from the authenticated
+    SETTINGS -> SECURITY "regenerate" endpoint (covers accounts migrated in with
+    recovery_key_hash=NULL, and lets a user rotate it if they're ever unsure whether an old copy
+    is still secret)."""
+    key = _gen_recovery_key()
+    h = _ph.hash(key)
+    with _conn() as c:
+        c.execute("UPDATE users SET recovery_key_hash=?, updated=? WHERE id=?", (h, int(time.time()), uid))
+    return key
+
+
+def has_recovery_key(uid):
+    user = get_user_by_id(uid)
+    return bool(user and user.get("recovery_key_hash"))
+
+
+def verify_recovery_key(uid, key):
+    user = get_user_by_id(uid)
+    if not user or not user.get("recovery_key_hash") or not key:
+        return False
+    try:
+        _ph.verify(user["recovery_key_hash"], key)
+        return True
+    except (VerifyMismatchError, InvalidHash):
+        return False
+    except Exception:
+        return False
+
+
+def invalidate_recovery_key(uid):
+    """Clears the recovery key after it's used to reset credentials (--reset-credentials below)
+    -- a successful recovery-key reset is exactly the moment to treat it as spent, the same way a
+    backup code is consumed on use, rather than leaving a working master-override key sitting
+    around indefinitely. The user has to explicitly generate a new one afterward."""
+    with _conn() as c:
+        c.execute("UPDATE users SET recovery_key_hash=NULL, updated=? WHERE id=?", (int(time.time()), uid))
 
 
 # ---------------------------------------------------------------------------
@@ -283,3 +363,130 @@ def rate_limited(ip):
 
 def record_login_attempt(ip):
     _login_attempts.setdefault(ip, []).append(time.time())
+
+
+# ============================================================================
+# Host-CLI recovery (2026-07-24, Account Recovery Tier 2) — run this INSIDE the running
+# container: `docker compose exec portfolio-api python auth.py --reset-credentials` (or
+# `--wipe-all`). Deliberately NOT reachable over HTTP -- this is the fallback for when the web
+# app itself can't be used to recover (no session, no working MFA, forgotten password), so it has
+# to work independently of app.py/the session gate.
+#
+# --reset-credentials requires BOTH container/host shell access AND the account's recovery key
+# (generated once at account creation, or afterward in SETTINGS -> SECURITY -- never recoverable
+# if lost, by design, same as the password itself). This is the one path that gets you back into
+# the EXISTING account without destroying anything else.
+#
+# --wipe-all requires ONLY container/host access (no recovery key) and is genuinely destructive --
+# deletes auth.db, store.db, chat.db, and the knowledge index cache, returning the whole app to a
+# blank first-run state. This is the intentional trade-off from the original design: host access
+# alone must not be enough to silently take over an EXISTING account and its data, but it also
+# shouldn't be blocked from resetting a hopelessly-locked-out installation entirely -- someone who
+# can already `docker exec` into the container can delete the underlying Docker volume directly
+# regardless of anything this script does, so gating --wipe-all further wouldn't add real
+# protection, only friction for the legitimate case.
+# ============================================================================
+def _wipe_all_paths():
+    """Same env-var-driven paths store.py/knowledge.py/app.py themselves use (duplicated here,
+    not imported, to keep this CLI runnable with only auth.py's own dependencies -- no need to
+    pull in requests/ollama/etc. just to delete files)."""
+    return [
+        AUTH_DB,
+        os.environ.get("STORE_DB", "/data/store.db"),
+        os.environ.get("CHAT_DB", "/data/chat.db"),
+        os.environ.get("KNOWLEDGE_INDEX", "/data/knowledge_index.json"),
+    ]
+
+
+def _cli_reset_credentials():
+    import getpass
+    init_db()
+    if not has_any_user():
+        print("No account exists yet -- nothing to reset. Just load the app; it will show the "
+              "first-run account-creation screen.")
+        return 1
+    username = input("Username: ").strip()
+    user = get_user_by_username(username)
+    if not user:
+        print("No such user.")
+        return 1
+    if not user.get("recovery_key_hash"):
+        print("This account has no recovery key configured -- either it was created before this "
+              "feature existed and one was never generated in SETTINGS -> SECURITY, or one was "
+              "used already (a recovery key is invalidated after a successful reset, same as a "
+              "backup code). --reset-credentials is not available without it. The only remaining "
+              "option is --wipe-all, which destroys ALL data, not just the login.")
+        return 1
+    recovery_key = getpass.getpass("Recovery key: ").strip()
+    if not verify_recovery_key(user["id"], recovery_key):
+        print("Incorrect recovery key.")
+        return 1
+    new_password = getpass.getpass("New password (min 8 characters): ")
+    confirm = getpass.getpass("Confirm new password: ")
+    if new_password != confirm:
+        print("Passwords do not match.")
+        return 1
+    try:
+        set_password(user["id"], new_password)
+    except ValueError as e:
+        print(str(e))
+        return 1
+    mfa_disable(user["id"])              # losing the device is presumably why this path was needed
+    invalidate_recovery_key(user["id"])  # spent -- treat like a used backup code, not reusable
+    print("Password reset, MFA disabled, and the used recovery key invalidated.")
+    print("Log in with the new password. Re-enroll MFA and generate a new recovery key in "
+          "SETTINGS -> SECURITY once you're back in -- both are treated as critical setup items.")
+    return 0
+
+
+def _cli_wipe_all():
+    print("This deletes ALL data for this deployment: auth.db (login/MFA), store.db (all "
+          "financial config/scenarios/history), chat.db (chat history), and the knowledge index "
+          "cache (source documents in ./knowledge itself are untouched, but the app will need to "
+          "reindex them). This is NOT limited to the login -- there is no undo.")
+    confirm = input('Type WIPE (all caps) to confirm: ')
+    if confirm != "WIPE":
+        print("Aborted -- nothing was deleted.")
+        return 1
+    removed, missing = [], []
+    for p in _wipe_all_paths():
+        try:
+            os.remove(p)
+            removed.append(p)
+        except FileNotFoundError:
+            missing.append(p)
+        except Exception as e:
+            print("Could not remove {}: {}".format(p, e))
+    print("Removed: {}".format(removed or "(none existed)"))
+    if missing:
+        print("Already absent: {}".format(missing))
+    print("Restart the app now (e.g. `docker compose restart portfolio-api`) -- it will come up "
+          "as a completely blank first-run install.")
+    return 0
+
+
+def _cli_main():
+    import argparse
+    p = argparse.ArgumentParser(
+        description="Fiduciary auth.db host-level recovery CLI -- for when a user is locked out "
+                    "with no session, no working MFA, and a forgotten password. Run this INSIDE "
+                    "the running container: docker compose exec portfolio-api python auth.py <flag>")
+    p.add_argument("--reset-credentials", action="store_true",
+                   help="Reset the password (and disable MFA) using the one-time recovery key "
+                        "issued at account creation. Requires container/host access AND the "
+                        "recovery key -- host access alone is NOT sufficient.")
+    p.add_argument("--wipe-all", action="store_true",
+                   help="Last resort: delete auth.db, store.db, chat.db, and the knowledge index "
+                        "cache, returning the whole app to a blank first-run state. Requires ONLY "
+                        "container/host access (no recovery key).")
+    args = p.parse_args()
+    if args.reset_credentials:
+        raise SystemExit(_cli_reset_credentials())
+    if args.wipe_all:
+        raise SystemExit(_cli_wipe_all())
+    p.print_help()
+    raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    _cli_main()

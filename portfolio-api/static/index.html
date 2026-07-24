@@ -378,6 +378,8 @@ const TOUR_TARGETS = {
   // first entry that targets the SETTINGS tab rather than PLAN/INSIGHTS, exercising the same
   // generic setSubtab()/panelSubtabs() machinery those already use.
   mfa_enrolled:'sec-mfa-setup-btn',
+  // Account Recovery Tier 2 (2026-07-24, same day) — host-CLI recovery key, also critical.
+  recovery_key_set:'sec-recoverykey-generate-btn',
 };
 let TOUR_DONE=false; try{ TOUR_DONE = localStorage.getItem('fidTourDone')==='1'; }catch(_){ TOUR_DONE=false; }
 function _tourMarkDone(){ TOUR_DONE=true; try{ localStorage.setItem('fidTourDone','1'); }catch(_){} }
@@ -673,6 +675,14 @@ W('https-cert','Getting started','HTTPS / certificates (SETTINGS → SECURITY �
   'By default this app serves plain HTTP — fine on a trusted home LAN, not fine once anything is reachable beyond it. SETTINGS → SECURITY → Certificate sets up real encrypted HTTPS with no command-line work: three built-in methods, pick whichever fits your deployment.',
   '**Self-signed** (instant): generate a key pair right here, no prerequisites at all — browsers show a "not trusted" warning until you manually trust the certificate once, but nothing else needs to be set up. Best for a pure local-LAN install. **Let\'s Encrypt / ACME** (preferred, when available): a real, browser-trusted certificate the app renews for you automatically — needs either a public DNS name with port 80 reachable from the internet (HTTP-01) or API credentials for your DNS provider (DNS-01, no public reachability needed). **Manual (CSR)**: the app generates a private key + certificate signing request you take to any Certificate Authority (or an internal CA for a LAN-only deployment); paste the signed certificate back in to install it — the private key never leaves this server.',
   'After setting one up, the app restarts itself in place within a couple seconds to switch modes — the current page will go unresponsive for a moment; that\'s expected, reload at the new address (the HTTPS port, default 8443, once a certificate is active; the plain-HTTP port, default 8097, if you REMOVE one). If you\'re on Let\'s Encrypt, auto-renew is on by default and needs no attention; a "renew now" button covers testing or renewing early.');
+W('mfa','Getting started','Multi-factor authentication (MFA) & backup codes',
+  'A rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) required at login on top of your password. Since this app manages your full financial picture, MFA is treated as a CRITICAL setup step — it shows a ! on the setup checklist and a stop on the guided tour, not an optional extra.',
+  'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → SECURITY → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → SECURITY also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
+  'If you lose your phone/authenticator: log in using one of your saved backup codes in place of the 6-digit code (the login screen\'s code field explicitly accepts either) — this works exactly like a normal login, no special recovery flow needed. Once in, go to SETTINGS → SECURITY, disable MFA (requires your password), then set it up again from scratch with your new device. If you\'ve also lost your backup codes, or never set up MFA at all, see the "Account recovery" entry below instead.');
+W('account-recovery','Getting started','Account recovery — forgot password, lost MFA, or locked out entirely',
+  'Two independent recovery paths, for two different situations. **Tier 1 (still have MFA working):** forgot the password but still have your authenticator app or a saved backup code. **Tier 2 (MFA is also gone, or was never set up):** forgotten password with no working second factor — this needs host/container access to this deployment, not just a browser.',
+  'Tier 1: click "Forgot password? (requires MFA)" on the sign-in screen, enter your username and a current authenticator code (or an unused backup code), then set a new password — this reuses the same code check the login screen itself uses, so it\'s exactly as secure as normal MFA login. Tier 2: run `docker compose exec portfolio-api python auth.py --reset-credentials` from the machine hosting this deployment. It will ask for your username, your **recovery key**, and a new password. The recovery key is a one-time secret shown ONCE — either right after you created your account, or whenever you last generated/regenerated one in SETTINGS → SECURITY → "HOST RECOVERY KEY". Like MFA, this is a CRITICAL checklist item: if you haven\'t generated one yet, do it now, before you need it — there is no way to recover a lost recovery key, only to generate a new one while you still have access.',
+  'Without a recovery key on file, `--reset-credentials` cannot help you — the only remaining option is `python auth.py --wipe-all` (same command form), which is genuinely destructive: it deletes the login, ALL financial config/history/scenarios, chat history, and the knowledge index cache, returning the app to a blank first-run state. This is intentional — host/container access alone is deliberately NOT enough to reset just the login and silently take over your existing data; it either gets you back into your OWN account (via the recovery key) or wipes everything and starts over, with nothing in between. Bottom line: generate your recovery key today, in SETTINGS → SECURITY, and store it like you would a password — it is the only thing standing between "forgot my password" and "lost everything."');
 
 W('net-worth','Dashboard','Net worth',
   'Every account value signed by type: assets add, liabilities (credit cards, loans, mortgage) subtract. It includes non-brokerage assets your provider tracks, such as a Zillow-valued home.',
@@ -2584,6 +2594,13 @@ function securityContent(){
   const mfaWrap=el('div'); mfaWrap.id='sec-mfa-wrap'; mfaWrap.appendChild(_securityMfaBlock(u));
   wrap.appendChild(mfaWrap);
 
+  // Account Recovery Tier 2 (2026-07-24) — host-CLI recovery key. Accounts created before this
+  // feature existed migrate in with none set (auth.py init_db()'s ALTER TABLE), so this section
+  // has to work whether u.recovery_key_set is true or false, not just show a toggle.
+  wrap.appendChild(el('div','ph','HOST RECOVERY KEY'));
+  const rkWrap=el('div'); rkWrap.id='sec-rk-wrap'; rkWrap.appendChild(_securityRecoveryKeyBlock(u));
+  wrap.appendChild(rkWrap);
+
   wrap.appendChild(el('div','ph','CERTIFICATE (HTTPS)'));
   const certWrap=el('div'); certWrap.id='sec-cert-wrap';
   if(!TLS_STATUS){ certWrap.appendChild(el('div','muted','Loading certificate status…')); _tlsRefreshStatus(); }
@@ -2946,6 +2963,48 @@ async function securityMfaDisable(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     await _authRefreshStatus();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+// Account Recovery Tier 2 (2026-07-24) — host-CLI recovery key. Without one, the ONLY way back
+// into an account that's lost both its password and its working MFA is host/container access
+// alone (`docker exec` + delete auth.db), which silently grants full access with zero second
+// factor -- Jason: "the whole robust authentication with MFA is completely undermined." This
+// pairs with `auth.py --reset-credentials` (run inside the container) -- generating/regenerating
+// the key here is the only way that CLI flag ever has a key to check against.
+function _securityRecoveryKeyBlock(u){
+  const box=el('div');
+  const p=el('div'); p.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
+  p.innerHTML = u.recovery_key_set
+    ? '<span class="pos">✓ Recovery key configured</span> — the host-CLI fallback (<code>auth.py --reset-credentials</code>) can use it if you ever forget your password AND lose MFA. Regenerating immediately replaces the old one.'
+    : '<span class="neg">⚠ No recovery key set</span> — without one, forgetting your password while MFA is also unavailable leaves only a full data wipe (<code>auth.py --wipe-all</code>), not a login reset. Generate one now while you still have access.';
+  box.appendChild(p);
+  const pwWrap=el('div');
+  pwWrap.innerHTML='Current password <input id="sec-rk-pass" type="password" style="width:200px;" autocomplete="current-password"/>';
+  box.appendChild(pwWrap);
+  const btn=el('button', null, u.recovery_key_set?'REGENERATE RECOVERY KEY':'GENERATE RECOVERY KEY');
+  btn.id='sec-recoverykey-generate-btn'; btn.style.marginTop='6px'; btn.onclick=securityRecoveryKeyRegenerate;
+  box.appendChild(btn);
+  const err=el('div','neg'); err.id='sec-rk-err'; err.style.cssText='font-size:var(--font-size-sm);min-height:16px;margin-top:4px;'; box.appendChild(err);
+  const area=el('div'); area.id='sec-rk-area'; area.style.marginTop='var(--space-3)'; box.appendChild(area);
+  return box;
+}
+async function securityRecoveryKeyRegenerate(){
+  const pass=document.getElementById('sec-rk-pass').value;
+  const err=document.getElementById('sec-rk-err'); err.textContent='';
+  try{
+    const r=await fetch('/api/auth/recovery-key/regenerate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    if(AUTH_STATUS && AUTH_STATUS.user) AUTH_STATUS.user.recovery_key_set=true;
+    document.getElementById('sec-rk-pass').value='';
+    const area=document.getElementById('sec-rk-area');
+    if(area){
+      area.innerHTML=
+        `<div class="pos" style="margin-bottom:6px;">✓ New recovery key generated.</div>`+
+        `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
+        `<div style="font-family:monospace;font-size:var(--font-size-md);letter-spacing:1px;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;text-align:center;word-break:break-all;">${d.recovery_key}</div>`+
+        `<button onclick="render()">✓ I'VE SAVED THIS — DONE</button>`;
+    }
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 function authLogout(){
@@ -5610,8 +5669,31 @@ async function authFirstRunSubmit(){
     // so the account is authenticated at this point — the MFA setup/verify endpoints (session-
     // gated, no separate login step) can be called immediately.
     AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
-    if(wantsMfa) renderFirstRunMfaPrompt(); else authInitApp();
+    // Recovery key reveal (2026-07-24, Account Recovery Tier 2) comes FIRST, regardless of the
+    // MFA checkbox — it's the host-CLI fallback for "forgot password AND lost MFA," so it applies
+    // whether or not MFA gets set up in the next step. Shown exactly once, same as MFA backup
+    // codes; the "CONTINUE" button stays disabled until the user acknowledges saving it.
+    renderFirstRunRecoveryKey(d.recovery_key, d.recovery_key_note, wantsMfa);
   }catch(e){ err.textContent='Request failed: '+e; }
+}
+// One-time recovery-key reveal, shown immediately after account creation (2026-07-24, Account
+// Recovery Tier 2). This is the ONLY copy of the plaintext key that will ever exist outside the
+// user's own records — auth.py stores only an argon2 hash. Gates "CONTINUE" behind an explicit
+// acknowledgment checkbox rather than a plain button, mirroring the deliberate friction on the
+// MFA backup-codes screen (both are "you cannot get this back" moments).
+function renderFirstRunRecoveryKey(recoveryKey, note, wantsMfa){
+  const body=document.getElementById('body'); body.innerHTML='';
+  const wrap=_authFormShell('SAVE YOUR RECOVERY KEY', note||'This is the only way back into this account if you ever forget your password AND lose your MFA device/backup codes. It is shown once, right now, and never stored anywhere retrievable.');
+  const box=el('div');
+  box.innerHTML=
+    `<div style="font-family:monospace;font-size:var(--font-size-lg);letter-spacing:1px;background:var(--color-panel-alt);padding:var(--space-3);border-radius:var(--radius-md);margin-bottom:var(--space-3);text-align:center;word-break:break-all;">${recoveryKey}</div>`+
+    `<label style="font-size:var(--font-size-sm);display:block;margin-bottom:var(--space-3);"><input type="checkbox" id="fr-rk-ack" onchange="document.getElementById('fr-rk-continue').disabled=!this.checked;"/> I've saved this somewhere safe (password manager, or printed and locked away)</label>`+
+    `<button id="fr-rk-continue" onclick="_frRecoveryKeyContinue(${wantsMfa?'true':'false'})" style="width:100%;" disabled>CONTINUE</button>`;
+  wrap.appendChild(box);
+  body.appendChild(wrap);
+}
+function _frRecoveryKeyContinue(wantsMfa){
+  if(wantsMfa) renderFirstRunMfaPrompt(); else authInitApp();
 }
 // Guided MFA enrollment immediately after account creation (2026-07-24 backlog). Reuses
 // securityMfaSetup()/securityMfaVerify() (parameterized by containerId, see the SECURITY panel
