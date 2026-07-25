@@ -34,6 +34,11 @@ holdings.csv
 audit/
 *.log
 *.tmp
+# SEC-1 security event log (2026-07-24) — holds IPs, usernames, encrypted config-change detail
+audit.db
+audit.jsonl
+**/audit.db
+**/audit.jsonl
 
 # ---- portfolio-api runtime state (regenerated at runtime; user-specific) ----
 data/
@@ -77,6 +82,9 @@ AWS-HOSTING-GUIDE.md
 CLOUD-PORTABILITY-ROADMAP.md
 DISTRIBUTION-MONETIZATION-RESEARCH.md
 LOCAL-HOSTING-HARDENING-PLAN.md
+SECURITY-CONTROLS-GAP-ANALYSIS.md
+DEMO-SITE-BUILD-PLAN.md
+POSITIONING-BRIEF.md
 docs/*
 !docs/DEPENDENCIES.md
 

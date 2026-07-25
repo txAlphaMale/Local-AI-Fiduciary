@@ -59,6 +59,7 @@ import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical 
 import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
+import audit        # SEC-1 (2026-07-24) — append-only, encrypted, hash-chained security event log
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
@@ -579,10 +580,15 @@ def _https_active():
 async def _security_and_auth_gate(request: Request, call_next):
     path = request.url.path
     if path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
+        audit.emit("authz.denied", outcome="denied", request=request, resource=path,
+                   detail={"reason": "no_session", "method": request.method})
         return JSONResponse({"error": "authentication required"}, status_code=401)
     if request.method == "POST" and _is_job_trigger_path(path):
         ip = request.client.host if request.client else "unknown"
         if auth.rate_limited(ip, bucket="jobs", limit=JOB_RATE_LIMIT_PER_MIN):
+            audit.emit("authz.denied", outcome="denied", request=request, resource=path,
+                       actor=request.session.get("uid"),
+                       detail={"reason": "job_rate_limited", "method": request.method})
             return JSONResponse({"error": "too many job triggers — wait a minute and try again"},
                                 status_code=429)
         auth.record_attempt(ip, bucket="jobs")
@@ -628,6 +634,7 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
                     https_only=_https_active())
 
 auth.init_db()
+audit.init_db()  # SEC-1: security event log store (own DB, 0600) — safe if it fails (emit never raises)
 
 # Whatever certificate exists on disk right now is, by definition, what run_server.py just chose
 # to serve for THIS process (see tls.py / run_server.py) — clears any stale "restart needed" flag
@@ -686,22 +693,34 @@ async def auth_login(request: Request):
     if auth.rate_limited(ip):
         return JSONResponse({"error": "too many attempts — wait a minute and try again"}, status_code=429)
     body = await request.json()
-    user = auth.get_user_by_username(body.get("username") or "")
+    attempted = (body.get("username") or "")
+    user = auth.get_user_by_username(attempted)
     if not user or not auth.verify_password(user, body.get("password") or ""):
         auth.record_login_attempt(ip)
+        audit.emit("auth.login.failure", outcome="failure", request=request,
+                   actor_name=attempted, resource="/api/auth/login",
+                   detail={"reason": "invalid_username_or_password"})
         return JSONResponse({"error": "invalid username or password"}, status_code=401)
     if user["totp_enabled"]:
         if not auth.mfa_check_code(user["id"], body.get("code") or ""):
             auth.record_login_attempt(ip)
+            audit.emit("auth.mfa.failure", outcome="failure", request=request,
+                       actor=user["id"], actor_name=user.get("username"), resource="/api/auth/login",
+                       detail={"reason": "invalid_or_missing_totp"})
             return JSONResponse({"error": "invalid or missing authenticator code", "mfa_required": True},
                                 status_code=401)
     request.session["uid"] = user["id"]
+    audit.emit("auth.login.success", request=request,
+               actor=user["id"], actor_name=user.get("username"), resource="/api/auth/login",
+               detail={"mfa_used": bool(user["totp_enabled"])})
     return {"ok": True, "user": auth.public_user(user)}
 
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
+    _uid = request.session.get("uid")
     request.session.clear()
+    audit.emit("auth.logout", request=request, actor=_uid, resource="/api/auth/logout")
     return {"ok": True}
 
 
@@ -716,6 +735,7 @@ async def auth_change_password(request: Request):
         auth.set_password(uid, body.get("new_password") or "")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    audit.emit("auth.password.changed", request=request, actor=uid, resource="/api/auth/change-password")
     return {"ok": True}
 
 
@@ -733,10 +753,12 @@ async def auth_mfa_verify(request: Request):
     """Confirms the authenticator app is actually producing valid codes, THEN enables MFA and
     returns 10 single-use backup codes — shown here exactly once, never retrievable again."""
     body = await request.json()
-    ok, codes = auth.mfa_verify_and_enable(_require_uid(request), body.get("code") or "")
+    _uid = _require_uid(request)
+    ok, codes = auth.mfa_verify_and_enable(_uid, body.get("code") or "")
     if not ok:
         return JSONResponse({"error": "incorrect code — check your authenticator app and try again"},
                             status_code=400)
+    audit.emit("auth.mfa.enrolled", request=request, actor=_uid, resource="/api/auth/mfa/verify")
     return {"ok": True, "backup_codes": codes,
             "note": "Save these now — shown only once. Each works one time if you lose your authenticator."}
 
@@ -749,6 +771,7 @@ async def auth_mfa_disable(request: Request):
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
+    audit.emit("auth.mfa.disabled", request=request, actor=uid, resource="/api/auth/mfa/disable")
     return {"ok": True}
 
 
@@ -765,6 +788,8 @@ async def auth_recovery_key_regenerate(request: Request):
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     key = auth.set_recovery_key(uid)
+    audit.emit("auth.recovery_key.regenerated", request=request, actor=uid,
+               resource="/api/auth/recovery-key/regenerate")
     return {"ok": True, "recovery_key": key,
             "note": "Save this now -- shown only once, and this immediately replaces any "
                     "previous recovery key (the old one stops working)."}
@@ -780,10 +805,13 @@ async def auth_change_username(request: Request):
     body = await request.json()
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    old_username = user["username"]
     try:
         auth.set_username(uid, body.get("new_username") or "")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    audit.emit("auth.username.changed", request=request, actor=uid, resource="/api/auth/change-username",
+               detail={"old": old_username, "new": (body.get("new_username") or "").strip()})
     return {"ok": True, "user": auth.public_user(auth.get_user_by_id(uid))}
 
 
@@ -808,6 +836,8 @@ async def auth_reset_account(request: Request):
     if (body.get("confirm_username") or "").strip() != user["username"]:
         return JSONResponse({"error": "typed username does not match — type it exactly to confirm"},
                              status_code=400)
+    audit.emit("auth.account.reset", outcome="success", request=request, actor=uid,
+               actor_name=user["username"], resource="/api/auth/reset-account")
     auth.delete_user(uid)
     request.session.clear()
     return {"ok": True}
@@ -833,10 +863,18 @@ async def auth_recovery_start(request: Request):
                                "deployment if MFA was never set up)"}
     if not user or not user["totp_enabled"]:
         auth.record_login_attempt(ip)
+        audit.emit("auth.recovery.used", outcome="failure", request=request,
+                   actor_name=(body.get("username") or ""), resource="/api/auth/recovery/start",
+                   detail={"reason": "unknown_user_or_mfa_not_enabled"})
         return JSONResponse(generic_error, status_code=401)
     if not auth.mfa_check_code(user["id"], body.get("code") or ""):
         auth.record_login_attempt(ip)
+        audit.emit("auth.recovery.used", outcome="failure", request=request,
+                   actor=user["id"], actor_name=user.get("username"),
+                   resource="/api/auth/recovery/start", detail={"reason": "invalid_code"})
         return JSONResponse(generic_error, status_code=401)
+    audit.emit("auth.recovery.used", outcome="success", request=request,
+               actor=user["id"], actor_name=user.get("username"), resource="/api/auth/recovery/start")
     # A short-lived marker distinct from the real "uid" session key -- this alone grants nothing
     # except the ability to call /recovery/reset once, within 5 minutes. The global auth gate
     # only ever checks "uid", never "recovery_uid", so this cannot be used to reach any other
@@ -861,6 +899,7 @@ async def auth_recovery_reset(request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
     request.session.pop("recovery_uid", None)
     request.session.pop("recovery_exp", None)
+    audit.emit("auth.recovery.reset", request=request, actor=ruid, resource="/api/auth/recovery/reset")
     return {"ok": True}
 
 
@@ -5128,14 +5167,20 @@ def get_policy():
 
 
 @app.post("/api/policy")
-async def post_policy(body: PolicyUpdate):
+async def post_policy(body: PolicyUpdate, request: Request):
     """Set the investment policy (local config, not a money action — editable from the dashboard).
     Body may include targets_by_type (e.g. {"Stock":60,"Mutual Fund":35,"Cash":5}), max_position_pct,
     drift_threshold_pct, and position_caps (per-ticker overrides, e.g. {"PLTR":40,"RKLB":40}).
     Pydantic-validated (2026-07-24): percentages must be 0-100, maps must have numeric values."""
     updates = body.model_dump(exclude_unset=True)
-    pol = {**_read_policy(), **{k: v for k, v in updates.items() if k in DEFAULT_POLICY}}
+    old = _read_policy()
+    pol = {**old, **{k: v for k, v in updates.items() if k in DEFAULT_POLICY}}
     store.write_json(POLICY_FILE, pol)
+    # SEC-1 config.changed: record only the keys that actually changed (old->new), encrypted at rest.
+    changed = {k: {"old": old.get(k), "new": pol.get(k)} for k in updates if old.get(k) != pol.get(k)}
+    if changed:
+        audit.emit("config.changed", request=request, actor=request.session.get("uid"),
+                   resource="/api/policy", detail={"changed": changed})
     return {"ok": True, "policy": pol}
 
 
@@ -7608,6 +7653,10 @@ async def post_secrets(req: Request):
         if spec["scope"] == "mcpo-file":
             mcpo_file_touched = True
     _write_secrets(stored)   # encrypted at rest — see secrets_crypto.py
+    if saved:
+        # SEC-1 secret.changed: record WHICH secret keys were set/cleared — never the values.
+        audit.emit("secret.changed", request=req, actor=req.session.get("uid"), resource="/api/secrets",
+                   detail={"keys": saved, "staged_behind_env": staged_behind_env})
     if mcpo_file_touched:
         _write_mcpo_secrets_file()   # regenerate ./mcpo-secrets/mcpo.env from the just-saved DB state
                                       # (still correctly excludes any key that's env_locked)
