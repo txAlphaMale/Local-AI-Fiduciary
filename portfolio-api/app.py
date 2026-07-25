@@ -60,6 +60,8 @@ import insider      # SEC Form 4 insider-transaction signal (G15) — context-on
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
 import audit        # SEC-1 (2026-07-24) — append-only, encrypted, hash-chained security event log
+import detections   # SEC-4 (2026-07-25) — rules engine over the audit log (failed-login bursts, etc.)
+import demo_seed     # Demo harness (2026-07-25) — synthetic-data seeder + scheduled reset, DEMO_MODE-gated (no-op otherwise)
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
@@ -663,6 +665,9 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
 auth.init_db()
 audit.init_db()  # SEC-1: security event log store (own DB, 0600) — safe if it fails (emit never raises)
 audit.start_retention_thread()  # SEC-2: daily automated purge_expired() — see audit.py
+detections.start_detections_thread()  # SEC-4: periodic rules sweep over the audit log — see detections.py
+demo_seed.seed_if_needed()  # Demo harness: no-op unless DEMO_MODE=1; refuses to touch a real account (see demo_seed.py)
+demo_seed.start_demo_reset_thread()  # Demo harness: no-op unless DEMO_MODE=1
 
 # Whatever certificate exists on disk right now is, by definition, what run_server.py just chose
 # to serve for THIS process (see tls.py / run_server.py) — clears any stale "restart needed" flag
@@ -1268,6 +1273,104 @@ def post_audit_purge(request: Request):
     retention/re-anchor behavior on demand, mirroring /api/tls/acme/renew's same "automatic +
     manual trigger" pattern."""
     return audit.purge_expired(actor_name=(request.session.get("uid") or "manual"))
+
+
+@app.get("/api/detections/rules")
+def get_detection_rules():
+    """SEC-4 (2026-07-25) — the rule catalog (id/label/description) for a "what does this actually
+    watch for" display. No sensitive data here (just rule metadata), so no admin gate needed
+    beyond the standard authenticated-session requirement every route already has."""
+    return {"rules": list(detections.RULES)}
+
+
+@app.post("/api/detections/run")
+def post_detections_run():
+    """Manual 'check now' — the background thread (detections.start_detections_thread(), started
+    at app boot) already sweeps every DETECTIONS_INTERVAL_S automatically; this is for testing/
+    demoing the detect step on demand, same automatic+manual pattern as retention/ACME renewal.
+    Viewer-denied by omission (not in _VIEWER_ALLOWED_WRITE_PATHS), same as every other mutating
+    endpoint — no separate _require_admin check needed."""
+    return detections.run_detections()
+
+
+@app.get("/api/privacy/export")
+def get_privacy_export(request: Request):
+    """SEC-8 (2026-07-25) — self-service data access/export (the "right to access/portability"
+    half of a DSAR workflow). A GET, so it's untouched by the write-only viewer gate — every
+    authenticated session (admin OR viewer) can pull their OWN bundle, no admin check needed.
+
+    SCOPE DECISION, stated plainly: this exports the requester's own IDENTITY + SECURITY-HISTORY
+    data (account record + their own audit-log activity, core fields only — no decrypted `detail`,
+    since a change payload can contain OTHER household members' shared financial context, not just
+    the requester's own PII). It deliberately does NOT bundle the shared household financial ledger
+    (holdings, retirement config, insurance/estate docs, etc.) — in a single-tenant household app
+    that data isn't "personal data belonging to one data subject" in the DSAR sense, it's jointly-
+    used household data with no single rightful requester. See compliance/ROPA.md for the full
+    reasoning. (If this app is ever productized multi-tenant, that data WOULD need its own
+    per-owner export scope — flagged there as a would-need-to-change-if item, not silently
+    assumed away.)
+
+    ERASURE ("right to be forgotten") is deliberately NOT a new endpoint here — it's already fully
+    served by the existing self-service account deletion (`POST /api/auth/reset-account`, viewer-
+    allowed) and admin-driven viewer removal (`POST /api/auth/users/{uid}/delete`) built under
+    SEC-5. Building a second, parallel "delete my data" path would just be a second way to do the
+    same thing with more surface area to keep correct."""
+    uid = _require_uid(request)
+    if not uid:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    user = auth.get_user_by_id(uid)
+    if not user:
+        return JSONResponse({"error": "no such account"}, status_code=404)
+
+    username = user.get("username")
+    # Core-only (no decrypted detail — see docstring), filtered to events this account itself
+    # generated. query_core has no actor_name filter param, so pull a generous window and filter
+    # here — same pattern detections.py's own rules use for anything not natively indexed.
+    all_events = audit.query_core(limit=5000)
+    own_events = [e for e in all_events if e.get("actor_name") == username]
+
+    bundle = {
+        "export_generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "scope_note": "Identity + security-history data for this account only. Shared household "
+                       "financial data is not included — see compliance/ROPA.md.",
+        "account": auth.public_user(user),
+        "security_history": own_events,
+    }
+    audit.emit("data.exported", request=request, actor=uid, actor_name=username,
+               resource="/api/privacy/export", detail={"event_count": len(own_events)})
+    return bundle
+
+
+@app.get("/api/demo/status")
+def get_demo_status():
+    """Demo harness (2026-07-25) — tells the frontend whether this deployment is a public demo
+    instance (so it can show a clear "SYNTHETIC DATA — DEMO INSTANCE" banner) vs. a real one.
+    Deliberately public (in _AUTH_PUBLIC_PATHS is NOT needed since the whole point is this is
+    read before/alongside login — but it IS behind the normal auth gate today; that's fine, the
+    banner only needs to render once logged in, and demo credentials are published anyway)."""
+    return {"demo_mode": demo_seed.DEMO_MODE,
+            "demo_admin_username": demo_seed.DEMO_ADMIN_USERNAME if demo_seed.DEMO_MODE else None}
+
+
+COMPLIANCE_DIR = os.environ.get("COMPLIANCE_DIR", "/compliance")
+
+
+@app.get("/api/compliance/controls")
+def get_compliance_controls():
+    """Demo harness / SEC-6 (2026-07-25) — serves compliance/controls.json (the ISO/IEC
+    27001:2022 Annex A Statement of Applicability, machine-readable) to back the Security Posture
+    page. Reads from a read-only bind mount (COMPLIANCE_DIR, see docker-compose.yml) rather than
+    copying the file into the image at build time, so editing compliance/ on the host doesn't
+    require a rebuild — same reasoning as the existing ./knowledge mount."""
+    path = os.path.join(COMPLIANCE_DIR, "controls.json")
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return JSONResponse({"error": f"controls.json not found at {path} — is the compliance/ "
+                                       "folder mounted? (see docker-compose.yml)"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": f"failed to read controls.json: {e}"}, status_code=500)
 
 
 # ============================================================================
@@ -7928,6 +8031,34 @@ async def post_secrets(req: Request):
                                       # (still correctly excludes any key that's env_locked)
     return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
             "restart_required": bool(saved)}
+
+
+@app.get("/api/secrets/key-status")
+def get_secrets_key_status(request: Request):
+    """SEC-3 (2026-07-25) — admin-only encryption-key-version status for the SETTINGS → SECURITY
+    display. A GET, so (like /api/auth/users) it needs its own explicit admin check rather than
+    relying on the write-only viewer restriction in the global gate."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    return secrets_crypto.key_status()
+
+
+@app.post("/api/secrets/rotate-key")
+def post_secrets_rotate_key(request: Request):
+    """SEC-3 (2026-07-25) — admin-only: generate a new encryption key and make it current for all
+    FUTURE writes across every module that uses secrets_crypto (store.py's config/history tables,
+    knowledge/RAG, chat.db, auth.py's totp_secret, audit.py's event detail). Does NOT re-encrypt
+    existing data — old ciphertext keeps decrypting under its original key version forever (see
+    secrets_crypto.py's module docstring for why re-encrypting everything in one sweep is a
+    separate, larger, deliberately out-of-scope operation). Audited as `secret.rotated` — the one
+    EVENT_TYPES entry SEC-1 defined back on 2026-07-24 but never had a real trigger for until now."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    new_version = secrets_crypto.rotate_key()
+    audit.emit("secret.rotated", request=request, actor=admin["id"], actor_name=admin["username"],
+               resource="/api/secrets/rotate-key", detail={"new_version": new_version})
+    return {"ok": True, "status": secrets_crypto.key_status()}
 
 
 # ============ Persistent setup-progress checklist card (RESUME-TRACKER "START HERE NEXT

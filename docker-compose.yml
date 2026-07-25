@@ -119,11 +119,25 @@ services:
       - FINRA_CLIENT_ID=${FINRA_CLIENT_ID:-}
       - FINRA_CLIENT_SECRET=${FINRA_CLIENT_SECRET:-}
       - RENTCAST_API_KEY=${RENTCAST_API_KEY:-}
+      # Demo harness (2026-07-25) -- OFF by default (DEMO_MODE=0). Only ever set this to 1 on a
+      # SEPARATE, disposable deployment/volume for a public demo instance -- never on this real
+      # household's live instance. demo_seed.py refuses to seed/reset if it finds an existing
+      # non-demo account, but that's a safety NET, not a reason to rely on it -- see
+      # DEMO-SITE-BUILD-PLAN.md and demo_seed.py's module docstring for the full reasoning.
+      - DEMO_MODE=${DEMO_MODE:-0}
+      - DEMO_ADMIN_USERNAME=${DEMO_ADMIN_USERNAME:-demo}
+      - DEMO_ADMIN_PASSWORD=${DEMO_ADMIN_PASSWORD:-}
+      - DEMO_RESET_INTERVAL_S=${DEMO_RESET_INTERVAL_S:-21600}
     volumes:
       - portfolio-data:/data
       - ./knowledge:/knowledge:ro   # user-populated Knowledge folder (host-editable; container reads)
       - ./mcpo-secrets:/mcpo-secrets   # portfolio-api WRITES mcpo.env here (SETTINGS -> SECRETS);
                                        # mcpo reads the same host path via its own env_file above
+      - ./compliance:/compliance:ro   # Demo harness (2026-07-25) -- read-only mount of the public
+                                       # GRC evidence bundle (SoA/risk register/etc.), so the
+                                       # Security Posture page (GET /api/compliance/controls) can
+                                       # read controls.json without changing the Docker build
+                                       # context. Same bind-mount pattern as ./knowledge above.
     ports:
       - "${DASH_PORT:-8097}:8097"
       - "${HTTPS_PORT:-8443}:8443"

@@ -88,6 +88,16 @@ POSITIONING-BRIEF.md
 docs/*
 !docs/DEPENDENCIES.md
 
+# ---- Security/GRC demo evidence (2026-07-25) — deliberately TRACKED, not internal ----
+# New `compliance/` folder: public-safe governance artifacts meant to BE the demo site's own
+# content (IR runbook now; SEC-6's risk register, Statement of Applicability, and controls.json
+# to follow). Distinct from `docs/*` above on purpose — docs/ is candid internal R&D (real
+# financial figures, job-search framing) and correctly stays gitignored; compliance/ is written to
+# be public from the start, same bar as README/INSTALL. Nothing here should ever need scrubbing.
+!compliance/
+!compliance/*.md
+!compliance/*.json
+
 # ---- Local backups / scratch ----
 *.known-good
 *.known-good/

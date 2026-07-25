@@ -1,0 +1,89 @@
+name: Dependency & container vulnerability scan
+
+# SEC-7 (2026-07-25) -- ISO/IEC 27001:2022 A.8.8 (Management of technical vulnerabilities) ·
+# NIST SP 800-53 RA-5/SI-2 · SOC 2 (2017 TSC) CC7.1/CC8.1.
+#
+# Two scans, both against what's actually shipped:
+#   1. pip-audit over portfolio-api/requirements.txt -- known CVEs in pinned Python dependencies.
+#   2. Trivy image scan over the ACTUAL built portfolio-api image (not just the requirements
+#      file) -- catches OS-package CVEs from the python:3.12-slim base + curl/tar/socat/
+#      ca-certificates installed in the Dockerfile, which pip-audit alone would miss entirely.
+#
+# Runs on every push/PR touching dependency-relevant files, AND on a weekly schedule -- CVEs are
+# disclosed against code that hasn't changed, so "only scan on change" would miss newly-disclosed
+# vulnerabilities in already-merged pinned versions.
+#
+# SEVERITY-BASED PATCH SLA (the acceptance criterion this workflow exists to make enforceable):
+#   CRITICAL -- patch within 7 days of disclosure   (job below FAILS the run; blocks merge)
+#   HIGH     -- patch within 30 days                (job below FAILS the run; blocks merge)
+#   MEDIUM   -- patch within 90 days                 (reported, does not fail the run)
+#   LOW      -- best-effort, no fixed SLA            (reported, does not fail the run)
+# This SLA is the same one referenced in compliance/RISK-REGISTER.md (R-10) and
+# compliance/STATEMENT-OF-APPLICABILITY.md (A.8.8) -- keep all three in sync if it changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portfolio-api/requirements.txt"
+      - "portfolio-api/Dockerfile"
+      - ".github/workflows/dependency-scan.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "portfolio-api/requirements.txt"
+      - "portfolio-api/Dockerfile"
+  schedule:
+    # Every Monday 09:00 UTC -- catches newly-disclosed CVEs against unchanged pinned versions.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write   # upload SARIF to the repo's Security tab (Trivy step below)
+
+jobs:
+  pip-audit:
+    name: pip-audit (Python dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run pip-audit
+        run: |
+          pip install --quiet pip-audit
+          # --strict: a parse/resolution failure is itself a finding, not a silent skip.
+          # Fails the job on ANY known vulnerability -- Python deps here are few and pinned,
+          # so "fail on anything, triage in the PR" is cheaper than a severity-parsing step.
+          pip-audit --strict -r portfolio-api/requirements.txt
+
+  trivy-image-scan:
+    name: Trivy scan (built portfolio-api image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build portfolio-api image (scan target, not published)
+        run: docker build -t fiduciary-portfolio-api:scan ./portfolio-api
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: "fiduciary-portfolio-api:scan"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"   # fail the job -- CRITICAL/HIGH are inside the 7/30-day SLA above
+      - name: Upload SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+      - name: Full report (all severities, informational -- does not fail the job)
+        if: always()
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: "fiduciary-portfolio-api:scan"
+          format: "table"
+          severity: "CRITICAL,HIGH,MEDIUM,LOW"
+          exit-code: "0"

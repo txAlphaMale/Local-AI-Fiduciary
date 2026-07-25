@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # SEC-7 (2026-07-25) -- automated version-bump PRs complement dependency-scan.yml's vulnerability
+  # SCANNING with actual proposed FIXES, so a CVE finding isn't just a report with no next step.
+  - package-ecosystem: "pip"
+    directory: "/portfolio-api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  - package-ecosystem: "docker"
+    directory: "/portfolio-api"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "security"

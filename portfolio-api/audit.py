@@ -111,6 +111,14 @@ EVENT_TYPES = (
     "audit.retention.purged",
     # SEC-5 (2026-07-25): admin-managed household accounts (RBAC) + the viewer-role write denial.
     "auth.user.created", "auth.user.deleted",
+    # SEC-4 (2026-07-25): the detection engine (detections.py) logs its own findings as events of
+    # this type, reusing this module's storage/chain/viewer rather than a parallel alert store —
+    # an alert IS a security event.
+    "detection.alert",
+    # Demo harness (2026-07-25): demo_seed.py logs its own seed/reset actions here too, same
+    # "an X is a security event" reasoning as detection.alert above — a demo instance being wiped
+    # and reseeded is itself a security-relevant state transition worth a durable record.
+    "demo.seeded", "demo.reset",
 )
 
 
@@ -330,6 +338,37 @@ def read_recent(limit=200, redact_ip=False):
     except Exception as e:
         print(f"[audit] read_recent failed: {e}", flush=True)
     return out
+
+
+def query_core(event_type=None, resource_prefix=None, since_ts=None, limit=2000):
+    """SEC-4 (2026-07-25) -- read-only helper for the detection engine (detections.py) and any
+    future consumer that needs to scan the CORE plaintext columns (ts/actor/actor_name/src_ip/
+    event_type/resource/outcome) WITHOUT decrypting `detail` -- detection rules match on patterns
+    over these columns, not on the encrypted payload, so this is both simpler and faster than
+    routing every rule through read_recent()'s decrypt step. Oldest-first (rules reason about
+    sequences of events over time). Never raises -- returns [] on any failure, same fail-safe
+    contract as the rest of this module (a broken detection query must not break request paths
+    that happen to call into it)."""
+    try:
+        sql = "SELECT seq, ts, actor, actor_name, src_ip, event_type, resource, outcome FROM events WHERE 1=1"
+        args = []
+        if event_type:
+            sql += " AND event_type=?"
+            args.append(event_type)
+        if resource_prefix:
+            sql += " AND resource LIKE ?"
+            args.append(resource_prefix + "%")
+        if since_ts:
+            sql += " AND ts >= ?"
+            args.append(since_ts)
+        sql += " ORDER BY seq ASC LIMIT ?"
+        args.append(int(limit))
+        with _conn() as c:
+            rows = c.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[audit] query_core failed: {e}", flush=True)
+        return []
 
 
 def verify_chain():
