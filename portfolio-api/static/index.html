@@ -353,6 +353,7 @@ function runJob(url, btn, queuedLabel){
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
 let AUDIT_LOG=null, AUDIT_VERIFY=null;  // SEC-2 (2026-07-25) — security audit-log viewer panel
+let HOUSEHOLD_ACCOUNTS=null;  // SEC-5 (2026-07-25) — admin-only household-accounts management panel
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
@@ -2762,7 +2763,8 @@ function securityContent(){
 
   wrap.appendChild(el('div','ph','ACCOUNT'));
   const acctRow=el('div'); acctRow.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-2);';
-  acctRow.innerHTML=`Signed in as <b>${u.username}</b> · account created ${u.created?new Date(u.created*1000).toLocaleDateString():'—'}`;
+  const roleBadge=u.role==='viewer'?' · <span class="muted">view-only account</span>':'';
+  acctRow.innerHTML=`Signed in as <b>${u.username}</b> (${u.role||'admin'})${roleBadge} · account created ${u.created?new Date(u.created*1000).toLocaleDateString():'—'}`;
   wrap.appendChild(acctRow);
   const logoutBtn=el('button',null,'LOG OUT'); logoutBtn.style.marginBottom='var(--space-4)'; logoutBtn.onclick=authLogout; wrap.appendChild(logoutBtn);
 
@@ -2796,6 +2798,17 @@ function securityContent(){
   wrap.appendChild(el('div','ph','HOST RECOVERY KEY'));
   const rkWrap=el('div'); rkWrap.id='sec-rk-wrap'; rkWrap.appendChild(_securityRecoveryKeyBlock(u));
   wrap.appendChild(rkWrap);
+
+  // SEC-5 (2026-07-25) — admin-only household accounts management. A viewer's GET /api/auth/users
+  // would 403 anyway (see _require_admin, app.py), so this section simply doesn't render for one —
+  // no point showing a panel that would just error out immediately.
+  if(u.role==='admin'){
+    wrap.appendChild(el('div','ph','HOUSEHOLD ACCOUNTS'));
+    const acctsWrap=el('div'); acctsWrap.id='sec-accounts-wrap'; acctsWrap.style.cssText='margin-bottom:var(--space-4);';
+    if(!HOUSEHOLD_ACCOUNTS){ acctsWrap.appendChild(el('div','muted','Loading accounts…')); _accountsRefresh(); }
+    else { acctsWrap.appendChild(_accountsPanel()); }
+    wrap.appendChild(acctsWrap);
+  }
 
   wrap.appendChild(el('div','ph','CERTIFICATE (HTTPS)'));
   const certWrap=el('div'); certWrap.id='sec-cert-wrap';
@@ -2918,6 +2931,76 @@ function _auditPanel(){
   const tblWrap=el('div'); tblWrap.style.cssText='max-height:420px;overflow-y:auto;border:1px solid var(--border-color, #333);border-radius:4px;';
   tblWrap.appendChild(tbl);
   box.appendChild(tblWrap);
+  return box;
+}
+// SEC-5 (2026-07-25) — household-accounts management panel (admin-only; see securityContent()).
+function _accountsRefresh(){
+  return fetch('/api/auth/users').then(r=>r.json()).then(d=>{
+    HOUSEHOLD_ACCOUNTS=d.users||[]; if(TAB==='settings') render();
+  }).catch(()=>{ HOUSEHOLD_ACCOUNTS=[]; if(TAB==='settings') render(); });
+}
+async function accountsCreateViewer(){
+  const uEl=document.getElementById('acct-new-user'), pEl=document.getElementById('acct-new-pass');
+  const err=document.getElementById('acct-new-err'); err.textContent='';
+  const username=(uEl.value||'').trim(), password=pEl.value||'';
+  if(!username){ err.textContent='Username is required.'; return; }
+  try{
+    const r=await fetch('/api/auth/users',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username,password})});
+    const d=await r.json();
+    if(d.error){ err.textContent=d.error; return; }
+    uEl.value=''; pEl.value='';
+    alert(`Viewer account "${d.user.username}" created.\n\nRecovery key (shown once — save it now):\n${d.recovery_key}\n\n${d.recovery_key_note}`);
+    HOUSEHOLD_ACCOUNTS=null; _accountsRefresh();
+  }catch(e){ err.textContent='Request failed: '+e; }
+}
+async function accountsDeleteUser(uid, username){
+  if(!confirm(`Remove the viewer account "${username}"? This cannot be undone from here.`)) return;
+  try{
+    const r=await fetch(`/api/auth/users/${encodeURIComponent(uid)}/delete`,{method:'POST'});
+    const d=await r.json();
+    if(d.error){ alert('Failed: '+d.error); return; }
+    HOUSEHOLD_ACCOUNTS=null; _accountsRefresh();
+  }catch(e){ alert('Failed: '+e); }
+}
+function _accountsPanel(){
+  const box=el('div');
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Additional logins for this deployment — e.g. a spouse who should see the dashboards but not change config, secrets, or security settings. New accounts are always created as VIEW-ONLY; there is exactly one admin account (this one).';
+  box.appendChild(sub);
+
+  const accts=HOUSEHOLD_ACCOUNTS||[];
+  const tbl=el('table'); tbl.style.cssText='width:100%;border-collapse:collapse;font-size:var(--font-size-sm);margin-bottom:var(--space-3);';
+  tbl.appendChild(el('thead',null,
+    '<tr><th style="text-align:left;padding:4px 8px;">Username</th>'+
+    '<th style="text-align:left;padding:4px 8px;">Role</th>'+
+    '<th style="text-align:left;padding:4px 8px;">MFA</th>'+
+    '<th style="text-align:left;padding:4px 8px;">Created</th>'+
+    '<th style="padding:4px 8px;"></th></tr>'));
+  const tbody=el('tbody');
+  accts.forEach(a=>{
+    const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
+    const created=a.created?new Date(a.created*1000).toLocaleDateString():'—';
+    const delCell=a.role==='admin'?'<span class="muted">—</span>':
+      `<button onclick="accountsDeleteUser('${a.id}','${a.username.replace(/'/g,"\\'")}')">✕ REMOVE</button>`;
+    tr.innerHTML=
+      `<td style="padding:4px 8px;">${a.username}</td>`+
+      `<td style="padding:4px 8px;">${a.role}</td>`+
+      `<td style="padding:4px 8px;">${a.mfa_enabled?'<span class="pos">on</span>':'<span class="muted">off</span>'}</td>`+
+      `<td style="padding:4px 8px;">${created}</td>`+
+      `<td style="padding:4px 8px;text-align:right;">${delCell}</td>`;
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  box.appendChild(tbl);
+
+  const addWrap=el('div');
+  addWrap.innerHTML=
+    `<div style="margin-bottom:6px;">Username <input id="acct-new-user" type="text" style="width:220px;" autocomplete="off"/></div>`+
+    `<div style="margin-bottom:6px;">Password (min 8 characters) <input id="acct-new-pass" type="password" style="width:220px;" autocomplete="new-password"/></div>`+
+    `<div id="acct-new-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
+    `<button onclick="accountsCreateViewer()">＋ ADD VIEW-ONLY ACCOUNT</button>`;
+  box.appendChild(addWrap);
   return box;
 }
 function _tlsMethodLabel(m){ return {self_signed:'Self-signed',acme:"Let's Encrypt / ACME",manual:'Manual (CSR)'}[m] || 'none'; }

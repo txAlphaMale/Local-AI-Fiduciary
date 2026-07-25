@@ -109,6 +109,8 @@ EVENT_TYPES = (
     "tls.acme.enrolled", "tls.acme.renewed", "tls.auto_renew.changed", "tls.cert.cleared",
     # SEC-2 (2026-07-25): the retention/disposal job logs its own action under this type.
     "audit.retention.purged",
+    # SEC-5 (2026-07-25): admin-managed household accounts (RBAC) + the viewer-role write denial.
+    "auth.user.created", "auth.user.deleted",
 )
 
 

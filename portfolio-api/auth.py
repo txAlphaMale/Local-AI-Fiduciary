@@ -73,6 +73,13 @@ def init_db():
         cols = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
         if "recovery_key_hash" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN recovery_key_hash TEXT")
+        # SEC-5 (2026-07-25) migration: role-based access ("a 2nd household member is a small
+        # manual addition later, not a self-serve flow" -- this IS that later addition). DEFAULT
+        # 'admin' means Jason's existing live account backfills as admin with no behavior change
+        # (an admin can do everything the old single-role model already could) -- only a NEWLY
+        # created 'viewer' account is actually restricted, via _security_and_auth_gate (app.py).
+        if "role" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
     try:
         os.chmod(AUTH_DB, 0o600)
     except Exception:
@@ -122,33 +129,86 @@ def public_user(user):
             backup_remaining = None
     return {"id": user["id"], "username": user["username"], "mfa_enabled": bool(user["totp_enabled"]),
             "backup_codes_remaining": backup_remaining,
-            "recovery_key_set": bool(user.get("recovery_key_hash")), "created": user["created"]}
+            "recovery_key_set": bool(user.get("recovery_key_hash")), "created": user["created"],
+            "role": user.get("role") or "admin"}
 
 
 # ---------------------------------------------------------------------------
 # Passwords
 # ---------------------------------------------------------------------------
-def create_user(username, password):
+def create_user(username, password, role="admin"):
     """Returns (uid, recovery_key) -- the recovery key (2026-07-24, Account Recovery Tier 2) is
     generated immediately so every NEW account has one from day one; the caller is responsible
     for showing it to the user exactly once (same write-only pattern as MFA backup codes) and
     never logging/persisting the plaintext anywhere. Existing accounts created before this
     feature existed migrate in with recovery_key_hash=NULL (see init_db()) and only get one once
     the user explicitly generates it via set_recovery_key() (SETTINGS -> SECURITY, or the
-    "recovery_key_set" critical checklist item nudges them there)."""
+    "recovery_key_set" critical checklist item nudges them there).
+
+    `role` (SEC-5, 2026-07-25) defaults to 'admin' so the original bootstrap-only call site
+    (app.py's /api/auth/first-run, which creates THE ONE original account) needs zero changes.
+    Only create_viewer() below passes role='viewer' explicitly -- app.py NEVER accepts a `role`
+    value from request bodies, so a client can never self-escalate to admin through this
+    function; the two legitimate callers each hardcode their own literal role."""
     username = (username or "").strip()
     if not username:
         raise ValueError("username required")
     if not password or len(password) < 8:
         raise ValueError("password must be at least 8 characters")
+    if role not in ("admin", "viewer"):
+        raise ValueError("invalid role")
     uid = uuid.uuid4().hex[:16]
     now = int(time.time())
     ph = _ph.hash(password)
     with _conn() as c:
-        c.execute("INSERT INTO users(id, username, password_hash, totp_enabled, created, updated) "
-                  "VALUES(?,?,?,0,?,?)", (uid, username, ph, now, now))
+        c.execute("INSERT INTO users(id, username, password_hash, totp_enabled, role, created, updated) "
+                  "VALUES(?,?,?,0,?,?,?)", (uid, username, ph, role, now, now))
     recovery_key = set_recovery_key(uid)
     return uid, recovery_key
+
+
+def create_viewer(username, password):
+    """SEC-5 (2026-07-25) -- creates an additional, restricted 'viewer' account (a second
+    household member who should see the dashboards but not change config/secrets/security
+    settings). Thin, self-documenting wrapper around create_user(role='viewer') -- this is the
+    ONLY place in the codebase that ever passes role='viewer', so a reviewer can grep this one
+    name to find every path that can create a non-admin account. Callable only by an already-
+    authenticated admin (enforced in app.py's POST /api/auth/users, not here -- this module has
+    no concept of "who is calling," same as every other function in this file)."""
+    return create_user(username, password, role="viewer")
+
+
+def is_admin(user):
+    """True if `user` (a row/dict from get_user_by_id/get_user_by_username) has the admin role.
+    Existing rows migrated in via init_db()'s ALTER TABLE ... DEFAULT 'admin' are admins --
+    nothing that could act as an admin today loses that ability when this column is introduced."""
+    return bool(user) and (user.get("role") or "admin") == "admin"
+
+
+def list_users():
+    """All accounts for the admin-only 'HOUSEHOLD ACCOUNTS' management panel -- id/username/role/
+    created/mfa_enabled only, never password_hash/totp_secret/backup_codes_json/recovery_key_hash
+    (same write-only guarantee as public_user())."""
+    with _conn() as c:
+        rows = c.execute("SELECT * FROM users ORDER BY created ASC").fetchall()
+    return [public_user(_row_to_dict(r)) for r in rows]
+
+
+def admin_delete_viewer(uid):
+    """Deletes a 'viewer' account -- and ONLY a viewer account; raises ValueError if the target
+    is 'admin' (there is exactly one admin, the original account owner, and this function is not
+    the path to remove them). This is deliberately a DIFFERENT function from the existing
+    delete_user() (which /api/auth/reset-account already uses for an authenticated user deleting
+    their OWN account, any role, and is unaffected by this change) -- keeping the "delete someone
+    ELSE's account" capability structurally incapable of ever targeting the admin removes the
+    need for a separate "don't delete the last admin" runtime check entirely: there is only ever
+    one admin, and this function's own role check is the guard."""
+    user = get_user_by_id(uid)
+    if not user:
+        raise ValueError("no such account")
+    if is_admin(user):
+        raise ValueError("cannot delete the admin account this way")
+    delete_user(uid)
 
 
 def verify_password(user, password):

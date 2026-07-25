@@ -576,6 +576,24 @@ def _https_active():
     return os.environ.get("SESSION_HTTPS_ONLY", "0") == "1" or tls.has_active_cert()
 
 
+# SEC-5 (2026-07-25) RBAC: a 'viewer'-role session (a 2nd household member — see auth.create_viewer)
+# gets full GET/read access everywhere (nothing below touches GET at all — "viewer" means
+# read-only, not "less of the app"), but any WRITE (POST/PUT/PATCH/DELETE) is denied unless the
+# path is in this small, explicit allowlist. Deliberately narrow and self-service-only: logging
+# out, changing/securing YOUR OWN identity (password/MFA/recovery key), and self-service account
+# closure (reset-account, which — per its own handler — only ever targets the CALLER's own row,
+# never someone else's). Every config/secret/TLS/job-trigger/paper-trade/chat/knowledge-write
+# endpoint is denied by omission, same "deny unless explicitly whitelisted" philosophy as
+# _AUTH_PUBLIC_PATHS above. Chat (`/api/chat`) is deliberately NOT in this list for now — it can
+# trigger paid LLM calls and agentic tool actions, which reads more like a privileged action than
+# a plain data read; revisit if a real use case wants viewers to use chat (easy: add the path).
+_VIEWER_ALLOWED_WRITE_PATHS = {
+    "/api/auth/logout", "/api/auth/change-password", "/api/auth/change-username",
+    "/api/auth/mfa/setup", "/api/auth/mfa/verify", "/api/auth/mfa/disable",
+    "/api/auth/recovery-key/regenerate", "/api/auth/reset-account",
+}
+
+
 @app.middleware("http")
 async def _security_and_auth_gate(request: Request, call_next):
     path = request.url.path
@@ -583,6 +601,15 @@ async def _security_and_auth_gate(request: Request, call_next):
         audit.emit("authz.denied", outcome="denied", request=request, resource=path,
                    detail={"reason": "no_session", "method": request.method})
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    uid = request.session.get("uid")
+    if uid and request.method in ("POST", "PUT", "PATCH", "DELETE") and path not in _VIEWER_ALLOWED_WRITE_PATHS:
+        user = auth.get_user_by_id(uid)
+        if user and not auth.is_admin(user):
+            audit.emit("authz.denied", outcome="denied", request=request, actor=uid,
+                       actor_name=user.get("username"), resource=path,
+                       detail={"reason": "viewer_role_write_denied", "method": request.method})
+            return JSONResponse({"error": "this account is view-only — an admin must make this "
+                                          "change"}, status_code=403)
     if request.method == "POST" and _is_job_trigger_path(path):
         ip = request.client.host if request.client else "unknown"
         if auth.rate_limited(ip, bucket="jobs", limit=JOB_RATE_LIMIT_PER_MIN):
@@ -651,6 +678,18 @@ def _require_uid(request: Request):
     """The global gate above already guarantees this is set for any route that reaches a
     handler at all — this just gives auth-scoped handlers a clean, obviously-named read."""
     return request.session.get("uid")
+
+
+def _require_admin(request: Request):
+    """SEC-5 (2026-07-25): returns the current session's user dict if they're an admin, else
+    None. The global gate already blocks a viewer from reaching most WRITE endpoints by path, but
+    the household-accounts management endpoints below need the stronger, explicit "must be admin"
+    check regardless of method — GET /api/auth/users (listing accounts) is a read, so the gate's
+    write-only restriction wouldn't touch it, yet account enumeration is exactly the kind of thing
+    a viewer shouldn't see either."""
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    return user if (user and auth.is_admin(user)) else None
 
 
 def _emit_config_changed(request, resource, old, new, summarize_keys=None):
@@ -873,7 +912,13 @@ async def auth_reset_account(request: Request):
     MFA); this one is for when you're already logged in and want a clean-slate account on
     purpose. Two independent confirmations required since it's irreversible from the UI: the
     current password, AND typing the username back exactly (guards against a stray/accidental
-    click doing something a "are you sure?" dialog alone is too easy to click through)."""
+    click doing something a "are you sure?" dialog alone is too easy to click through).
+
+    SEC-5 (2026-07-25) guard: if OTHER accounts exist (viewer accounts an admin created), the
+    admin can't self-reset here — that would delete the only admin row while leaving one or more
+    viewer accounts behind with literally no admin left to manage them (list/create/delete
+    accounts are all admin-only). Delete the other accounts first, or use this endpoint only when
+    this is genuinely the last remaining account, same as before SEC-5 existed."""
     uid = _require_uid(request)
     user = auth.get_user_by_id(uid)
     body = await request.json()
@@ -882,10 +927,69 @@ async def auth_reset_account(request: Request):
     if (body.get("confirm_username") or "").strip() != user["username"]:
         return JSONResponse({"error": "typed username does not match — type it exactly to confirm"},
                              status_code=400)
+    if auth.is_admin(user) and auth.user_count() > 1:
+        return JSONResponse({"error": "other accounts still exist on this deployment — delete "
+                                       "them first (SETTINGS → SECURITY → HOUSEHOLD ACCOUNTS), "
+                                       "or this would leave them with no admin"}, status_code=400)
     audit.emit("auth.account.reset", outcome="success", request=request, actor=uid,
                actor_name=user["username"], resource="/api/auth/reset-account")
     auth.delete_user(uid)
     request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/auth/users")
+def auth_list_users(request: Request):
+    """SEC-5 (2026-07-25) — admin-only household-accounts list, for SETTINGS → SECURITY →
+    "HOUSEHOLD ACCOUNTS". A GET, so the global gate's write-only viewer restriction wouldn't
+    otherwise touch it — enforced explicitly here via _require_admin instead."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    return {"users": auth.list_users()}
+
+
+@app.post("/api/auth/users")
+async def auth_create_user(request: Request):
+    """SEC-5 (2026-07-25) — admin creates an additional, restricted 'viewer' account (e.g. a
+    spouse who should see the dashboards but not change config/secrets/security settings). Role
+    is ALWAYS 'viewer' here, hardcoded server-side — this endpoint has no `role` body field to
+    honor, so a client can never request/escalate to a second admin through it."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    body = await request.json()
+    try:
+        uid, recovery_key = auth.create_viewer(body.get("username"), body.get("password"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    new_user = auth.get_user_by_id(uid)
+    audit.emit("auth.user.created", request=request, actor=admin["id"], actor_name=admin["username"],
+               resource="/api/auth/users",
+               detail={"new_user_id": uid, "new_username": new_user["username"], "role": "viewer"})
+    return {"ok": True, "user": auth.public_user(new_user), "recovery_key": recovery_key,
+            "recovery_key_note": "Save this somewhere safe — it's this new account's own recovery "
+                                  "key (same one-time-shown, host-CLI-recoverable mechanism as the "
+                                  "original account's). Give it to whoever will use this login."}
+
+
+@app.post("/api/auth/users/{uid}/delete")
+def auth_delete_user(uid: str, request: Request):
+    """SEC-5 (2026-07-25) — admin removes a viewer account. auth.admin_delete_viewer() itself
+    refuses to delete an 'admin'-role row (there is exactly one, the original account), so this
+    endpoint can never be used to remove the admin — no separate "not yourself" check needed."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    target = auth.get_user_by_id(uid)
+    if not target:
+        return JSONResponse({"error": "no such account"}, status_code=404)
+    try:
+        auth.admin_delete_viewer(uid)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    audit.emit("auth.user.deleted", request=request, actor=admin["id"], actor_name=admin["username"],
+               resource="/api/auth/users/{}/delete".format(uid),
+               detail={"deleted_user_id": uid, "deleted_username": target["username"]})
     return {"ok": True}
 
 
@@ -1092,11 +1196,30 @@ async def tls_set_auto_renew(req: Request):
 def tls_clear(request: Request):
     """Removes the active certificate — reverts to plain HTTP on the next (self-triggered)
     restart. Doesn't touch a prior ACME enrollment's account/renewal state, so re-enrolling
-    later doesn't start over."""
+    later doesn't start over.
+
+    2026-07-25 (Jason: a tester runs their own reverse proxy and wants no HTTPS internally —
+    this endpoint already IS the "disable HTTPS, go back to plain HTTP" feature, wired to the
+    SETTINGS → SECURITY "REMOVE CERTIFICATE (revert to plain HTTP)" button). Fixed a real gap
+    while verifying that claim: HSTS (below, `_security_and_auth_gate`) is sent for ANY active
+    cert including self-signed, and a browser that once trusted a self-signed cert here caches
+    that HSTS policy for up to a year — simply removing the cert server-side does NOT undo an
+    already-cached browser policy, so the browser can keep refusing plain HTTP on this host long
+    after the server reverted (exactly the failure mode a self-signed-then-reverse-proxied
+    deployment can hit). The fix: explicitly send `max-age=0` on THIS response — the standard way
+    to tell a browser "forget the HSTS policy you cached for this host" — but ONLY when HTTPS is
+    actually going away (`not _https_active()` after the clear). If SESSION_HTTPS_ONLY is
+    force-set (an external TLS-terminating reverse proxy this app doesn't manage), clearing the
+    in-app cert does NOT change the deployment's real HTTPS posture, so HSTS should keep being
+    sent normally — the middleware below already does that in every other case; this override
+    only fires for a genuine downgrade."""
     status = tls.clear_active_cert()
     audit.emit("tls.cert.cleared", request=request, actor=request.session.get("uid"),
                resource="/api/tls/clear")
-    return {"ok": True, "status": status}
+    resp = JSONResponse({"ok": True, "status": status})
+    if not _https_active():
+        resp.headers["Strict-Transport-Security"] = "max-age=0"
+    return resp
 
 
 @app.post("/api/tls/restart")
