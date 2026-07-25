@@ -88,15 +88,20 @@ POSITIONING-BRIEF.md
 docs/*
 !docs/DEPENDENCIES.md
 
-# ---- Security/GRC demo evidence (2026-07-25) — deliberately TRACKED, not internal ----
-# New `compliance/` folder: public-safe governance artifacts meant to BE the demo site's own
-# content (IR runbook now; SEC-6's risk register, Statement of Applicability, and controls.json
-# to follow). Distinct from `docs/*` above on purpose — docs/ is candid internal R&D (real
-# financial figures, job-search framing) and correctly stays gitignored; compliance/ is written to
-# be public from the start, same bar as README/INSTALL. Nothing here should ever need scrubbing.
-!compliance/
-!compliance/*.md
-!compliance/*.json
+# ---- Security/GRC demo evidence (2026-07-25, narrowed 2026-07-25 later) ----
+# `compliance/` holds two kinds of content: (1) genuinely useful documentation for anyone running
+# their own copy of this app (what data is collected, how it's protected, how long it's kept), and
+# (2) GRC-audience artifacts written specifically to drive the public demo site (risk register,
+# ISO 27001 Annex A SoA, IR runbook, ROPA/DPIA, the machine-readable controls.json + its
+# generator). Jason's call (2026-07-25): only (1) benefits a new user, so only those two files are
+# tracked here; the rest are gitignored — Jason will populate the demo site's copy of that content
+# manually rather than via this (potentially public) repo. NOTE: these files were briefly committed
+# in 654c823 before this narrowing — untracking them now stops FUTURE commits from including them,
+# but they remain recoverable from that commit in git history until a filter-repo pass removes
+# them (same standing debt already tracked for other files — see SHARING-CHECKLIST.md section 4).
+compliance/*
+!compliance/PRIVACY-NOTICE.md
+!compliance/DATA-RETENTION-SCHEDULE.md
 
 # ---- Local backups / scratch ----
 *.known-good
