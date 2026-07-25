@@ -181,6 +181,12 @@
      rule covers all of them without a class added at each site. Numeric/ticker cells that happen to
      share the pattern are unaffected: no spaces to break on, so nowrap vs normal looks identical. */
   td.l[style*="font-size"]{white-space:normal;word-break:break-word;max-width:360px;}
+  /* Explicit wrap opt-in (2026-07-26) -- same intent as the rule above (long free-text cells
+     should wrap, not force a horizontal scrollbar), but as a real class instead of the
+     style*="font-size" trigger, for call sites that don't happen to carry an inline font-size.
+     Prefer this for any NEW table with a long-text column; the rule above stays as-is for the
+     existing call sites already depending on it. */
+  th.wrap,td.wrap{white-space:normal;overflow-wrap:break-word;word-break:break-word;}
   .legend{display:flex;flex-wrap:wrap;gap:var(--space-3);margin-top:var(--space-2);font-size:var(--font-size-base);color:var(--color-text-muted);}
   .legend span{display:flex;align-items:center;gap:var(--space-1);}
   .sw{width:9px;height:9px;border-radius:var(--radius-sm);display:inline-block;}
@@ -2809,30 +2815,33 @@ function securityPostureContent(){
 
   const shown = (POSTURE_FILTER && POSTURE_FILTER!=='All') ? controls.filter(c=>c.theme===POSTURE_FILTER) : controls;
 
-  // table-layout:fixed + explicit column widths (2026-07-26 fix): without this, the browser lets
-  // the Rationale/Evidence column grow to fit its longest row on ONE unwrapped line, forcing a
-  // horizontal scrollbar — the visible slice then looks right-aligned/truncated even though the
-  // text itself is left-aligned, since you're only ever seeing whatever's left of the far-right
-  // edge of a much-wider-than-the-viewport cell. Fixed widths force wrapping within the cell instead.
+  // table-layout:fixed + explicit column widths: without this, the browser lets the Rationale/
+  // Evidence column grow to fit its longest row on ONE unwrapped line, forcing a horizontal
+  // scrollbar — the visible slice then looks right-aligned/truncated even though the text itself
+  // is left-aligned, since you're only ever seeing the tail end of a much-wider-than-viewport
+  // cell. Width proportions are genuinely per-table (every table's columns differ), so those stay
+  // inline here — but alignment/wrap behavior itself uses the app's shared `.l`/`.wrap` classes
+  // (index.html's global <style>, ~line 173/183) instead of repeating text-align/white-space
+  // inline, so the next table that needs this doesn't have to rediscover the fix from scratch.
   const tbl=el('table'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);';
   tbl.appendChild(el('thead',null,
     '<tr>'+
-      '<th style="text-align:left;padding:4px 8px;width:70px;">Control</th>'+
-      '<th style="text-align:left;padding:4px 8px;width:16%;">Title</th>'+
-      '<th style="text-align:left;padding:4px 8px;width:110px;">Theme</th>'+
-      '<th style="text-align:left;padding:4px 8px;width:70px;">Status</th>'+
-      '<th style="text-align:left;padding:4px 8px;">Rationale / Evidence</th>'+
+      '<th class="l" style="width:70px;">Control</th>'+
+      '<th class="l" style="width:16%;">Title</th>'+
+      '<th class="l" style="width:110px;">Theme</th>'+
+      '<th class="l" style="width:70px;">Status</th>'+
+      '<th class="l wrap">Rationale / Evidence</th>'+
     '</tr>'));
   const tbody=el('tbody');
   shown.forEach(c=>{
     const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
-    const ev=c.evidence?` <code style="word-break:break-word;">${c.evidence}</code>`:'';
+    const ev=c.evidence?` <code class="wrap">${c.evidence}</code>`:'';
     tr.innerHTML=
-      `<td style="padding:4px 8px;text-align:left;white-space:nowrap;"><code>${c.id}</code></td>`+
-      `<td style="padding:4px 8px;text-align:left;white-space:normal;overflow-wrap:break-word;">${c.title}</td>`+
-      `<td style="padding:4px 8px;text-align:left;white-space:normal;">${c.theme}</td>`+
-      `<td style="padding:4px 8px;text-align:left;white-space:nowrap;"><span class="${_postureBadgeClass(c.status)}">${c.status}</span></td>`+
-      `<td style="padding:4px 8px;text-align:left;white-space:normal;overflow-wrap:break-word;word-break:break-word;"><span class="muted">${c.rationale||''}</span>${ev}</td>`;
+      `<td class="l"><code>${c.id}</code></td>`+
+      `<td class="l wrap">${c.title}</td>`+
+      `<td class="l">${c.theme}</td>`+
+      `<td class="l"><span class="${_postureBadgeClass(c.status)}">${c.status}</span></td>`+
+      `<td class="l wrap"><span class="muted">${c.rationale||''}</span>${ev}</td>`;
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
