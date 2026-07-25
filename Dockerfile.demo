@@ -1,0 +1,44 @@
+# Dockerfile.demo -- builds the SAME portfolio-api image as portfolio-api/Dockerfile, but with
+# compliance/ baked in at build time. Needed specifically for AWS Fargate (see
+# AWS-DEMO-HOSTING-GUIDE.md): Fargate task definitions have no host to bind-mount from, unlike
+# docker-compose.yml's local `./compliance:/compliance:ro` mount, which only works because Docker
+# Compose runs on a host with that folder actually present.
+#
+# BUILD FROM THE REPO ROOT (not portfolio-api/), so this Dockerfile can reach both directories:
+#   docker build -f Dockerfile.demo -t fiduciary-portfolio-api:demo .
+#
+# IMPORTANT: compliance/'s GRC-only content (risk register, Statement of Applicability,
+# controls.json, ROPA, DPIA, IR runbook) is intentionally NOT committed to this repo (2026-07-25
+# decision -- see RESUME-TRACKER.md's compliance/ tracking note). Populate your OWN compliance/
+# folder at the repo root -- at minimum a valid controls.json -- before running this build, or the
+# Security Posture page will 404. The two files that ARE tracked (PRIVACY-NOTICE.md,
+# DATA-RETENTION-SCHEDULE.md) will already be present in a normal git checkout.
+#
+# Otherwise identical to portfolio-api/Dockerfile -- keep the two in sync if that file changes
+# (the acme.sh install step, base image, CMD, etc. are all duplicated here on purpose, since a
+# multi-stage/shared-base setup would be more indirection than this one-off demo build is worth).
+
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl tar socat ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz -o /tmp/acme.tar.gz \
+    && mkdir -p /tmp/acme-src && tar -xzf /tmp/acme.tar.gz -C /tmp/acme-src --strip-components=1 \
+    && (cd /tmp/acme-src && ./acme.sh --install --force) \
+    && rm -rf /tmp/acme.tar.gz /tmp/acme-src
+
+COPY portfolio-api/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY portfolio-api/. .
+
+# The one real difference from portfolio-api/Dockerfile: bake compliance/ into the image at a
+# fixed path, and point COMPLIANCE_DIR (app.py's GET /api/compliance/controls, see app.py) at it.
+# Everything else about that endpoint is unchanged -- it just reads from a different directory
+# than the local bind-mount default (/compliance).
+COPY compliance/ /compliance-baked/
+ENV COMPLIANCE_DIR=/compliance-baked
+
+EXPOSE 8097 8443
+CMD ["python", "run_server.py"]

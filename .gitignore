@@ -8,6 +8,7 @@
 .env
 .env.*
 !.env.example
+!.env.demo.example
 secrets.env
 *.secret
 *.key
@@ -79,6 +80,8 @@ MEMORY-HANDOFF-FROM-LOCAL-AI.md
 MIGRATION.md
 AWS-DEPLOYMENT-PLAN.md
 AWS-HOSTING-GUIDE.md
+AWS-DEMO-HOSTING-GUIDE.md
+portfolio-api-demo-task.json
 CLOUD-PORTABILITY-ROADMAP.md
 DISTRIBUTION-MONETIZATION-RESEARCH.md
 LOCAL-HOSTING-HARDENING-PLAN.md
