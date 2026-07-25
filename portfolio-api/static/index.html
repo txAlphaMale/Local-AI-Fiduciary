@@ -187,6 +187,12 @@
      Prefer this for any NEW table with a long-text column; the rule above stays as-is for the
      existing call sites already depending on it. */
   th.wrap,td.wrap{white-space:normal;overflow-wrap:break-word;word-break:break-word;}
+  /* Denser row padding + line-height for long reference tables (2026-07-26) — opt in per table
+     with class="tbl-compact" rather than repeating padding inline on every cell. The default
+     td/th padding above (var(--space-1) var(--space-2)) is fine for shorter tables; a 90+ row
+     reference list reads better tighter. */
+  .tbl-compact{line-height:1.25;}
+  .tbl-compact th,.tbl-compact td{padding:3px 8px;}
   .legend{display:flex;flex-wrap:wrap;gap:var(--space-3);margin-top:var(--space-2);font-size:var(--font-size-base);color:var(--color-text-muted);}
   .legend span{display:flex;align-items:center;gap:var(--space-1);}
   .sw{width:9px;height:9px;border-radius:var(--radius-sm);display:inline-block;}
@@ -2823,13 +2829,18 @@ function securityPostureContent(){
   // inline here — but alignment/wrap behavior itself uses the app's shared `.l`/`.wrap` classes
   // (index.html's global <style>, ~line 173/183) instead of repeating text-align/white-space
   // inline, so the next table that needs this doesn't have to rediscover the fix from scratch.
-  const tbl=el('table'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);';
+  // Title got only 16% before, which wrapped most titles to 2 lines and stretched EVERY row to
+  // match (row height = tallest cell in that row) -- that was the real source of the "needlessly
+  // tall rows" complaint, not padding. Widened Title, narrowed Theme (its 4 values are all short —
+  // "Technological" is the longest and fits well under 100px), and tightened line-height/padding
+  // for a denser reference-table feel appropriate to a 93-row list.
+  const tbl=el('table','tbl-compact'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);';
   tbl.appendChild(el('thead',null,
     '<tr>'+
-      '<th class="l" style="width:70px;">Control</th>'+
-      '<th class="l" style="width:16%;">Title</th>'+
-      '<th class="l" style="width:110px;">Theme</th>'+
-      '<th class="l" style="width:70px;">Status</th>'+
+      '<th class="l" style="width:60px;">Control</th>'+
+      '<th class="l" style="width:26%;">Title</th>'+
+      '<th class="l" style="width:96px;">Theme</th>'+
+      '<th class="l" style="width:60px;">Status</th>'+
       '<th class="l wrap">Rationale / Evidence</th>'+
     '</tr>'));
   const tbody=el('tbody');
