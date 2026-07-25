@@ -635,6 +635,7 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
 
 auth.init_db()
 audit.init_db()  # SEC-1: security event log store (own DB, 0600) — safe if it fails (emit never raises)
+audit.start_retention_thread()  # SEC-2: daily automated purge_expired() — see audit.py
 
 # Whatever certificate exists on disk right now is, by definition, what run_server.py just chose
 # to serve for THIS process (see tls.py / run_server.py) — clears any stale "restart needed" flag
@@ -650,6 +651,51 @@ def _require_uid(request: Request):
     """The global gate above already guarantees this is set for any route that reaches a
     handler at all — this just gives auth-scoped handlers a clean, obviously-named read."""
     return request.session.get("uid")
+
+
+def _emit_config_changed(request, resource, old, new, summarize_keys=None):
+    """SEC-1 broadening (2026-07-25) — shared diff-and-log helper for the app's config-mutating
+    endpoints (retirement/insurance/scanner/accounts/settings/schedule/prompts/policy). Scalar
+    fields are logged old->new in full (the whole detail payload is Fernet-encrypted at rest by
+    audit.emit — see audit.py); keys named in `summarize_keys` are logged as before/after COUNTS
+    only, not full contents. That's for list/dict-valued fields that hold bulk PII (insurance's
+    policies/contacts/estate_docs/income_sources_*) — without this, every routine insurance save
+    would duplicate a full copy of every policy/contact/estate-doc record into the audit log on
+    top of the (already-encrypted) copy store.py already keeps, which is unnecessary duplication
+    of sensitive data for no real audit value (the count changing is what matters for a security
+    trail; the contents are the app's own data, not the audit log's job to hold twice).
+
+    Caller contract: `old` MUST be captured from an INDEPENDENT read (a second call to the same
+    read-from-store function used to build the working copy) taken before ANY mutation — several
+    of these config blobs contain nested dicts that handlers mutate in place (e.g. schedule.py's
+    `entry = cur.get(k, {})` pattern), so a shallow `dict(old)` copy of an already-mutated object
+    would silently show no diff. Two independent store reads sidesteps that entirely regardless
+    of each handler's own mutation style.
+
+    Never raises — mirrors audit.emit's own fail-safe contract; a bad diff means the change goes
+    unlogged, not that the underlying save fails."""
+    try:
+        summarize_keys = summarize_keys or set()
+        changed = {}
+        for k in set(old or {}) | set(new or {}):
+            ov, nv = (old or {}).get(k), (new or {}).get(k)
+            if ov == nv:
+                continue
+            if k in summarize_keys:
+                changed[k] = {
+                    "old_count": len(ov) if isinstance(ov, (list, dict)) else None,
+                    "new_count": len(nv) if isinstance(nv, (list, dict)) else None,
+                }
+            else:
+                changed[k] = {"old": ov, "new": nv}
+        if changed:
+            audit.emit("config.changed", request=request,
+                       actor=(request.session.get("uid") if request is not None else None),
+                       resource=resource, detail={"changed": changed})
+        return changed
+    except Exception as e:
+        print(f"[audit] config-diff logging failed for {resource}: {e}", flush=True)
+        return {}
 
 
 @app.get("/api/auth/status")
@@ -927,8 +973,14 @@ async def tls_self_signed(req: Request):
                                        "box's LAN IP, a hostname you use to reach it, or "
                                        "'localhost')"}, status_code=400)
     try:
-        return {"ok": True, "status": tls.generate_self_signed(hosts)}
+        status = tls.generate_self_signed(hosts)
+        audit.emit("tls.cert.self_signed_generated", request=req, actor=req.session.get("uid"),
+                   resource="/api/tls/self-signed", detail={"hostnames": hosts})
+        return {"ok": True, "status": status}
     except Exception as e:
+        audit.emit("tls.cert.self_signed_generated", outcome="error", request=req,
+                   actor=req.session.get("uid"), resource="/api/tls/self-signed",
+                   detail={"hostnames": hosts, "error": str(e)})
         return JSONResponse({"error": f"self-signed generation failed: {e}"}, status_code=500)
 
 
@@ -944,6 +996,8 @@ async def tls_csr(req: Request):
     sans = [str(s).strip() for s in (body.get("sans") or []) if str(s).strip()]
     try:
         csr_pem = tls.generate_csr(cn, sans)
+        audit.emit("tls.cert.csr_generated", request=req, actor=req.session.get("uid"),
+                   resource="/api/tls/csr", detail={"common_name": cn, "sans": sans})
         return {"ok": True, "csr_pem": csr_pem,
                 "note": "Submit this CSR to any Certificate Authority (or an internal/self-"
                         "signed CA for a LAN-only deployment). Once you have the signed "
@@ -963,7 +1017,10 @@ async def tls_import_cert(req: Request):
     if not cert_pem:
         return JSONResponse({"error": "cert_pem is required"}, status_code=400)
     try:
-        return {"ok": True, "status": tls.import_signed_certificate(cert_pem, body.get("chain_pem"))}
+        status = tls.import_signed_certificate(cert_pem, body.get("chain_pem"))
+        audit.emit("tls.cert.imported", request=req, actor=req.session.get("uid"),
+                   resource="/api/tls/import-cert", detail={"had_chain": bool(body.get("chain_pem"))})
+        return {"ok": True, "status": status}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -989,6 +1046,13 @@ async def tls_acme_enroll(req: Request):
         res = tls.acme_enroll(domain, challenge=(body.get("challenge") or "http-01"),
                                dns_provider=body.get("dns_provider"), dns_creds=dns_creds,
                                extra_domains=extra_domains, staging=body.get("staging"))
+        # dns_creds deliberately excluded from the audit detail — those are third-party API tokens,
+        # not this app's own secret store, but still credential material that shouldn't be
+        # duplicated into a log even encrypted-at-rest. Domain/challenge/staging are not secrets.
+        audit.emit("tls.acme.enrolled", request=req, actor=req.session.get("uid"),
+                   resource="/api/tls/acme/enroll",
+                   detail={"domain": domain, "challenge": body.get("challenge") or "http-01",
+                           "staging": bool(body.get("staging"))})
         return {"ok": True, "status": res}
     except tls.AcmeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
@@ -999,12 +1063,15 @@ async def tls_acme_enroll(req: Request):
 
 
 @app.post("/api/tls/acme/renew")
-def tls_acme_renew():
+def tls_acme_renew(request: Request):
     """Manual 'renew now' — the background thread already does this automatically once the
     active ACME certificate is within TLS_RENEWAL_THRESHOLD_DAYS of expiring and auto_renew is
     on; this is for testing or renewing early on demand."""
     try:
-        return {"ok": True, "status": tls.acme_renew()}
+        status = tls.acme_renew()
+        audit.emit("tls.acme.renewed", request=request, actor=request.session.get("uid"),
+                   resource="/api/tls/acme/renew")
+        return {"ok": True, "status": status}
     except tls.AcmeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     except Exception as e:
@@ -1014,15 +1081,22 @@ def tls_acme_renew():
 @app.post("/api/tls/auto-renew")
 async def tls_set_auto_renew(req: Request):
     body = await req.json()
-    return {"ok": True, "status": tls.set_auto_renew(bool(body.get("enabled")))}
+    enabled = bool(body.get("enabled"))
+    status = tls.set_auto_renew(enabled)
+    audit.emit("tls.auto_renew.changed", request=req, actor=req.session.get("uid"),
+               resource="/api/tls/auto-renew", detail={"enabled": enabled})
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/tls/clear")
-def tls_clear():
+def tls_clear(request: Request):
     """Removes the active certificate — reverts to plain HTTP on the next (self-triggered)
     restart. Doesn't touch a prior ACME enrollment's account/renewal state, so re-enrolling
     later doesn't start over."""
-    return {"ok": True, "status": tls.clear_active_cert()}
+    status = tls.clear_active_cert()
+    audit.emit("tls.cert.cleared", request=request, actor=request.session.get("uid"),
+               resource="/api/tls/clear")
+    return {"ok": True, "status": status}
 
 
 @app.post("/api/tls/restart")
@@ -1033,6 +1107,44 @@ def tls_restart():
     tls.restart_to_apply()
     return {"ok": True, "note": "restarting now to apply the certificate configuration — this "
                                  "page will briefly disconnect"}
+
+
+# ============================================================================
+#  SEC-2 (2026-07-25) — read-only, redacted security audit-log viewer.
+#  Gated by the same global session middleware as everything else (nothing here is in
+#  _AUTH_PUBLIC_PATHS) — an authenticated household member can review their own security
+#  history, but it's not publicly reachable. IP is masked by default (redact_ip=True in
+#  read_recent()) since this is the surface most likely to get shown to a demo-site visitor —
+#  see DEMO-SITE-BUILD-PLAN.md §3.3, "the demo site's centerpiece screen".
+# ============================================================================
+@app.get("/api/audit/events")
+def get_audit_events(limit: int = 200):
+    """Most-recent-first security events: logins/logouts/MFA/recovery/config changes/TLS state/
+    authz denials. IPs are masked to the /24 (last octet redacted) — full precision isn't needed
+    to see WHAT happened or spot a pattern, and this endpoint's whole purpose is to be safe to
+    show a visitor. `detail` (old->new config values etc.) is decrypted for display here since a
+    logged-in household member is exactly who that detail is FOR — this isn't the encrypted-at-
+    rest boundary, it's the same trust boundary as every other authenticated page in the app."""
+    limit = max(1, min(int(limit or 200), 1000))
+    return {"events": audit.read_recent(limit=limit, redact_ip=True)}
+
+
+@app.get("/api/audit/verify")
+def get_audit_verify():
+    """Recomputes the HMAC hash chain across every stored event and reports whether it's intact —
+    the control that makes the log trustworthy as evidence rather than just a list of rows (ISO
+    A.8.15/NIST AU-9). Cheap enough to call on every viewer-panel load for a household-scale log;
+    would need pagination/caching at a much larger scale than this app is designed for."""
+    return audit.verify_chain()
+
+
+@app.post("/api/audit/purge-expired")
+def post_audit_purge(request: Request):
+    """Manual 'run retention now' — the background thread (audit.start_retention_thread(),
+    started at app boot) already does this once a day automatically; this is for testing the
+    retention/re-anchor behavior on demand, mirroring /api/tls/acme/renew's same "automatic +
+    manual trigger" pattern."""
+    return audit.purge_expired(actor_name=(request.session.get("uid") or "manual"))
 
 
 # ============================================================================
@@ -1274,6 +1386,16 @@ async def post_schedule(req: Request):
     """Override a job's fire time (24h). Body: {"<kind>": {"hour": H, "minute": M}, ...}
     or {"reset": "<kind>"} to restore a job's default. Config only — no money action."""
     body = await req.json()
+    # Independent read for the audit diff, captured BEFORE any mutation. Deliberately NOT a
+    # shallow dict(cur) copy taken after this point — the mutation loop below does
+    # `entry = cur.get(k, {})` then mutates `entry` IN PLACE (no reassignment until `cur[k] =
+    # entry`), so a shallow copy of `cur` would share that same nested dict object and silently
+    # show no diff. A second, fully independent JSON read avoids this regardless of how the
+    # mutation logic below is written.
+    try:
+        old = store.read_json_strict(SCHEDULE_FILE) or {}
+    except Exception:
+        old = {}
     try:
         cur = store.read_json_strict(SCHEDULE_FILE) or {}
     except Exception:
@@ -1297,6 +1419,7 @@ async def post_schedule(req: Request):
                 pass
             cur[k] = entry
     store.write_json(SCHEDULE_FILE, cur)
+    _emit_config_changed(req, "/api/schedule", old, cur)
     return {"ok": True, "schedule": get_schedule()}
 
 
@@ -5463,13 +5586,15 @@ def get_retire_config():
 
 
 @app.post("/api/retirement-config")
-async def post_retire_config(body: RetirementConfigUpdate):
+async def post_retire_config(body: RetirementConfigUpdate, request: Request):
     """Set retirement assumptions (local config). Keys: withdrawal_rate_pct, expected_real_return_pct,
     annual_expenses_override, annual_savings_override, current_age, target_age, exclude_account_types.
     Pydantic-validated (2026-07-24): ages 0-120, percentages/rates range-checked, SS claim age 62-70."""
     updates = body.model_dump(exclude_unset=True)
+    old = _read_retire()   # independent read, captured before any mutation — see _emit_config_changed
     cfg = {**_read_retire(), **{k: v for k, v in updates.items() if k in DEFAULT_RETIRE}}
     store.write_json(RETIRE_FILE, cfg)
+    _emit_config_changed(request, "/api/retirement-config", old, cfg)
     return {"ok": True, "config": cfg}
 
 
@@ -6117,6 +6242,7 @@ async def post_insurance_config(req: Request):
     every read, overriding whatever's separately saved under that scalar key -- a household that
     doesn't use this stays on the plain single-number entry with zero behavior change."""
     body = await req.json()
+    old = _read_insurance_cfg()   # independent read, captured before any mutation below
     cfg = _read_insurance_cfg()
     for k in ("income_self", "income_spouse", "children", "home_value_override",
               "mortgage_rate_pct", "mortgage_payment_monthly", "deposit_yield_pct",
@@ -6209,6 +6335,12 @@ async def post_insurance_config(req: Request):
                 })
             cfg[sk] = rows
     store.write_json(INSURANCE_FILE, cfg)
+    # PII-bulk fields summarized as before/after counts, not full contents — see
+    # _emit_config_changed's docstring for why (avoids duplicating every policy/contact/estate-doc
+    # record into the audit log on a routine save).
+    _emit_config_changed(req, "/api/insurance-config", old, cfg,
+                         summarize_keys={"policies", "contacts", "estate_docs",
+                                         "income_sources_self", "income_sources_spouse"})
     return {"ok": True, "config": cfg}
 
 
@@ -7318,10 +7450,12 @@ async def post_scanner_config(req: Request):
     """Set the opportunity-scanner config (local). Keys: watchlist (list of tickers),
     include_holding_peers (bool), criteria (thresholds), strategy_description."""
     body = await req.json()
+    old = _read_scanner()   # independent read, captured before any mutation
     cfg = {**_read_scanner(), **{k: v for k, v in body.items() if k in DEFAULT_SCANNER}}
     if "criteria" in body and isinstance(body["criteria"], dict):
         cfg["criteria"] = {**DEFAULT_SCANNER["criteria"], **body["criteria"]}
     store.write_json(SCANNER_FILE, cfg)
+    _emit_config_changed(req, "/api/scanner-config", old, cfg)
     return {"ok": True, "config": cfg}
 
 
@@ -7368,6 +7502,7 @@ async def post_accounts_config(req: Request):
     Body: {"account": name, "drip": bool, "fractional_ok": bool} for one account,
     and/or {"accounts": {name: {...}}} bulk, and/or {"defaults": {...}}."""
     body = await req.json()
+    old = _read_accounts_cfg()   # independent read, captured before any mutation
     cfg = _read_accounts_cfg()
     if isinstance(body.get("defaults"), dict):
         cfg["defaults"] = {**cfg["defaults"],
@@ -7388,6 +7523,9 @@ async def post_accounts_config(req: Request):
                     cur[k] = bool(v[k])
             cfg["accounts"][nm] = cur
     store.write_json(ACCOUNTS_FILE, cfg)
+    # "accounts" summarized as a count (per-account DRIP/fractional flags aren't sensitive, but a
+    # full per-account diff is noisy for a household with many accounts); "defaults" logged in full.
+    _emit_config_changed(req, "/api/accounts-config", old, cfg, summarize_keys={"accounts"})
     return {"ok": True, "config": cfg}
 
 
@@ -7434,6 +7572,7 @@ async def post_settings(req: Request):
     """Set advanced knobs (local settings.json). ENV-set knobs are ignored (env wins) and
     reported as env_locked. Blank clears back to default. Config only — no money action."""
     body = await req.json()
+    old = _read_settings()   # independent read, captured before any mutation
     stored = _read_settings()
     applied, ignored = [], []
     for key, val in (body or {}).items():
@@ -7469,6 +7608,10 @@ async def post_settings(req: Request):
         if key in _ENV_SECRETS_AT_BOOT:
             staged_behind_env.append(key)
     store.write_json(SETTINGS_FILE, stored)
+    # Settings/config knobs are non-secret operational values (timeouts, model names, etc.) — safe
+    # to log in full; SETTING_SPECS/CONFIG_SPECS never overlap with SECRET_SPECS (secrets are a
+    # separate encrypted store, see /api/secrets above, which already logs key-names-only).
+    _emit_config_changed(req, "/api/settings", old, stored)
     return {"ok": True, "applied": applied, "ignored_env_locked": ignored,
             "staged_behind_env": staged_behind_env, "restart_required": restart_needed, "settings": stored}
 
@@ -10671,6 +10814,10 @@ async def post_prompts(req: Request):
         body = await req.json()
     except Exception:
         body = {}
+    # Independent read for the audit diff (see /api/schedule's comment above for why — this
+    # handler also mutates the nested "prompts" dict in place via .pop(), so it needs a fully
+    # separate read rather than a shallow copy of `pd`).
+    old = _read_prompts_store()
     pd = _read_prompts_store()
     if "user_ref" in body:
         pd["user_ref"] = str(body.get("user_ref") or "").strip()
@@ -10688,6 +10835,10 @@ async def post_prompts(req: Request):
         _write_prompts_store(pd)
     except Exception as e:
         return JSONResponse({"error": f"could not save prompts: {e}"}, status_code=500)
+    # Logged in FULL (not summarized) — a persona system-prompt override changes AI behavior, and
+    # being able to see exactly what changed is the point of auditing this endpoint (AI-governance/
+    # model-risk angle, not just generic config hygiene).
+    _emit_config_changed(req, "/api/prompts", old, pd)
     return get_prompts()
 
 

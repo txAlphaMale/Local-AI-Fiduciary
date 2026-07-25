@@ -352,6 +352,7 @@ function runJob(url, btn, queuedLabel){
 
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
+let AUDIT_LOG=null, AUDIT_VERIFY=null;  // SEC-2 (2026-07-25) — security audit-log viewer panel
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
@@ -2802,6 +2803,15 @@ function securityContent(){
   else { certWrap.appendChild(_certPanel(TLS_STATUS)); }
   wrap.appendChild(certWrap);
 
+  // SEC-2 (2026-07-25) — security audit-log viewer: the app's own record of logins, MFA/recovery
+  // use, config/secret/TLS changes, and denied requests. See DEMO-SITE-BUILD-PLAN.md §3.3 — this
+  // is the panel meant to be safe to show a demo-site visitor (IPs pre-masked by the API).
+  wrap.appendChild(el('div','ph','SECURITY AUDIT LOG'));
+  const auditWrap=el('div'); auditWrap.id='sec-audit-wrap'; auditWrap.style.cssText='margin-bottom:var(--space-4);';
+  if(!AUDIT_LOG){ auditWrap.appendChild(el('div','muted','Loading audit log…')); _auditRefresh(); }
+  else { auditWrap.appendChild(_auditPanel()); }
+  wrap.appendChild(auditWrap);
+
   // Reset account / auth.db (2026-07-24 backlog — Jason: "reset the auth.db from within the
   // settings if I'm already authenticated... to simply test out the new changes"). Deliberately
   // scoped to ONLY the users row in auth.db — financial config, chat history, and the knowledge
@@ -2823,6 +2833,92 @@ function securityContent(){
 }
 function _tlsRefreshStatus(){
   return fetch('/api/tls/status').then(r=>r.json()).then(d=>{ TLS_STATUS=d; if(TAB==='settings') render(); }).catch(()=>{});
+}
+// SEC-2 (2026-07-25) — audit-log viewer panel. Two independent fetches (events + chain-integrity
+// verify) so a slow/failed verify doesn't block the event list from showing, and vice versa.
+function _auditRefresh(){
+  return Promise.all([
+    fetch('/api/audit/events?limit=100').then(r=>r.json()).catch(()=>({events:[]})),
+    fetch('/api/audit/verify').then(r=>r.json()).catch(()=>({ok:null})),
+  ]).then(([ev,ver])=>{ AUDIT_LOG=ev.events||[]; AUDIT_VERIFY=ver; if(TAB==='settings') render(); });
+}
+function auditRunRetention(){
+  const btn=document.getElementById('audit-retention-btn');
+  if(btn){ btn.disabled=true; btn.textContent='running…'; }
+  fetch('/api/audit/purge-expired',{method:'POST'}).then(r=>r.json()).then(d=>{
+    AUDIT_LOG=null; AUDIT_VERIFY=null;
+    _auditRefresh();
+  }).catch(()=>{ if(btn){ btn.disabled=false; btn.textContent='↻ RUN RETENTION NOW'; } });
+}
+function _auditEventBadgeClass(outcome){
+  return (outcome==='success')?'pos':(outcome==='failure'||outcome==='denied'||outcome==='error')?'neg':'muted';
+}
+function _auditPanel(){
+  const box=el('div');
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Every security-relevant action this deployment has recorded — logins, MFA/recovery use, config and secret changes, TLS/certificate changes, and denied requests. Append-only and tamper-evident (HMAC hash chain, verified below); IPs are masked. A daily background job automatically retires events past the retention window; that disposal is itself logged as an event.';
+  box.appendChild(sub);
+
+  // Chain-integrity status line — the control that makes this log trustworthy as evidence, not
+  // just a list of rows.
+  const chain=el('div'); chain.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);';
+  if(AUDIT_VERIFY==null){
+    chain.innerHTML='<span class="muted">Verifying chain integrity…</span>';
+  } else if(AUDIT_VERIFY.ok===true){
+    chain.innerHTML=`<span class="pos">✓ Chain integrity verified</span> — ${AUDIT_VERIFY.checked} event(s) checked, no tampering detected.`;
+  } else {
+    chain.innerHTML=`<span class="neg">✗ CHAIN INTEGRITY FAILURE</span> — verification broke at event #${AUDIT_VERIFY.broken_at_seq} (${AUDIT_VERIFY.reason||'mismatch'}). This means a stored event was altered or removed outside the app's own retention process.`;
+  }
+  box.appendChild(chain);
+
+  const btnRow=el('div'); btnRow.style.cssText='margin-bottom:var(--space-3);';
+  const refreshBtn=el('button',null,'↻ REFRESH'); refreshBtn.style.marginRight='8px';
+  refreshBtn.onclick=()=>{ AUDIT_LOG=null; AUDIT_VERIFY=null; render(); _auditRefresh(); };
+  btnRow.appendChild(refreshBtn);
+  const retBtn=el('button',null,'↻ RUN RETENTION NOW'); retBtn.id='audit-retention-btn';
+  retBtn.title='Manually triggers the same daily automated retention/disposal job — deletes events past the retention window and logs the disposal.';
+  retBtn.onclick=auditRunRetention;
+  btnRow.appendChild(retBtn);
+  box.appendChild(btnRow);
+
+  const events=AUDIT_LOG||[];
+  if(!events.length){
+    box.appendChild(el('div','muted','No events recorded yet.'));
+    return box;
+  }
+  const tbl=el('table'); tbl.style.cssText='width:100%;border-collapse:collapse;font-size:var(--font-size-sm);';
+  const thead=el('thead',null,
+    '<tr>'+
+      '<th style="text-align:left;padding:4px 8px;">Time (UTC)</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Event</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Outcome</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Actor</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Source IP</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Resource</th>'+
+      '<th style="text-align:left;padding:4px 8px;">Detail</th>'+
+    '</tr>');
+  tbl.appendChild(thead);
+  const tbody=el('tbody');
+  events.forEach(e=>{
+    const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
+    const ts=e.ts?new Date(e.ts).toLocaleString():'—';
+    const detailStr=e.detail?JSON.stringify(e.detail):'';
+    const detailShort=detailStr.length>60?detailStr.slice(0,57)+'…':detailStr;
+    tr.innerHTML=
+      `<td style="padding:4px 8px;white-space:nowrap;">${ts}</td>`+
+      `<td style="padding:4px 8px;white-space:nowrap;"><code>${e.event_type||''}</code></td>`+
+      `<td style="padding:4px 8px;"><span class="${_auditEventBadgeClass(e.outcome)}">${e.outcome||''}</span></td>`+
+      `<td style="padding:4px 8px;">${e.actor_name||'—'}</td>`+
+      `<td style="padding:4px 8px;">${e.src_ip||'—'}</td>`+
+      `<td style="padding:4px 8px;"><code>${e.resource||''}</code></td>`+
+      `<td style="padding:4px 8px;" title="${detailStr.replace(/"/g,'&quot;')}"><span class="muted">${detailShort}</span></td>`;
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  const tblWrap=el('div'); tblWrap.style.cssText='max-height:420px;overflow-y:auto;border:1px solid var(--border-color, #333);border-radius:4px;';
+  tblWrap.appendChild(tbl);
+  box.appendChild(tblWrap);
+  return box;
 }
 function _tlsMethodLabel(m){ return {self_signed:'Self-signed',acme:"Let's Encrypt / ACME",manual:'Manual (CSR)'}[m] || 'none'; }
 function _certPanel(st){
