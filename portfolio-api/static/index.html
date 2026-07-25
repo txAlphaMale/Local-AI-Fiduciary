@@ -2809,29 +2809,34 @@ function securityPostureContent(){
 
   const shown = (POSTURE_FILTER && POSTURE_FILTER!=='All') ? controls.filter(c=>c.theme===POSTURE_FILTER) : controls;
 
-  const tbl=el('table'); tbl.style.cssText='width:100%;border-collapse:collapse;font-size:var(--font-size-sm);';
+  // table-layout:fixed + explicit column widths (2026-07-26 fix): without this, the browser lets
+  // the Rationale/Evidence column grow to fit its longest row on ONE unwrapped line, forcing a
+  // horizontal scrollbar — the visible slice then looks right-aligned/truncated even though the
+  // text itself is left-aligned, since you're only ever seeing whatever's left of the far-right
+  // edge of a much-wider-than-the-viewport cell. Fixed widths force wrapping within the cell instead.
+  const tbl=el('table'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);';
   tbl.appendChild(el('thead',null,
     '<tr>'+
-      '<th style="text-align:left;padding:4px 8px;">Control</th>'+
-      '<th style="text-align:left;padding:4px 8px;">Title</th>'+
-      '<th style="text-align:left;padding:4px 8px;">Theme</th>'+
-      '<th style="text-align:left;padding:4px 8px;">Status</th>'+
+      '<th style="text-align:left;padding:4px 8px;width:70px;">Control</th>'+
+      '<th style="text-align:left;padding:4px 8px;width:16%;">Title</th>'+
+      '<th style="text-align:left;padding:4px 8px;width:110px;">Theme</th>'+
+      '<th style="text-align:left;padding:4px 8px;width:70px;">Status</th>'+
       '<th style="text-align:left;padding:4px 8px;">Rationale / Evidence</th>'+
     '</tr>'));
   const tbody=el('tbody');
   shown.forEach(c=>{
     const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
-    const ev=c.evidence?` <code>${c.evidence}</code>`:'';
+    const ev=c.evidence?` <code style="word-break:break-word;">${c.evidence}</code>`:'';
     tr.innerHTML=
-      `<td style="padding:4px 8px;white-space:nowrap;"><code>${c.id}</code></td>`+
-      `<td style="padding:4px 8px;">${c.title}</td>`+
-      `<td style="padding:4px 8px;white-space:nowrap;">${c.theme}</td>`+
-      `<td style="padding:4px 8px;"><span class="${_postureBadgeClass(c.status)}">${c.status}</span></td>`+
-      `<td style="padding:4px 8px;"><span class="muted">${c.rationale||''}</span>${ev}</td>`;
+      `<td style="padding:4px 8px;text-align:left;white-space:nowrap;"><code>${c.id}</code></td>`+
+      `<td style="padding:4px 8px;text-align:left;white-space:normal;overflow-wrap:break-word;">${c.title}</td>`+
+      `<td style="padding:4px 8px;text-align:left;white-space:normal;">${c.theme}</td>`+
+      `<td style="padding:4px 8px;text-align:left;white-space:nowrap;"><span class="${_postureBadgeClass(c.status)}">${c.status}</span></td>`+
+      `<td style="padding:4px 8px;text-align:left;white-space:normal;overflow-wrap:break-word;word-break:break-word;"><span class="muted">${c.rationale||''}</span>${ev}</td>`;
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
-  const tblWrap=el('div'); tblWrap.style.cssText='max-height:520px;overflow-y:auto;border:1px solid var(--border-color, #333);border-radius:4px;';
+  const tblWrap=el('div'); tblWrap.style.cssText='max-height:520px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--border-color, #333);border-radius:4px;';
   tblWrap.appendChild(tbl);
   box.appendChild(tblWrap);
   return box;
