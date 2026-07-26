@@ -1,0 +1,13 @@
+{
+  "_comment": "Demo-only mcpo config (baked into the fiduciary/mcpo-demo image via Dockerfile.mcpo-demo, see AWS-DEMO-HOSTING-GUIDE.md §7). Deliberately excludes 'monarch' -- the public demo runs on synthetic/CSV holdings (PORTFOLIO_PROVIDER=csv), never real Monarch credentials. Keeps 'tavily' so the news-discovery feature works against real news; TAVILY_API_KEY is supplied to the mcpo container at runtime via an SSM secret (see task def), not stored here. 'time' is a harmless helper.",
+  "mcpServers": {
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time", "--local-timezone=America/Chicago"]
+    },
+    "tavily": {
+      "command": "uvx",
+      "args": ["--from", "mcp-tavily", "python", "-m", "mcp_server_tavily"]
+    }
+  }
+}
