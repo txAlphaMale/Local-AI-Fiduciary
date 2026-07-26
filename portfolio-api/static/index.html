@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- 2026-07-26 notifications work: manifest+apple meta make "Add to Home Screen" available, which
+     is a HARD requirement for the Push API on iOS Safari (16.4+) -- an ordinary open tab there can
+     never receive push, only an installed PWA can. Harmless no-ops on desktop/Android. -->
+<link rel="manifest" href="/manifest.json" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Fiduciary" />
+<meta name="theme-color" content="#0a0b0d" />
 <title>PORTFOLIO TERMINAL</title>
 <style>
   :root{
@@ -243,6 +250,14 @@
   .fid-tour-popover .driver-popover-arrow-side-right{border-left-color:var(--color-panel)!important;}
   .fid-tour-popover .driver-popover-arrow-side-top{border-bottom-color:var(--color-panel)!important;}
   .fid-tour-popover .driver-popover-arrow-side-bottom{border-top-color:var(--color-panel)!important;}
+  /* SEC-5 UX gap fix (2026-07-26): "no hide-mutating-buttons pass for a viewer session" --
+     RESUME-TRACKER.md's own known gap. The backend already 403s any of these regardless (this is
+     UX polish, not the security boundary); tagging a button .mut-btn dims+disables it for a
+     viewer session and explains why on hover, instead of letting them click through to a 403.
+     Coverage note: this pass tags the highest-traffic SAVE/action buttons across SETTINGS and
+     PAPER TRADING -- not literally every mutating control in the app (see RESUME-TRACKER.md for
+     the honest scope of this pass). Tag any future button the same way: class="mut-btn". */
+  body.viewer-mode .mut-btn{opacity:0.4;pointer-events:none;cursor:not-allowed;}
 </style>
 <!-- Guided coach-mark tour (2026-07-23, RESUME-TRACKER "new user tour" item): Driver.js — MIT
      licensed, ~5kb, zero dependencies, no build step needed. Chosen over Shepherd.js/Intro.js
@@ -367,6 +382,8 @@ let AUTH_STATUS=null;
 let TLS_STATUS=null;
 let AUDIT_LOG=null, AUDIT_VERIFY=null;  // SEC-2 (2026-07-25) — security audit-log viewer panel
 let HOUSEHOLD_ACCOUNTS=null;  // SEC-5 (2026-07-25) — admin-only household-accounts management panel
+let NOTIF_PREFS=null;  // Notifications (2026-07-26) — SETTINGS -> NOTIFICATIONS panel state
+function isViewer(){ return !!(AUTH_STATUS && AUTH_STATUS.user && AUTH_STATUS.user.role==='viewer'); }
 let KEY_STATUS=null;  // SEC-3 (2026-07-25) — encryption key version/rotation panel
 let COMPLIANCE_CONTROLS=null;  // Demo harness (2026-07-25) — Security Posture page (SETTINGS -> SECURITY POSTURE)
 let POSTURE_FILTER=null;  // Demo harness — client-side theme filter for the Security Posture table
@@ -443,6 +460,10 @@ const TOUR_TARGETS = {
   mfa_enrolled:'sec-mfa-setup-btn',
   // Account Recovery Tier 2 (2026-07-24, same day) — host-CLI recovery key, also critical.
   recovery_key_set:'sec-recoverykey-generate-btn',
+  // Notifications (2026-07-26) — Tier 3, optional. Points at the SUBSCRIBE button on the new
+  // SETTINGS -> NOTIFICATIONS subtab; "filled" (see app.py's notify_flags) also counts as done via
+  // SMTP alone, so a household that only wants email never sees this tour step nag about push.
+  notifications_configured:'notif-subscribe-btn',
 };
 let TOUR_DONE=false; try{ TOUR_DONE = localStorage.getItem('fidTourDone')==='1'; }catch(_){ TOUR_DONE=false; }
 function _tourMarkDone(){ TOUR_DONE=true; try{ localStorage.setItem('fidTourDone','1'); }catch(_){} }
@@ -836,7 +857,7 @@ W('https-cert','Getting started','HTTPS / certificates (SETTINGS → SECURITY �
 W('secrets-encryption','Getting started','Secrets encryption & the secrets.key backup (SETTINGS → SECRETS)',
   'Every credential saved from SETTINGS → SECRETS (Finnhub, SnapTrade, Monarch, Tavily, the Claude/LLM provider keys, etc.) is encrypted before it\'s stored — not just protected by a locked-down file, an actual encryption key stands between the database and anyone reading it.',
   'The encryption key lives at `secrets.key` in the app\'s data volume, generated automatically the first time it\'s needed (same auto-generate-if-absent approach `SESSION_SECRET` already uses) — nothing to set up. Values you save through the UI are encrypted before they reach the database; the app decrypts them again only when it actually needs to use them (calling Finnhub, logging into Monarch, etc.). One thing this does NOT cover: `mcpo-secrets/mcpo.env`, the small bridge file that carries Monarch/Tavily credentials to the separate mcpo container — Docker itself reads that file directly, which means it has to stay plain text (locked down to owner-only access, but not encrypted the way the database copy is).',
-  '**Back up `secrets.key` along with your data volume.** If that key is ever lost — a wiped volume, a botched restore that skips it — every credential already saved through SETTINGS → SECRETS becomes permanently unreadable, with no way to recover it; you\'d need to re-enter everything from scratch. It\'s worth including in whatever backup routine already covers your data volume, not treated as an afterthought. Migrating a credential OFF `.env` and into this UI takes one clean pass: save the new value here while the old `.env` line is still active (it\'s held in reserve, not yet in effect — the panel says so), then remove that `.env` line and run `docker compose up -d` for the affected service. **Note the command** — a plain restart (`docker compose restart`) reuses the container\'s existing environment and will NOT pick up an edited `.env`/mcpo.env; only `up -d` re-reads it and recreates the container. Monarch/Tavily specifically need portfolio-api recreated first (it regenerates the mcpo bridge file on boot), then mcpo.');
+  '**Back up `secrets.key` along with your data volume.** If that key is ever lost — a wiped volume, a botched restore that skips it — every credential already saved through SETTINGS → SECRETS becomes permanently unreadable, with no way to recover it; you\'d need to re-enter everything from scratch. It\'s worth including in whatever backup routine already covers your data volume, not treated as an afterthought. Migrating a credential OFF `.env` and into this UI takes one clean pass: save the new value here while the old `.env` line is still active (it\'s held in reserve, not yet in effect — the panel says so), then remove that `.env` line and recreate the affected service\'s container. **Note the exact command, it matters:** a plain restart (`docker compose restart`) reuses the container\'s existing environment and will NOT pick up an edited `.env`/mcpo.env. For portfolio-api, `docker compose up -d --build portfolio-api` is enough (the `--build` itself forces a recreate). For **mcpo specifically, `up -d` alone is NOT enough** — mcpo has no build step (a prebuilt image, same tag every time), so nothing forces Docker to notice a changed `mcpo.env`; you need `docker compose up -d mcpo --force-recreate` (confirmed 2026-07-26 — a real incident where a plain `up -d mcpo` silently did nothing while Monarch credentials sat stale). Monarch/Tavily specifically need portfolio-api recreated first (it regenerates the mcpo bridge file on boot), then mcpo with `--force-recreate`.');
 W('ai-provider','Getting started','AI provider (SETTINGS → AI / LLM PROVIDER): local Ollama vs. hosted Claude',
   'Every LLM-backed feature — chat, the weekly Strategist run, cash-deployment advice, the Dashboard narrative, and every research brief\'s JSON synthesis — routes through one swappable backend, set in SETTINGS → AI / LLM PROVIDER. The default is your own local Ollama models (zero marginal cost, fully private, bounded by these two 1080 Tis). Optionally, chat/analysis alone can point at Anthropic\'s Claude API instead — a separate, metered, pay-per-token service, added 2026-07-24.',
   'Two model tiers exist for the Claude path: an "everyday" model (chat + the Dashboard narrative) and a "Strategist" model (the autonomous weekly paper-trading run + the on-demand cash-deployment planner), since those two run longer, tool-heavier ReAct loops that can justify a stronger/pricier model — set separately so a quick chat question doesn\'t pay Opus-tier cost every turn. Embeddings (the Knowledge/RAG index that lets chat cite your own documents) CANNOT run on Claude — Anthropic sells no embeddings API at all — so they stay on local Ollama regardless of the chat provider, unless "Knowledge/RAG embeddings provider" is separately pointed at an OpenAI-compatible embeddings host. Retrieval quality is unaffected either way: Claude only ever sees the already-retrieved passages as plain text, same as Ollama does today. **Important:** a claude.ai Pro/Max chat subscription does NOT include API access — the key this needs comes from a separate console.anthropic.com account with its own pay-per-token billing, unrelated to a Pro subscription\'s usage.',
@@ -847,8 +868,8 @@ W('holdings-csv','Getting started','No brokerage account? The HOLDINGS tab (CSV 
   'Filling this in does NOT automatically make it the active portfolio — check the banner at the top of the HOLDINGS tab. If it says these holdings are "not the active data source," go to SETTINGS → ADVANCED KNOBS → "Portfolio data source" and switch it to CSV, then `docker compose up -d portfolio-api` (a plain `restart` won\'t pick it up — see the "AI provider" and "Secrets encryption" WIKI entries for why `up -d` specifically matters). Once it IS active, prices/day-change for every non-Cash row are fetched live from Finnhub on each dashboard load, same as every other provider — you only maintain quantities/cost basis here, not prices. To update a holding later (a new purchase, a sale, a stock split), just reopen HOLDINGS, edit the affected row(s) in the table, and SAVE again — there is no need to re-upload the whole file for a small change. This is also the fastest way back onto a working dashboard if Monarch/mcpo is ever down: switch to CSV here temporarily (even with just one placeholder row) rather than staring at a portfolio-load error, then switch back to Monarch once it recovers.');
 W('monarch-setup','Getting started','Connecting Monarch Money (live, real-time)',
   'Monarch Money is a paid budgeting/net-worth service that aggregates real brokerage, bank, and retirement accounts. Using it here means the dashboard reads your ACTUAL live balances and positions with no manual entry — the tradeoff is a Monarch subscription and handing this app your Monarch login.',
-  'Three credentials, all set from SETTINGS → SECRETS → "Portfolio (Monarch)": your Monarch email, your Monarch password, and your Monarch MFA/TOTP secret (the same secret you\'d scan into an authenticator app during Monarch\'s own MFA setup — not a 6-digit code, the underlying secret string, since this app has to generate fresh codes on every login the same way an authenticator app would). All three are encrypted at rest and never shown again once saved — see the "Secrets encryption" WIKI entry. These credentials are consumed by the separate `mcpo` container, so after saving them here you need `docker compose up -d portfolio-api` FIRST (its boot writes the credentials to the bridge file `mcpo` reads), THEN `docker compose up -d mcpo` — in that order, not a combined `docker compose up -d` for the whole stack.',
-  'Set SETTINGS → ADVANCED KNOBS → "Portfolio data source" to `monarch` (needs the same `docker compose up -d portfolio-api` to apply). If the dashboard ever shows a portfolio-load error, it almost always means one of these three credentials is stale (Monarch password changed, or the MFA secret doesn\'t match what Monarch currently has on file) — check `docker compose logs mcpo` for the real underlying error, and consider switching temporarily to the HOLDINGS (CSV) tab so the rest of the app stays usable while you sort it out.');
+  'Three credentials, all set from SETTINGS → SECRETS → "Portfolio (Monarch)": your Monarch email, your Monarch password, and your Monarch MFA/TOTP secret (the same secret you\'d scan into an authenticator app during Monarch\'s own MFA setup — not a 6-digit code, the underlying secret string, since this app has to generate fresh codes on every login the same way an authenticator app would). All three are encrypted at rest and never shown again once saved — see the "Secrets encryption" WIKI entry. These credentials are consumed by the separate `mcpo` container, so after saving them here you need `docker compose up -d --build portfolio-api` FIRST (its boot writes the credentials to the bridge file `mcpo` reads), THEN `docker compose up -d mcpo --force-recreate` — in that order, not a combined `docker compose up -d` for the whole stack, and NOT just `up -d mcpo` without `--force-recreate` (confirmed 2026-07-26: mcpo has no build step, so Compose doesn\'t detect a changed mcpo.env on its own — a plain `up -d mcpo` silently leaves it running on stale credentials).',
+  'Set SETTINGS → ADVANCED KNOBS → "Portfolio data source" to `monarch` (needs the same `docker compose up -d --build portfolio-api` to apply). If the dashboard ever shows a portfolio-load error, it almost always means one of these three credentials is stale (Monarch password changed, or the MFA secret doesn\'t match what Monarch currently has on file), OR that mcpo simply hasn\'t been recreated since the credentials last changed (see above — this includes mcpo\'s Monarch session periodically expiring and needing a fresh login from current credentials, even if you didn\'t just change anything). Check `docker compose logs mcpo` for the real underlying error; if it says something like "MONARCH_EMAIL and MONARCH_PASSWORD environment variables are required," that\'s this — run `docker compose up -d mcpo --force-recreate`. Consider switching temporarily to the HOLDINGS (CSV) tab so the rest of the app stays usable while you sort it out.');
 W('snaptrade-setup','Getting started','Connecting SnapTrade (live, many brokers incl. Robinhood)',
   'SnapTrade is a free-for-personal-use aggregation service that links one or many real brokerage accounts (Robinhood and most other major U.S. brokers) directly, without going through Monarch. Like Monarch, this gives real live positions with no manual entry — the setup is a one-time developer registration plus a brokerage-linking step, done outside this app.',
   'This one is NOT a SETTINGS-panel setup (unlike Monarch/CSV) — it needs a one-time script run on the host. First, a free developer signup at snaptrade.com gets you a CLIENT_ID and CONSUMER_KEY; set those in `.env`. Then run `python3 snaptrade_register.py` from the app folder — it registers a SnapTrade user, walks you through linking your actual brokerage account(s) in a browser, and prints the resulting USER_ID and USER_SECRET for you to also add to `.env`. Full step-by-step is in `INSTALL.md`\'s data-source table.',
@@ -861,6 +882,10 @@ W('account-recovery','Getting started','Account recovery — forgot password, lo
   'Two independent recovery paths, for two different situations. **Tier 1 (still have MFA working):** forgot the password but still have your authenticator app or a saved backup code. **Tier 2 (MFA is also gone, or was never set up):** forgotten password with no working second factor — this needs host/container access to this deployment, not just a browser.',
   'Tier 1: click "Forgot password? (requires MFA)" on the sign-in screen, enter your username and a current authenticator code (or an unused backup code), then set a new password — this reuses the same code check the login screen itself uses, so it\'s exactly as secure as normal MFA login. Tier 2: run `docker compose exec portfolio-api python auth.py --reset-credentials` from the machine hosting this deployment. It will ask for your username, your **recovery key**, and a new password. The recovery key is a one-time secret shown ONCE — either right after you created your account, or whenever you last generated/regenerated one in SETTINGS → IAM → "HOST RECOVERY KEY". Like MFA, this is a CRITICAL checklist item: if you haven\'t generated one yet, do it now, before you need it — there is no way to recover a lost recovery key, only to generate a new one while you still have access.',
   'Without a recovery key on file, `--reset-credentials` cannot help you — the only remaining option is `python auth.py --wipe-all` (same command form), which is genuinely destructive: it deletes the login, ALL financial config/history/scenarios, chat history, and the knowledge index cache, returning the app to a blank first-run state. This is intentional — host/container access alone is deliberately NOT enough to reset just the login and silently take over your existing data; it either gets you back into your OWN account (via the recovery key) or wipes everything and starts over, with nothing in between. Bottom line: generate your recovery key today, in SETTINGS → IAM, and store it like you would a password — it is the only thing standing between "forgot my password" and "lost everything."');
+W('notifications','Getting started','Push & email notifications (SETTINGS → NOTIFICATIONS)',
+  'Get security alerts (logins, MFA/account changes, admin actions, detections) and portfolio-data-source outage warnings pushed straight to your phone or laptop, or emailed to you — instead of the only way to find out being to open SETTINGS → SECURITY → SECURITY AUDIT LOG yourself. Self-hosted, no third-party push service or paid cloud API involved (see the "Secrets encryption" entry\'s spirit — same philosophy applied here).',
+  '**Push** (this device/browser only — each phone or laptop subscribes separately): click 🔔 SUBSCRIBE THIS DEVICE in SETTINGS → NOTIFICATIONS, allow the browser permission prompt, and you\'re done. **On iPhone/iPad specifically**, Apple only allows push to an installed web app, never an ordinary open Safari tab — first tap the Share icon → "Add to Home Screen," then open the app from the Home Screen icon you just created and subscribe from there (requires iOS 16.4+; nearly every device released since 2023 qualifies). Android/desktop Chrome, Firefox, and Edge all support subscribing directly from an ordinary tab, no install step needed. **Email** goes to ONE shared address for the whole household, set up once by the admin account: enter an SMTP server under SETTINGS → SECRETS & KEYS → "Notifications (Email)" — for Gmail specifically, that\'s `smtp.gmail.com`, port `587`, your full email address, and an **App Password** (Google requires 2-Step Verification turned on first to generate one — this is NOT your normal Gmail password, search "Google App Passwords" if you\'ve never made one), then flip the email checkbox on in SETTINGS → NOTIFICATIONS. Any other provider\'s SMTP details work the same way, not just Gmail.',
+  'Pick which categories notify you (security alerts, portfolio outages) and through which channels, then use ✉ SEND TEST NOTIFICATION to confirm both actually arrive before relying on them. A viewer account (a second household login) manages its own push subscription and preferences independently — email is admin-controlled only, since it\'s one shared inbox for the household, not a per-person setting. "Portfolio outage" alerts only ever fire for whichever data source you actually have configured — a household on the CSV/HOLDINGS tab or that\'s never touched SnapTrade will never see a SnapTrade alert, since there is nothing there to have an outage. If a subscribed device stops receiving push (browser data cleared, permission revoked, app uninstalled), it silently drops off the list next time an alert tries to reach it — just re-subscribe from that device to restore it.');
 
 W('net-worth','Dashboard','Net worth',
   'Every account value signed by type: assets add, liabilities (credit cards, loans, mortgage) subtract. It includes non-brokerage assets your provider tracks, such as a Zillow-valued home.',
@@ -1418,6 +1443,7 @@ function render(){
       {key:'iam',label:'IAM',build:()=>iamContent()},
       {key:'security',label:'SECURITY',build:()=>securityContent()},
       {key:'posture',label:'SECURITY POSTURE',build:()=>securityPostureContent()},
+      {key:'notifications',label:'NOTIFICATIONS',build:()=>notificationsContent()},
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
       {key:'prompts',label:'PERSONA PROMPTS',build:()=>promptsContent()},
@@ -2846,7 +2872,20 @@ function themeContent(){
 // an EXISTING account.
 // ---------------------------------------------------------------------------
 function _authRefreshStatus(){
-  return fetch('/api/auth/status').then(r=>r.json()).then(d=>{ AUTH_STATUS=d; if(TAB==='settings') render(); }).catch(()=>{});
+  return fetch('/api/auth/status').then(r=>r.json()).then(d=>{
+    AUTH_STATUS=d;
+    document.body.classList.toggle('viewer-mode', isViewer());
+    // 2026-07-26 notifications work: register the service worker once logged in (registration
+    // itself is a no-op if already registered) so it's ready by the time someone visits SETTINGS
+    // -> NOTIFICATIONS and clicks SUBSCRIBE -- not registering here would still work (the
+    // subscribe button registers it lazily too) but this way it's warm sooner.
+    if(d && d.user && 'serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
+    // Warm NOTIF_PREFS right after login (rather than only on first SETTINGS -> NOTIFICATIONS
+    // visit) so the guided tour's notifications_configured step -- which highlights the SUBSCRIBE
+    // button by id -- has something real to find instead of racing an in-flight fetch.
+    if(d && d.user && !NOTIF_PREFS){ _notifRefresh(); }
+    if(TAB==='settings') render();
+  }).catch(()=>{});
 }
 // Demo harness (2026-07-25) — Security Posture page: renders compliance/controls.json (the
 // ISO/IEC 27001:2022 Annex A Statement of Applicability, generated by compliance/generate_soa.py)
@@ -3102,6 +3141,126 @@ function securityContent(){
   wrap.appendChild(_privacyPanel());
   return wrap;
 }
+// ============================================================================
+// Notifications (2026-07-26) — SETTINGS -> NOTIFICATIONS. Closes the gap compliance/IR-RUNBOOK.md
+// documented: previously the ONLY way to learn about a security event or a portfolio-provider
+// outage was opening SETTINGS -> SECURITY -> SECURITY AUDIT LOG yourself. Push is per-device (this
+// browser/phone only) via the open VAPID standard; email is one shared destination for the whole
+// household, configured under SETTINGS -> SECRETS & KEYS ("Notifications (Email)" group) and
+// controlled here only by the admin account (see notifications.py module docstring for why).
+// ============================================================================
+function _notifRefresh(){
+  return fetch('/api/notifications/preferences').then(r=>r.json()).then(d=>{
+    NOTIF_PREFS=d; if(TAB==='settings') render();
+  }).catch(()=>{});
+}
+function _urlBase64ToUint8Array(base64){
+  const padding='='.repeat((4 - base64.length % 4) % 4);
+  const b64=(base64+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(b64); const out=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+  return out;
+}
+async function notifPushSubscribe(){
+  const err=document.getElementById('notif-push-err'); if(err) err.textContent='';
+  try{
+    if(!('serviceWorker' in navigator) || !('PushManager' in window)){
+      if(err) err.textContent='This browser does not support push notifications'+
+        (/iPhone|iPad|iPod/.test(navigator.userAgent)?' in the current context — on iOS, first use Share -> "Add to Home Screen", then open the app from your Home Screen and try again (Safari 16.4+ required).':'.');
+      return;
+    }
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){ if(err) err.textContent='Notification permission was not granted.'; return; }
+    const keyResp=await (await fetch('/api/notifications/vapid-public-key')).json();
+    const sub=await reg.pushManager.subscribe({
+      userVisibleOnly:true, applicationServerKey:_urlBase64ToUint8Array(keyResp.key)
+    });
+    await fetch('/api/notifications/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({subscription:sub.toJSON()})});
+    NOTIF_PREFS=null; _notifRefresh();
+  }catch(e){ if(err) err.textContent='Subscribe failed: '+e; }
+}
+async function notifPushUnsubscribe(){
+  try{
+    if('serviceWorker' in navigator){
+      const reg=await navigator.serviceWorker.getRegistration();
+      const sub=reg && await reg.pushManager.getSubscription();
+      if(sub){
+        await fetch('/api/notifications/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({endpoint:sub.endpoint})});
+        await sub.unsubscribe();
+      }
+    }
+  }catch(e){ /* best-effort -- still refresh below so the UI doesn't get stuck */ }
+  NOTIF_PREFS=null; _notifRefresh();
+}
+function notifSavePrefs(){
+  const push=document.getElementById('notif-push-chk').checked;
+  const email=document.getElementById('notif-email-chk') ? document.getElementById('notif-email-chk').checked : false;
+  const categories={};
+  document.querySelectorAll('.notif-cat-chk').forEach(c=>{ categories[c.dataset.cat]=c.checked; });
+  fetch('/api/notifications/preferences',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({push,email,categories})})
+    .then(r=>r.json()).then(()=>{ NOTIF_PREFS=null; _notifRefresh(); alert('Notification preferences saved.'); })
+    .catch(e=>alert('Save failed: '+e));
+}
+function notifSendTest(){
+  const btn=document.getElementById('notif-test-btn');
+  if(btn){ btn.disabled=true; btn.textContent='sending…'; }
+  fetch('/api/notifications/test',{method:'POST'}).then(r=>r.json()).then(d=>{
+    alert(`Test sent — push attempted: ${d.push_attempted}, push delivered: ${d.push_sent}, email sent: ${d.email_sent}.`+
+      (d.push_attempted===0?'\n\n(No push devices subscribed yet — click SUBSCRIBE above first.)':''));
+  }).catch(e=>alert('Test failed: '+e))
+    .finally(()=>{ if(btn){ btn.disabled=false; btn.textContent='✉ SEND TEST NOTIFICATION'; } });
+}
+function notificationsContent(){
+  const wrap=el('div');
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Get notified of security events and portfolio-data outages without having to check SETTINGS → SECURITY → SECURITY AUDIT LOG yourself. Push notifications go to this device/browser only (self-hosted, no third-party push service — see notifications.py); email goes to one shared address, configured under SETTINGS → SECRETS & KEYS and controlled here by the admin account only.';
+  wrap.appendChild(sub);
+  if(!NOTIF_PREFS){ wrap.appendChild(el('div','muted','Loading notification settings…')); _notifRefresh(); return wrap; }
+
+  const p=NOTIF_PREFS.preferences||{}, cats=NOTIF_PREFS.categories||{};
+
+  wrap.appendChild(el('div','ph','PUSH NOTIFICATIONS (this device)'));
+  const pushWrap=el('div'); pushWrap.style.cssText='margin-bottom:var(--space-4);';
+  const deviceNote=NOTIF_PREFS.device_count>0
+    ? `<span class="pos">${NOTIF_PREFS.device_count} device(s) subscribed on this account.</span>`
+    : '<span class="muted">No devices subscribed yet.</span>';
+  pushWrap.innerHTML=`<div style="margin-bottom:8px;">${deviceNote}</div>`;
+  const subBtn=el('button',null,'🔔 SUBSCRIBE THIS DEVICE'); subBtn.id='notif-subscribe-btn'; subBtn.onclick=notifPushSubscribe;
+  const unsubBtn=el('button',null,'UNSUBSCRIBE THIS DEVICE'); unsubBtn.style.marginLeft='8px'; unsubBtn.onclick=notifPushUnsubscribe;
+  pushWrap.appendChild(subBtn); pushWrap.appendChild(unsubBtn);
+  const pushErr=el('div'); pushErr.id='notif-push-err'; pushErr.className='neg'; pushErr.style.cssText='font-size:var(--font-size-sm);min-height:16px;margin-top:6px;';
+  pushWrap.appendChild(pushErr);
+  wrap.appendChild(pushWrap);
+
+  wrap.appendChild(el('div','ph','CHANNELS & CATEGORIES'));
+  const prefWrap=el('div'); prefWrap.style.cssText='margin-bottom:var(--space-4);';
+  let html=`<div style="margin-bottom:8px;"><label><input type="checkbox" id="notif-push-chk" ${p.push?'checked':''}/> Push (this device)</label></div>`;
+  if(NOTIF_PREFS.is_admin){
+    html+=`<div style="margin-bottom:8px;"><label><input type="checkbox" id="notif-email-chk" ${p.email?'checked':''} ${NOTIF_PREFS.email_available?'':'disabled'}/> Email (shared household address)</label>`+
+      (NOTIF_PREFS.email_note?` <span class="muted" style="font-size:var(--font-size-sm);">${NOTIF_PREFS.email_note}</span>`:'')+`</div>`;
+  } else if(NOTIF_PREFS.email_note_role){
+    html+=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">${NOTIF_PREFS.email_note_role}</div>`;
+  }
+  html+='<div class="muted" style="font-size:var(--font-size-sm);margin:10px 0 4px;">Categories</div>';
+  Object.keys(cats).forEach(k=>{
+    html+=`<div style="margin-bottom:6px;"><label><input type="checkbox" class="notif-cat-chk" data-cat="${k}" ${((p.categories||{})[k]!==false)?'checked':''}/> ${cats[k]}</label></div>`;
+  });
+  prefWrap.innerHTML=html;
+  const saveBtn=el('button',null,'↳ SAVE PREFERENCES'); saveBtn.style.marginTop='8px'; saveBtn.onclick=notifSavePrefs;
+  prefWrap.appendChild(saveBtn);
+  wrap.appendChild(prefWrap);
+
+  wrap.appendChild(el('div','ph','TEST'));
+  const testWrap=el('div');
+  const testBtn=el('button',null,'✉ SEND TEST NOTIFICATION'); testBtn.id='notif-test-btn'; testBtn.onclick=notifSendTest;
+  testWrap.appendChild(testBtn);
+  wrap.appendChild(testWrap);
+  return wrap;
+}
 function _tlsRefreshStatus(){
   return fetch('/api/tls/status').then(r=>r.json()).then(d=>{ TLS_STATUS=d; if(TAB==='settings') render(); }).catch(()=>{});
 }
@@ -3168,7 +3327,7 @@ function _auditPanel(){
   const refreshBtn=el('button',null,'↻ REFRESH'); refreshBtn.style.marginRight='8px';
   refreshBtn.onclick=()=>{ AUDIT_LOG=null; AUDIT_VERIFY=null; render(); _auditRefresh(); };
   btnRow.appendChild(refreshBtn);
-  const retBtn=el('button',null,'↻ RUN RETENTION NOW'); retBtn.id='audit-retention-btn';
+  const retBtn=el('button','mut-btn','↻ RUN RETENTION NOW'); retBtn.id='audit-retention-btn';
   retBtn.title='Manually triggers the same daily automated retention/disposal job — deletes events past the retention window and logs the disposal.';
   retBtn.onclick=auditRunRetention;
   btnRow.appendChild(retBtn);
@@ -3288,6 +3447,25 @@ async function accountsDeleteUser(uid, username){
     HOUSEHOLD_ACCOUNTS=null; _accountsRefresh();
   }catch(e){ alert('Failed: '+e); }
 }
+// SEC-5 UX gap fix (2026-07-26): in-place admin<->viewer role swap — replaces the old only-option
+// workaround (delete this viewer, recreate them as admin). Requires the CURRENT admin's own
+// password (same re-auth bar as reset-account) plus typing the target's username, since this hands
+// over the single most privileged seat in the app and logs the caller out immediately afterward.
+async function accountsTransferAdmin(uid, username){
+  const password=prompt(`Hand the ADMIN role to "${username}"? You will become a VIEWER and be logged out immediately.\n\nEnter YOUR current password to confirm:`);
+  if(password==null) return;
+  const confirmUser=prompt(`Type "${username}" exactly to confirm you're handing the admin role to the right account:`);
+  if(confirmUser==null) return;
+  try{
+    const r=await fetch(`/api/auth/users/${encodeURIComponent(uid)}/transfer-admin`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password,confirm_username:confirmUser})});
+    const d=await r.json();
+    if(d.error){ alert('Failed: '+d.error); return; }
+    alert(d.note||'Admin role transferred.');
+    location.reload();   // caller's session was cleared server-side — reload to hit the login screen
+  }catch(e){ alert('Failed: '+e); }
+}
 function _accountsPanel(){
   const box=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
@@ -3306,8 +3484,10 @@ function _accountsPanel(){
   accts.forEach(a=>{
     const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
     const created=a.created?new Date(a.created*1000).toLocaleDateString():'—';
+    const safeUser=a.username.replace(/'/g,"\\'");
     const delCell=a.role==='admin'?'<span class="muted">—</span>':
-      `<button onclick="accountsDeleteUser('${a.id}','${a.username.replace(/'/g,"\\'")}')">✕ REMOVE</button>`;
+      `<button onclick="accountsDeleteUser('${a.id}','${safeUser}')">✕ REMOVE</button> `+
+      `<button onclick="accountsTransferAdmin('${a.id}','${safeUser}')" title="Hand the admin role to this account — you become a viewer">⇄ MAKE ADMIN</button>`;
     tr.innerHTML=
       `<td style="padding:4px 8px;">${a.username}</td>`+
       `<td style="padding:4px 8px;">${a.role}</td>`+
@@ -3779,7 +3959,7 @@ function settingsContent(){
       });
     });
   }
-  const btn=el('button',null,'↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);
+  const btn=el('button','mut-btn','↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-4);line-height:1.45;';
   foot.textContent='Model / AI-provider config here is DB-backed and restart-to-apply, same as the SECRETS tab (which is also encrypted at rest). A real .env value always wins over a saved one while both exist.';
   wrap.appendChild(foot);
@@ -3797,17 +3977,25 @@ function saveSecrets(){
       const stagedMcpo=(d.staged_behind_env||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
       let msg='Saved: '+((d.saved||[]).join(', ')||'(none)');
       // 2026-07-24: `docker compose restart` reuses the container's EXISTING environment and will
-      // NOT pick up an edited .env or mcpo-secrets/mcpo.env -- only `up -d` re-reads them and
-      // recreates the container. Get this wrong and the value silently never activates.
-      if(apiRestart) msg+='\n\nApplies on the next `docker compose up -d` (not a plain restart) for portfolio-api.';
-      if(mcpoRestart) msg+='\n\nApplies on the next `docker compose up -d` (not a plain restart) for mcpo.';
+      // NOT pick up an edited .env or mcpo-secrets/mcpo.env -- only a container RECREATE re-reads
+      // them. CORRECTED 2026-07-26 (Jason, live incident): for portfolio-api, `up -d --build`
+      // reliably recreates because --build produces a new image reference, which forces a
+      // recreate regardless of Compose's config-hash check. mcpo has no build step (prebuilt
+      // ghcr.io/open-webui/mcpo:main image, same tag every time) -- nothing forces a new image
+      // reference, and Compose's hash-based recreate check does NOT cover env_file byte content,
+      // so a plain `up -d mcpo` can silently do nothing even though mcpo.env changed. mcpo
+      // ALWAYS needs an explicit `--force-recreate`; portfolio-api doesn't, as long as `--build`
+      // is part of the command (which it always should be here).
+      if(apiRestart) msg+='\n\nApplies on the next `docker compose up -d --build portfolio-api` (not a plain restart).';
+      if(mcpoRestart) msg+='\n\nApplies on the next `docker compose up -d mcpo --force-recreate` (not a plain restart, and not a plain `up -d mcpo` either -- Compose won\'t detect an mcpo.env content change on its own).';
       if(d.staged_behind_env && d.staged_behind_env.length){
         msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '
             +'them from .env.';
         if(stagedMcpo){
           msg+=' For Monarch/Tavily specifically: recreate portfolio-api FIRST (docker compose up -d '
-              +'portfolio-api — it regenerates the mcpo bridge file on boot), THEN mcpo (docker compose '
-              +'up -d mcpo) — in that order, or mcpo may start before the fresh value is written.';
+              +'--build portfolio-api — it regenerates the mcpo bridge file on boot), THEN mcpo '
+              +'(docker compose up -d mcpo --force-recreate) — in that order, or mcpo may start '
+              +'before the fresh value is written.';
         }
       }
       alert(msg);
@@ -3870,7 +4058,7 @@ function holdingsContent(){
   };
   bar.appendChild(upBtn); bar.appendChild(fileInp);
   const addBtn=el('button',null,'+ ADD ROW'); bar.appendChild(addBtn);
-  const saveBtn=el('button',null,'↳ SAVE HOLDINGS'); bar.appendChild(saveBtn);
+  const saveBtn=el('button','mut-btn','↳ SAVE HOLDINGS'); bar.appendChild(saveBtn);
   wrap.appendChild(bar);
 
   const errBox=el('div'); errBox.style.cssText='color:var(--color-negative);font-size:var(--font-size-sm);margin-bottom:var(--space-2);white-space:pre-line;';
@@ -3957,15 +4145,20 @@ function secretsContent(){
         // 2026-07-24: a key can be SAVED (staged) here even while env_locked -- it just has no
         // effect until the .env line is removed AND the relevant service is RECREATED (`docker
         // compose up -d`, not `restart` -- restart reuses the container's existing environment
-        // and won't see an edited .env/mcpo.env at all).
+        // and won't see an edited .env/mcpo.env at all). CORRECTED 2026-07-26 (Jason, live
+        // incident): mcpo specifically needs `--force-recreate`, not just `up -d mcpo` -- it has
+        // no build step (prebuilt image, same tag every time) so nothing forces a new image
+        // reference, and Compose's recreate-detection hash doesn't cover env_file byte content --
+        // a plain `up -d mcpo` can silently do nothing. portfolio-api is fine with plain `up -d
+        // --build` since --build itself forces a recreate via the new image reference.
         if(it.env_locked){
-          const svc = it.scope==='mcpo-file' ? 'mcpo' : 'portfolio-api';
+          const svc = it.scope==='mcpo-file' ? 'mcpo --force-recreate' : '--build portfolio-api';
           const lnote=el('span','muted'); lnote.style.cssText='font-size:var(--font-size-sm);';
           lnote.textContent='· .env wins for now — remove it there + `docker compose up -d '+svc+'` to activate'+(it.staged_behind_env?' (already staged)':'');
           row.appendChild(lnote);
         } else if(it.scope==='mcpo-file'){
           const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
-          mnote.textContent='· applies on next `docker compose up -d mcpo`, not portfolio-api\'s';
+          mnote.textContent='· applies on next `docker compose up -d mcpo --force-recreate`, not portfolio-api\'s (plain `up -d mcpo` alone won\'t pick this up)';
           row.appendChild(mnote);
         }
       } else {
@@ -3976,9 +4169,9 @@ function secretsContent(){
       wrap.appendChild(row);
     });
   });
-  const btn=el('button',null,'↳ SAVE SECRETS'); btn.style.marginTop='12px'; btn.onclick=saveSecrets; wrap.appendChild(btn);
+  const btn=el('button','mut-btn','↳ SAVE SECRETS'); btn.style.marginTop='12px'; btn.onclick=saveSecrets; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
-  foot.textContent='Write-only and encrypted at rest (Fernet, secrets_crypto.py) — stored values are never shown or sent back to the browser. Applies the next time the affected service\'s container is recreated: `docker compose up -d` for portfolio-api, or for mcpo\'s (Monarch/Tavily). A plain `restart` reuses the existing container environment and will NOT pick up an edited .env or mcpo.env. This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
+  foot.textContent='Write-only and encrypted at rest (Fernet, secrets_crypto.py) — stored values are never shown or sent back to the browser. Applies the next time the affected service\'s container is recreated: `docker compose up -d --build portfolio-api`, or `docker compose up -d mcpo --force-recreate` for mcpo\'s (Monarch/Tavily). A plain `restart` reuses the existing container environment and will NOT pick up an edited .env or mcpo.env — and for mcpo specifically, even a plain `up -d mcpo` isn\'t enough (no build step means nothing forces a recreate; --force-recreate is required). This dashboard is plain-HTTP on your LAN — treat it as trusted-network only.';
   wrap.appendChild(foot);
 
   // SEC-3 (2026-07-25) — encryption key version/rotation, admin-only (a viewer's GET would 403).
@@ -4027,7 +4220,7 @@ function _keyStatusPanel(){
   const s=el('div'); s.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);line-height:1.6;';
   s.innerHTML=rows;
   box.appendChild(s);
-  const btn=el('button',null,'↻ ROTATE KEY NOW'); btn.id='key-rotate-btn'; btn.onclick=secretsRotateKey;
+  const btn=el('button','mut-btn','↻ ROTATE KEY NOW'); btn.id='key-rotate-btn'; btn.onclick=secretsRotateKey;
   box.appendChild(btn);
   return box;
 }
@@ -4682,7 +4875,7 @@ function knowledgeContent(){
     (k.built_at?` · indexed ${new Date(k.built_at*1000).toLocaleString()}`:' · not yet indexed')+
     (k.stale?' · <span class="neg">⚠ folder changed — REINDEX</span>':'');
   wrap.appendChild(stats);
-  const btn=el('button',null,'↻ REINDEX'); btn.id='kn-reindex'; btn.onclick=reindexKnowledge; wrap.appendChild(btn);
+  const btn=el('button','mut-btn','↻ REINDEX'); btn.id='kn-reindex'; btn.onclick=reindexKnowledge; wrap.appendChild(btn);
   if(k.reindexing){                          // panel (re)opened mid-reindex — pick up live progress
     _knSawRunning=true;
     const tot=k.total_chunks||0, done=k.done_chunks||0;

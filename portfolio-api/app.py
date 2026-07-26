@@ -62,6 +62,7 @@ import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — 
 import audit        # SEC-1 (2026-07-24) — append-only, encrypted, hash-chained security event log
 import detections   # SEC-4 (2026-07-25) — rules engine over the audit log (failed-login bursts, etc.)
 import demo_seed     # Demo harness (2026-07-25) — synthetic-data seeder + scheduled reset, DEMO_MODE-gated (no-op otherwise)
+import notifications  # Outbound awareness layer (2026-07-26) — VAPID web push + generic SMTP email, triggered from audit.emit()
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
@@ -337,6 +338,11 @@ CONFIG_SPECS = [
     # matching in-app editor that goes with this.
     {"key": "PORTFOLIO_PROVIDER", "label": "Portfolio data source", "group": "Portfolio provider",
      "default": "monarch", "options": ["monarch", "csv", "snaptrade"]},
+    # ---- Notifications (2026-07-26) -- VAPID requires *a* contact address in its claim (the push
+    # service, e.g. Chrome's/Mozilla's, may use it to reach you about a misbehaving sender); it
+    # does not need to be monitored or even real-looking, so this is not in SECRET_SPECS.
+    {"key": "NOTIFY_VAPID_CONTACT_EMAIL", "label": "Push notification contact email (VAPID claim — any address, not shown to users)",
+     "group": "Notifications", "default": "admin@localhost"},
 ]
 
 
@@ -533,7 +539,13 @@ _AUTH_PUBLIC_PATHS = {"/", "/health", "/api/auth/status", "/api/auth/first-run",
                        # sets a short-lived "recovery_uid" marker (checked explicitly by /reset,
                        # not by this gate), so being public here does not widen what an
                        # unauthenticated caller can actually do.
-                       "/api/auth/recovery/start", "/api/auth/recovery/reset"}
+                       "/api/auth/recovery/start", "/api/auth/recovery/reset",
+                       # PWA manifest + service worker (2026-07-26 notifications work) -- must be
+                       # fetchable pre-login the same way "/" itself is: iOS Safari needs the
+                       # manifest to offer "Add to Home Screen" at all, and the service worker is
+                       # what makes the Push API available post-install. Neither file contains
+                       # anything sensitive.
+                       "/manifest.json", "/sw.js"}
 
 # API hardening follow-up (2026-07-24): rate limiting was login-only until now -- extended to the
 # heavy job-trigger endpoints too (every /api/run-* scheduled-job trigger, the knowledge reindex,
@@ -593,6 +605,11 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     "/api/auth/logout", "/api/auth/change-password", "/api/auth/change-username",
     "/api/auth/mfa/setup", "/api/auth/mfa/verify", "/api/auth/mfa/disable",
     "/api/auth/recovery-key/regenerate", "/api/auth/reset-account",
+    # Notifications (2026-07-26) -- self-service, same category as the identity/security rows
+    # above: a viewer manages their OWN device subscriptions/preferences, never anyone else's, and
+    # none of these can read or change anything about the household's financial data or config.
+    "/api/notifications/subscribe", "/api/notifications/unsubscribe",
+    "/api/notifications/preferences", "/api/notifications/test",
 }
 
 
@@ -999,6 +1016,39 @@ def auth_delete_user(uid: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/auth/users/{uid}/transfer-admin")
+async def auth_transfer_admin(uid: str, request: Request):
+    """SEC-5 UX gap fix (2026-07-26) — RESUME-TRACKER.md flagged "no in-place role-change (delete +
+    recreate works instead)" as a known gap; this is that fix. Admin-only, and re-authenticates the
+    CALLER's own password (same bar as /api/auth/reset-account) since handing over the single admin
+    seat is the most privileged action this app exposes. Swaps roles atomically via
+    auth.transfer_admin_role() — no delete, no recreate, no new recovery key, no orphaned audit
+    history under a dead account id."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    body = await request.json()
+    if not auth.verify_password(admin, body.get("password") or ""):
+        return JSONResponse({"error": "password is incorrect"}, status_code=401)
+    target = auth.get_user_by_id(uid)
+    if not target:
+        return JSONResponse({"error": "no such account"}, status_code=404)
+    if (body.get("confirm_username") or "").strip() != target["username"]:
+        return JSONResponse({"error": "typed username does not match — type it exactly to confirm "
+                                       "you're handing the admin role to the right account"},
+                             status_code=400)
+    try:
+        auth.transfer_admin_role(admin["id"], uid)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    audit.emit("auth.user.role_changed", request=request, actor=admin["id"], actor_name=admin["username"],
+               resource="/api/auth/users/{}/transfer-admin".format(uid),
+               detail={"previous_admin": admin["username"], "new_admin": target["username"]})
+    request.session.clear()   # the caller is no longer admin -- force a fresh login
+    return {"ok": True, "note": f"Admin role transferred to {target['username']}. "
+                                  "You've been logged out — log back in; your account is now a viewer."}
+
+
 @app.post("/api/auth/recovery/start")
 async def auth_recovery_start(request: Request):
     """Account Recovery Tier 1 (RESUME-TRACKER.md 2026-07-23f design, built 2026-07-24):
@@ -1351,6 +1401,27 @@ def get_demo_status():
     banner only needs to render once logged in, and demo credentials are published anyway)."""
     return {"demo_mode": demo_seed.DEMO_MODE,
             "demo_admin_username": demo_seed.DEMO_ADMIN_USERNAME if demo_seed.DEMO_MODE else None}
+
+
+@app.post("/api/demo/reset-now")
+def demo_reset_now(request: Request):
+    """On-demand demo wipe+reseed (2026-07-26) -- the follow-up RESUME-TRACKER.md flagged after
+    Jason had to do a manual `docker compose down -v` + `up` dance just to change
+    DEMO_ADMIN_PASSWORD (demo_seed.seed_if_needed() only seeds once; there was previously no way to
+    force a fresh seed short of destroying the volume). Admin-only (viewer-denied is also already
+    the default for any POST not in _VIEWER_ALLOWED_WRITE_PATHS, but this adds the explicit,
+    stronger check the same way the household-accounts endpoints do) AND DEMO_MODE-gated --
+    demo_seed.reset_and_reseed() itself additionally refuses to run unless DEMO_MODE=1, so this can
+    never be used to wipe a real deployment even if somehow called on one."""
+    if not demo_seed.DEMO_MODE:
+        return JSONResponse({"error": "not a demo instance (DEMO_MODE is not set)"}, status_code=404)
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    result = demo_seed.reset_and_reseed()
+    audit.emit("demo.reset", request=request, actor=admin["id"], actor_name=admin["username"],
+               resource="/api/demo/reset-now", detail=result)
+    return {"ok": bool(result.get("reset")), **result}
 
 
 COMPLIANCE_DIR = os.environ.get("COMPLIANCE_DIR", "/compliance")
@@ -2150,14 +2221,32 @@ def _build_snaptrade():
 
 
 def build():
-    """Dispatch to the configured portfolio provider (PORTFOLIO_PROVIDER=monarch|csv|snaptrade)."""
+    """Dispatch to the configured portfolio provider (PORTFOLIO_PROVIDER=monarch|csv|snaptrade).
+
+    2026-07-26: wrapped in try/except to feed notifications.record_integration_result() -- the
+    "communication outage" half of the notifications work. csv is deliberately excluded (a local
+    file has no "outage" to detect); snaptrade/monarch failures accumulate toward the
+    integration_outage detection.alert (notifications.py), which only ever fires for the provider
+    actually selected here, so a household that's never touched SnapTrade never generates a
+    SnapTrade alert in the first place."""
     p = os.environ.get("PORTFOLIO_PROVIDER", "monarch").lower()
-    if p == "csv":
-        d = _build_csv()
-    elif p == "snaptrade":
-        d = _build_snaptrade()
-    else:
-        d = _build_monarch()
+    try:
+        if p == "csv":
+            d = _build_csv()
+        elif p == "snaptrade":
+            d = _build_snaptrade()
+        else:
+            d = _build_monarch()
+    except Exception as e:
+        try:
+            notifications.record_integration_result(p, ok=False, error=e)
+        except Exception:
+            pass
+        raise
+    try:
+        notifications.record_integration_result(p, ok=True)
+    except Exception:
+        pass
     d["portfolio_provider"] = p   # 2026-07-24 -- lets the frontend know which provider is active
                                   # (e.g. to badge the HOLDINGS panel as live vs. staged-but-inactive)
     _snapshot_value(d)          # record today's value for the accruing risk-metrics history
@@ -7931,6 +8020,19 @@ SECRET_SPECS = [
      "group": "AI / LLM provider", "scope": "app"},
     {"key": "EMBED_API_KEY", "label": "Embeddings provider API key (blank = same as above, or local Ollama)",
      "group": "AI / LLM provider", "scope": "app"},
+    # ---- Notifications / email (2026-07-26) -- generic SMTP, deliberately NOT tied to any one
+    # provider (Gmail, Outlook, a self-hosted mail server, ...) and NOT a paid cloud API like AWS
+    # SES -- Jason's call: no recurring cloud cost just to send an alert email, and per-installation
+    # configurability (each self-hosted deployment brings its own mailbox). For Gmail specifically:
+    # smtp.gmail.com / 587 / your address / a 16-character App Password (not your real password —
+    # Google requires 2-Step Verification enabled first to generate one). See notifications.py.
+    {"key": "SMTP_HOST",         "label": "SMTP server (e.g. smtp.gmail.com)",         "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_PORT",         "label": "SMTP port (587 = STARTTLS, blank defaults to 587)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_USERNAME",     "label": "SMTP username (usually your full email address)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_PASSWORD",     "label": "SMTP password (Gmail: an App Password, not your login password)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_FROM_ADDRESS", "label": "From address (blank = same as SMTP username)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_TO_ADDRESS",   "label": "Send alert emails to this address",         "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_USE_TLS",      "label": "Use STARTTLS (1 = yes, 0 = no; blank defaults to yes)", "group": "Notifications (Email)", "scope": "app"},
 ]
 
 
@@ -7965,13 +8067,20 @@ _write_secrets(_read_secrets())   # one-time-per-boot upgrade pass: re-encrypts 
 # env_file. A key already set in portfolio-api's REAL environment (env_locked, i.e. a real .env
 # value) is deliberately EXCLUDED here, not just skipped on the read side -- so mcpo's separate
 # `env_file: .env` entry is always the one supplying it, and the two files are never actually
-# defining the same key at once. Applies the next time mcpo's container is RECREATED
-# (`docker compose up -d mcpo` -- NOT `docker compose restart mcpo`, which reuses the existing
-# container's environment and will never see an edited env_file). When migrating a currently
-# env-locked value off .env, recreate portfolio-api FIRST (its boot is what regenerates this
-# file with the now-unlocked value) and mcpo SECOND. There is no live push into an already-
-# running mcpo container (that would need Docker-socket access from portfolio-api, deliberately
-# not done here).
+# defining the same key at once. Applies the next time mcpo's container is genuinely RECREATED.
+# CONFIRMED 2026-07-26 (Jason, live incident): a plain `docker compose up -d mcpo` is NOT enough --
+# Compose's container-recreate decision is driven by a config hash computed from the resolved
+# docker-compose.yml service definition, which does NOT include the byte content of a file
+# referenced via `env_file:`. Editing mcpo.env alone never changes that hash, so plain `up -d mcpo`
+# sees "no config change" and leaves the existing container (and its stale environment) running --
+# exactly what happened here: mcpo's cached Monarch session expired, it tried to re-auth using its
+# own (stale) MONARCH_EMAIL/PASSWORD, and a plain `up -d mcpo` first attempt did nothing. The fix
+# that actually worked: `docker compose up -d mcpo --force-recreate`. Also NOT
+# `docker compose restart mcpo`, which reuses the existing container's environment and will never
+# see an edited env_file either. When migrating a currently env-locked value off .env, recreate
+# portfolio-api FIRST (its boot is what regenerates this file with the now-unlocked value) and mcpo
+# SECOND, both with --force-recreate. There is no live push into an already-running mcpo container
+# (that would need Docker-socket access from portfolio-api, deliberately not done here).
 MCPO_SECRETS_FILE = os.environ.get("MCPO_SECRETS_FILE", "/mcpo-secrets/mcpo.env")
 
 
@@ -8043,9 +8152,12 @@ async def post_secrets(req: Request):
     env-locked). Ignores 'mcpo'-scope (env-only) keys and unknown keys. Blank clears. A key that's
     currently env_locked can still be SAVED here (staged) -- it just has no effect until the real
     .env value is removed and the relevant service's container is RECREATED via `docker compose
-    up -d` (portfolio-api for 'app', mcpo for 'mcpo-file' -- recreate portfolio-api first when
-    migrating a currently-locked value, since its boot regenerates the mcpo bridge file). A plain
-    `restart` will NOT pick this up. Values never echoed back."""
+    up -d --force-recreate` (portfolio-api for 'app', mcpo for 'mcpo-file' -- recreate portfolio-api
+    first when migrating a currently-locked value, since its boot regenerates the mcpo bridge
+    file). `--force-recreate` is NOT optional here (confirmed 2026-07-26): Compose's recreate-
+    detection hash doesn't cover env_file byte content, so a plain `up -d <service>` silently does
+    nothing when only mcpo.env changed. A plain `restart` will NOT pick this up either. Values
+    never echoed back."""
     body = await req.json()
     stored = _read_secrets()
     by_key = {s["key"]: s for s in SECRET_SPECS}
@@ -8075,6 +8187,75 @@ async def post_secrets(req: Request):
                                       # (still correctly excludes any key that's env_locked)
     return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
             "restart_required": bool(saved)}
+
+
+# ============================================================================
+# Notifications (2026-07-26) — SETTINGS -> NOTIFICATIONS. Self-service (each session manages its
+# OWN push subscriptions/preferences — see _VIEWER_ALLOWED_WRITE_PATHS above), no admin gate needed
+# beyond "you must be logged in" (the global auth gate already covers that). See notifications.py
+# module docstring for the full design (VAPID web push + generic SMTP, self-hosted, no third party).
+# ============================================================================
+@app.get("/api/notifications/vapid-public-key")
+def notifications_vapid_key(request: Request):
+    """Public by necessity of what it is (a public key), but still behind the normal login gate —
+    no reason to hand it to an unauthenticated caller. Used by the frontend's
+    `PushManager.subscribe({applicationServerKey: ...})` call."""
+    return {"key": notifications.vapid_public_key_b64()}
+
+
+@app.post("/api/notifications/subscribe")
+async def notifications_subscribe(request: Request):
+    uid = request.session.get("uid")
+    body = await request.json()
+    sub = body.get("subscription")
+    if not sub or not sub.get("endpoint"):
+        return JSONResponse({"error": "missing subscription"}, status_code=400)
+    count = notifications.add_subscription(uid, sub)
+    return {"ok": True, "device_count": count}
+
+
+@app.post("/api/notifications/unsubscribe")
+async def notifications_unsubscribe(request: Request):
+    uid = request.session.get("uid")
+    body = await request.json()
+    endpoint = body.get("endpoint")
+    if not endpoint:
+        return JSONResponse({"error": "missing endpoint"}, status_code=400)
+    notifications.remove_subscription(uid, endpoint)
+    return {"ok": True}
+
+
+@app.get("/api/notifications/preferences")
+def notifications_get_preferences(request: Request):
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid)
+    prefs = notifications.get_prefs(uid)
+    return {"preferences": prefs, "categories": notifications.CATEGORIES,
+            "device_count": notifications.subscription_count(uid),
+            "is_admin": auth.is_admin(user),
+            "email_available": notifications.smtp_configured(),
+            "email_note": None if notifications.smtp_configured() else
+                "Email is off until SMTP is configured under SETTINGS -> SECRETS & KEYS "
+                "(\"Notifications (Email)\" group).",
+            "email_note_role": None if auth.is_admin(user) else
+                "Email notifications are configured once for the whole household by the admin "
+                "account and go to one shared address."}
+
+
+@app.post("/api/notifications/preferences")
+async def notifications_set_preferences(request: Request):
+    uid = request.session.get("uid")
+    body = await request.json()
+    saved = notifications.set_prefs(uid, body or {})
+    return {"ok": True, "preferences": saved}
+
+
+@app.post("/api/notifications/test")
+def notifications_test(request: Request):
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid)
+    result = notifications.send_test(uid, auth.is_admin(user))
+    return {"ok": True, **result}
 
 
 @app.get("/api/secrets/key-status")
@@ -8272,19 +8453,33 @@ SETUP_FIELDS = [
     {"id": "api_tavily", "tier": 3, "group": "Tavily API key", "cfg": "secret",
      "key": "TAVILY_API_KEY", "jump": None,
      "note": "Set in .env (see INSTALL.md) -- gates news alerts and opportunity scanning."},
+    # Notifications (2026-07-26) -- Tier 3 (optional, not blocking): "configured" means either a
+    # push device is subscribed OR SMTP is set up, either one is enough to count as done. cfg="notify"
+    # is a NEW branch (see _setup_field_filled below) since this data lives in notify_subs.json/
+    # notify_prefs.json + the SECRET_SPECS SMTP_* keys, not any of the existing retire/insurance/
+    # policy/secret/auth sources.
+    {"id": "notifications_configured", "tier": 3, "group": "Security & outage notifications", "cfg": "notify",
+     "key": "configured", "jump": ("settings", "notifications"),
+     "note": "Push and/or email alerts for security events and portfolio-provider outages, instead "
+             "of only showing up in SETTINGS -> SECURITY -> SECURITY AUDIT LOG. Optional but "
+             "recommended -- set up in SETTINGS -> NOTIFICATIONS."},
 ]
 
 
-def _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags=None):
+def _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags=None, notify_flags=None):
     """True if `spec`'s value counts as provided. `secrets_set` is the set of secret keys that
     are set (env-locked OR saved) -- same definition /api/secrets itself uses. `auth_flags`
     (2026-07-24, extended same day to cover 2 cfg=="auth" entries: `mfa_enabled` and
     `recovery_key_set`) is a small dict keyed by spec["key"] -- both live in auth.db, not any of
-    the JSON/SQLite config stores the other three cfg branches read."""
+    the JSON/SQLite config stores the other three cfg branches read. `notify_flags` (2026-07-26,
+    same pattern) covers cfg=="notify" -- notifications.py's own subscription/SMTP state, not a
+    config-file value either."""
     if spec["cfg"] == "secret":
         return spec["key"] in secrets_set
     if spec["cfg"] == "auth":
         return bool((auth_flags or {}).get(spec["key"]))
+    if spec["cfg"] == "notify":
+        return bool((notify_flags or {}).get(spec["key"]))
     cfg = {"retire": retire, "insurance": insurance, "policy": policy}.get(spec["cfg"]) or {}
     val = cfg.get(spec["key"])
     kind = spec.get("kind", "scalar")
@@ -8311,13 +8506,14 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags
     return val not in (None, "")
 
 
-def _setup_progress(auth_flags=None):
+def _setup_progress(auth_flags=None, notify_flags=None):
     """Compute the full onboarding completeness model: every SETUP_FIELDS entry checked against
     the LIVE config, grouped by tier, with an honest X-of-N that only counts fields where
     "blank" really means "not yet provided" for THIS household (married-only fields are excluded
     from a single filer's denominator; already-reasonable-default fields are shown but never
     counted -- see SETUP_FIELDS' docstring). `auth_flags` (2026-07-24) is read from the caller's
-    session/auth.db, not any of the JSON config stores this function otherwise reads."""
+    session/auth.db, not any of the JSON config stores this function otherwise reads.
+    `notify_flags` (2026-07-26) is the notifications.py equivalent -- see get_setup_progress()."""
     retire = _read_retire()
     insurance = _read_insurance_cfg()
     policy = _read_policy()
@@ -8329,7 +8525,7 @@ def _setup_progress(auth_flags=None):
     tiers = {}
     for spec in SETUP_FIELDS:
         applicable = not (spec.get("required_if") == "mfj" and not married)
-        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags)
+        filled = _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags, notify_flags)
         scored = applicable and spec.get("scored", True)
         severity = spec.get("severity", "optional")
         # "done" (drives the % bar / X-of-N counts) != "filled" (drives the ✓/△/! glyph). A blank
@@ -8362,7 +8558,12 @@ def get_setup_progress(request: Request):
     user = auth.get_user_by_id(uid) if uid else None
     auth_flags = {"mfa_enabled": bool(user and user.get("totp_enabled")),
                   "recovery_key_set": bool(user and user.get("recovery_key_hash"))}
-    return _setup_progress(auth_flags=auth_flags)
+    # Notifications (2026-07-26) -- "configured" counts as done if EITHER this account has a push
+    # device subscribed OR SMTP is set up (shared household email doesn't need every viewer to
+    # also subscribe push for the checklist to consider notifications "handled").
+    notify_flags = {"configured": bool(uid and (notifications.subscription_count(uid)
+                                                 or notifications.smtp_configured()))}
+    return _setup_progress(auth_flags=auth_flags, notify_flags=notify_flags)
 
 
 def _dividend_drip_split():
@@ -11636,3 +11837,25 @@ def index():
     path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     with open(path, encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/manifest.json")
+def manifest():
+    """PWA manifest (2026-07-26 notifications work) -- lets a browser offer "Add to Home Screen" /
+    "Install". Required on iOS specifically: the Push API is only available to a Home-Screen-
+    installed web app there (Safari 16.4+), never to an ordinary open tab."""
+    path = os.path.join(os.path.dirname(__file__), "static", "manifest.json")
+    with open(path, encoding="utf-8") as f:
+        return Response(content=f.read(), media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    """Service worker (2026-07-26 notifications work) -- served from the ROOT path (not
+    /static/sw.js) so its default registration scope covers the whole origin, not just a
+    subfolder. Cache-Control: no-cache so an update to this file is picked up on the next visit
+    rather than being stuck behind a stale cached copy indefinitely."""
+    path = os.path.join(os.path.dirname(__file__), "static", "sw.js")
+    with open(path, encoding="utf-8") as f:
+        return Response(content=f.read(), media_type="application/javascript",
+                         headers={"Cache-Control": "no-cache"})

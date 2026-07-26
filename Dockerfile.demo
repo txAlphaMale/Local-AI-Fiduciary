@@ -7,12 +7,11 @@
 # BUILD FROM THE REPO ROOT (not portfolio-api/), so this Dockerfile can reach both directories:
 #   docker build -f Dockerfile.demo -t fiduciary-portfolio-api:demo .
 #
-# IMPORTANT: compliance/'s GRC-only content (risk register, Statement of Applicability,
-# controls.json, ROPA, DPIA, IR runbook) is intentionally NOT committed to this repo (2026-07-25
-# decision -- see RESUME-TRACKER.md's compliance/ tracking note). Populate your OWN compliance/
-# folder at the repo root -- at minimum a valid controls.json -- before running this build, or the
-# Security Posture page will 404. The two files that ARE tracked (PRIVACY-NOTICE.md,
-# DATA-RETENTION-SCHEDULE.md) will already be present in a normal git checkout.
+# compliance/'s GRC content (risk register, Statement of Applicability, controls.json, ROPA, DPIA,
+# IR runbook) IS committed to this repo (reversed 2026-07-26 — see .gitignore's compliance/ note
+# and RESUME-TRACKER.md) — a normal git checkout already has everything this build needs, no manual
+# population step required. Replace any of it with your own content before building if you want the
+# Security Posture page to reflect a different deployment's actual controls.
 #
 # Otherwise identical to portfolio-api/Dockerfile -- keep the two in sync if that file changes
 # (the acme.sh install step, base image, CMD, etc. are all duplicated here on purpose, since a

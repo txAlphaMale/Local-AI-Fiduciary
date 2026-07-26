@@ -50,7 +50,14 @@ services:
     # first place, so the two files are never actually fighting over the same key in practice;
     # the list order here is just defense-in-depth. mcpo.env MUST exist before the first
     # `docker compose up` (same requirement as config.json below) -- `cp mcpo-secrets/mcpo.env.example
-    # mcpo-secrets/mcpo.env`. MCPO_API_KEY is NOT part of this -- it's passed via the `--api-key`
+    # mcpo-secrets/mcpo.env`. CONFIRMED 2026-07-26 (real incident, not theoretical): editing
+    # mcpo.env's CONTENT alone does not change Compose's recreate-detection hash (that hash covers
+    # this file's resolved service definition, not the byte content of anything referenced via
+    # `env_file:`), and mcpo has no build step to force a new image reference either -- so a plain
+    # `docker compose up -d mcpo` after an mcpo.env edit can silently do nothing. Always use
+    # `docker compose up -d mcpo --force-recreate` after mcpo.env changes (or after mcpo's cached
+    # Monarch session simply expires and needs fresh credentials to re-auth with).
+    # MCPO_API_KEY is NOT part of this -- it's passed via the `--api-key`
     # CLI flag below, which Compose resolves from the TOP-LEVEL .env only (env_file entries can't
     # feed command-line variable substitution), so it stays a genuine .env-only, restart-to-change
     # value, same as before.

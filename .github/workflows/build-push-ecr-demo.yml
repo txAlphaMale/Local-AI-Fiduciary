@@ -1,0 +1,90 @@
+name: Build & push demo image to ECR (manual, public demo path)
+
+# AWS-DEMO-HOSTING-GUIDE.md §7 automation follow-up (flagged, not built, in the 2026-07-25 session
+# that wrote that guide; built 2026-07-26). Copy-and-tweak of build-push-ecr.yml: same OIDC-only,
+# no-auto-deploy, workflow_dispatch-gated shape, retargeted at Dockerfile.demo (repo-root build
+# context, bakes compliance/ in) and the SEPARATE fiduciary/portfolio-api-demo ECR repo, so a bad
+# push here can never collide with or affect the real instance's fiduciary/portfolio-api repo/image.
+#
+# Scope, stated plainly: this covers portfolio-api-demo only. The demo's mcpo image (mcpo-demo,
+# which bakes in mcpo/config.json since Fargate can't bind-mount it — see AWS-DEMO-HOSTING-GUIDE.md
+# §7) has no committed Dockerfile yet (written inline in that guide instead, a deliberate
+# 2026-07-25 scope call — "committing a third Dockerfile felt like more ceremony than value").
+# Automating mcpo-demo's build is a good follow-up if a Dockerfile for it ever gets committed; until
+# then that half stays the guide's manual `docker build`/`push` commands.
+#
+# One-time setup this workflow depends on (same IAM OIDC role as build-push-ecr.yml — no separate
+# role needed, just broaden its ECR permissions to also cover the repo below):
+#   - The same IAM OIDC role ("github-actions-ecr-push") used by build-push-ecr.yml, scoped to also
+#     include ecr:* on fiduciary/portfolio-api-demo (or ecr:* on the whole fiduciary/* namespace)
+#   - One ECR repository already created: fiduciary/portfolio-api-demo
+#     (aws ecr create-repository --repository-name fiduciary/portfolio-api-demo)
+#
+# Deliberately uses OIDC role assumption, not long-lived AWS access-key secrets — same reasoning as
+# build-push-ecr.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag to push (e.g. demo-2026-07-26). Defaults to the short commit SHA."
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # required for OIDC -> AWS role assumption
+  contents: read
+
+env:
+  AWS_REGION: us-east-1   # change if your demo stack lives in a different region
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build + push portfolio-api-demo
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Built from the REPO ROOT (not ./portfolio-api), same as the guide's manual command --
+          # Dockerfile.demo needs to reach both portfolio-api/ and compliance/.
+          docker build -f Dockerfile.demo \
+                       -t "$REGISTRY/fiduciary/portfolio-api-demo:$TAG" \
+                       -t "$REGISTRY/fiduciary/portfolio-api-demo:latest" \
+                       .
+          docker push "$REGISTRY/fiduciary/portfolio-api-demo:$TAG"
+          docker push "$REGISTRY/fiduciary/portfolio-api-demo:latest"
+
+      - name: Summary
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $REGISTRY/fiduciary/portfolio-api-demo:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "mcpo-demo is NOT built by this workflow -- no committed Dockerfile for it yet, see AWS-DEMO-HOSTING-GUIDE.md section 7 for its manual build command." >> "$GITHUB_STEP_SUMMARY"
+          echo "This did NOT update the running ECS demo service. See AWS-DEMO-HOSTING-GUIDE.md's deploy step to roll it out." >> "$GITHUB_STEP_SUMMARY"

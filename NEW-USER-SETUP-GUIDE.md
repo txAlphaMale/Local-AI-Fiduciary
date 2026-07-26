@@ -89,6 +89,7 @@ Same household-register file again.
 | API keys (Finnhub, Tavily) | SETTINGS → SECRETS (2026-07-24 — was `.env`-only) | Research briefs, news alerts, opportunity scanning | `.env` still works as a fallback/seed value, but the UI is the preferred path now — see the in-app WIKI → "Secrets encryption & the secrets.key backup" entry. |
 | AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |
 | No brokerage account? Portfolio data source (CSV) | HOLDINGS tab + SETTINGS → ADVANCED KNOBS | A full portfolio with no Monarch/SnapTrade account needed at all | See "No-brokerage-account holdings (CSV)" below — new 2026-07-24, this used to require hand-placing a file on the host. |
+| Notifications (push and/or email) | SETTINGS → NOTIFICATIONS (+ SETTINGS → SECRETS & KEYS for email) | Security alerts and portfolio-outage warnings pushed/emailed to you, instead of only showing up in the audit log | New 2026-07-26 — see "Notifications" below. |
 
 ---
 
@@ -157,6 +158,42 @@ now.
 This is also the fastest way back onto a working dashboard if Monarch/mcpo is ever down —
 switch to CSV temporarily instead of staring at a portfolio-load error. Full detail in the in-app
 **WIKI → Getting started → "No brokerage account? The HOLDINGS tab (CSV positions)"** entry.
+
+---
+
+## Notifications (push and/or email) — optional but recommended
+
+By default, the only way to learn about a security event (a login from a new location, MFA
+disabled, an admin action) or a portfolio-data-source outage is to open SETTINGS → SECURITY →
+SECURITY AUDIT LOG yourself. SETTINGS → NOTIFICATIONS (new 2026-07-26) closes that gap — self-
+hosted, no third-party push service and no paid cloud email API required.
+
+**Push (this device only):**
+- Open SETTINGS → NOTIFICATIONS and click **🔔 SUBSCRIBE THIS DEVICE**, then allow the browser's
+  permission prompt.
+- **iPhone/iPad:** Apple only allows push notifications for an installed web app, never an
+  ordinary open Safari tab. First tap the Share icon → **"Add to Home Screen,"** then reopen the
+  app from that Home Screen icon before subscribing. Requires iOS 16.4+ (released March 2023 —
+  nearly every device in use qualifies).
+- **Android / desktop Chrome, Firefox, Edge:** subscribe directly from an ordinary browser tab, no
+  install step needed.
+- Each device/browser subscribes independently — subscribe your phone AND your laptop if you want
+  both to get alerts.
+
+**Email (one shared address for the whole household, admin-only):**
+- Under SETTINGS → SECRETS & KEYS → **"Notifications (Email)"**, enter your SMTP server details.
+  For Gmail: host `smtp.gmail.com`, port `587`, your full email address as the username, and an
+  **App Password** — not your normal Gmail password. Google requires 2-Step Verification turned on
+  first before it will generate one (search "Google App Passwords" if you've never made one). Any
+  other email provider's SMTP details work the same way.
+- Then flip the email checkbox on in SETTINGS → NOTIFICATIONS.
+
+**Either way:** pick which categories notify you (security alerts, portfolio outages) under
+SETTINGS → NOTIFICATIONS, then click **✉ SEND TEST NOTIFICATION** to confirm delivery actually
+works before relying on it. "Portfolio outage" alerts only ever fire for whichever data source
+you've actually configured — if you're on the CSV/HOLDINGS tab or have never touched SnapTrade,
+you will never see a SnapTrade alert. Full detail in the in-app **WIKI → Getting started → "Push &
+email notifications"** entry.
 
 ---
 

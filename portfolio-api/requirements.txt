@@ -8,3 +8,4 @@ argon2-cffi             # password hashing (auth.py) — 2026-07-23c local-hosti
 pyotp                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
 qrcode[pil]             # renders the TOTP QR code for MFA setup (auth.py)
 cryptography            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
+pywebpush               # VAPID web push delivery (notifications.py) — 2026-07-26, pulls in py_vapid

@@ -111,6 +111,9 @@ EVENT_TYPES = (
     "audit.retention.purged",
     # SEC-5 (2026-07-25): admin-managed household accounts (RBAC) + the viewer-role write denial.
     "auth.user.created", "auth.user.deleted",
+    # SEC-5 UX gap fix (2026-07-26): in-place admin<->viewer role swap (notifications.py module
+    # docstring / RESUME-TRACKER.md "no in-place role-change" gap).
+    "auth.user.role_changed",
     # SEC-4 (2026-07-25): the detection engine (detections.py) logs its own findings as events of
     # this type, reusing this module's storage/chain/viewer rather than a parallel alert store —
     # an alert IS a security event.
@@ -286,6 +289,18 @@ def emit(event_type, outcome="success", *, actor=None, actor_name=None, src_ip=N
             "event_type": event_type, "resource": resource, "outcome": outcome,
             "corr_id": corr_id, "entry_hash": entry_hash,
         })
+        # Notification hook (2026-07-26) -- the "detect" stage (this function) now also feeds the
+        # "notify" stage: notifications.py decides whether this event is push/email-worthy and, if
+        # so, dispatches on its own background thread. Lazy-imported (rather than a top-of-file
+        # import) so a broken notifications.py can NEVER prevent audit.py itself from loading --
+        # this module's own SAFETY CONTRACT (never raise, never block the write above) extends to
+        # this call: best-effort only, wrapped separately from the try/except that guards the
+        # actual DB write so a notify failure is never confused with an audit-write failure.
+        try:
+            import notifications
+            notifications.notify_from_event(event_type, outcome, actor_name, resource, detail, ts)
+        except Exception as e:
+            print(f"[audit] notify hook failed for {event_type}: {e}", flush=True)
         return True
     except Exception as e:
         print(f"[audit] emit failed for {event_type}/{outcome}: {e}", flush=True)

@@ -211,6 +211,30 @@ def admin_delete_viewer(uid):
     delete_user(uid)
 
 
+def transfer_admin_role(current_admin_uid, new_admin_uid):
+    """SEC-5 UX gap fix (2026-07-26): swaps the admin role between the current admin and one
+    existing viewer, IN PLACE -- same two account rows, same ids, same audit-log actor history.
+    Replaces the previous only-option workaround (delete the viewer, recreate them as admin, which
+    orphaned their audit history under a dead id and forced a brand-new recovery key for what was
+    conceptually the same household member). Atomic single-connection update: there is exactly one
+    admin before this call and exactly one admin after it, never zero or two along the way."""
+    if current_admin_uid == new_admin_uid:
+        raise ValueError("cannot transfer the admin role to yourself")
+    admin = get_user_by_id(current_admin_uid)
+    target = get_user_by_id(new_admin_uid)
+    if not admin or not is_admin(admin):
+        raise ValueError("caller is not the current admin")
+    if not target:
+        raise ValueError("no such account")
+    if is_admin(target):
+        raise ValueError("target is already admin")
+    now = int(time.time())
+    with _conn() as c:
+        c.execute("UPDATE users SET role='viewer', updated=? WHERE id=?", (now, current_admin_uid))
+        c.execute("UPDATE users SET role='admin', updated=? WHERE id=?", (now, new_admin_uid))
+    return True
+
+
 def verify_password(user, password):
     if not user or not password:
         return False
