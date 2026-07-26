@@ -24,10 +24,12 @@ import os
 import csv
 import io
 import datetime
+import threading
 
 import auth
 import store
 import audit
+import knowledge
 
 DEMO_MODE = os.environ.get("DEMO_MODE", "0") == "1"
 DEMO_ADMIN_USERNAME = os.environ.get("DEMO_ADMIN_USERNAME", "demo")
@@ -78,6 +80,32 @@ def _marker_exists():
     return os.path.exists(DEMO_MARKER_FILE)
 
 
+def _reindex_knowledge_async():
+    """Kick off a full knowledge-base (re)index in a background thread right after a fresh seed.
+
+    Why this exists (2026-07-26, found by Jason on the first real demo walkthrough): the
+    knowledge/reference/*.md corpus (public tax/estate/insurance/risk/security reference material,
+    all git-tracked and bind-mounted into both the real and demo containers via the same
+    ./knowledge:/knowledge:ro mount) is only ever indexed on-demand -- via the SETTINGS -> KNOWLEDGE
+    "REINDEX" button, or implicitly the first time a chat persona's search_knowledge tool runs a
+    query. Neither happens automatically. Compounding it: the knowledge tables live in the same
+    store.db that reset_and_reseed() below deletes wholesale every DEMO_RESET_INTERVAL_S (6h
+    default), so even a demo that WAS indexed loses that index on every periodic reset. Net effect:
+    a fresh demo (or one visited shortly after a reset) shows "no documents" in the KNOWLEDGE tab
+    and gets no citations from search_knowledge, even though the files were there the whole time --
+    not a missing-content bug, an indexing-timing gap. Run in a background thread (not inline) so a
+    slow embed pass never blocks app boot or the reset thread's own next tick; failures are logged,
+    never raised, matching every other best-effort background job in this app.
+    """
+    def _run():
+        try:
+            result = knowledge.ensure_index(force=True)
+            print(f"[demo_seed] knowledge base indexed for demo: {result}", flush=True)
+        except Exception as e:
+            print(f"[demo_seed] knowledge reindex failed (non-fatal): {e}", flush=True)
+    threading.Thread(target=_run, daemon=True, name="demo-knowledge-reindex").start()
+
+
 def seed_if_needed():
     """Called once at app boot. Safe to call even when DEMO_MODE=0 (no-op)."""
     if not DEMO_MODE:
@@ -106,6 +134,7 @@ def seed_if_needed():
                    detail={"holdings_count": len(SYNTHETIC_HOLDINGS)})
     except Exception:
         pass
+    _reindex_knowledge_async()
     print(f"[demo_seed] seeded fresh demo instance — login as '{DEMO_ADMIN_USERNAME}'.", flush=True)
     return {"seeded": True, "username": DEMO_ADMIN_USERNAME}
 

@@ -370,6 +370,8 @@ let HOUSEHOLD_ACCOUNTS=null;  // SEC-5 (2026-07-25) — admin-only household-acc
 let KEY_STATUS=null;  // SEC-3 (2026-07-25) — encryption key version/rotation panel
 let COMPLIANCE_CONTROLS=null;  // Demo harness (2026-07-25) — Security Posture page (SETTINGS -> SECURITY POSTURE)
 let POSTURE_FILTER=null;  // Demo harness — client-side theme filter for the Security Posture table
+let COMPLIANCE_DOC_CATALOG=null, COMPLIANCE_DOC_OPEN=null;  // 2026-07-26 — GRC document viewer (risk register/IR runbook/SoA/privacy docs) on the Security Posture page
+const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cached for the session
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
@@ -509,6 +511,80 @@ function _maybeAutoStartTour(){
   if(TOUR_DONE || TAB!=='dashboard') return;
   const sp=SETUPPROG; if(!sp || sp.error || !sp.total || sp.done>=sp.total) return;
   setTimeout(startTour, 600);
+}
+
+// ============================================================================
+//  Security & compliance walkthrough (2026-07-26) — a SEPARATE tour from buildTourSteps()/
+//  startTour() above, deliberately. That tour is generated from YOUR unfilled setup-checklist
+//  fields and is aimed at a household setting up their own instance; this one is a fixed, curated
+//  path through the SEC-1..8 security engineering + GRC program for a different audience (e.g. an
+//  interviewer evaluating the build), and never auto-starts. Never mixed into the same steps array
+//  since the two audiences and purposes don't overlap. Triggered from the "🛡 Take the security &
+//  compliance walkthrough" button on the Security Posture page (securityPostureContent()).
+// ============================================================================
+function buildSecurityTourSteps(){
+  return [
+    {tab:'settings', subtab:'posture', title:'Security & compliance, by design',
+     desc:'A tour of this app\'s security engineering and GRC program — every stop below is a live control you can click into and try yourself, not a slide. Close any time with ✕ or Esc.'},
+    {tab:'settings', subtab:'posture', element:'#posture-summary',
+     title:'A real Statement of Applicability, machine-generated',
+     desc:'93 ISO/IEC 27001:2022 Annex A controls, each Applied/Partial/N-A with a rationale naming real code or evidence. Generated from compliance/generate_soa.py so the human-readable document and this table can never drift apart — no hand-copied claims to go stale.'},
+    {tab:'settings', subtab:'posture', element:'#posture-docs-row',
+     title:'The prose behind the table',
+     desc:'Risk register, incident-response runbook, and the full Statement of Applicability, as written documents — not just this table\'s summary of them. Click one to read it inline.'},
+    {tab:'settings', subtab:'iam', element:'#sec-accounts-wrap',
+     title:'Least-privilege access control (RBAC)',
+     desc:'Exactly one admin, zero-or-more read-only viewers. Enforcement is server-side default-deny: a viewer session can read the entire dashboard, but every write endpoint is denied unless explicitly allowlisted — not client-side button-hiding that a direct API call could bypass.'},
+    {tab:'settings', subtab:'iam', element:'#sec-mfa-wrap',
+     title:'MFA enforced as a critical control, not an option',
+     desc:'TOTP + one-time backup codes. Treated as a CRITICAL setup item from account creation — flagged on the setup checklist and the onboarding flow, not a buried settings toggle.'},
+    {tab:'settings', subtab:'iam', element:'#sec-rk-wrap',
+     title:'Break-glass recovery, without a backdoor',
+     desc:'A host-CLI recovery path for a fully locked-out admin still requires a secret shown exactly once at generation time. Host/container access ALONE is deliberately not enough to silently take over the account — it either restores the real owner or wipes everything, nothing in between.'},
+    {tab:'settings', subtab:'security', element:'#sec-cert-wrap',
+     title:'Transport security, managed in-app',
+     desc:'Self-signed, Let\'s Encrypt/ACME, or a manual CSR — no command line required. A real gap was found and fixed here: reverting to plain HTTP now explicitly clears a cached browser HSTS policy, so a downgrade actually takes effect instead of silently failing.'},
+    {tab:'settings', subtab:'security', element:'#sec-audit-wrap',
+     title:'Tamper-evident audit trail',
+     desc:'Every login, MFA/recovery use, config/secret/TLS change, and denied request — HMAC hash-chained so tampering is detectable, IPs masked, with automated retention that logs its own disposal. Try "⚡ RUN DETECTIONS NOW" below: a small rules engine (failed-login bursts, first-seen IPs, MFA-disable-then-change) that fires real alerts into this same log on demand.'},
+    {tab:'settings', subtab:'security', element:'#privacy-export-btn',
+     title:'Privacy program with a working DSAR export',
+     desc:'A real "what does this app know about my account" export — not just a privacy notice. Click ⬇ EXPORT MY DATA to download your own identity + security history as JSON right now.'},
+    {tab:'settings', subtab:'secrets', element:'#sec-keystatus-wrap',
+     title:'Key rotation with zero downtime',
+     desc:'Envelope-style key versioning: rotating generates a new key for future writes while everything encrypted under an older version keeps decrypting correctly — verified across multiple simultaneous key versions, not just claimed.'},
+    {tab:'settings', subtab:'posture', element:'#posture-docs-row',
+     title:'That\'s the tour',
+     desc:'Everything above maps to a specific ISO 27001 Annex A control in the table above, plus NIST 800-53 and SOC 2 equivalents documented alongside the build history. Replay this any time from the 🛡 button on this page.'},
+  ];
+}
+function startSecurityTour(){
+  if(!window.driver || !window.driver.js){ console.warn('driver.js not loaded — tour unavailable'); return; }
+  const driverFn = window.driver.js.driver;
+  const steps = buildSecurityTourSteps();
+  let d=null;
+  const goToStep=(idx)=>{
+    if(idx<0) return;
+    if(idx>=steps.length){ if(d) d.destroy(); return; }
+    const s=steps[idx];
+    TAB=s.tab; if(s.subtab) setSubtab(s.tab, s.subtab); else render();
+    setTimeout(()=>{
+      if(d) d.destroy();
+      const isLast = idx===steps.length-1;
+      const step={ element: s.element||undefined,
+        popover:{ title:s.title, description:s.desc,
+          showButtons: idx===0 ? ['next','close'] : (isLast? ['previous','close'] : ['next','previous','close']),
+          nextBtnText: isLast?'Done':'Next →', prevBtnText:'← Back',
+          onNextClick:()=>goToStep(idx+1), onPrevClick:()=>goToStep(idx-1),
+          onCloseClick:()=>{ d.destroy(); } } };
+      if(!step.element) delete step.element;
+      d = driverFn({ allowClose:true, stagePadding:6, animate:true, popoverClass:'fid-tour-popover',
+        progressText:(idx+1)+' of '+steps.length, showProgress:true,
+        steps:[step] });
+      d.drive();
+    }, s.element? 150:0);
+  };
+  goToStep(0);
 }
 
 // Setup-progress data model (RESUME-TRACKER "START HERE NEXT SESSION" item, 2026-07-19 -> built
@@ -779,12 +855,12 @@ W('snaptrade-setup','Getting started','Connecting SnapTrade (live, many brokers 
   'Set `PORTFOLIO_PROVIDER=snaptrade` in `.env` (or SETTINGS → ADVANCED KNOBS → "Portfolio data source", same as the other two providers) and recreate portfolio-api (`docker compose up -d portfolio-api`). If a linked brokerage ever needs re-authorizing (SnapTrade sessions can expire), re-run `snaptrade_register.py` to relink it — your existing USER_ID/USER_SECRET stay valid, only the brokerage connection itself needs refreshing.');
 W('mfa','Getting started','Multi-factor authentication (MFA) & backup codes',
   'A rotating 6-digit code from any authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, etc.) required at login on top of your password. Since this app manages your full financial picture, MFA is treated as a CRITICAL setup step — it shows a ! on the setup checklist and a stop on the guided tour, not an optional extra.',
-  'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → SECURITY → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → SECURITY also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
-  'If you lose your phone/authenticator: log in using one of your saved backup codes in place of the 6-digit code (the login screen\'s code field explicitly accepts either) — this works exactly like a normal login, no special recovery flow needed. Once in, go to SETTINGS → SECURITY, disable MFA (requires your password), then set it up again from scratch with your new device. If you\'ve also lost your backup codes, or never set up MFA at all, see the "Account recovery" entry below instead.');
+  'Set up right after creating your account (the first-run screen offers to walk you through it immediately, checked by default) or any time later in SETTINGS → IAM → "SET UP MFA": scan the QR code with your authenticator app, enter the 6-digit code it shows, and you\'ll be given 10 single-use backup codes — save them somewhere safe, they\'re shown exactly once and never again. SETTINGS → IAM also shows how many backup codes you have left; regenerate a fresh set (disable, then re-enable MFA) once you\'re down to your last couple.',
+  'If you lose your phone/authenticator: log in using one of your saved backup codes in place of the 6-digit code (the login screen\'s code field explicitly accepts either) — this works exactly like a normal login, no special recovery flow needed. Once in, go to SETTINGS → IAM, disable MFA (requires your password), then set it up again from scratch with your new device. If you\'ve also lost your backup codes, or never set up MFA at all, see the "Account recovery" entry below instead.');
 W('account-recovery','Getting started','Account recovery — forgot password, lost MFA, or locked out entirely',
   'Two independent recovery paths, for two different situations. **Tier 1 (still have MFA working):** forgot the password but still have your authenticator app or a saved backup code. **Tier 2 (MFA is also gone, or was never set up):** forgotten password with no working second factor — this needs host/container access to this deployment, not just a browser.',
-  'Tier 1: click "Forgot password? (requires MFA)" on the sign-in screen, enter your username and a current authenticator code (or an unused backup code), then set a new password — this reuses the same code check the login screen itself uses, so it\'s exactly as secure as normal MFA login. Tier 2: run `docker compose exec portfolio-api python auth.py --reset-credentials` from the machine hosting this deployment. It will ask for your username, your **recovery key**, and a new password. The recovery key is a one-time secret shown ONCE — either right after you created your account, or whenever you last generated/regenerated one in SETTINGS → SECURITY → "HOST RECOVERY KEY". Like MFA, this is a CRITICAL checklist item: if you haven\'t generated one yet, do it now, before you need it — there is no way to recover a lost recovery key, only to generate a new one while you still have access.',
-  'Without a recovery key on file, `--reset-credentials` cannot help you — the only remaining option is `python auth.py --wipe-all` (same command form), which is genuinely destructive: it deletes the login, ALL financial config/history/scenarios, chat history, and the knowledge index cache, returning the app to a blank first-run state. This is intentional — host/container access alone is deliberately NOT enough to reset just the login and silently take over your existing data; it either gets you back into your OWN account (via the recovery key) or wipes everything and starts over, with nothing in between. Bottom line: generate your recovery key today, in SETTINGS → SECURITY, and store it like you would a password — it is the only thing standing between "forgot my password" and "lost everything."');
+  'Tier 1: click "Forgot password? (requires MFA)" on the sign-in screen, enter your username and a current authenticator code (or an unused backup code), then set a new password — this reuses the same code check the login screen itself uses, so it\'s exactly as secure as normal MFA login. Tier 2: run `docker compose exec portfolio-api python auth.py --reset-credentials` from the machine hosting this deployment. It will ask for your username, your **recovery key**, and a new password. The recovery key is a one-time secret shown ONCE — either right after you created your account, or whenever you last generated/regenerated one in SETTINGS → IAM → "HOST RECOVERY KEY". Like MFA, this is a CRITICAL checklist item: if you haven\'t generated one yet, do it now, before you need it — there is no way to recover a lost recovery key, only to generate a new one while you still have access.',
+  'Without a recovery key on file, `--reset-credentials` cannot help you — the only remaining option is `python auth.py --wipe-all` (same command form), which is genuinely destructive: it deletes the login, ALL financial config/history/scenarios, chat history, and the knowledge index cache, returning the app to a blank first-run state. This is intentional — host/container access alone is deliberately NOT enough to reset just the login and silently take over your existing data; it either gets you back into your OWN account (via the recovery key) or wipes everything and starts over, with nothing in between. Bottom line: generate your recovery key today, in SETTINGS → IAM, and store it like you would a password — it is the only thing standing between "forgot my password" and "lost everything."');
 
 W('net-worth','Dashboard','Net worth',
   'Every account value signed by type: assets add, liabilities (credit cards, loans, mortgage) subtract. It includes non-brokerage assets your provider tracks, such as a Zillow-valued home.',
@@ -1339,6 +1415,7 @@ function render(){
   else if(TAB==='settings'){
     tc.appendChild(panelSubtabs('settings',[
       {key:'theme',label:'THEME',build:()=>themeContent()},
+      {key:'iam',label:'IAM',build:()=>iamContent()},
       {key:'security',label:'SECURITY',build:()=>securityContent()},
       {key:'posture',label:'SECURITY POSTURE',build:()=>securityPostureContent()},
       {key:'advanced',label:'ADVANCED KNOBS',build:()=>settingsContent()},
@@ -2781,14 +2858,36 @@ function _complianceRefresh(){
     COMPLIANCE_CONTROLS=d; if(TAB==='settings') render();
   }).catch(()=>{ COMPLIANCE_CONTROLS={error:'failed to load'}; if(TAB==='settings') render(); });
 }
+// 2026-07-26 — GRC document viewer: the table above is the machine-readable layer; these are the
+// actual evidence documents (risk register, IR runbook, SoA, privacy program) it was generated
+// from/points at. Click a document to fetch + render it inline (marked.js, same as chat).
+function _complianceDocsRefresh(){
+  return fetch('/api/compliance/docs').then(r=>r.json()).then(d=>{
+    COMPLIANCE_DOC_CATALOG=d.docs||[]; if(TAB==='settings') render();
+  }).catch(()=>{ COMPLIANCE_DOC_CATALOG=[]; if(TAB==='settings') render(); });
+}
+function _complianceDocOpen(name){
+  if(COMPLIANCE_DOC_OPEN===name){ COMPLIANCE_DOC_OPEN=null; render(); return; }
+  COMPLIANCE_DOC_OPEN=name;
+  if(COMPLIANCE_DOC_CONTENT[name]!=null){ render(); return; }
+  render();  // shows "Loading…" immediately, then fills in once the fetch below resolves
+  fetch('/api/compliance/doc?name='+encodeURIComponent(name)).then(r=>r.json()).then(d=>{
+    COMPLIANCE_DOC_CONTENT[name] = d.error ? ('*'+d.error+'*') : (d.content||'*(empty document)*');
+    render();
+  }).catch(()=>{ COMPLIANCE_DOC_CONTENT[name]='*failed to load*'; render(); });
+}
 function _postureBadgeClass(status){
   return status==='Applied'?'pos':status==='Partial'?'muted':'neg';
 }
 function securityPostureContent(){
   const box=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
-  sub.textContent='Machine-readable ISO/IEC 27001:2022 Annex A Statement of Applicability, generated from compliance/generate_soa.py — every "Applied"/"Partial" status names real, checkable evidence in this codebase (see the SECURITY AUDIT LOG, HOUSEHOLD ACCOUNTS, ENCRYPTION KEY, and PRIVACY panels elsewhere on this page for several of them in action). Equivalent NIST SP 800-53 and SOC 2 control mappings for each build item are documented narratively in RESUME-TRACKER.md and SECURITY-CONTROLS-GAP-ANALYSIS.md — this page shows the ISO Annex A machine-readable layer specifically.';
+  sub.textContent='Machine-readable ISO/IEC 27001:2022 Annex A Statement of Applicability, generated from compliance/generate_soa.py — every "Applied"/"Partial" status names real, checkable evidence in this codebase (see SETTINGS → IAM for Household Accounts, SECURITY for the Audit Log and Privacy panels, and SECRETS for the Encryption Key panel — several controls in action). Equivalent NIST SP 800-53 and SOC 2 control mappings for each build item are documented narratively in RESUME-TRACKER.md and SECURITY-CONTROLS-GAP-ANALYSIS.md — this page shows the ISO Annex A machine-readable layer specifically.';
   box.appendChild(sub);
+
+  const tourBtn=el('button',null,'🛡 Take the security & compliance walkthrough');
+  tourBtn.style.cssText='margin-bottom:var(--space-3);'; tourBtn.onclick=startSecurityTour;
+  box.appendChild(tourBtn);
 
   if(!COMPLIANCE_CONTROLS){ box.appendChild(el('div','muted','Loading control catalog…')); _complianceRefresh(); return box; }
   if(COMPLIANCE_CONTROLS.error){
@@ -2797,13 +2896,39 @@ function securityPostureContent(){
   }
 
   const d=COMPLIANCE_CONTROLS;
-  const summary=el('div'); summary.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);';
+  const summary=el('div'); summary.id='posture-summary'; summary.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);';
   const s=d.summary||{};
   summary.innerHTML=`<b>${d.framework||'ISO/IEC 27001:2022 Annex A'}</b> — `+
     `<span class="pos">${s.Applied||0} Applied</span> · `+
     `<span class="muted">${s.Partial||0} Partial</span> · `+
     `<span class="neg">${s['N/A']||0} N/A</span> · ${s.total||0} total controls`;
   box.appendChild(summary);
+
+  // GRC document viewer (2026-07-26) — the table above is generated FROM these documents; a
+  // visitor evaluating the program (e.g. an interviewer) can read the actual prose here instead
+  // of taking the table's rationale column on faith.
+  box.appendChild(el('div','ph','GRC DOCUMENTS'));
+  const docsSub=el('div','muted'); docsSub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  docsSub.textContent='The written program behind the table above — risk register, incident-response runbook, statement of applicability, and privacy program. Click any document to read it inline.';
+  box.appendChild(docsSub);
+  const docsRow=el('div'); docsRow.id='posture-docs-row'; docsRow.style.cssText='margin-bottom:var(--space-3);display:flex;flex-wrap:wrap;gap:6px;';
+  if(!COMPLIANCE_DOC_CATALOG){ docsRow.appendChild(el('div','muted','Loading document list…')); _complianceDocsRefresh(); }
+  else {
+    COMPLIANCE_DOC_CATALOG.forEach(doc=>{
+      const b=el('button',null,(COMPLIANCE_DOC_OPEN===doc.name?'▾ ':'▸ ')+doc.title); b.style.cssText='font-size:var(--font-size-sm);';
+      if(COMPLIANCE_DOC_OPEN===doc.name){ b.style.borderColor='var(--color-accent)'; }
+      b.onclick=()=>_complianceDocOpen(doc.name);
+      docsRow.appendChild(b);
+    });
+  }
+  box.appendChild(docsRow);
+  if(COMPLIANCE_DOC_OPEN){
+    const viewWrap=el('div'); viewWrap.id='posture-doc-viewer';
+    viewWrap.style.cssText='max-height:420px;overflow-y:auto;border:1px solid var(--border-color, #333);border-radius:4px;padding:var(--space-3);margin-bottom:var(--space-4);font-size:var(--font-size-sm);line-height:1.5;';
+    const content=COMPLIANCE_DOC_CONTENT[COMPLIANCE_DOC_OPEN];
+    viewWrap.innerHTML = content!=null ? mdToHtml(content) : '<span class="muted">Loading…</span>';
+    box.appendChild(viewWrap);
+  }
 
   // Simple client-side theme filter (Organizational/People/Physical/Technological/All) — cheap
   // and useful given there are 93 rows; no server round-trip needed since the whole file is
@@ -2862,11 +2987,16 @@ function securityPostureContent(){
   return box;
 }
 
-function securityContent(){
+// 2026-07-26: split out of the former securityContent() (Jason — SETTINGS -> SECURITY had grown to
+// 10 sections and mixed two different concerns: identity/account-lifecycle vs. security operations/
+// GRC evidence). iamContent() now owns everything account-and-access; securityContent() below keeps
+// Certificate/Audit Log/Privacy. CERTIFICATE explicitly did NOT move — it's TLS config, not an
+// account action, even though it lived in the same old panel.
+function iamContent(){
   const wrap=el('div');
   const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
-  sub.textContent='Account & session security for this deployment — single local login, optional authenticator-app MFA. No data leaves this server for any of this.';
+  sub.textContent='Identity & access management (IAM) for this deployment — account, password, MFA, recovery, and household accounts. No data leaves this server for any of this. (Certificate/audit log/privacy live under SETTINGS → SECURITY.)';
   wrap.appendChild(sub);
   if(!u){ wrap.appendChild(el('div','muted','Loading account…')); _authRefreshStatus(); return wrap; }
 
@@ -2919,6 +3049,35 @@ function securityContent(){
     wrap.appendChild(acctsWrap);
   }
 
+  // Reset account / auth.db (2026-07-24 backlog — Jason: "reset the auth.db from within the
+  // settings if I'm already authenticated... to simply test out the new changes"). Deliberately
+  // scoped to ONLY the users row in auth.db — financial config, chat history, and the knowledge
+  // index are all untouched; this just deletes the login/MFA and returns the app to the
+  // first-run "CREATE YOUR ACCOUNT" screen. NOT the same thing as the still-unbuilt Account
+  // Recovery Tier 2 (`auth.py --wipe-all`) — that one is for when you're locked out with no
+  // session at all; this is a deliberate, already-authenticated reset. Two confirmations
+  // required (password + typing the username back) since there's no undo from the UI. Kept in
+  // IAM (2026-07-26 split) rather than SECURITY — it's account-lifecycle, not a GRC/operational
+  // control, even though it's destructive.
+  wrap.appendChild(el('div','ph','⚠ RESET ACCOUNT (advanced)'));
+  const resetWrap=el('div'); resetWrap.style.cssText='margin-bottom:var(--space-2);';
+  resetWrap.innerHTML=
+    `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Deletes ONLY the login/MFA record in <code>auth.db</code> and returns this app to the first-run account-creation screen. Your financial config, chat history, and knowledge index are NOT touched by this — this is for re-testing onboarding, or starting over with a fresh account. This cannot be undone from here.</div>`+
+    `<div style="margin-bottom:6px;">Current password <input id="sec-reset-pass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
+    `<div style="margin-bottom:6px;">Type your username (<code>${u.username}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
+    `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
+    `<button onclick="securityResetAccount()">⚠ DELETE ACCOUNT &amp; RESET</button>`;
+  wrap.appendChild(resetWrap);
+  return wrap;
+}
+function securityContent(){
+  const wrap=el('div');
+  const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
+  sub.textContent='Security operations for this deployment — TLS/certificates, the tamper-evident audit log, and your data/privacy rights. Account & access management (password, MFA, recovery, household accounts) moved to SETTINGS → IAM.';
+  wrap.appendChild(sub);
+  if(!u){ wrap.appendChild(el('div','muted','Loading account…')); _authRefreshStatus(); return wrap; }
+
   wrap.appendChild(el('div','ph','CERTIFICATE (HTTPS)'));
   const certWrap=el('div'); certWrap.id='sec-cert-wrap';
   if(!TLS_STATUS){ certWrap.appendChild(el('div','muted','Loading certificate status…')); _tlsRefreshStatus(); }
@@ -2941,24 +3100,6 @@ function securityContent(){
   // — export is scoped server-side to the requester's own identity + security history regardless.
   wrap.appendChild(el('div','ph','PRIVACY & YOUR DATA'));
   wrap.appendChild(_privacyPanel());
-
-  // Reset account / auth.db (2026-07-24 backlog — Jason: "reset the auth.db from within the
-  // settings if I'm already authenticated... to simply test out the new changes"). Deliberately
-  // scoped to ONLY the users row in auth.db — financial config, chat history, and the knowledge
-  // index are all untouched; this just deletes the login/MFA and returns the app to the
-  // first-run "CREATE YOUR ACCOUNT" screen. NOT the same thing as the still-unbuilt Account
-  // Recovery Tier 2 (`auth.py --wipe-all`) — that one is for when you're locked out with no
-  // session at all; this is a deliberate, already-authenticated reset. Two confirmations
-  // required (password + typing the username back) since there's no undo from the UI.
-  wrap.appendChild(el('div','ph','⚠ RESET ACCOUNT (advanced)'));
-  const resetWrap=el('div'); resetWrap.style.cssText='margin-bottom:var(--space-2);';
-  resetWrap.innerHTML=
-    `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Deletes ONLY the login/MFA record in <code>auth.db</code> and returns this app to the first-run account-creation screen. Your financial config, chat history, and knowledge index are NOT touched by this — this is for re-testing onboarding, or starting over with a fresh account. This cannot be undone from here.</div>`+
-    `<div style="margin-bottom:6px;">Current password <input id="sec-reset-pass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
-    `<div style="margin-bottom:6px;">Type your username (<code>${u.username}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
-    `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
-    `<button onclick="securityResetAccount()">⚠ DELETE ACCOUNT &amp; RESET</button>`;
-  wrap.appendChild(resetWrap);
   return wrap;
 }
 function _tlsRefreshStatus(){
@@ -3090,7 +3231,7 @@ function _auditPanel(){
 function _privacyPanel(){
   const box=el('div'); box.style.cssText='margin-bottom:var(--space-4);';
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
-  sub.textContent='Export a copy of your own account identity and security/login history as a JSON file (a "what does this app know about my account" download). This does not include the shared household financial data, which isn\'t personally tied to one account holder in a single-tenant app like this — see compliance/PRIVACY-NOTICE.md for the reasoning. To delete your account entirely, use the account-recovery/reset controls above (admins: HOUSEHOLD ACCOUNTS; anyone: RESET ACCOUNT below).';
+  sub.textContent='Export a copy of your own account identity and security/login history as a JSON file (a "what does this app know about my account" download). This does not include the shared household financial data, which isn\'t personally tied to one account holder in a single-tenant app like this — see compliance/PRIVACY-NOTICE.md for the reasoning. To delete your account entirely, use the account controls under SETTINGS → IAM (admins: HOUSEHOLD ACCOUNTS; anyone: ⚠ RESET ACCOUNT).';
   box.appendChild(sub);
   const btn=el('button',null,'⬇ EXPORT MY DATA'); btn.id='privacy-export-btn';
   btn.onclick=privacyExportData;
@@ -3472,7 +3613,7 @@ async function securityResetAccount(){
 // securityMfaSetup/securityMfaVerify take an explicit containerId (2026-07-24, parameterized so
 // the first-run "enroll now" interstitial — renderFirstRunMfaPrompt() below — can drive the same
 // QR/verify/backup-codes flow into its own container instead of duplicating this code). The
-// SETTINGS -> SECURITY call site passes 'sec-mfa-setup-area' explicitly (NOT a bare function
+// SETTINGS -> IAM call site passes 'sec-mfa-setup-area' explicitly (NOT a bare function
 // reference — `btn.onclick=securityMfaSetup` would hand the click Event itself in as
 // containerId). A container tagged data-onboarding="1" gets a different "DONE" action (finishes
 // account creation instead of re-rendering the Settings panel) — see _frMfaSetupDone() below.
@@ -6526,7 +6667,7 @@ function renderFirstRunMfaPrompt(){
   const area=el('div'); area.id='fr-mfa-setup-area'; area.setAttribute('data-onboarding','1');
   wrap.appendChild(area);
   const skip=el('div'); skip.style.cssText='margin-top:var(--space-4);text-align:center;';
-  skip.innerHTML=`<a href="#" onclick="_frMfaSetupSkip();return false;" class="muted" style="font-size:var(--font-size-sm);">Skip for now — set this up later in SETTINGS → SECURITY</a>`;
+  skip.innerHTML=`<a href="#" onclick="_frMfaSetupSkip();return false;" class="muted" style="font-size:var(--font-size-sm);">Skip for now — set this up later in SETTINGS → IAM</a>`;
   wrap.appendChild(skip);
   body.appendChild(wrap);
   securityMfaSetup('fr-mfa-setup-area');

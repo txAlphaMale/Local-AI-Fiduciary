@@ -91,7 +91,9 @@ services:
       - TZ=${TZ:-America/Chicago}
       - INTERNAL_SCHEDULER=${INTERNAL_SCHEDULER:-1}
       - ANALYSIS_FILE=/data/analysis.json
-      - ANALYSIS_TOKEN=${ANALYSIS_TOKEN}
+      # ANALYSIS_TOKEN line removed 2026-07-26 -- the env var is no longer read anywhere in app.py
+      # (see .env.example); passing it through here was harmless but produced a confusing
+      # "variable is not set" Compose warning on every `up` once it stopped being in .env.
       # Session login (2026-07-23c) — real username/password + optional TOTP MFA now gates the
       # whole app; AUTH_DB lands in the same /data volume already mounted below, no new volume
       # needed. Set SESSION_SECRET in .env for a real deployment — left blank, one is generated

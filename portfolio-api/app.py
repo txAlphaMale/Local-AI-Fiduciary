@@ -934,7 +934,7 @@ async def auth_reset_account(request: Request):
                              status_code=400)
     if auth.is_admin(user) and auth.user_count() > 1:
         return JSONResponse({"error": "other accounts still exist on this deployment — delete "
-                                       "them first (SETTINGS → SECURITY → HOUSEHOLD ACCOUNTS), "
+                                       "them first (SETTINGS → IAM → HOUSEHOLD ACCOUNTS), "
                                        "or this would leave them with no admin"}, status_code=400)
     audit.emit("auth.account.reset", outcome="success", request=request, actor=uid,
                actor_name=user["username"], resource="/api/auth/reset-account")
@@ -945,9 +945,10 @@ async def auth_reset_account(request: Request):
 
 @app.get("/api/auth/users")
 def auth_list_users(request: Request):
-    """SEC-5 (2026-07-25) — admin-only household-accounts list, for SETTINGS → SECURITY →
-    "HOUSEHOLD ACCOUNTS". A GET, so the global gate's write-only viewer restriction wouldn't
-    otherwise touch it — enforced explicitly here via _require_admin instead."""
+    """SEC-5 (2026-07-25) — admin-only household-accounts list, for SETTINGS → IAM →
+    "HOUSEHOLD ACCOUNTS" (moved from SECURITY 2026-07-26 — see iamContent()). A GET, so the
+    global gate's write-only viewer restriction wouldn't otherwise touch it — enforced explicitly
+    here via _require_admin instead."""
     if not _require_admin(request):
         return JSONResponse({"error": "admin only"}, status_code=403)
     return {"users": auth.list_users()}
@@ -1371,6 +1372,49 @@ def get_compliance_controls():
                                        "folder mounted? (see docker-compose.yml)"}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": f"failed to read controls.json: {e}"}, status_code=500)
+
+
+# 2026-07-26 — Jason: the Security Posture page showed the controls.json-derived table but nothing
+# let a visitor actually read the underlying GRC prose docs (risk register, IR runbook, SoA,
+# privacy program) that controls.json's "evidence" column points at — the more convincing artifacts
+# for an interviewer audience, arguably, since they read like real program documentation rather than
+# a checklist. Hardcoded allowlist (not a raw path join) so this can never be tricked into serving an
+# arbitrary file from the mount or escaping it via "..".
+_COMPLIANCE_DOCS = {
+    "RISK-REGISTER.md": "Risk Register",
+    "STATEMENT-OF-APPLICABILITY.md": "Statement of Applicability (ISO 27001 Annex A)",
+    "DATA-RETENTION-SCHEDULE.md": "Data Retention Schedule",
+    "IR-RUNBOOK.md": "Incident Response Runbook",
+    "PRIVACY-NOTICE.md": "Privacy Notice",
+    "ROPA.md": "Record of Processing Activities (ROPA)",
+    "DPIA.md": "Data Protection Impact Assessment (DPIA)",
+}
+
+
+@app.get("/api/compliance/docs")
+def list_compliance_docs():
+    """Catalog of the servable GRC evidence documents (name + display title), for the Security
+    Posture page's "GRC DOCUMENTS" section to build its link list without hardcoding the set
+    twice (once here, once in the frontend)."""
+    return {"docs": [{"name": k, "title": v} for k, v in _COMPLIANCE_DOCS.items()]}
+
+
+@app.get("/api/compliance/doc")
+def get_compliance_doc(name: str):
+    """Serves one compliance/*.md file's raw text, allowlisted by exact filename match against
+    _COMPLIANCE_DOCS above — never a path join of caller input, so there's no traversal surface
+    even though this is read-only. Same COMPLIANCE_DIR bind mount as controls.json above."""
+    if name not in _COMPLIANCE_DOCS:
+        return JSONResponse({"error": "unknown document"}, status_code=404)
+    path = os.path.join(COMPLIANCE_DIR, name)
+    try:
+        with open(path, "r") as f:
+            return {"name": name, "title": _COMPLIANCE_DOCS[name], "content": f.read()}
+    except FileNotFoundError:
+        return JSONResponse({"error": f"{name} not found at {path} — is the compliance/ folder "
+                                       "mounted? (see docker-compose.yml)"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": f"failed to read {name}: {e}"}, status_code=500)
 
 
 # ============================================================================
@@ -8035,9 +8079,11 @@ async def post_secrets(req: Request):
 
 @app.get("/api/secrets/key-status")
 def get_secrets_key_status(request: Request):
-    """SEC-3 (2026-07-25) — admin-only encryption-key-version status for the SETTINGS → SECURITY
-    display. A GET, so (like /api/auth/users) it needs its own explicit admin check rather than
-    relying on the write-only viewer restriction in the global gate."""
+    """SEC-3 (2026-07-25) — admin-only encryption-key-version status for the SETTINGS → SECRETS
+    display (docstring corrected 2026-07-26 — this was never actually under SECURITY, see
+    secretsContent() in static/index.html). A GET, so (like /api/auth/users) it needs its own
+    explicit admin check rather than relying on the write-only viewer restriction in the global
+    gate."""
     if not _require_admin(request):
         return JSONResponse({"error": "admin only"}, status_code=403)
     return secrets_crypto.key_status()
@@ -8106,9 +8152,12 @@ SETUP_FIELDS = [
     # of the financial-config fields -- this app manages a household's full financial picture, so
     # account-takeover risk is treated as at least as foundational as any single config value.
     {"id": "mfa_enrolled", "tier": 1, "group": "Multi-factor authentication (MFA)", "cfg": "auth",
-     "key": "mfa_enabled", "jump": ("settings", "security"), "severity": "critical",
+     # jump/copy repointed 2026-07-26: account/access items (password, MFA, recovery, household
+     # accounts, reset) moved from SETTINGS -> SECURITY into their own SETTINGS -> IAM subtab --
+     # see iamContent() in static/index.html. SECURITY now holds only Certificate/Audit Log/Privacy.
+     "key": "mfa_enabled", "jump": ("settings", "iam"), "severity": "critical",
      "note": "A rotating code from any authenticator app (Google Authenticator, Authy, 1Password, "
-             "Bitwarden, etc.) on top of your password. Set up in SETTINGS -> SECURITY -- or right "
+             "Bitwarden, etc.) on top of your password. Set up in SETTINGS -> IAM -- or right "
              "after creating your account, if you ticked \"enroll now\" on that screen."},
     # Account Recovery Tier 2 (2026-07-24) -- without this, the ONLY way back in after forgetting
     # the password with no working MFA is host/container access alone (`docker exec` + delete
@@ -8117,10 +8166,10 @@ SETUP_FIELDS = [
     # the owner's own live account) start with NONE and need this flagged loudly, not left silently
     # unset -- hence critical, not optional, same tier as MFA itself.
     {"id": "recovery_key_set", "tier": 1, "group": "Host recovery key", "cfg": "auth",
-     "key": "recovery_key_set", "jump": ("settings", "security"), "severity": "critical",
+     "key": "recovery_key_set", "jump": ("settings", "iam"), "severity": "critical",
      "note": "The only way back in via host/container access if you ever forget your password AND "
              "lose MFA -- without one, that scenario means a full data wipe, not just a login "
-             "reset. Generate it in SETTINGS -> SECURITY; shown once, save it somewhere safe."},
+             "reset. Generate it in SETTINGS -> IAM; shown once, save it somewhere safe."},
     # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
     {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
      "key": "state_of_residence", "jump": ("plan", "assumptions"), "severity": "critical",
