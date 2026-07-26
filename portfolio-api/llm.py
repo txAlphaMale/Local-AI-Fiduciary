@@ -465,9 +465,13 @@ def _to_anthropic_tools(tools):
 
 
 def _anthropic_body(messages, model, tools, temperature, format_json, stream):
+    # 'temperature' deliberately omitted -- confirmed live 2026-07-26 that Anthropic now rejects it
+    # outright for current-generation models ("temperature is deprecated for this model", HTTP 400
+    # on every single request). The 'temperature' param this function still accepts is kept only so
+    # callers elsewhere in this file (ollama/openai dialects, which DO still use it) don't need a
+    # separate signature.
     system_text, amsgs = _to_anthropic_messages(messages)
-    body = {"model": model, "max_tokens": ANTHROPIC_MAX_TOKENS, "messages": amsgs,
-            "temperature": temperature}
+    body = {"model": model, "max_tokens": ANTHROPIC_MAX_TOKENS, "messages": amsgs}
     if stream:
         body["stream"] = True
     if system_text:
@@ -487,11 +491,12 @@ def _anthropic_chat(messages, model, tools, temperature, format_json, think, tim
     body, forcing_json = _anthropic_body(messages, model, tools, temperature, format_json, stream=False)
     # Extended thinking: only offered on the single-turn, no-tools, non-JSON-forcing path (the
     # only think=True caller in this app, _ollama_generate, never combines it with tools) --
-    # thinking requires temperature==1 and Anthropic rejects a forced tool_choice alongside it,
-    # so JSON-forcing takes priority if both were somehow requested together.
+    # Anthropic rejects a forced tool_choice alongside thinking, so JSON-forcing takes priority if
+    # both were somehow requested together. No explicit temperature is set here (or anywhere in
+    # _anthropic_body, see its comment) since the API now rejects the field outright regardless of
+    # value -- thinking mode uses the API's own default rather than an explicit temperature=1.
     if think and not tools and not forcing_json:
         body["thinking"] = {"type": "enabled", "budget_tokens": min(4096, ANTHROPIC_MAX_TOKENS - 1024)}
-        body["temperature"] = 1
     r = requests.post(f"{BASE_URL}/v1/messages", json=body, headers=_headers(), timeout=timeout)
     if r.status_code >= 400:
         return LLMResult(False, status_code=r.status_code, error=f"anthropic {r.status_code}: {r.text[:300]}")
