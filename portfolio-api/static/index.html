@@ -6867,43 +6867,90 @@ function renderFirstRunMfaPrompt(){
 }
 function _frMfaSetupSkip(){ authInitApp(); }
 function _frMfaSetupDone(){ authInitApp(); }
+// Bug fix (2026-07-26, Jason): renderLogin(true) used to rebuild the ENTIRE form from scratch,
+// including fresh blank #li-user/#li-pass inputs — so after a correct username/password, the MFA
+// step visually asked for username+password AGAIN (empty, unfilled) alongside the code. The
+// backend's own POST /api/auth/login is (deliberately, per its own docstring) a single-call
+// contract — it always wants username+password+code together, there is no separate server-side
+// "phase 1 passed" session the way /api/auth/recovery/start's 5-minute recovery_uid marker works.
+// Rather than add a new stateful pre-auth session just for this, the fix is client-side only:
+// cache the already-verified-as-CORRECT username/password in memory (`_pendingLoginCreds`,
+// cleared the instant login succeeds OR the user backs out) and render ONLY the code field for
+// step 2 — resending the cached username/password transparently alongside the code, exactly
+// matching the expected behavior ("display the MFA field separately after successful username/
+// password authentication") without changing the backend's request contract at all.
+let _pendingLoginCreds=null;
 function renderLogin(mfaRequired){
   const body=document.getElementById('body'); body.innerHTML='';
   const wrap=_authFormShell('SIGN IN', null);
   const form=el('div');
-  form.innerHTML=
-    `<div style="margin-bottom:var(--space-3);">Username<br/><input id="li-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
-    `<div style="margin-bottom:var(--space-3);">Password<br/><input id="li-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="current-password"/></div>`+
-    (mfaRequired?`<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="li-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`:'')+
-    `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-    `<button onclick="authLoginSubmit()" style="width:100%;">SIGN IN</button>`;
+  if(mfaRequired && _pendingLoginCreds){
+    form.innerHTML=
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-3);">Signed in as <b>${_pendingLoginCreds.username}</b> — enter your authenticator code to continue.</div>`+
+      `<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="li-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`+
+      `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+      `<button onclick="authLoginSubmit()" style="width:100%;">VERIFY &amp; SIGN IN</button>`;
+  } else {
+    _pendingLoginCreds=null;   // starting fresh — any previously cached password is discarded
+    form.innerHTML=
+      `<div style="margin-bottom:var(--space-3);">Username<br/><input id="li-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
+      `<div style="margin-bottom:var(--space-3);">Password<br/><input id="li-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="current-password"/></div>`+
+      `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
+      `<button onclick="authLoginSubmit()" style="width:100%;">SIGN IN</button>`;
+  }
   wrap.appendChild(form);
+  if(mfaRequired && _pendingLoginCreds){
+    // Lets someone back out to the username/password screen (typo'd username, wrong account,
+    // etc.) instead of being stuck re-entering a code for an account they didn't mean to sign
+    // into — discards the cached credentials, same as any other abandoned login attempt.
+    const back=el('div'); back.style.cssText='margin-top:var(--space-3);text-align:center;';
+    back.innerHTML=`<a href="#" onclick="_pendingLoginCreds=null;renderLogin(false);return false;" class="muted" style="font-size:var(--font-size-sm);">← Not you? Sign in with a different account</a>`;
+    wrap.appendChild(back);
+  }
   // Account Recovery Tier 1 (2026-07-24 backlog, design from RESUME-TRACKER.md 2026-07-23f) —
   // forgot-password via a still-working authenticator/backup code. Only useful if MFA is
   // enabled on the account; the link itself doesn't know that in advance (asking would leak
   // account existence pre-login) — /api/auth/recovery/start gives the same generic error either
-  // way if MFA isn't actually enabled.
-  const forgot=el('div'); forgot.style.cssText='margin-top:var(--space-3);text-align:center;';
-  forgot.innerHTML=`<a href="#" onclick="renderRecovery();return false;" class="muted" style="font-size:var(--font-size-sm);">Forgot password? (requires MFA)</a>`;
-  wrap.appendChild(forgot);
+  // way if MFA isn't actually enabled. Not shown mid-MFA-step (password's already correct then —
+  // recovery is for a forgotten PASSWORD, not a missing code).
+  if(!(mfaRequired && _pendingLoginCreds)){
+    const forgot=el('div'); forgot.style.cssText='margin-top:var(--space-3);text-align:center;';
+    forgot.innerHTML=`<a href="#" onclick="renderRecovery();return false;" class="muted" style="font-size:var(--font-size-sm);">Forgot password? (requires MFA)</a>`;
+    wrap.appendChild(forgot);
+  }
   body.appendChild(wrap);
-  const focusEl=document.getElementById(mfaRequired?'li-code':'li-user'); if(focusEl) focusEl.focus();
-  const lastField=document.getElementById(mfaRequired?'li-code':'li-pass');
+  const focusId=(mfaRequired && _pendingLoginCreds)?'li-code':'li-user';
+  const focusEl=document.getElementById(focusId); if(focusEl) focusEl.focus();
+  const lastField=document.getElementById((mfaRequired && _pendingLoginCreds)?'li-code':'li-pass');
   if(lastField) lastField.onkeydown=e=>{ if(e.key==='Enter') authLoginSubmit(); };
 }
 async function authLoginSubmit(){
-  const u=(document.getElementById('li-user').value||'').trim();
-  const p=document.getElementById('li-pass').value;
   const codeEl=document.getElementById('li-code');
+  const inMfaStep=!!(codeEl && _pendingLoginCreds);
+  const u=inMfaStep?_pendingLoginCreds.username:(document.getElementById('li-user').value||'').trim();
+  const p=inMfaStep?_pendingLoginCreds.password:document.getElementById('li-pass').value;
   const code=codeEl?codeEl.value.trim():'';
   const err=document.getElementById('li-err'); err.textContent='';
   try{
     const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,code:code})});
     const d=await r.json();
     if(d.error){
-      if(d.mfa_required && !codeEl){ renderLogin(true); return; }
-      err.textContent=d.error; return;
+      if(d.mfa_required && !inMfaStep){
+        // Password (and username) just verified correct server-side — cache them ONLY in memory,
+        // only for the remainder of this same login attempt, never persisted or sent anywhere
+        // except back to this same endpoint alongside the code the user is about to enter.
+        _pendingLoginCreds={username:u, password:p};
+        renderLogin(true);
+        return;
+      }
+      // Wrong/expired code on an already-cached attempt: stay on the code screen, don't wipe the
+      // cached username/password — the user should only ever have to retype the CODE, not start
+      // the whole login over, on a simple typo.
+      err.textContent=d.error;
+      if(codeEl){ codeEl.value=''; codeEl.focus(); }
+      return;
     }
+    _pendingLoginCreds=null;
     AUTH_STATUS={has_user:true,authenticated:true,user:d.user};
     authInitApp();
   }catch(e){ err.textContent='Request failed: '+e; }
