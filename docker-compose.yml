@@ -31,7 +31,13 @@ services:
   # host: only portfolio-api (same network) talks to it.
   mcpo:
     image: ghcr.io/open-webui/mcpo:main
-    container_name: fiduciary-mcpo
+    # Explicit container_name is NOT namespaced by `-p <project>` -- Docker container names are
+    # global to the whole daemon, so a second Compose project against this same file (e.g. the
+    # demo instance, `-p fiduciary-demo`) WILL collide here unless this is overridden. Real
+    # deployment needs no .env change (default preserves the original name); .env.demo sets
+    # MCPO_CONTAINER_NAME=fiduciary-demo-mcpo instead. (Found 2026-07-26 when the demo's first
+    # `docker compose -p fiduciary-demo up` collided with the already-running real instance.)
+    container_name: ${MCPO_CONTAINER_NAME:-fiduciary-mcpo}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -67,7 +73,8 @@ services:
       context: ./portfolio-api
       dockerfile: Dockerfile
     image: fiduciary-portfolio-api:local
-    container_name: fiduciary-portfolio-api
+    # Same non-namespacing gotcha as mcpo's container_name above -- overridable per-project.
+    container_name: ${PORTFOLIO_CONTAINER_NAME:-fiduciary-portfolio-api}
     restart: unless-stopped
     depends_on:
       - mcpo
