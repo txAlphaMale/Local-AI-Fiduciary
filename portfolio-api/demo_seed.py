@@ -175,6 +175,10 @@ def reset_and_reseed():
         audit.init_db()
     except Exception:
         pass
+    try:
+        store.init_db()
+    except Exception:
+        pass
 
     os.remove(DEMO_MARKER_FILE) if _marker_exists() else None
     result = seed_if_needed()
