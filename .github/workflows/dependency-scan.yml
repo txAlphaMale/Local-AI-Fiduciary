@@ -67,7 +67,18 @@ jobs:
       - name: Build portfolio-api image (scan target, not published)
         run: docker build -t fiduciary-portfolio-api:scan ./portfolio-api
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.24.0
+        # Pinned to the commit SHA, not a tag (2026-07-27): aquasecurity/trivy-action was hit by a
+        # supply-chain compromise on 2026-03-19 (TeamPCP) -- 76 of its 77 version tags, including
+        # the 0.24.0 this workflow used to reference, were force-pushed to malicious commits that
+        # injected a credential-stealing payload before running the real scan (output looked
+        # normal either way). GitHub deleted/invalidated the poisoned tags during remediation,
+        # which is why 0.24.0 stopped resolving -- NOT a transient CI problem. v0.35.0 is the one
+        # tag GitHub's immutable-releases protection had already locked before the attack, so it's
+        # the only confirmed-clean one; pinning by its full commit SHA (not just the tag) means
+        # this step can't be silently re-pointed by any future tag manipulation of the same kind.
+        # Do NOT change this to @0.25.0, @master, or any other trivy-action tag/branch without
+        # first checking https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
           image-ref: "fiduciary-portfolio-api:scan"
           format: "sarif"
@@ -81,7 +92,7 @@ jobs:
           sarif_file: "trivy-results.sarif"
       - name: Full report (all severities, informational -- does not fail the job)
         if: always()
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 -- see pinning note on the step above
         with:
           image-ref: "fiduciary-portfolio-api:scan"
           format: "table"

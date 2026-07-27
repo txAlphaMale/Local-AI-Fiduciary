@@ -6782,7 +6782,7 @@ function chatContent(){
       const it=el('div','chat-sess'+(s.id===cs.sid?' on':''));
       const act=_isChatActive(s.id);
       const tt=el('span','chat-sess-t'); tt.textContent=(s.title||'(untitled)')+(act?' ⏳':''); tt.title=(s.title||'')+(act?' · generating…':'');
-      const x=el('span','chat-sess-x'); x.textContent='✕'; x.title='Delete'; x.onclick=(e)=>chatDelete(s.id,e);
+      const x=el('span','chat-sess-x mut-btn'); x.textContent='✕'; x.title='Delete'; x.onclick=(e)=>chatDelete(s.id,e);
       it.appendChild(tt); it.appendChild(x);
       it.onclick=()=>chatOpen(s.id,s.persona);
       list.appendChild(it);

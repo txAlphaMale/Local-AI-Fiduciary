@@ -622,6 +622,18 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # none of these can read or change anything about the household's financial data or config.
     "/api/notifications/subscribe", "/api/notifications/unsubscribe",
     "/api/notifications/preferences", "/api/notifications/test",
+    # Chat (2026-07-27, Jason's call): FIDUCIARY_TOOLS is entirely get_*/search_knowledge/
+    # web_search (read-only by construction -- see _fiduciary_dispatch's own docstring), and
+    # STRATEGIST_ADVICE_TOOLS explicitly excludes paper_buy/paper_sell/log_report (the only
+    # mutating strategist tools) with a second hard-block in _advice_dispatch as defense in depth.
+    # So sending/cancelling a chat message can never mutate financial data or config, regardless of
+    # role -- same category as "research", not "write". Deliberately NOT included here:
+    # DELETE /api/chat/session/{sid} -- chat.db's sessions table has no owner/uid column at all
+    # (it's shared household history, same as the paper-trading ledger), so there is no way yet to
+    # scope "delete your own session" vs "delete anyone's" -- allowing it here would let a viewer
+    # delete the ADMIN's chat history too, a materially bigger permission than "use chat". Revisit
+    # if/when chat sessions ever get a per-account owner column.
+    "/api/chat", "/api/chat/cancel",
 }
 
 
