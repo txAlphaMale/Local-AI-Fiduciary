@@ -489,6 +489,12 @@ const TOUR_TARGETS = {
   // SETTINGS -> NOTIFICATIONS subtab; "filled" (see app.py's notify_flags) also counts as done via
   // SMTP alone, so a household that only wants email never sees this tour step nag about push.
   notifications_configured:'notif-subscribe-btn',
+  // Backup passphrase + HTTPS/TLS (2026-07-27, Jason caught the checklist was missing the backup
+  // passphrase entirely) — backup_passphrase points at the new id on its row in SETTINGS -> SECRETS
+  // & KEYS (secretsContent(), matched by key==='BACKUP_PASSPHRASE'); https_enabled reuses the same
+  // #sec-cert-wrap the security walkthrough tour already targets (SETTINGS -> SECURITY).
+  backup_passphrase:'sec-backup-passphrase-row',
+  https_enabled:'sec-cert-wrap',
 };
 let TOUR_DONE=false; try{ TOUR_DONE = localStorage.getItem('fidTourDone')==='1'; }catch(_){ TOUR_DONE=false; }
 function _tourMarkDone(){ TOUR_DONE=true; try{ localStorage.setItem('fidTourDone','1'); }catch(_){} }
@@ -4570,6 +4576,9 @@ function secretsContent(){
     const gh=el('div','ph',g); gh.style.marginTop='10px'; wrap.appendChild(gh);
     groups[g].forEach(it=>{
       const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
+      // Stable id for the setup checklist / guided tour to jump/highlight to (2026-07-27 --
+      // TOUR_TARGETS.backup_passphrase, added alongside the new checklist item of the same id).
+      if(it.key==='BACKUP_PASSPHRASE') row.id='sec-backup-passphrase-row';
       const lab=el('span'); lab.style.cssText='width:250px;'; lab.textContent=it.label;
       const status=el('span'); status.style.cssText='font-size:var(--font-size-sm);';
       status.innerHTML = it.source==='env' ? '<span class="muted">•••• set in .env</span>'

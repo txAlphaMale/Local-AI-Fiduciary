@@ -8506,7 +8506,12 @@ SECRET_SPECS = [
     # env var uses (see backup.py's module docstring) -- set them to the same value if you want a
     # UI-triggered backup and the systemd-timer-triggered one to be interchangeable, though nothing
     # requires that; restore only ever needs whichever passphrase actually encrypted a given file.
-    {"key": "BACKUP_PASSPHRASE", "label": "Backup passphrase (SETTINGS -> SECURITY -> Backups)", "group": "Backups", "scope": "app"},
+    # Label corrected 2026-07-27 (caught while auditing the setup checklist) -- this field itself
+    # lives right here, in SETTINGS -> SECRETS & KEYS ("Backups" group); it was wrongly described
+    # as living under "SETTINGS -> SECURITY -> Backups", which is actually where the RUN BACKUP
+    # NOW / Stage restore buttons live (SETTINGS -> SECURITY POSTURE, not plain SECURITY) -- two
+    # different panels, easy to conflate since they're both part of the same feature.
+    {"key": "BACKUP_PASSPHRASE", "label": "Backup passphrase (set here; use it in SETTINGS -> SECURITY POSTURE -> Backups)", "group": "Backups", "scope": "app"},
 ]
 
 
@@ -8825,6 +8830,20 @@ SETUP_FIELDS = [
      "note": "The only way back in via host/container access if you ever forget your password AND "
              "lose MFA -- without one, that scenario means a full data wipe, not just a login "
              "reset. Generate it in SETTINGS -> IAM; shown once, save it somewhere safe."},
+    # Backup passphrase (2026-07-27, Jason caught this missing while reviewing the checklist after
+    # SEC-7a shipped) -- same tier/severity as the two account-recovery items right above, on
+    # purpose: MFA and the host recovery key protect against losing ACCESS to your account; this
+    # protects against losing the DATA itself (a bad upgrade, a corrupted volume, deleting the
+    # wrong thing). All three are "the thing you wish you'd set up BEFORE the day you needed it."
+    # Setting the passphrase alone doesn't create a backup by itself -- it just unlocks the RUN
+    # BACKUP NOW button (SETTINGS -> SECURITY POSTURE) and the scheduled/systemd paths; the note
+    # says so explicitly rather than letting filling this in feel like the whole job is done.
+    {"id": "backup_passphrase", "tier": 1, "group": "Backup passphrase", "cfg": "secret",
+     "key": "BACKUP_PASSPHRASE", "jump": ("settings", "secrets"), "severity": "critical",
+     "note": "Set this before you need it, not after. Unlocks one-click encrypted backups "
+             "(SETTINGS -> SECURITY POSTURE -> Backups) and the scheduled/systemd backup paths -- "
+             "setting the passphrase alone doesn't create a backup by itself, so also run (or "
+             "schedule) one once this is set. Set in SETTINGS -> SECRETS & KEYS."},
     # ---- Tier 1: PLAN -> ASSUMPTIONS (retirement.json) ----
     {"id": "state_of_residence", "tier": 1, "group": "State of residence", "cfg": "retire",
      "key": "state_of_residence", "jump": ("plan", "assumptions"), "severity": "critical",
@@ -8937,6 +8956,20 @@ SETUP_FIELDS = [
      "note": "Push and/or email alerts for security events and portfolio-provider outages, instead "
              "of only showing up in SETTINGS -> SECURITY -> SECURITY AUDIT LOG. Optional but "
              "recommended -- set up in SETTINGS -> NOTIFICATIONS."},
+    # HTTPS/TLS (2026-07-27, found the same pass as backup_passphrase above) -- Tier 3/optional on
+    # purpose, not critical: this app is designed to run LAN-only by default (Jason confirmed his
+    # own instance is), where plain HTTP carries little real exposure. It's genuinely worth doing
+    # if this instance (or a future user's) is ever reachable beyond a trusted LAN -- self-signed,
+    # Let's Encrypt/ACME, or a manual CSR, all in-app, no command line. cfg="tls" reads
+    # tls.has_active_cert() directly (a plain file-existence check, not session/request state), so
+    # unlike notify_flags/auth_flags this needs no extra flags dict threaded through
+    # get_setup_progress() -- see _setup_field_filled's cfg=="tls" branch.
+    {"id": "https_enabled", "tier": 3, "group": "HTTPS / TLS certificate", "cfg": "tls",
+     "key": "active", "jump": ("settings", "security"),
+     "note": "Optional if this instance is strictly LAN-only (no real exposure); worth doing if "
+             "it's ever reachable beyond your own network. Self-signed, Let's Encrypt/ACME, or a "
+             "manual CSR -- all set up in SETTINGS -> SECURITY -> Certificate, no command line "
+             "required."},
 ]
 
 
@@ -8954,6 +8987,11 @@ def _setup_field_filled(spec, retire, insurance, policy, secrets_set, auth_flags
         return bool((auth_flags or {}).get(spec["key"]))
     if spec["cfg"] == "notify":
         return bool((notify_flags or {}).get(spec["key"]))
+    if spec["cfg"] == "tls":
+        # Plain file-existence check (tls.py's has_active_cert()) -- no request/session state
+        # involved, unlike auth_flags/notify_flags above, so no extra param needs threading
+        # through get_setup_progress() for this one.
+        return tls.has_active_cert()
     cfg = {"retire": retire, "insurance": insurance, "policy": policy}.get(spec["cfg"]) or {}
     val = cfg.get(spec["key"])
     kind = spec.get("kind", "scalar")
