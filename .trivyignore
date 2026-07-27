@@ -1,0 +1,39 @@
+# Trivy risk-acceptance ignore list -- SEC-7 / RISK-REGISTER.md (R-10)
+#
+# Every entry below is a CRITICAL finding from the 2026-07-27 scan of the bookworm-pinned
+# portfolio-api image that has NO available vendor fix (or an explicit permanent will_not_fix),
+# confirmed via a real local Trivy 0.69.3 run against the actual built image -- not assumed.
+# Formally risk-accepted per Jason's decision on 2026-07-27, rather than leaving CI red
+# indefinitely for issues outside this project's control (essential Debian packages / upstream
+# Perl / zlib maintainers, not anything in our Dockerfile or requirements.txt).
+#
+# `exp:` dates force an automatic re-check: once the date passes, Trivy stops ignoring the CVE
+# and CI will fail again on the next push or the existing weekly Monday 09:00 UTC scheduled run
+# (see dependency-scan.yml's `schedule:` trigger) -- no manual tracking required to notice the
+# deadline. At that point, check the "Full report" step's Fixed Version column: if a fix now
+# exists, rebuild the image (Docker won't auto-pull a newer base layer on its own) and drop the
+# entry; if not, renew the exp: date with a fresh justification line.
+#
+# Review cadence: all six set to the same 90-day window (2026-10-25) so this is one quarterly
+# review, not six staggered ones. Do not extend past 90 days without updating
+# compliance/RISK-REGISTER.md (R-10) to reflect the renewed acceptance.
+
+# libsqlite3-0 -- SQLite integer overflow. No Fixed Version available as of 2026-07-27.
+CVE-2025-7458 exp:2026-10-25
+
+# perl-base -- upstream Perl bug (versions "through 5.43.9"), silently-incorrect regex results.
+# NOT Debian-release-specific -- confirmed present on both trixie and bookworm scans.
+CVE-2026-13221 exp:2026-10-25
+
+# perl-base (Archive::Tar) -- path traversal via crafted symlinks. Status: fix_deferred.
+CVE-2026-42496 exp:2026-10-25
+
+# perl-base (Storable) -- signed integer overflow, versions before 3.41. Status: affected, no fix yet.
+CVE-2026-57433 exp:2026-10-25
+
+# perl-base -- heap buffer overflow compiling regular expressions on 32-bit builds. No fix yet.
+CVE-2026-8376 exp:2026-10-25
+
+# zlib1g -- integer overflow / heap buffer overflow in zipOpenNewFileInZip4_6.
+# Status: will_not_fix -- Debian has permanently declined to patch this one.
+CVE-2023-45853 exp:2026-10-25

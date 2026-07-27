@@ -89,6 +89,10 @@ jobs:
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
           exit-code: "1"   # fail the job -- CRITICAL/HIGH are inside the 7/30-day SLA above
+          # 2026-07-27: 6 genuine CRITICALs (essential Debian/perl/zlib packages, no vendor fix,
+          # one permanent will_not_fix) formally risk-accepted per Jason -- see .trivyignore at
+          # repo root for the CVE list, justification, and 90-day exp: re-review dates.
+          trivyignores: ".trivyignore"
       - name: Upload SARIF to GitHub Security tab
         if: always()
         # v3 -> v4 (2026-07-27): v3 is GitHub's own deprecated Node-20 runtime (the "Node 20 is
@@ -107,3 +111,6 @@ jobs:
           format: "table"
           severity: "CRITICAL,HIGH,MEDIUM,LOW"
           exit-code: "0"
+          # Deliberately NOT applying .trivyignore here -- this step is informational only
+          # (exit-code 0) and exists so the risk-accepted CVEs stay visible in the log for the
+          # 90-day review, rather than silently disappearing from the report entirely.
