@@ -64,6 +64,7 @@ must not break the user action being audited (that would turn logging into a den
 the app itself). All failures are swallowed and reported to stderr only.
 """
 import os
+import re
 import sqlite3
 import json
 import time
@@ -376,9 +377,39 @@ def _mirror_jsonl(record):
 # Read + integrity helpers. The read-only, IP-REDACTED VIEWER ENDPOINT + UI is SEC-2; these are the
 # primitives it will build on, and verify_chain() is what makes the log trustworthy as evidence.
 # ---------------------------------------------------------------------------
+_IPV4_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
+
+
+def _redact_ip_str(ip):
+    """Masks the last octet of an IPv4-shaped string ('203.0.113.9' -> '203.0.113.x'). Returns
+    anything else (IPv6, '-', None, already non-IP text) unchanged."""
+    if isinstance(ip, str) and _IPV4_RE.match(ip):
+        return ".".join(ip.split(".")[:3] + ["x"])
+    return ip
+
+
+def _redact_ips_in(value):
+    """Recursively walk a decrypted `detail` JSON value and mask every IPv4-shaped string found
+    anywhere inside it, regardless of key name. Consistency fix (2026-07-27, Jason caught this):
+    read_recent(redact_ip=True) only ever masked the top-level src_ip COLUMN -- a detection.alert
+    event's `detail` blob (source_ips/new_ip/known_ips, written by detections.py) stayed fully
+    unredacted even when the viewer's default masked the event's own src_ip right next to it. Not
+    keyed to specific field names on purpose, so a future detection rule that adds a differently-
+    named IP field is covered automatically rather than needing another one-off fix here."""
+    if isinstance(value, dict):
+        return {k: _redact_ips_in(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_ips_in(v) for v in value]
+    if isinstance(value, str):
+        return _redact_ip_str(value)
+    return value
+
+
 def read_recent(limit=200, redact_ip=False):
     """Most-recent-first events with the detail payload decrypted. `redact_ip` masks the last octet
-    (IPv4) for the SEC-2 viewer's privacy-preserving default. Returns a list of dicts."""
+    (IPv4) for the SEC-2 viewer's privacy-preserving default -- applied consistently to BOTH the
+    event's own src_ip column and any IP-shaped strings embedded in its decrypted `detail` blob
+    (see _redact_ips_in). Returns a list of dicts."""
     out = []
     try:
         with _conn() as c:
@@ -393,8 +424,10 @@ def read_recent(limit=200, redact_ip=False):
                 except Exception:
                     detail = {"_undecryptable": True}
             ip = r["src_ip"]
-            if redact_ip and ip and ip.count(".") == 3:
-                ip = ".".join(ip.split(".")[:3] + ["x"])
+            if redact_ip:
+                ip = _redact_ip_str(ip)
+                if detail:
+                    detail = _redact_ips_in(detail)
             out.append({
                 "seq": r["seq"], "ts": r["ts"], "actor": r["actor"], "actor_name": r["actor_name"],
                 "src_ip": ip, "event_type": r["event_type"], "resource": r["resource"],

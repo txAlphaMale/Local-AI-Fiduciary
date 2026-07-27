@@ -1328,17 +1328,35 @@ def tls_restart():
 #  history, but it's not publicly reachable. IP is masked by default (redact_ip=True in
 #  read_recent()) since this is the surface most likely to get shown to a demo-site visitor —
 #  see DEMO-SITE-BUILD-PLAN.md §3.3, "the demo site's centerpiece screen".
+#
+#  UNMASK (2026-07-27, Jason's follow-up after spotting the Shodan scan): the real household
+#  instance's admin needs full-precision IPs to actually act on what they see here (e.g. copying an
+#  offending range into scripts/aws-demo/setup-waf.sh's blocklist) -- permanently masking there too
+#  would make the log strictly less useful with no matching privacy benefit, since the admin IS the
+#  data subject on a private single-household deployment. `unmask=1` reveals full IPs (both the
+#  event's own src_ip AND any IP-shaped strings inside a detection.alert's detail -- see
+#  audit._redact_ips_in) -- but ONLY when BOTH: (a) this is NOT a DEMO_MODE deployment (the demo
+#  site's whole point is protecting a VISITOR's IP, which has nothing to do with who's logged in as
+#  the demo admin, so masking there is never negotiable regardless of caller), and (b) the caller is
+#  an admin, not a viewer role (mirrors every other admin-only distinction in this app). Any other
+#  combination silently falls back to the masked default rather than erroring -- fail-closed on the
+#  privacy-sensitive default, same posture as the rest of this module.
 # ============================================================================
 @app.get("/api/audit/events")
-def get_audit_events(limit: int = 200):
+def get_audit_events(limit: int = 200, unmask: bool = False, request: Request = None):
     """Most-recent-first security events: logins/logouts/MFA/recovery/config changes/TLS state/
-    authz denials. IPs are masked to the /24 (last octet redacted) — full precision isn't needed
-    to see WHAT happened or spot a pattern, and this endpoint's whole purpose is to be safe to
-    show a visitor. `detail` (old->new config values etc.) is decrypted for display here since a
-    logged-in household member is exactly who that detail is FOR — this isn't the encrypted-at-
-    rest boundary, it's the same trust boundary as every other authenticated page in the app."""
+    authz denials. IPs are masked to the /24 (last octet redacted) by default — full precision
+    isn't needed to see WHAT happened or spot a pattern, and this endpoint's whole purpose is to be
+    safe to show a visitor. `detail` (old->new config values etc.) is decrypted for display here
+    since a logged-in household member is exactly who that detail is FOR — this isn't the
+    encrypted-at-rest boundary, it's the same trust boundary as every other authenticated page in
+    the app. Pass `unmask=1` for full-precision IPs — see the section docstring above for exactly
+    when that's honored."""
     limit = max(1, min(int(limit or 200), 1000))
-    return {"events": audit.read_recent(limit=limit, redact_ip=True)}
+    do_unmask = False
+    if unmask and not demo_seed.DEMO_MODE and request is not None and _require_admin(request):
+        do_unmask = True
+    return {"events": audit.read_recent(limit=limit, redact_ip=not do_unmask), "unmasked": do_unmask}
 
 
 @app.get("/api/audit/verify")

@@ -396,7 +396,7 @@ function runJob(url, btn, queuedLabel){
 
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
-let AUDIT_LOG=null, AUDIT_VERIFY=null;  // SEC-2 (2026-07-25) — security audit-log viewer panel
+let AUDIT_LOG=null, AUDIT_VERIFY=null, AUDIT_UNMASKED=false, AUDIT_UNMASK_WANT=false;  // SEC-2 (2026-07-25) — security audit-log viewer panel; UNMASK_WANT/UNMASKED added 2026-07-27 (see _auditRefresh/_auditPanel)
 // Real client-side filtering for the audit log table (2026-07-27) — the panel's own alert-count
 // line used to just SAY "(filter by detection.alert)" with no actual control behind it (Jason
 // caught this from a screenshot). Filters recompute + swap only #audit-table-container's contents
@@ -578,6 +578,14 @@ function buildSecurityTourSteps(){
     {tab:'settings', subtab:'posture', element:'#posture-docs-row',
      title:'The prose behind the table',
      desc:'Risk register, incident-response runbook, and the full Statement of Applicability, as written documents — not just this table\'s summary of them. Click one to read it inline.'},
+    // Added 2026-07-27 -- both panels below were built AFTER this tour's original 2026-07-26 pass,
+    // so neither was tour-linked until now (Jason caught this gap and asked for it directly).
+    {tab:'settings', subtab:'posture', element:'#risk-register-panel',
+     title:'The risk register isn\'t just a document — it\'s live data',
+     desc:'Add, edit, or close a risk right here, enforcing its own process rules in code (an R-number is never reused; a closed row keeps its reasoning instead of disappearing). The markdown document above is rendered fresh from this same data on every read, so the prose and the table can never quietly drift apart.'},
+    {tab:'settings', subtab:'posture', element:'#backup-panel',
+     title:'Backup & restore, one click, fully encrypted',
+     desc:'AES-256 encrypted backups of the whole data volume — the exact same format the host-level systemd timer and AWS-scheduled backups use, so any backup is restorable from any of the three paths. Restore only stages files for review here; it deliberately never overwrites live data with one click.'},
     {tab:'settings', subtab:'iam', element:'#sec-accounts-wrap',
      title:'Least-privilege access control (RBAC)',
      desc:'Exactly one admin, zero-or-more read-only viewers. Enforcement is server-side default-deny: a viewer session can read the entire dashboard, but every write endpoint is denied unless explicitly allowlisted — not client-side button-hiding that a direct API call could bypass.'},
@@ -3054,7 +3062,7 @@ function _riskRegisterFormPanel(){
   return box;
 }
 function riskRegisterPanel(){
-  const box=el('div');
+  const box=el('div'); box.id='risk-register-panel';
   box.appendChild(el('div','ph','RISK REGISTER (live)'));
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
   sub.textContent='The structured data behind the "Risk Register" document above — add, edit, or close a risk here rather than editing the file by hand. See "Risk Register — Maintenance Process" above for the rules this follows (never deleted, closed rows keep their reasoning).';
@@ -3162,7 +3170,7 @@ function _backupFmtTs(ts){
   return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]} UTC`;
 }
 function backupPanel(){
-  const box=el('div');
+  const box=el('div'); box.id='backup-panel';
   box.appendChild(el('div','ph','BACKUPS'));
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
   sub.textContent='One-click encrypted backup of this container\'s /data volume, same format scripts/backup.sh and the systemd timer installer use — see INSTALL.md "Backups" for the fully-automated host-level path. Restore here only stages files for review; completing a real restore still means stopping this container and copying the staged files over /data yourself.';
@@ -3564,10 +3572,15 @@ function _tlsRefreshStatus(){
 // SEC-2 (2026-07-25) — audit-log viewer panel. Two independent fetches (events + chain-integrity
 // verify) so a slow/failed verify doesn't block the event list from showing, and vice versa.
 function _auditRefresh(){
+  // AUDIT_UNMASK_WANT (2026-07-27) -- the toggle's requested state; the server has the final say
+  // (silently falls back to masked unless the caller is an admin on a non-demo instance — see
+  // app.py's GET /api/audit/events docstring) and tells us what it actually did via `unmasked` in
+  // the response, which is what the UI trusts, not the request we sent.
+  const qs = AUDIT_UNMASK_WANT ? '?limit=100&unmask=1' : '?limit=100';
   return Promise.all([
-    fetch('/api/audit/events?limit=100').then(r=>r.json()).catch(()=>({events:[]})),
+    fetch('/api/audit/events'+qs).then(r=>r.json()).catch(()=>({events:[],unmasked:false})),
     fetch('/api/audit/verify').then(r=>r.json()).catch(()=>({ok:null})),
-  ]).then(([ev,ver])=>{ AUDIT_LOG=ev.events||[]; AUDIT_VERIFY=ver; if(TAB==='settings') render(); });
+  ]).then(([ev,ver])=>{ AUDIT_LOG=ev.events||[]; AUDIT_VERIFY=ver; AUDIT_UNMASKED=!!ev.unmasked; if(TAB==='settings') render(); });
 }
 function auditRunRetention(){
   const btn=document.getElementById('audit-retention-btn');
@@ -3635,6 +3648,42 @@ function _auditPanel(){
   const detStatus=el('span','muted'); detStatus.id='audit-detections-status'; detStatus.style.cssText='margin-left:10px;font-size:var(--font-size-sm);';
   btnRow.appendChild(detStatus);
   box.appendChild(btnRow);
+
+  // Unmask toggle (2026-07-27) -- admin-only, and only has any effect on a real (non-demo)
+  // instance; the demo site's masking protects a VISITOR's IP and is never negotiable, so the
+  // toggle is simply not shown there. On the real instance, an admin acting on what they see here
+  // (e.g. copying a scanner range into the WAF blocklist) needs full precision, not a /24.
+  const me=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  const canUnmask = me && me.role==='admin' && !(DEMO_STATUS&&DEMO_STATUS.demo_mode);
+  if(canUnmask){
+    const unmaskRow=el('div'); unmaskRow.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+    const cb=el('input'); cb.type='checkbox'; cb.id='audit-unmask-cb'; cb.checked=AUDIT_UNMASK_WANT;
+    cb.style.marginRight='6px';
+    cb.onchange=()=>{ AUDIT_UNMASK_WANT=cb.checked; AUDIT_LOG=null; AUDIT_VERIFY=null; render(); _auditRefresh(); };
+    const lbl=el('label',null,'Show full IP addresses (admin)');
+    lbl.style.cssText='cursor:pointer;'; lbl.htmlFor='audit-unmask-cb';
+    unmaskRow.appendChild(cb); unmaskRow.appendChild(lbl);
+    if(AUDIT_UNMASK_WANT){
+      const note=el('span','muted'); note.style.cssText='margin-left:8px;';
+      note.textContent = AUDIT_UNMASKED
+        ? '— showing full precision (event IPs and any IPs inside alert detail).'
+        : '— requested, confirming with server…';
+      unmaskRow.appendChild(note);
+    }
+    box.appendChild(unmaskRow);
+  }
+  // Non-UI raw-file pointer (always shown, not gated to admin/unmask -- this is just documentation
+  // of what already exists on disk, not a new capability): the JSONL SIEM mirror
+  // (AUDIT_JSONL, default /data/audit.jsonl) always carries the full-precision src_ip for every
+  // event, unredacted, regardless of this page's masking setting -- readable directly on the host
+  // (or via `docker compose exec portfolio-api cat /data/audit.jsonl`) without going through the
+  // UI at all. Caveat worth stating plainly: it carries only each event's OWN src_ip column, not
+  // the extra IPs a detection.alert bundles into its `detail` (source_ips/known_ips) — those stay
+  // encrypted-at-rest and are only ever visible through this page's unmask toggle above, since
+  // `detail` is deliberately excluded from the plaintext JSONL mirror (see audit.py's docstring).
+  const rawNote=el('div','muted'); rawNote.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);';
+  rawNote.innerHTML='Prefer a raw file over the UI? <code>/data/audit.jsonl</code> on the host always has the full, unmasked source IP for every event (one JSON object per line) — no login needed if you already have host/volume access. It does <i>not</i> include the extra IPs bundled into a detection alert\'s detail (e.g. every IP in a failed-login burst) — those are encrypted at rest and only surface through the unmask toggle above.';
+  box.appendChild(rawNote);
 
   const events=AUDIT_LOG||[];
   const alertCount=events.filter(e=>e.event_type==='detection.alert').length;

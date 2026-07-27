@@ -59,7 +59,7 @@ if [ -z "$IPSET_ID" ]; then
   ADDR_JSON="$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" $SEED_BLOCKLIST_CIDRS)"
   aws wafv2 create-ip-set --name "$IPSET_NAME" --scope REGIONAL --region "$REGION" \
     --ip-address-version IPV4 --addresses "$ADDR_JSON" \
-    --description "Manually-curated CIDR blocklist (e.g. observed scanner ranges like Shodan)" \
+    --description "Manually-curated CIDR blocklist, e.g. observed scanner ranges like Shodan" \
     >/dev/null
   IPSET_ID="$(aws wafv2 list-ip-sets --scope REGIONAL --region "$REGION" \
     --query "IPSets[?Name=='$IPSET_NAME'].Id | [0]" --output text)"
