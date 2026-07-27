@@ -250,13 +250,20 @@
   .fid-tour-popover .driver-popover-arrow-side-right{border-left-color:var(--color-panel)!important;}
   .fid-tour-popover .driver-popover-arrow-side-top{border-bottom-color:var(--color-panel)!important;}
   .fid-tour-popover .driver-popover-arrow-side-bottom{border-top-color:var(--color-panel)!important;}
-  /* SEC-5 UX gap fix (2026-07-26): "no hide-mutating-buttons pass for a viewer session" --
-     RESUME-TRACKER.md's own known gap. The backend already 403s any of these regardless (this is
-     UX polish, not the security boundary); tagging a button .mut-btn dims+disables it for a
-     viewer session and explains why on hover, instead of letting them click through to a 403.
-     Coverage note: this pass tags the highest-traffic SAVE/action buttons across SETTINGS and
-     PAPER TRADING -- not literally every mutating control in the app (see RESUME-TRACKER.md for
-     the honest scope of this pass). Tag any future button the same way: class="mut-btn". */
+  /* SEC-5 UX gap fix (2026-07-26, widened 2026-07-27): "no hide-mutating-buttons pass for a
+     viewer session" -- RESUME-TRACKER.md's own known gap. The backend already 403s any of these
+     regardless (this is UX polish, not the security boundary); tagging a control .mut-btn
+     dims+disables it (button, span-as-link, select, or checkbox all work -- pure CSS) for a
+     viewer session, instead of letting them click through to a 403. 2026-07-27 pass widened
+     coverage from the original 6 SETTINGS buttons to: every job-trigger button that funnels
+     through the shared runJob()/runScheduleNow() helpers (also refuses centrally inside runJob()
+     itself as defense-in-depth -- see its comment), prompts SAVE/RESET, certificate REMOVE/RENEW,
+     knowledge-doc DELETE, RUN DETECTIONS NOW, real-estate/business Underwrite, thesis SAVE +
+     register-ticker chips, and the whole paper-trading ledger/scenario surface (create/delete/
+     archive/reactivate, buy/sell, reset/seed/contribute/recurring, risk-profile select). Coverage
+     note: still not literally every mutating control in a 6,800+ line frontend (a few obscure
+     per-panel actions may remain untagged) -- see RESUME-TRACKER.md for the honest scope. Tag any
+     future button the same way: class="mut-btn" (append to an existing class with a space). */
   body.viewer-mode .mut-btn{opacity:0.4;pointer-events:none;cursor:not-allowed;}
 </style>
 <!-- Guided coach-mark tour (2026-07-23, RESUME-TRACKER "new user tour" item): Driver.js — MIT
@@ -372,6 +379,15 @@ const numOrNull = v => { if(v===''||v==null) return null; const n=parseFloat(v);
 // cookie (sent automatically with every same-origin request) is the only auth check anywhere in
 // the app, including these job-trigger endpoints.
 function runJob(url, btn, queuedLabel){
+  // 2026-07-27 (SEC-5 UX gap #2, widened pass): every "RUN X NOW"/"Build now"/"REFRESH ..." button
+  // in the app funnels through this ONE function (run-narrative, run-performance, run-hedging,
+  // run-backtest, run-risk-suite, run-attribution, run-sizing, run-leverage, plus every SCHEDULE
+  // panel "RUN NOW" row via runScheduleNow) — none of these job-trigger endpoints are in
+  // _VIEWER_ALLOWED_WRITE_PATHS (app.py), so the backend already 403s a viewer here regardless.
+  // Refusing HERE, in the one shared chokepoint, covers all of them without hand-tagging every
+  // call site — the button still visually dims (mut-btn class, added at each call site) but this
+  // is defense-in-depth for any current/future runJob() button that isn't tagged.
+  if(isViewer()){ if(btn){ btn.textContent='view-only — ask an admin'; btn.disabled=true; } return Promise.resolve(null); }
   if(btn){ btn.textContent = queuedLabel || 'queued…'; btn.disabled = true; }
   return fetch(url, {method:'POST'})
     .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json().catch(()=>({})); })
@@ -381,6 +397,13 @@ function runJob(url, btn, queuedLabel){
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
 let AUDIT_LOG=null, AUDIT_VERIFY=null;  // SEC-2 (2026-07-25) — security audit-log viewer panel
+// Real client-side filtering for the audit log table (2026-07-27) — the panel's own alert-count
+// line used to just SAY "(filter by detection.alert)" with no actual control behind it (Jason
+// caught this from a screenshot). Filters recompute + swap only #audit-table-container's contents
+// (see _auditApplyFilter below), NOT a full render() -- a full render() would rebuild the whole
+// DOM from scratch on every keystroke in the search box and steal focus/cursor position back to
+// nothing, same class of bug this app's other live-typing fields already avoid.
+let AUDIT_FILTER={q:'', outcome:'All', alertsOnly:false};
 let HOUSEHOLD_ACCOUNTS=null;  // SEC-5 (2026-07-25) — admin-only household-accounts management panel
 let NOTIF_PREFS=null;  // Notifications (2026-07-26) — SETTINGS -> NOTIFICATIONS panel state
 function isViewer(){ return !!(AUTH_STATUS && AUTH_STATUS.user && AUTH_STATUS.user.role==='viewer'); }
@@ -1653,7 +1676,7 @@ function dashboardContent(){
       nbox.appendChild(el2);
     }
   }
-  const gb=el('button',null,nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:var(--space-2);';
+  const gb=el('button','mut-btn',nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:var(--space-2);';
   gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
   nbox.appendChild(gb);
   wrap.appendChild(nbox);
@@ -2121,8 +2144,8 @@ function promptsContent(){
   refBox.appendChild(refLbl);
   const refIn=el('input'); refIn.id='prm-userref'; refIn.type='text'; refIn.value=PROMPTS_CFG.user_ref_is_custom?(PROMPTS_CFG.user_ref||''):''; refIn.placeholder=PROMPTS_CFG.user_ref_default||'the user'; refIn.style.cssText='width:280px;';
   refBox.appendChild(refIn);
-  const refSave=el('button',null,'↳ SAVE'); refSave.style.cssText='margin-left:var(--space-2);'; refSave.onclick=saveUserRef; refBox.appendChild(refSave);
-  if(PROMPTS_CFG.user_ref_is_custom){ const refReset=el('button',null,'↺ default'); refReset.style.cssText='margin-left:var(--space-1);font-size:var(--font-size-sm);'; refReset.onclick=()=>{ const i=document.getElementById('prm-userref'); if(i) i.value=''; saveUserRef(); }; refBox.appendChild(refReset); }
+  const refSave=el('button','mut-btn','↳ SAVE'); refSave.style.cssText='margin-left:var(--space-2);'; refSave.onclick=saveUserRef; refBox.appendChild(refSave);
+  if(PROMPTS_CFG.user_ref_is_custom){ const refReset=el('button','mut-btn','↺ default'); refReset.style.cssText='margin-left:var(--space-1);font-size:var(--font-size-sm);'; refReset.onclick=()=>{ const i=document.getElementById('prm-userref'); if(i) i.value=''; saveUserRef(); }; refBox.appendChild(refReset); }
   wrap.appendChild(refBox);
   // ---- per-persona prompt editors ----
   const personas=PROMPTS_CFG.personas||{};
@@ -2136,8 +2159,8 @@ function promptsContent(){
     ta.style.cssText='width:100%;font-family:inherit;font-size:var(--font-size-sm);line-height:1.5;box-sizing:border-box;';
     box.appendChild(ta);
     const bar=el('div'); bar.style.cssText='margin-top:var(--space-1);';
-    const save=el('button',null,'↳ SAVE'); save.onclick=()=>savePrompt(key); bar.appendChild(save);
-    const reset=el('button',null,'↺ RESET TO DEFAULT'); reset.style.cssText='margin-left:var(--space-2);'; reset.onclick=()=>resetPrompt(key); bar.appendChild(reset);
+    const save=el('button','mut-btn','↳ SAVE'); save.onclick=()=>savePrompt(key); bar.appendChild(save);
+    const reset=el('button','mut-btn','↺ RESET TO DEFAULT'); reset.style.cssText='margin-left:var(--space-2);'; reset.onclick=()=>resetPrompt(key); bar.appendChild(reset);
     box.appendChild(bar);
     wrap.appendChild(box);
   });
@@ -2168,7 +2191,7 @@ function scheduleContent(){
       `<td style="white-space:nowrap;"><input id="sch-h-${j.kind}" type="number" min="0" max="23" value="${j.hour}" style="width:44px;"/> <span class="muted">:</span> `+
       `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
       `<td class="l" style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> <span style="display:inline-block;min-width:70px;">${reset}</span></td>`+
-      `<td style="white-space:nowrap;"><button onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></td>`;
+      `<td style="white-space:nowrap;"><button class="mut-btn" onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></td>`;
     t.appendChild(tr); });
   wrap.appendChild(t);
   return wrap;
@@ -3331,7 +3354,7 @@ function _auditPanel(){
   retBtn.title='Manually triggers the same daily automated retention/disposal job — deletes events past the retention window and logs the disposal.';
   retBtn.onclick=auditRunRetention;
   btnRow.appendChild(retBtn);
-  const detBtn=el('button',null,'⚡ RUN DETECTIONS NOW'); detBtn.id='audit-detections-btn'; detBtn.style.marginLeft='8px';
+  const detBtn=el('button','mut-btn','⚡ RUN DETECTIONS NOW'); detBtn.id='audit-detections-btn'; detBtn.style.marginLeft='8px';
   detBtn.title='SEC-4 — manually runs the rules engine (failed-login bursts, first-seen IPs, MFA-disable-then-change) that otherwise sweeps this log automatically every 5 minutes. Fired alerts appear below as "detection.alert" events.';
   detBtn.onclick=auditRunDetections;
   btnRow.appendChild(detBtn);
@@ -3341,15 +3364,77 @@ function _auditPanel(){
 
   const events=AUDIT_LOG||[];
   const alertCount=events.filter(e=>e.event_type==='detection.alert').length;
-  const alertLine=el('div'); alertLine.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+  const alertLine=el('div'); alertLine.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
   alertLine.innerHTML = alertCount
-    ? `<span class="neg">⚠ ${alertCount} detection alert(s)</span> in the events shown below (filter by <code>detection.alert</code>) — the rules engine's own findings, stored as ordinary hash-chained events (SEC-4).`
-    : `<span class="muted">No detection alerts among the events shown below. Rules engine (SEC-4) runs automatically every 5 minutes and can be triggered on demand above.</span>`;
+    ? `<span class="neg">⚠ ${alertCount} detection alert(s)</span> recorded — <a href="#" id="audit-alerts-link">show alerts only</a> — the rules engine's own findings, stored as ordinary hash-chained events (SEC-4).`
+    : `<span class="muted">No detection alerts recorded. Rules engine (SEC-4) runs automatically every 5 minutes and can be triggered on demand above.</span>`;
   box.appendChild(alertLine);
+  if(alertCount){
+    alertLine.querySelector('#audit-alerts-link').onclick=(ev)=>{ ev.preventDefault(); AUDIT_FILTER.alertsOnly=true; render(); };
+  }
 
-  if(!events.length){
-    box.appendChild(el('div','muted','No events recorded yet.'));
-    return box;
+  // Real filter row (2026-07-27) -- replaces the old alert-line text that just SAID "(filter by
+  // detection.alert)" with no actual control behind it. Three independent filters, ANDed together:
+  // free-text (event type/actor/resource/detail, case-insensitive substring), an outcome dropdown,
+  // and an "alerts only" quick toggle (also reachable via the link above). Deliberately does NOT
+  // call the global render() on every keystroke -- see AUDIT_FILTER's declaration for why -- the
+  // input/select/button handlers below only rebuild #audit-table-container via _auditApplyFilter().
+  const filterRow=el('div'); filterRow.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2);';
+  const qInp=el('input'); qInp.type='text'; qInp.id='audit-filter-q'; qInp.placeholder='filter (event, actor, resource, detail)…';
+  qInp.value=AUDIT_FILTER.q; qInp.style.cssText='width:260px;font-size:var(--font-size-sm);';
+  qInp.oninput=()=>{ AUDIT_FILTER.q=qInp.value; _auditApplyFilter(); };
+  filterRow.appendChild(qInp);
+  const outSel=el('select'); outSel.id='audit-filter-outcome'; outSel.style.cssText='font-size:var(--font-size-sm);background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);';
+  ['All','success','denied','failure','error'].forEach(o=>{ const op=el('option',null,o); op.value=o; if(AUDIT_FILTER.outcome===o) op.selected=true; outSel.appendChild(op); });
+  outSel.onchange=()=>{ AUDIT_FILTER.outcome=outSel.value; _auditApplyFilter(); };
+  filterRow.appendChild(outSel);
+  const alertsBtn=el('button',null,'⚠ alerts only'); alertsBtn.id='audit-filter-alerts-btn';
+  alertsBtn.style.cssText='font-size:var(--font-size-sm);'+(AUDIT_FILTER.alertsOnly?'border-color:var(--color-accent);':'');
+  alertsBtn.onclick=()=>{ AUDIT_FILTER.alertsOnly=!AUDIT_FILTER.alertsOnly; alertsBtn.style.borderColor=AUDIT_FILTER.alertsOnly?'var(--color-accent)':''; _auditApplyFilter(); };
+  filterRow.appendChild(alertsBtn);
+  const clearBtn=el('button',null,'clear filters'); clearBtn.style.cssText='font-size:var(--font-size-sm);';
+  clearBtn.onclick=()=>{ AUDIT_FILTER={q:'',outcome:'All',alertsOnly:false}; render(); };
+  filterRow.appendChild(clearBtn);
+  box.appendChild(filterRow);
+
+  const container=el('div'); container.id='audit-table-container';
+  box.appendChild(container);
+  container.appendChild(_auditBuildTable(events));
+  return box;
+}
+// Applies AUDIT_FILTER against the currently-loaded AUDIT_LOG and swaps ONLY
+// #audit-table-container's contents -- see AUDIT_FILTER's declaration for why this is not a full
+// render() call (would steal focus out of the search box on every keystroke).
+function _auditApplyFilter(){
+  const c=document.getElementById('audit-table-container');
+  if(!c) return;
+  c.replaceChildren(_auditBuildTable(AUDIT_LOG||[]));
+}
+function _auditFilterEvents(events){
+  const q=(AUDIT_FILTER.q||'').trim().toLowerCase();
+  return events.filter(e=>{
+    if(AUDIT_FILTER.alertsOnly && e.event_type!=='detection.alert') return false;
+    if(AUDIT_FILTER.outcome && AUDIT_FILTER.outcome!=='All' && e.outcome!==AUDIT_FILTER.outcome) return false;
+    if(q){
+      const hay=[e.event_type,e.actor_name,e.resource,e.detail?JSON.stringify(e.detail):''].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+function _auditBuildTable(allEvents){
+  const wrap=el('div');
+  const shown=_auditFilterEvents(allEvents);
+  const countLine=el('div','muted'); countLine.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  countLine.textContent = allEvents.length ? `Showing ${shown.length} of ${allEvents.length} event(s).` : '';
+  wrap.appendChild(countLine);
+  if(!allEvents.length){
+    wrap.appendChild(el('div','muted','No events recorded yet.'));
+    return wrap;
+  }
+  if(!shown.length){
+    wrap.appendChild(el('div','muted','No events match the current filter.'));
+    return wrap;
   }
   const tbl=el('table'); tbl.style.cssText='width:100%;border-collapse:collapse;font-size:var(--font-size-sm);';
   const thead=el('thead',null,
@@ -3364,7 +3449,7 @@ function _auditPanel(){
     '</tr>');
   tbl.appendChild(thead);
   const tbody=el('tbody');
-  events.forEach(e=>{
+  shown.forEach(e=>{
     const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
     const ts=e.ts?new Date(e.ts).toLocaleString():'—';
     const detailStr=e.detail?JSON.stringify(e.detail):'';
@@ -3382,8 +3467,8 @@ function _auditPanel(){
   tbl.appendChild(tbody);
   const tblWrap=el('div'); tblWrap.style.cssText='max-height:420px;overflow-y:auto;border:1px solid var(--border-color, #333);border-radius:4px;';
   tblWrap.appendChild(tbl);
-  box.appendChild(tblWrap);
-  return box;
+  wrap.appendChild(tblWrap);
+  return wrap;
 }
 // SEC-8 (2026-07-25) — privacy panel: export button + plain-language pointers. See app.py's
 // GET /api/privacy/export docstring and compliance/PRIVACY-NOTICE.md for the full reasoning.
@@ -3523,11 +3608,11 @@ function _certPanel(st){
       `Common name: <b>${st.common_name||'—'}</b>${st.sans&&st.sans.length>1?' · SANs: '+st.sans.join(', '):''}<br/>`+
       `Issuer: ${st.issuer||'—'}${st.self_issued?' (self-issued)':''}<br/>`+
       (st.expires_at?`Expires: ${new Date(st.expires_at*1000).toLocaleDateString()} (${st.days_remaining!=null?st.days_remaining+' days remaining':'—'})<br/>`:'')+
-      (st.method==='acme'?`Auto-renew: <label><input type="checkbox" id="cert-autorenew" ${st.auto_renew?'checked':''} onchange="certToggleAutoRenew()"/> on</label> `+
-        `<button onclick="certAcmeRenew()">↻ RENEW NOW</button><br/>`:'')+
+      (st.method==='acme'?`Auto-renew: <label><input type="checkbox" class="mut-btn" id="cert-autorenew" ${st.auto_renew?'checked':''} onchange="certToggleAutoRenew()"/> on</label> `+
+        `<button class="mut-btn" onclick="certAcmeRenew()">↻ RENEW NOW</button><br/>`:'')+
       (st.restart_required?`<span class="muted">Applying — the server is restarting itself in place; if this dashboard was loaded over plain HTTP, browse to the HTTPS address next.</span><br/>`:'');
     box.appendChild(s);
-    const clearBtn=el('button',null,'REMOVE CERTIFICATE (revert to plain HTTP)');
+    const clearBtn=el('button','mut-btn','REMOVE CERTIFICATE (revert to plain HTTP)');
     clearBtn.onclick=certClear;
     box.appendChild(clearBtn);
     box.appendChild(el('div',null,'')).style.marginBottom='var(--space-3)';
@@ -4037,7 +4122,7 @@ function holdingsContent(){
   const tmplA=el('a',null,'⬇ DOWNLOAD TEMPLATE'); tmplA.href='/api/holdings-csv/template'; tmplA.setAttribute('download','holdings_template.csv'); tmplA.style.cssText='font-size:var(--font-size-sm);';
   bar.appendChild(tmplA);
   const fileInp=document.createElement('input'); fileInp.type='file'; fileInp.accept='.csv,text/csv'; fileInp.style.display='none';
-  const upBtn=el('button',null,'⬆ UPLOAD CSV'); upBtn.onclick=()=>fileInp.click();
+  const upBtn=el('button','mut-btn','⬆ UPLOAD CSV'); upBtn.onclick=()=>fileInp.click();
   fileInp.onchange=()=>{
     const f=fileInp.files && fileInp.files[0]; if(!f) return;
     const rdr=new FileReader();
@@ -4316,7 +4401,7 @@ function performanceContent(){
   const x=el('div','muted'); x.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);';
   x.textContent='Money-weighted views (WHEN capital moved): INSIGHTS → ATTRIBUTION (per-holding XIRR) · STRATEGIST (paper book IRR).';
   wrap.appendChild(x);
-  const rf=el('button',null,'REBUILD'); rf.style.cssText='margin-top:var(--space-2);';
+  const rf=el('button','mut-btn','REBUILD'); rf.style.cssText='margin-top:var(--space-2);';
   rf.onclick=()=>runJob('/api/run-performance', rf, 'building…');
   wrap.appendChild(rf);
   return wrap;
@@ -4702,7 +4787,7 @@ function hedgingContent(){
       box.appendChild(d3); }
     wrap.appendChild(box);
   });
-  const rf=el('button',null,'REFRESH CHAINS'); rf.onclick=()=>runJob('/api/run-hedging', rf, 'building…');
+  const rf=el('button','mut-btn','REFRESH CHAINS'); rf.onclick=()=>runJob('/api/run-hedging', rf, 'building…');
   wrap.appendChild(rf);
   return wrap;
 }
@@ -4859,7 +4944,7 @@ function backtestContent(){
       rtb.appendChild(tr); });
     wrap.appendChild(rtb);
   }
-  const rf=el('button',null,'RUN BACKTEST NOW'); rf.style.cssText='margin-top:var(--space-3);';
+  const rf=el('button','mut-btn','RUN BACKTEST NOW'); rf.style.cssText='margin-top:var(--space-3);';
   rf.onclick=()=>runJob('/api/run-backtest', rf, 'building…');
   wrap.appendChild(rf);
   return wrap;
@@ -4898,7 +4983,7 @@ function knowledgeContent(){
       const tdSize=el('td'); tdSize.textContent=d.size!=null?Math.round(d.size/1024)+'kb':'—';
       const tdChunks=el('td'); tdChunks.textContent=d.chunks!=null?d.chunks:'—';
       const tdDel=el('td');
-      const delBtn=el('button',null,'✕ DELETE'); delBtn.style.cssText='font-size:var(--font-size-sm);padding:2px 8px;';
+      const delBtn=el('button','mut-btn','✕ DELETE'); delBtn.style.cssText='font-size:var(--font-size-sm);padding:2px 8px;';
       delBtn.onclick=()=>deleteKnowledgeDoc(d.hash, d.file);
       tdDel.appendChild(delBtn);
       tr.appendChild(tdName); tr.appendChild(tdSize); tr.appendChild(tdChunks); tr.appendChild(tdDel);
@@ -5184,7 +5269,7 @@ function riskContent(){
     } else {
       const sb=el('div','muted'); sb.style.cssText='font-size:var(--font-size-base);';
       sb.textContent=rs.note||('Risk suite '+(rs.status||'building')+((rs.common_days!=null)?(' ('+rs.common_days+'/'+(rs.days_needed||60)+' days)'):'')+'.'); wrap.appendChild(sb);
-      if(rs.status!=='unavailable'){ const rf=el('button','btn'); rf.textContent='Build now'; rf.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);';
+      if(rs.status!=='unavailable'){ const rf=el('button','btn mut-btn'); rf.textContent='Build now'; rf.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);';
         rf.onclick=()=>runJob('/api/run-risk-suite', rf, 'building…'); wrap.appendChild(rf); }
     }
   }
@@ -5240,7 +5325,7 @@ function attributionContent(){
   } else {
     const cb=el('div','muted'); cb.style.cssText='font-size:var(--font-size-base);';
     cb.textContent='Reconstructing holding history (shares the risk-suite price cache) — check back shortly, or build the RISK suite first.'; wrap.appendChild(cb);
-    const rb=el('button','btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
+    const rb=el('button','btn mut-btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
     rb.onclick=()=>runJob('/api/run-attribution', rb, 'building…'); wrap.appendChild(rb);
   }
   const rn=el('div','muted'); rn.style.cssText='font-size:var(--font-size-sm);line-height:1.4;margin-top:var(--space-2);'; rn.textContent=a.note||''; wrap.appendChild(rn);
@@ -5252,7 +5337,7 @@ function sizingContent(){
   if(!s || s.error){ const e=el('div','muted'); e.textContent='Sizing not available.'; wrap.appendChild(e); return wrap; }
   if(s.status!=='ready'){
     const b=el('div','muted'); b.style.cssText='font-size:var(--font-size-base);'; b.textContent=s.note||'Building position-sizing program…'; wrap.appendChild(b);
-    const rb=el('button','btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
+    const rb=el('button','btn mut-btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
     rb.onclick=()=>runJob('/api/run-sizing', rb, 'building…'); wrap.appendChild(rb);
     return wrap;
   }
@@ -5417,7 +5502,7 @@ function realEstateContent(){
     const inp=el('input'); inp.id='re-'+k; inp.type='number'; inp.step='any'; inp.value=(cur[k]!=null?cur[k]:''); inp.style.cssText='width:100px;font-size:var(--font-size-base);';
     c.appendChild(inp); form.appendChild(c); });
   wrap.appendChild(form);
-  const btn=el('button','btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:var(--font-size-md);margin:4px 0 10px;'; btn.onclick=runUnderwrite; wrap.appendChild(btn);
+  const btn=el('button','btn mut-btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:var(--font-size-md);margin:4px 0 10px;'; btn.onclick=runUnderwrite; wrap.appendChild(btn);
   // results
   const res=R.last&&R.last.result;
   if(res){
@@ -5456,7 +5541,7 @@ function businessContent(){
     const inp=el('input'); inp.id='bz-'+k; inp.type='number'; inp.step='any'; inp.value=(cur[k]!=null?cur[k]:''); inp.style.cssText='width:100px;font-size:var(--font-size-base);';
     c.appendChild(inp); form.appendChild(c); });
   wrap.appendChild(form);
-  const btn=el('button','btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:var(--font-size-md);margin:4px 0 10px;'; btn.onclick=runBizUnderwrite; wrap.appendChild(btn);
+  const btn=el('button','btn mut-btn'); btn.textContent='Underwrite'; btn.style.cssText='font-size:var(--font-size-md);margin:4px 0 10px;'; btn.onclick=runBizUnderwrite; wrap.appendChild(btn);
   const res=B.last&&B.last.result;
   if(res){
     const rh=el('div','ph','DEAL METRICS'); rh.style.cssText='font-size:var(--font-size-base);'; wrap.appendChild(rh);
@@ -5483,7 +5568,7 @@ function leverageContent(){
   if(!v || v.error){ const e=el('div','muted'); e.textContent='Leverage model not available.'; wrap.appendChild(e); return wrap; }
   if(v.status!=='ready'){
     const b=el('div','muted'); b.style.cssText='font-size:var(--font-size-base);'; b.textContent=v.note||'Building leverage ruin model…'; wrap.appendChild(b);
-    const rb=el('button','btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
+    const rb=el('button','btn mut-btn'); rb.textContent='Build now'; rb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);display:block;';
     rb.onclick=()=>runJob('/api/run-leverage', rb, 'building…'); wrap.appendChild(rb);
     return wrap;
   }
@@ -5646,7 +5731,7 @@ function thesesContent(){
     const ed=el('div'); ed.id=edId; ed.style.cssText='display:none;margin-top:var(--space-2);border-top:1px solid var(--line);padding-top:var(--space-2);';
     const ta=el('textarea'); ta.value=e.thesis||''; ta.placeholder='thesis (why you own it)'; ta.style.cssText='width:100%;height:40px;font-size:var(--font-size-base);box-sizing:border-box;';
     const tj=el('textarea'); tj.value=JSON.stringify(e.triggers_spec||T.registry[e.ticker]&&T.registry[e.ticker].triggers||[],null,0); tj.style.cssText='width:100%;height:52px;font-size:var(--font-size-sm);font-family:monospace;box-sizing:border-box;margin-top:var(--space-1);';
-    const sv=el('button','btn'); sv.textContent='Save'; sv.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-1);'; sv.onclick=()=>saveThesis(e.ticker, ta.value, tj.value);
+    const sv=el('button','btn mut-btn'); sv.textContent='Save'; sv.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-1);'; sv.onclick=()=>saveThesis(e.ticker, ta.value, tj.value);
     ed.appendChild(el('div','muted','thesis:')); ed.appendChild(ta); ed.appendChild(el('div','muted','triggers (JSON array):')); ed.appendChild(tj); ed.appendChild(sv);
     card.appendChild(ed);
     wrap.appendChild(card);
@@ -5656,7 +5741,7 @@ function thesesContent(){
   if(unreg.length){
     const uh=el('div','ph','HOLDINGS WITHOUT A THESIS'); uh.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-4);'; wrap.appendChild(uh);
     const chips=el('div'); chips.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin:4px 0;';
-    unreg.forEach(tk=>{ const c=el('button','btn'); c.textContent='+ '+tk; c.style.cssText='font-size:var(--font-size-sm);'; c.title='Register '+tk+' with default exit triggers (snapshots current fundamentals as entry)';
+    unreg.forEach(tk=>{ const c=el('button','btn mut-btn'); c.textContent='+ '+tk; c.style.cssText='font-size:var(--font-size-sm);'; c.title='Register '+tk+' with default exit triggers (snapshots current fundamentals as entry)';
       c.onclick=()=>saveThesis(tk,'', null); chips.appendChild(c); });
     wrap.appendChild(chips);
     const un=el('div','muted'); un.style.cssText='font-size:var(--font-size-xs);'; un.textContent='Adding snapshots current fundamentals as the entry baseline + seeds default triggers (Piotroski≤3, FCF-margin decay 10pt, implied-growth>40%, −30% drawdown). Edit after.'; wrap.appendChild(un);
@@ -5861,7 +5946,7 @@ function scenarioCreatePanel(){
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('sc-seedck')}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
     `</div>`+
-    `<div><button onclick="scenarioCreateSubmit()">✓ CREATE</button> <button onclick="scenarioCreateToggle()">cancel</button></div>`;
+    `<div><button class="mut-btn" onclick="scenarioCreateSubmit()">✓ CREATE</button> <button onclick="scenarioCreateToggle()">cancel</button></div>`;
   return wrap;
 }
 function scenarioSetRiskProfile(sid, rp){
@@ -5906,7 +5991,7 @@ function scenarioSwitcher(){
   const cnt=el('span','muted'); cnt.style.fontSize='var(--font-size-sm)';
   cnt.textContent=sc.active_count+' of '+sc.max_active+' active slots used';
   head.appendChild(cnt);
-  const addBtn=el('button',null,'+ NEW SCENARIO'); addBtn.style.marginLeft='auto'; addBtn.onclick=scenarioCreateToggle;
+  const addBtn=el('button','mut-btn','+ NEW SCENARIO'); addBtn.style.marginLeft='auto'; addBtn.onclick=scenarioCreateToggle;
   if(sc.active_count>=sc.max_active) addBtn.title='Cap reached — archive or delete one first';
   head.appendChild(addBtn);
   wrap.appendChild(head);
@@ -5929,16 +6014,16 @@ function scenarioSwitcher(){
     const rpRow=el('div'); rpRow.style.cssText='margin-top:2px;font-size:var(--font-size-sm);';
     const rpSel=el('select'); rpSel.style.cssText='background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);font-size:var(--font-size-sm);';
     rps.forEach(p=>{ const o=el('option',null,p); o.value=p; if((s.risk_profile||'moderate')===p) o.selected=true; rpSel.appendChild(o); });
-    rpSel.onchange=()=>scenarioSetRiskProfile(s.id, rpSel.value);
+    rpSel.className='mut-btn'; rpSel.onchange=()=>scenarioSetRiskProfile(s.id, rpSel.value);
     rpRow.appendChild(rpSel);
     card.appendChild(rpRow);
     const acts=el('div'); acts.style.cssText='margin-top:4px;display:flex;gap:8px;font-size:var(--font-size-sm);';
     if(archived){
-      const a1=el('span',null,'reactivate'); a1.style.cssText='cursor:pointer;color:var(--color-accent);'; a1.onclick=()=>scenarioActivate(s.id,s.name); acts.appendChild(a1);
+      const a1=el('span','mut-btn','reactivate'); a1.style.cssText='cursor:pointer;color:var(--color-accent);'; a1.onclick=()=>scenarioActivate(s.id,s.name); acts.appendChild(a1);
     } else {
-      const a1=el('span',null,'archive'); a1.style.cssText='cursor:pointer;color:var(--color-text-muted);'; a1.onclick=()=>scenarioArchive(s.id,s.name); acts.appendChild(a1);
+      const a1=el('span','mut-btn','archive'); a1.style.cssText='cursor:pointer;color:var(--color-text-muted);'; a1.onclick=()=>scenarioArchive(s.id,s.name); acts.appendChild(a1);
     }
-    if(aiScens.length>1){ const a2=el('span',null,'delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
+    if(aiScens.length>1){ const a2=el('span','mut-btn','delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
     card.appendChild(acts);
     row.appendChild(card);
   });
@@ -6267,7 +6352,7 @@ function ledgerCreatePanel(){
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('lc-seedck')}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
     `</div>`+
-    `<div><button onclick="ledgerCreateSubmit()">✓ CREATE</button> <button onclick="ledgerCreateToggle()">cancel</button></div>`;
+    `<div><button class="mut-btn" onclick="ledgerCreateSubmit()">✓ CREATE</button> <button onclick="ledgerCreateToggle()">cancel</button></div>`;
   return wrap;
 }
 function ledgerArchive(){
@@ -6303,9 +6388,9 @@ function ledgerBuySellForm(){
   const wrap=el('div'); wrap.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
   wrap.innerHTML=
     `<span>Ticker <input id="ledger-ticker" type="text" placeholder="AAPL" style="width:70px;text-transform:uppercase;"/></span>`+
-    `<span>$<input id="ledger-dollars" type="number" placeholder="500" style="width:80px;"/> <button onclick="ledgerBuy()">BUY</button></span>`+
+    `<span>$<input id="ledger-dollars" type="number" placeholder="500" style="width:80px;"/> <button class="mut-btn" onclick="ledgerBuy()">BUY</button></span>`+
     `<span class="muted">|</span>`+
-    `<span>Shares (blank = all) <input id="ledger-shares" type="number" placeholder="" style="width:70px;"/> <button onclick="ledgerSell()">SELL</button></span>`;
+    `<span>Shares (blank = all) <input id="ledger-shares" type="number" placeholder="" style="width:70px;"/> <button class="mut-btn" onclick="ledgerSell()">SELL</button></span>`;
   return wrap;
 }
 function userLedgerPanel(){
@@ -6320,7 +6405,7 @@ function userLedgerPanel(){
   const cap=(SCENARIOS&&SCENARIOS.max_user_ledgers)||1;
   if(!r){
     const p=el('div'); p.style.cssText='border:1px dashed var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-3);';
-    const b=el('button',null,'+ CREATE YOUR LEDGER'); b.onclick=ledgerCreateToggle; p.appendChild(b);
+    const b=el('button','mut-btn','+ CREATE YOUR LEDGER'); b.onclick=ledgerCreateToggle; p.appendChild(b);
     const d=el('div','muted'); d.style.cssText='font-size:var(--font-size-sm);margin-top:6px;';
     d.textContent='Limited to '+cap+' ledger — you can disable or delete it any time to save compute.';
     p.appendChild(d);
@@ -6335,26 +6420,26 @@ function userLedgerPanel(){
   if(archived){
     const p=el('div'); p.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;gap:var(--space-3);align-items:center;';
     p.appendChild(el('span','muted','Disabled — not being tracked or updated.'));
-    const rb=el('button',null,'↺ RE-ENABLE'); rb.onclick=ledgerActivate; p.appendChild(rb);
-    const db=el('button',null,'✕ DELETE'); db.style.color='var(--color-negative)'; db.onclick=ledgerDelete; p.appendChild(db);
+    const rb=el('button','mut-btn','↺ RE-ENABLE'); rb.onclick=ledgerActivate; p.appendChild(rb);
+    const db=el('button','mut-btn','✕ DELETE'); db.style.color='var(--color-negative)'; db.onclick=ledgerDelete; p.appendChild(db);
     wrap.appendChild(p);
   } else {
     wrap.appendChild(ledgerBuySellForm());
     const rec=r.recurring;
     const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
     ctrl.innerHTML=
-      `<span>Reset $<input id="ledger-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="ledgerReset()">↺ RESET</button> <button onclick="ledgerSeedToggle()">⊕ SEED</button></span>`+
+      `<span>Reset $<input id="ledger-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button class="mut-btn" onclick="ledgerReset()">↺ RESET</button> <button class="mut-btn" onclick="ledgerSeedToggle()">⊕ SEED</button></span>`+
       `<span class="muted">|</span>`+
-      `<span>Add $<input id="ledger-add" type="number" placeholder="500" style="width:74px;"/> <button onclick="ledgerContribute()">+ CASH</button></span>`+
+      `<span>Add $<input id="ledger-add" type="number" placeholder="500" style="width:74px;"/> <button class="mut-btn" onclick="ledgerContribute()">+ CASH</button></span>`+
       `<span class="muted">|</span>`+
       `<span>Recurring $<input id="ledger-rec" type="number" placeholder="${rec?rec.amount:'100'}" style="width:64px;"/> `+
         `<select id="ledger-cad" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
         `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
         `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
         `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
-        `<button onclick="ledgerRecurring()">SET</button>${rec?' <button onclick="ledgerStopRecurring()">STOP</button>':''}</span>`+
+        `<button class="mut-btn" onclick="ledgerRecurring()">SET</button>${rec?' <button class="mut-btn" onclick="ledgerStopRecurring()">STOP</button>':''}</span>`+
       `<span class="muted">|</span>`+
-      `<span><button onclick="ledgerArchive()">⏸ DISABLE</button> <button onclick="ledgerDelete()" style="color:var(--color-negative)">✕ DELETE</button></span>`;
+      `<span><button class="mut-btn" onclick="ledgerArchive()">⏸ DISABLE</button> <button class="mut-btn" onclick="ledgerDelete()" style="color:var(--color-negative)">✕ DELETE</button></span>`;
     wrap.appendChild(ctrl);
     const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
     let boxes='';
