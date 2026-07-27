@@ -90,7 +90,9 @@ _SETTINGS_FILE_BOOT = os.environ.get("SETTINGS_FILE", "/data/settings.json")
 _CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE",
                     "LLM_API_DIALECT", "LLM_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_STRATEGIST_MODEL",
                     "EMBED_API_DIALECT", "EMBED_BASE_URL",
-                    "PORTFOLIO_PROVIDER")   # 2026-07-24 -- see CONFIG_SPECS below
+                    "PORTFOLIO_PROVIDER",   # 2026-07-24 -- see CONFIG_SPECS below
+                    "TRUST_PROXY_HEADERS")  # 2026-07-27 -- see CONFIG_SPECS below; audit.py reads
+                                            # this lazily specifically so this boot-merge path works
 # Keys present in the REAL environment at boot (from .env / compose). Used so the UI can
 # honestly mark those "env-locked" — env wins and the UI must not pretend to override it.
 _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
@@ -343,6 +345,16 @@ CONFIG_SPECS = [
     # does not need to be monitored or even real-looking, so this is not in SECRET_SPECS.
     {"key": "NOTIFY_VAPID_CONTACT_EMAIL", "label": "Push notification contact email (VAPID claim — any address, not shown to users)",
      "group": "Notifications", "default": "admin@localhost"},
+    # ---- Reverse proxy (2026-07-27) -- found live on the AWS demo: request.client.host is always
+    # the proxy/load-balancer's own address once one sits in front of this app, never the real
+    # visitor, which silently breaks the audit log's source IP, the SEC-4 first-seen-IP detection
+    # rule, and per-IP rate limiting alike. OFF by default -- only turn this on if this exact
+    # instance sits behind a reverse proxy/load balancer you control, where nothing else can reach
+    # this app directly. Enabling it on a directly-reachable instance lets ANY caller forge their
+    # logged IP via a hand-set X-Forwarded-For header -- see audit.py's _resolve_client_ip docstring.
+    {"key": "TRUST_PROXY_HEADERS",
+     "label": "Trust X-Forwarded-For (ONLY if a reverse proxy you control sits in front of this app)",
+     "group": "Network / reverse proxy", "default": "0", "options": ["0", "1"]},
 ]
 
 
@@ -630,7 +642,10 @@ async def _security_and_auth_gate(request: Request, call_next):
             return JSONResponse({"error": "this account is view-only — an admin must make this "
                                           "change"}, status_code=403)
     if request.method == "POST" and _is_job_trigger_path(path):
-        ip = request.client.host if request.client else "unknown"
+        # 2026-07-26: resolved client IP (audit.client_ip), not the raw TCP peer -- see audit.py's
+        # TRUST_PROXY_HEADERS. Behind the AWS demo's ALB, the raw peer is constant for every
+        # visitor, which would otherwise bucket everyone's job-trigger rate limit together.
+        ip = audit.client_ip(request)
         if auth.rate_limited(ip, bucket="jobs", limit=JOB_RATE_LIMIT_PER_MIN):
             audit.emit("authz.denied", outcome="denied", request=request, resource=path,
                        actor=request.session.get("uid"),
@@ -796,7 +811,12 @@ async def auth_first_run(request: Request):
 
 @app.post("/api/auth/login")
 async def auth_login(request: Request):
-    ip = request.client.host if request.client else "unknown"
+    # 2026-07-26: resolved client IP, not the raw TCP peer -- see audit.py's TRUST_PROXY_HEADERS.
+    # Behind the AWS demo's ALB, request.client.host is the ALB's own constant address for every
+    # visitor; using it here would bucket every visitor's login attempts under one shared rate
+    # limit (one attacker's failures could lock out everyone else, and it wouldn't actually throttle
+    # a specific abusive source at all).
+    ip = audit.client_ip(request)
     if auth.rate_limited(ip):
         return JSONResponse({"error": "too many attempts — wait a minute and try again"}, status_code=429)
     body = await request.json()
@@ -1059,7 +1079,7 @@ async def auth_recovery_start(request: Request):
     normal login attempts, and the error message is identical whether the username doesn't
     exist, exists without MFA enabled, or the code is wrong — doesn't confirm or deny account
     existence/MFA status to an unauthenticated caller."""
-    ip = request.client.host if request.client else "unknown"
+    ip = audit.client_ip(request)  # 2026-07-26: resolved, not the raw peer -- see audit.py TRUST_PROXY_HEADERS
     if auth.rate_limited(ip):
         return JSONResponse({"error": "too many attempts — wait a minute and try again"}, status_code=429)
     body = await request.json()

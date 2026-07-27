@@ -79,6 +79,46 @@ AUDIT_HMAC_KEY_FILE = os.environ.get("AUDIT_HMAC_KEY_FILE", "/data/audit_hmac.ke
 # SEC-2: retention window for purge_expired() (ISO A.8.10, NIST AU-11, SOC 2 CC6.5/Privacy P4).
 AUDIT_RETENTION_DAYS = int(os.environ.get("AUDIT_RETENTION_DAYS", "365"))
 
+# 2026-07-26 -- found live on the AWS demo: `request.client.host` is the load balancer's own ENI
+# address once this app sits behind an ALB (or any reverse proxy), never the real visitor -- every
+# event logged the SAME constant IP for every visitor, which also silently neutered the SEC-4
+# first-seen-IP detection rule (an IP that never changes is "already seen" forever after the first
+# hit) and meant the login/recovery rate limiters were bucketing ALL visitors together under one
+# key. TRUST_PROXY_HEADERS=1 opts into resolving the real client from X-Forwarded-For instead --
+# but ONLY when explicitly set, because blindly trusting XFF is itself a spoofing vector: any
+# caller that can reach this process directly could hand-craft that header to frame another IP in
+# the audit log. This must be set ONLY where the deployment's own network guarantees the sole path
+# in is through exactly one trusted hop (e.g. the AWS demo's ECS security group, which only accepts
+# inbound traffic from the ALB's security group -- see AWS-DEMO-HOSTING-GUIDE.md). Left OFF (0) by
+# default for the real household instance and the local demo project, where there is no proxy at
+# all and `request.client.host` is already correct -- turning this on there would let anyone on the
+# LAN spoof their logged IP for free.
+#
+# Read LAZILY (a function, not a module-level constant read once at import time) -- deliberately.
+# app.py imports this module (line ~62) BEFORE it runs its settings.json -> os.environ boot-merge
+# (line ~114, the mechanism the SETTINGS -> ADVANCED KNOBS "Trust reverse-proxy headers" toggle
+# relies on, added 2026-07-27). A module-level constant here would have permanently frozen in
+# whatever os.environ held at that early import moment, silently ignoring a UI-saved value for the
+# rest of the process's life. Re-checking os.environ on every call costs nothing measurable and
+# sidesteps the ordering hazard entirely -- it's still only ever read once per request, and still
+# only ever changes on a restart either way (same "restart to apply" contract as every other knob
+# in CONFIG_SPECS).
+def _trust_proxy_headers():
+    return os.environ.get("TRUST_PROXY_HEADERS", "0") == "1"
+
+
+def _resolve_client_ip(src_ip, xff):
+    """Best-known real client IP for THIS deployment's trust model. When TRUST_PROXY_HEADERS is on
+    and an X-Forwarded-For value is present, the LAST comma-separated entry is trusted -- that's
+    the one the single trusted hop (e.g. the ALB, or a self-hosted tester's own reverse proxy)
+    itself appended; anything to its LEFT could have been supplied by the original client and is
+    deliberately never trusted. Falls back to the raw TCP peer (src_ip) otherwise, which is exactly
+    the old (pre-2026-07-26) behavior."""
+    if not _trust_proxy_headers() or not xff:
+        return src_ip
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    return parts[-1] if parts else src_ip
+
 CURRENT_SCHEME = "hmac-sha256"
 
 # Serializes the read-prev-hash -> insert sequence so the chain stays consistent under concurrent
@@ -182,8 +222,8 @@ def init_db():
                 ts          TEXT NOT NULL,          -- UTC ISO-8601 (Z)
                 actor       TEXT,                   -- uid, or NULL/'-' when unauthenticated
                 actor_name  TEXT,                   -- username at time of event (plaintext; low-sensitivity, aids review)
-                src_ip      TEXT,                   -- request.client.host (plaintext: detections filter on it)
-                xff         TEXT,                   -- X-Forwarded-For chain when behind the planned reverse proxy
+                src_ip      TEXT,                   -- resolved real client (see _resolve_client_ip; plaintext, detections filter on it)
+                xff         TEXT,                   -- raw X-Forwarded-For header, kept verbatim for forensic double-checking
                 event_type  TEXT NOT NULL,
                 resource    TEXT,                   -- endpoint/path or logical target
                 outcome     TEXT NOT NULL,          -- success | failure | denied | error
@@ -224,17 +264,27 @@ def _sha(s):
 
 
 def request_source(request):
-    """Extract (src_ip, xff) from a Starlette/FastAPI request. XFF matters once the app sits behind
-    the reverse proxy the demo/AWS plans put in front of it -- request.client.host would otherwise be
-    the proxy, not the real client. Never raises."""
-    src_ip, xff = None, None
+    """Extract (src_ip, xff) from a Starlette/FastAPI request, with src_ip already RESOLVED to the
+    best-known real client (see _resolve_client_ip above) -- this is what gets persisted to the
+    events table's src_ip column and is what every consumer (the audit viewer, SEC-4 detections,
+    rate limiting) should treat as "the client." The raw XFF header string is returned alongside it
+    and stored too, for forensic double-checking, but src_ip is the one to actually use. Never
+    raises."""
+    raw_ip, xff = None, None
     try:
-        src_ip = request.client.host if request and request.client else None
+        raw_ip = request.client.host if request and request.client else None
         if request is not None:
             xff = request.headers.get("x-forwarded-for")
     except Exception:
         pass
-    return src_ip, xff
+    return _resolve_client_ip(raw_ip, xff), xff
+
+
+def client_ip(request):
+    """Public one-call helper for non-audit consumers (app.py's login/recovery/job-trigger rate
+    limiters) that need the same resolved real-client IP audit logging uses, without needing to
+    know about xff/_resolve_client_ip themselves. Same trust rules as request_source() above."""
+    return request_source(request)[0]
 
 
 def emit(event_type, outcome="success", *, actor=None, actor_name=None, src_ip=None, xff=None,
