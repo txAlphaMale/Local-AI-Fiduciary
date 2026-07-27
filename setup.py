@@ -43,6 +43,14 @@ def step_env():
         log(WARN, "created mcpo/config.json from example")
     else:
         log(WARN, "mcpo/config.json missing (and no example)")
+    secret_env, secret_ex = ROOT / "mcpo-secrets" / "mcpo.env", ROOT / "mcpo-secrets" / "mcpo.env.example"
+    if secret_env.exists():
+        log(OK, "mcpo-secrets/mcpo.env present")
+    elif secret_ex.exists():
+        shutil.copy(secret_ex, secret_env)
+        log(WARN, "created mcpo-secrets/mcpo.env from example (empty is fine -- fill in via SETTINGS -> SECRETS later)")
+    else:
+        log(ERR, "mcpo-secrets/mcpo.env missing (and no example) -- docker compose up will fail without it")
 
 
 def step_model(skip=False):

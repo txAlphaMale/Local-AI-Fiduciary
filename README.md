@@ -79,8 +79,9 @@ ollama pull bge-m3             # embeddings for the Fiduciary knowledge RAG
 
 ```bash
 # 1. Copy the templates and fill in YOUR values (never commit the real ones)
-cp .env.example .env                          # then edit .env
-cp mcpo/config.json.example mcpo/config.json  # REQUIRED before first run
+cp .env.example .env                                    # then edit .env
+cp mcpo/config.json.example mcpo/config.json            # REQUIRED before first run
+cp mcpo-secrets/mcpo.env.example mcpo-secrets/mcpo.env  # REQUIRED before first run
 
 # 2. Pull the models (on the host)
 ollama pull qwen3.6:27b
