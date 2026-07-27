@@ -141,8 +141,34 @@ WAF_ARN="$(aws wafv2 get-web-acl --name "$WAF_NAME" --scope REGIONAL --id "$WAF_
   --region "$REGION" --query 'WebACL.ARN' --output text)"
 
 # --- Step 3: attach to the ALB (idempotent -- associating an already-associated resource is a no-op) ---
+# WAFUnavailableEntityException (2026-07-27, Jason hit this live, ~3 seconds after create-web-acl
+# succeeded): a Web ACL just created isn't always immediately available for AssociateWebACL yet --
+# a known AWS eventual-consistency gap, not a bug in this script (same root cause as
+# terraform-provider-aws issue #29080 and gyro-aws-provider issue #521: creating + associating a
+# WAFv2 Web ACL back-to-back in one run). AWS's own guidance is "wait and retry" -- community
+# reports range from a few seconds up to several minutes, so this retries on a fixed interval
+# rather than the single fixed `sleep N` used elsewhere in this repo (a one-shot wait isn't
+# reliably long enough for this specific error). Fails fast (no retry) on any OTHER error, so a
+# genuinely wrong ALB/ARN still surfaces immediately instead of silently looping for 3 minutes.
 log "Associating Web ACL with the demo ALB..."
-aws wafv2 associate-web-acl --web-acl-arn "$WAF_ARN" --resource-arn "$ALB"
+ASSOC_TRIES=12
+ASSOC_DELAY=15
+i=1
+while true; do
+  if ASSOC_ERR="$(aws wafv2 associate-web-acl --web-acl-arn "$WAF_ARN" --resource-arn "$ALB" 2>&1)"; then
+    log "Associated."
+    break
+  fi
+  if ! echo "$ASSOC_ERR" | grep -q "WAFUnavailableEntityException"; then
+    die "associate-web-acl failed with an unexpected error (not the known propagation-delay one): $ASSOC_ERR"
+  fi
+  if [ "$i" -ge "$ASSOC_TRIES" ]; then
+    die "associate-web-acl still failing after $ASSOC_TRIES attempts (~$((ASSOC_TRIES*ASSOC_DELAY))s) -- last error: $ASSOC_ERR -- wait a few more minutes and re-run this script (safe to re-run, everything else is already created)."
+  fi
+  log "Web ACL not yet available for association (attempt $i/$ASSOC_TRIES) -- waiting ${ASSOC_DELAY}s and retrying..."
+  sleep "$ASSOC_DELAY"
+  i=$((i+1))
+done
 
 echo
 echo "Done. All 3 rules are BLOCKING now: (1) AWS IP reputation list, (2) custom blocklist incl."
