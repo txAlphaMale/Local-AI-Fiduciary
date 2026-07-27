@@ -230,6 +230,18 @@
   .msg.asst .msg-body code{background:#0b0d10;padding:var(--space-1) var(--space-1);border-radius:var(--radius-md);font-size:var(--font-size-md);}
   .msg.asst .msg-body pre code{background:none;padding:0;}
   .msg.asst .msg-body table{margin:6px 0;border-collapse:collapse;table-layout:fixed;width:100%;} .msg.asst .msg-body th,.msg.asst .msg-body td{text-align:left;border:1px solid var(--color-border-strong);padding:var(--space-1) var(--space-2);overflow-wrap:break-word;word-break:break-word;}
+  /* GRC document viewer (2026-07-27 fix -- Jason caught right-aligned/overflowing tables in the
+     rendered DPIA doc, e.g. the Likelihood/Impact/Measures table). #posture-doc-viewer (SETTINGS ->
+     SECURITY POSTURE -> GRC DOCUMENTS) renders 7 different .md files through the same mdToHtml()/
+     marked.js path chat already uses -- but only chat's own container (.msg.asst .msg-body above)
+     ever got matching table CSS. Without it, every markdown table in every one of those 7 documents
+     fell back to the app's GLOBAL td default (text-align:right, white-space:nowrap, ~line 182),
+     which is right for numeric data tables elsewhere but wrong for prose-heavy compliance tables --
+     hence the right-aligned, unwrapped, horizontally-scrolling text in the screenshot. Same
+     table-layout:fixed + left-align + wrap treatment as the chat rule above, applied once here so
+     it covers all 7 documents through this one shared container rather than needing a fix per doc. */
+  #posture-doc-viewer table{margin:6px 0;border-collapse:collapse;table-layout:fixed;width:100%;}
+  #posture-doc-viewer th,#posture-doc-viewer td{text-align:left;border:1px solid var(--color-border-strong);padding:var(--space-1) var(--space-2);overflow-wrap:break-word;word-break:break-word;white-space:normal;}
   .msg-tools{display:flex;flex-wrap:wrap;gap:var(--space-1);margin-bottom:var(--space-1);}
   .tool-chip{font-size:var(--font-size-sm);letter-spacing:.5px;color:var(--color-text-muted);border:1px solid var(--color-border-strong);border-radius:10px;padding:var(--space-1) var(--space-2);}
   .chat-bar{display:flex;gap:var(--space-2);align-items:flex-end;border-top:1px solid var(--color-border);padding-top:var(--space-2);margin-top:var(--space-1);}

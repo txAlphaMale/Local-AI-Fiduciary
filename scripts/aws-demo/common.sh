@@ -62,6 +62,11 @@ backup_role_arn() { (aws iam get-role --role-name fiduciary-demo-backup-role \
                        --query 'Role.Arn' --output text 2>/dev/null || true) | sed 's/None//'; }
 sched_role_arn()  { (aws iam get-role --role-name fiduciary-demo-scheduler \
                        --query 'Role.Arn' --output text 2>/dev/null || true) | sed 's/None//'; }
+# WAF (2026-07-27, setup-waf.sh) -- same discovery-by-name pattern as everything else above.
+waf_web_acl_id()  { aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" \
+                       --query "WebACLs[?Name=='fiduciary-demo-acl'].Id | [0]" --output text 2>/dev/null | sed 's/None//'; }
+waf_ip_set_id()   { aws wafv2 list-ip-sets --scope REGIONAL --region "$REGION" \
+                       --query "IPSets[?Name=='fiduciary-demo-blocklist'].Id | [0]" --output text 2>/dev/null | sed 's/None//'; }
 
 # Convenience: private subnets + Fargate SG, the trio every one-off run-task call needs.
 network_config() {

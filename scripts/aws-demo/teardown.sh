@@ -27,12 +27,13 @@ fi
 
 if [ "$SKIP_CONFIRM" -ne 1 ]; then
   echo
-  echo "About to DELETE the following, if present: EventBridge schedules, ECS service+cluster,"
-  echo "ALB+target group, the DNS A-record (zone itself is KEPT), ACM cert, EFS (filesystem +"
-  echo "data -- already backed up above), NAT Gateway + EIP, route tables/subnets/IGW/VPC,"
-  echo "security groups, CloudWatch log group, both ECR repos, all 6 SSM parameters, and the"
-  echo "exec/task/scheduler IAM roles. The S3 backup bucket, backup IAM role, backup task"
-  echo "definition, and Route 53 hosted zone are deliberately KEPT."
+  echo "About to DELETE the following, if present: EventBridge schedules, the WAF Web ACL + IP set"
+  echo "(scanner blocklist + geo-allow rules), ECS service+cluster, ALB+target group, the DNS"
+  echo "A-record (zone itself is KEPT), ACM cert, EFS (filesystem + data -- already backed up"
+  echo "above), NAT Gateway + EIP, route tables/subnets/IGW/VPC, security groups, CloudWatch log"
+  echo "group, both ECR repos, all 6 SSM parameters, and the exec/task/scheduler IAM roles. The S3"
+  echo "backup bucket, backup IAM role, backup task definition, and Route 53 hosted zone are"
+  echo "deliberately KEPT."
   echo
   read -r -p "Type 'teardown' to proceed: " CONFIRM
   [ "$CONFIRM" != "teardown" ] && { log "Aborted, nothing deleted."; exit 1; }
@@ -45,6 +46,42 @@ aws scheduler delete-schedule --name fiduciary-demo-scale-down 2>/dev/null || lo
 log "=== Step 3/3: full resource teardown ==="
 
 ALB="$(alb_arn)"; TG="$(tg_arn)"; ZONE="$(zone_id)"
+
+# WAF (2026-07-27) -- MUST run before the ALB is deleted below: disassociate-web-acl needs the
+# ALB's ARN, which stops resolving the instant the ALB itself is gone. Deletion order matters the
+# other direction too -- a Web ACL can't be deleted while it still references the IP set in one of
+# its rules, so: disassociate -> delete Web ACL -> delete IP set, same order setup-waf.sh's own
+# trailing "to remove entirely" instructions already gave. Each step is its own existence check +
+# `|| true`/`|| log ...` fallback, matching every other resource in this script, so a second run
+# after a partial failure (or an environment that never had WAF set up at all) just skips ahead.
+WAF_ID="$(waf_web_acl_id)"
+if [ -n "$WAF_ID" ]; then
+  if [ -n "$ALB" ]; then
+    log "Disassociating WAF Web ACL from the ALB..."
+    aws wafv2 disassociate-web-acl --resource-arn "$ALB" 2>/dev/null || log "  (already disassociated, or association never existed)"
+  fi
+  log "Deleting WAF Web ACL 'fiduciary-demo-acl'..."
+  WAF_LOCK="$(aws wafv2 get-web-acl --name fiduciary-demo-acl --scope REGIONAL --id "$WAF_ID" \
+    --region "$REGION" --query 'LockToken' --output text 2>/dev/null)"
+  if [ -n "$WAF_LOCK" ]; then
+    aws wafv2 delete-web-acl --name fiduciary-demo-acl --scope REGIONAL --id "$WAF_ID" \
+      --lock-token "$WAF_LOCK" 2>/dev/null || warn "Web ACL delete failed -- it may still be associated with something, or another change raced its lock token. Check manually: aws wafv2 get-web-acl --name fiduciary-demo-acl --scope REGIONAL --id $WAF_ID --region $REGION"
+  fi
+else
+  log "  (WAF Web ACL already gone, or was never set up)"
+fi
+IPSET_ID="$(waf_ip_set_id)"
+if [ -n "$IPSET_ID" ]; then
+  log "Deleting WAF IP set 'fiduciary-demo-blocklist'..."
+  IPSET_LOCK="$(aws wafv2 get-ip-set --name fiduciary-demo-blocklist --scope REGIONAL --id "$IPSET_ID" \
+    --region "$REGION" --query 'LockToken' --output text 2>/dev/null)"
+  if [ -n "$IPSET_LOCK" ]; then
+    aws wafv2 delete-ip-set --name fiduciary-demo-blocklist --scope REGIONAL --id "$IPSET_ID" \
+      --lock-token "$IPSET_LOCK" 2>/dev/null || warn "IP set delete failed -- if the Web ACL delete above also failed, this one still references it and can't be removed until that's resolved first."
+  fi
+else
+  log "  (WAF IP set already gone, or was never set up)"
+fi
 
 if [ -n "$ALB" ] && [ -n "$ZONE" ]; then
   log "Deleting DNS A-record for demo.bentleybuilds.tech (keeping the hosted zone itself)..."
