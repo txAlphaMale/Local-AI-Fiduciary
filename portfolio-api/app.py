@@ -63,6 +63,7 @@ import audit        # SEC-1 (2026-07-24) — append-only, encrypted, hash-chaine
 import detections   # SEC-4 (2026-07-25) — rules engine over the audit log (failed-login bursts, etc.)
 import demo_seed     # Demo harness (2026-07-25) — synthetic-data seeder + scheduled reset, DEMO_MODE-gated (no-op otherwise)
 import notifications  # Outbound awareness layer (2026-07-26) — VAPID web push + generic SMTP email, triggered from audit.emit()
+import backup        # SEC-7a (2026-07-27) — UI-triggered encrypted backup/staged-restore, same format as scripts/backup.sh
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
@@ -1854,6 +1855,86 @@ async def post_risk_register_row_close(row_id: str, req: Request):
                resource=f"/api/compliance/risk-register/row/{row_id}/close",
                detail={"id": row_id, "reason": reason})
     return {"ok": True, "row": row}
+
+
+# ---- UI-triggered backup/restore (2026-07-27, SEC-7a) -------------------------------------------
+# BACKUP_OUTPUT_DIR defaults to a bind-mounted host folder (docker-compose.yml's `./backups:/backups`)
+# rather than somewhere under /data -- storing a backup archive on the SAME volume it protects
+# defeats the point for a genuine host-loss scenario, only helping against accidental delete/
+# corruption. If you also run scripts/install-local-backup.sh (the systemd-timer path), point ITS
+# BACKUP_OUTPUT_DIR at the same host path (./backups, i.e. wherever this repo checkout lives) if you
+# want one unified backups folder regardless of which trigger made a given file -- not required,
+# they work independently either way.
+BACKUP_OUTPUT_DIR = os.environ.get("BACKUP_OUTPUT_DIR", "/backups")
+BACKUP_STAGING_DIR = os.environ.get("BACKUP_STAGING_DIR", "/backups/.restore-staging")
+BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0") or "0")
+
+
+@app.get("/api/backup/status")
+def get_backup_status():
+    """Existing backups (newest first) + whether a passphrase is configured yet. A GET, so no RBAC
+    change needed -- viewers can see this like anything else read-only."""
+    configured = bool(_read_secrets().get("BACKUP_PASSPHRASE"))
+    try:
+        files = backup.list_backups(BACKUP_OUTPUT_DIR)
+    except Exception as e:
+        return {"passphrase_configured": configured, "files": [], "error": str(e)}
+    return {"passphrase_configured": configured, "files": files, "output_dir": BACKUP_OUTPUT_DIR}
+
+
+@app.post("/api/backup/run")
+def post_backup_run(request: Request):
+    """Admin-only by omission from _VIEWER_ALLOWED_WRITE_PATHS, same as the Risk Register mutation
+    endpoints above -- the global gate already 403s a non-admin session before this runs. Backs up
+    the SAME /data this container itself uses (DATA_DIR-equivalent), so the running app's data
+    volume is exactly what gets archived -- no separate mount needed for the source side, unlike
+    BACKUP_OUTPUT_DIR above which deliberately IS a separate mount for the output side."""
+    pw = _read_secrets().get("BACKUP_PASSPHRASE")
+    try:
+        result = backup.run_backup(pw, "/data", BACKUP_OUTPUT_DIR, retention_days=BACKUP_RETENTION_DAYS)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        audit.emit("backup.run", outcome="failure", request=request, actor=request.session.get("uid"),
+                   resource="/api/backup/run", detail={"error": str(e)})
+        return JSONResponse({"error": f"backup failed: {e}"}, status_code=500)
+    audit.emit("backup.run", request=request, actor=request.session.get("uid"),
+               resource="/api/backup/run",
+               detail={"file": result["file"], "size_bytes": result["size_bytes"],
+                       "pruned": result["pruned"]})
+    return {"ok": True, **result}
+
+
+@app.post("/api/backup/restore-stage")
+async def post_backup_restore_stage(req: Request):
+    """Admin-only (same gate). Body: {file: "fiduciary-backup-<ts>.tar.gz.enc"}. Decrypts + extracts
+    into BACKUP_STAGING_DIR -- deliberately NOT a live restore over /data; see backup.py's module
+    docstring for why. Refuses if the staging dir already has something in it (from a previous,
+    not-yet-completed restore) rather than silently mixing two restores together."""
+    body = await req.json()
+    fname = str(body.get("file") or "").strip()
+    if not fname:
+        return JSONResponse({"error": "file is required (see GET /api/backup/status for names)"},
+                            status_code=400)
+    archive_path = os.path.join(BACKUP_OUTPUT_DIR, os.path.basename(fname))  # basename: no path traversal
+    pw = _read_secrets().get("BACKUP_PASSPHRASE")
+    if not pw:
+        return JSONResponse({"error": "no backup passphrase configured (SETTINGS -> SECRETS)"},
+                            status_code=400)
+    try:
+        result = backup.stage_restore(pw, archive_path, BACKUP_STAGING_DIR)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"restore staging failed: {e}"}, status_code=500)
+    audit.emit("backup.restore_staged", request=req, actor=req.session.get("uid"),
+               resource="/api/backup/restore-stage",
+               detail={"file": fname, "file_count": len(result["files"])})
+    return {"ok": True, "note": "Files extracted to a STAGING directory, not applied live. To "
+                                 "actually restore: stop this container, copy the staged files "
+                                 f"from {result['staging_dir']} over your real /data (back up the "
+                                 "current /data first!), then start the container back up.",
+            **result}
 
 
 # ============================================================================
@@ -8401,6 +8482,13 @@ SECRET_SPECS = [
     {"key": "SMTP_FROM_ADDRESS", "label": "From address (blank = same as SMTP username)", "group": "Notifications (Email)", "scope": "app"},
     {"key": "SMTP_TO_ADDRESS",   "label": "Send alert emails to this address",         "group": "Notifications (Email)", "scope": "app"},
     {"key": "SMTP_USE_TLS",      "label": "Use STARTTLS (1 = yes, 0 = no; blank defaults to yes)", "group": "Notifications (Email)", "scope": "app"},
+    # 2026-07-27 (SEC-7a, UI-triggered backup): scope="app" like SMTP above -- read live via
+    # _read_secrets() at the moment a backup actually runs, no container restart needed after
+    # saving it. Deliberately the SAME passphrase concept scripts/backup.sh's BACKUP_PASSPHRASE
+    # env var uses (see backup.py's module docstring) -- set them to the same value if you want a
+    # UI-triggered backup and the systemd-timer-triggered one to be interchangeable, though nothing
+    # requires that; restore only ever needs whichever passphrase actually encrypted a given file.
+    {"key": "BACKUP_PASSPHRASE", "label": "Backup passphrase (SETTINGS -> SECURITY -> Backups)", "group": "Backups", "scope": "app"},
 ]
 
 

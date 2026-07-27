@@ -413,6 +413,7 @@ let POSTURE_FILTER=null;  // Demo harness — client-side theme filter for the S
 let COMPLIANCE_DOC_CATALOG=null, COMPLIANCE_DOC_OPEN=null;  // 2026-07-26 — GRC document viewer (risk register/IR runbook/SoA/privacy docs) on the Security Posture page
 const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cached for the session
 let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
+let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
@@ -3113,6 +3114,104 @@ function riskRegisterPanel(){
   }
   return box;
 }
+// 2026-07-27 — UI-triggered backup/restore (SEC-7a). Same encrypted-archive format as
+// scripts/backup.sh (see portfolio-api/backup.py's module docstring — verified byte-compatible
+// both directions), so a backup made here and one made by the systemd timer are interchangeable.
+// Restore is deliberately STAGED, not live — see backup.py for why a one-click live restore isn't
+// built (a wrong restore is a much worse failure mode than a wrong backup, and this was built/
+// tested without a live container to verify a restart-into-restore-mode flow against).
+function _backupRefresh(){
+  return fetch('/api/backup/status').then(r=>r.json()).then(d=>{
+    BACKUP_STATUS=d; if(TAB==='settings') render();
+  }).catch(()=>{ BACKUP_STATUS={error:'failed to load', files:[]}; if(TAB==='settings') render(); });
+}
+function _backupRunNow(){
+  if(BACKUP_BUSY) return;
+  BACKUP_BUSY=true; BACKUP_LAST_RESULT=null; render();
+  fetch('/api/backup/run',{method:'POST'})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(({ok,d})=>{
+      BACKUP_BUSY=false;
+      BACKUP_LAST_RESULT = ok ? {type:'ok', text:'Backup written: '+d.file+' ('+_backupFmtSize(d.size_bytes)+')'+(d.pruned&&d.pruned.length?' — pruned '+d.pruned.length+' old archive(s).':'')}
+                              : {type:'err', text:d.error||'backup failed'};
+      _backupRefresh();
+    }).catch(e=>{ BACKUP_BUSY=false; BACKUP_LAST_RESULT={type:'err', text:'backup failed: '+e.message}; render(); });
+}
+function _backupStageRestore(file){
+  if(!confirm('Stage a restore of "'+file+'"?\n\nThis decrypts it into a STAGING folder only — it does NOT touch your live data. You\'ll still need to manually copy the staged files over /data after stopping this container. Continue?')) return;
+  BACKUP_BUSY=true; BACKUP_LAST_RESULT=null; render();
+  fetch('/api/backup/restore-stage',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({file})})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(({ok,d})=>{
+      BACKUP_BUSY=false;
+      BACKUP_LAST_RESULT = ok ? {type:'ok', text:d.note+' ('+d.files.length+' file(s) staged.)'}
+                              : {type:'err', text:d.error||'restore staging failed'};
+      render();
+    }).catch(e=>{ BACKUP_BUSY=false; BACKUP_LAST_RESULT={type:'err', text:'restore staging failed: '+e.message}; render(); });
+}
+function _backupFmtSize(n){
+  if(n==null) return '';
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  return (n/1024/1024).toFixed(1)+' MB';
+}
+function _backupFmtTs(ts){
+  // ts like "20260727T162812Z" -> readable
+  const m=/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(ts);
+  if(!m) return ts;
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]} UTC`;
+}
+function backupPanel(){
+  const box=el('div');
+  box.appendChild(el('div','ph','BACKUPS'));
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  sub.textContent='One-click encrypted backup of this container\'s /data volume, same format scripts/backup.sh and the systemd timer installer use — see INSTALL.md "Backups" for the fully-automated host-level path. Restore here only stages files for review; completing a real restore still means stopping this container and copying the staged files over /data yourself.';
+  box.appendChild(sub);
+  if(!BACKUP_STATUS){ box.appendChild(el('div','muted','Loading backup status…')); _backupRefresh(); return box; }
+  if(BACKUP_STATUS.error){ box.appendChild(el('div','neg',BACKUP_STATUS.error)); return box; }
+
+  if(!BACKUP_STATUS.passphrase_configured){
+    const warn=el('div','neg'); warn.style.cssText='margin-bottom:var(--space-2);';
+    warn.textContent='No backup passphrase set yet — go to SETTINGS → SECRETS → "Backup passphrase" first.';
+    box.appendChild(warn);
+  }
+  if(BACKUP_LAST_RESULT){
+    const res=el('div', BACKUP_LAST_RESULT.type==='ok'?'pos':'neg'); res.style.cssText='margin-bottom:var(--space-2);font-size:var(--font-size-sm);';
+    res.textContent=BACKUP_LAST_RESULT.text;
+    box.appendChild(res);
+  }
+
+  const runBtn=el('button','mut-btn', BACKUP_BUSY?'Running…':'RUN BACKUP NOW');
+  runBtn.disabled = BACKUP_BUSY || !BACKUP_STATUS.passphrase_configured;
+  runBtn.style.cssText='margin-bottom:var(--space-3);';
+  runBtn.onclick=_backupRunNow;
+  box.appendChild(runBtn);
+
+  const files=BACKUP_STATUS.files||[];
+  if(!files.length){
+    box.appendChild(el('div','muted','No backups yet.'));
+    return box;
+  }
+  const tbl=el('table','tbl-compact'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);';
+  const thead=el('tr'); ['When','Size',''].forEach(h=>{
+    const th=el('th',null,h); th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'; thead.appendChild(th);
+  });
+  tbl.appendChild(thead);
+  files.forEach(f=>{
+    const tr=el('tr');
+    const tdWhen=el('td',null,_backupFmtTs(f.timestamp)); tdWhen.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);';
+    const tdSize=el('td',null,_backupFmtSize(f.size_bytes)); tdSize.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);';
+    const tdAction=el('td'); tdAction.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);';
+    const stageBtn=el('button','mut-btn','Stage restore'); stageBtn.style.cssText='font-size:var(--font-size-sm);';
+    stageBtn.disabled=BACKUP_BUSY;
+    stageBtn.onclick=()=>_backupStageRestore(f.file);
+    tdAction.appendChild(stageBtn);
+    tr.appendChild(tdWhen); tr.appendChild(tdSize); tr.appendChild(tdAction);
+    tbl.appendChild(tr);
+  });
+  box.appendChild(tbl);
+  return box;
+}
 function securityPostureContent(){
   const box=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
@@ -3165,6 +3264,7 @@ function securityPostureContent(){
   }
 
   box.appendChild(riskRegisterPanel());
+  box.appendChild(backupPanel());
 
   // Simple client-side theme filter (Organizational/People/Physical/Technological/All) — cheap
   // and useful given there are 93 rows; no server round-trip needed since the whole file is

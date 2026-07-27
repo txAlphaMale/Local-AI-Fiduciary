@@ -154,6 +154,16 @@ services:
                                        # Security Posture page (GET /api/compliance/controls) can
                                        # read controls.json without changing the Docker build
                                        # context. Same bind-mount pattern as ./knowledge above.
+      - ./backups:/backups            # SEC-7a (2026-07-27) -- UI-triggered backup output (SETTINGS
+                                       # -> SECURITY -> Backups). Deliberately a SEPARATE mount from
+                                       # portfolio-data above, not a subfolder under /data -- a
+                                       # backup archive stored on the same volume it protects only
+                                       # helps against accidental delete/corruption, not real host/
+                                       # volume loss. Read-write (not :ro) since the app writes new
+                                       # archives here. If you also use scripts/install-local-
+                                       # backup.sh (the systemd-timer path, runs on the HOST outside
+                                       # Docker), point its BACKUP_OUTPUT_DIR at this same ./backups
+                                       # folder if you want one unified location -- not required.
     ports:
       - "${DASH_PORT:-8097}:8097"
       - "${HTTPS_PORT:-8443}:8443"
