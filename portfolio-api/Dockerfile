@@ -1,4 +1,15 @@
-FROM python:3.12-slim
+# Pinned to -bookworm explicitly (2026-07-27), not the floating `python:3.12-slim` tag it used to
+# be: a Trivy scan on 2026-07-27 found 202 vulnerabilities (5 CRITICAL, incl. perl-base CVE-2026-
+# 13221 and socat CVE-2026-56123) with almost no "Fixed Version" available, and the build log's own
+# `Detected OS family="debian" version="13.6"` line showed why -- the floating tag had silently
+# resolved to Debian 13 "trixie" (very new stable release, Debian's security team hasn't backported
+# most patches yet) instead of Debian 12 "bookworm" (years of active security patching). Pinning to
+# `-bookworm` fixes both problems: an actively-patched base AND a base that can't silently shift OS
+# releases out from under this Dockerfile again on a future `docker build` with no cache. Jason:
+# rebuild + rescan (`docker build -t fiduciary-portfolio-api:scan .` then `trivy image ... fiduciary-
+# portfolio-api:scan`) to confirm this actually clears the 2 CRITICAL findings above -- not verified
+# against a real Trivy run from this session (no Docker available in the sandbox).
+FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 # curl: fetches acme.sh below. tar: extracts it. socat: acme.sh's --standalone HTTP-01 challenge
