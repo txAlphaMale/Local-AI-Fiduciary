@@ -1458,6 +1458,202 @@ def demo_reset_now(request: Request):
 
 COMPLIANCE_DIR = os.environ.get("COMPLIANCE_DIR", "/compliance")
 
+# ---- Risk Register: live, UI-editable data (2026-07-27) ----------------------------------------
+# compliance/ is a read-only bind mount locally (docker-compose.yml's `./compliance:/compliance:ro`)
+# and baked into the image at build time for the AWS demo (Dockerfile.demo's `COPY compliance/`) --
+# there is no writable path back into that directory from a running container either way. So the
+# Risk Register's LIVE data lives here instead, in the same writable /data volume as every other
+# piece of app state (store.py's *_FILE convention), and compliance/RISK-REGISTER.md's rendered
+# markdown is generated fresh from it on every read (_compliance_doc_data above) rather than being
+# a static file — the Security Posture doc viewer and the chat get_compliance_doc tool always see
+# the current data, and nothing can drift out of sync because there is no second copy to drift.
+RISK_REGISTER_FILE = os.environ.get("RISK_REGISTER_FILE", "/data/risk_register.json")
+_risk_register_lock = threading.Lock()
+
+# One-time seed (2026-07-27) matching the register as it stood in compliance/RISK-REGISTER.md
+# before this file became the live source of truth -- used ONLY to initialize RISK_REGISTER_FILE
+# the first time it's read and found missing, never referenced again after that first write.
+_RISK_REGISTER_SEED = [
+    dict(id="R-1", asset="Financial/PII data (holdings, income, estate docs, chat transcripts)",
+         threat="Unauthorized read via a compromised session or stolen backup",
+         likelihood="Low", impact="High", inherent="Medium-High",
+         treatment="Fernet encryption at rest across all sensitive tables/files (`secrets_crypto.py`); "
+                    "Argon2+MFA-gated sessions; deny-by-default access gate",
+         residual="Low-Medium", owner="Jason"),
+    dict(id="R-2", asset="Master encryption key(s) (Fernet, HMAC audit key)",
+         threat="Key file loss or theft (host compromise, bad backup hygiene)",
+         likelihood="Low", impact="High", inherent="Medium-High",
+         treatment="Key-versioning (SEC-3) limits blast radius of a *future* rotation, but does not "
+                    "protect the *current* key file itself; documented \"back this file up "
+                    "separately\" guidance",
+         residual="Medium (residual risk is real — a stolen current-version key file still "
+                   "decrypts current data)", owner="Jason"),
+    dict(id="R-3", asset="Security audit log integrity",
+         threat="An attacker (or operator mistake) alters or deletes historical events to hide activity",
+         likelihood="Low", impact="Medium", inherent="Low-Medium",
+         treatment="HMAC hash chain (separate key from Fernet) detects any alteration; "
+                    "retention/disposal is itself logged",
+         residual="Low", owner="Jason"),
+    dict(id="R-4", asset="Account credentials (password, MFA, recovery key)",
+         threat="Credential-stuffing / brute-force login attempts",
+         likelihood="Medium", impact="Medium", inherent="Medium",
+         treatment="Argon2 hashing, TOTP MFA, sliding-window login rate limiting, single-use hashed "
+                    "backup codes",
+         residual="Low", owner="Jason"),
+    dict(id="R-5", asset="Household viewer account",
+         threat="A viewer session used to attempt privileged actions (curiosity or compromise)",
+         likelihood="Low", impact="Low", inherent="Low",
+         treatment="Server-side role assignment (never client-supplied); deny-by-default write "
+                    "gate; every denial logged (`authz.denied`)",
+         residual="Low", owner="Jason"),
+    dict(id="R-6", asset="TLS/transport",
+         threat="Downgrade to plaintext HTTP exposing credentials/session cookies in transit",
+         likelihood="Low", impact="High", inherent="Medium",
+         treatment="In-app TLS provisioning + HSTS when active; explicit `max-age=0` fix so a "
+                    "genuine downgrade doesn't leave a browser stuck refusing HTTP either",
+         residual="Low", owner="Jason"),
+    dict(id="R-7", asset="Host OS / container runtime",
+         threat="Compromise of the underlying host (root access)",
+         likelihood="Low", impact="High", inherent="Medium-High",
+         treatment="Standard OS hardening assumed, containerized service boundaries "
+                    "(docker-compose); explicitly documented that the audit hash chain does NOT "
+                    "protect against a full root/host compromise (an attacker with both key files "
+                    "could rebuild a consistent chain)",
+         residual="Medium (real, named, un-mitigated by the app layer — a host-level control gap "
+                   "by design)", owner="Jason"),
+    dict(id="R-8", asset="Backup / disaster recovery",
+         threat="No tested restore path today — a corrupted DB or lost host means real data loss",
+         likelihood="Medium", impact="High", inherent="Medium-High",
+         treatment="Manual \"back up this key file\" guidance only; no automated encrypted backup "
+                    "or evidenced restore test yet",
+         residual="**High** — SEC-7 (queued) is the direct treatment for this row", owner="Jason"),
+    dict(id="R-9", asset="Third-party API credentials (market data, LLM providers, SnapTrade)",
+         threat="Leaked API key used for unauthorized calls (cost/abuse, not data breach — these "
+                "are outbound-only, read-scoped)",
+         likelihood="Low", impact="Low-Medium", inherent="Low",
+         treatment="Stored via the same encrypted secrets store as everything else; scoped, "
+                    "read-only credentials where the provider supports it",
+         residual="Low", owner="Jason"),
+    dict(id="R-10", asset="Dependency supply chain (Python/JS packages)",
+         threat="A vulnerable or malicious transitive dependency",
+         likelihood="Medium", impact="Medium", inherent="Low-Medium",
+         treatment="SEC-7 CI dependency scanning is live: `pip-audit` on every push/PR touching "
+                    "dependency files + a weekly Monday scan (catches newly-disclosed CVEs against "
+                    "unchanged pins), and a Trivy image scan of the actual built container (OS "
+                    "packages, not just Python deps) blocking on CRITICAL/HIGH per the 7/30-day "
+                    "patch SLA. 6 CRITICAL findings with no vendor fix (essential Debian "
+                    "`perl-base`, `zlib1g` — one `will_not_fix`) are formally risk-accepted via "
+                    "`.trivyignore` with 90-day `exp:` dates (review due 2026-10-25), not silently "
+                    "suppressed — see `dependency-scan.yml` and `.trivyignore` at repo root",
+         residual="Low-Medium — real scanning + documented risk acceptance in place; residual risk "
+                   "is the inherent gap between an upstream CVE's disclosure and a vendor patch "
+                   "actually landing, which no scanning tool can close on its own", owner="Jason"),
+    dict(id="R-11", asset="LLM/chat data path",
+         threat="Sensitive financial context sent to an external LLM provider is logged/retained "
+                "by that provider beyond Fiduciary's control",
+         likelihood="Low-Medium", impact="Medium", inherent="Medium",
+         treatment="Documented hybrid-LLM path exists (local-first where feasible); no "
+                    "per-provider data-retention audit done yet",
+         residual="Medium", owner="Jason"),
+    dict(id="R-12", asset="Detection engine coverage",
+         threat="A real attack pattern falls outside the 3 current detection rules and goes unnoticed",
+         likelihood="Medium", impact="Medium", inherent="Medium",
+         treatment="3 rules cover the highest-value, most checkable scenarios today (failed-login "
+                    "burst, first-seen IP, MFA-disable-then-change); explicitly documented as v1, "
+                    "not exhaustive",
+         residual="Medium (residual gap is honest, not hidden — new incidents are meant to grow "
+                   "this rule set, per the IR runbook's post-incident step)", owner="Jason"),
+    dict(id="R-13", asset="Privacy/PII program maturity",
+         threat="No formal DSAR/export-delete workflow, privacy notice, or DPIA yet for data that "
+                "is, in substance, sensitive financial PII",
+         likelihood="Medium", impact="Medium", inherent="Medium",
+         treatment="Strong technical controls (encryption, RBAC) exist; the *programmatic* privacy "
+                    "layer is SEC-8, still queued",
+         residual="Medium — treatment queued, not yet reducing residual risk", owner="Jason"),
+    dict(id="R-14", asset="Demo/portfolio instance itself",
+         threat="Publishing a public demo instance widens the attack surface beyond the private "
+                "household deployment",
+         likelihood="Medium", impact="Low-Medium", inherent="Low-Medium",
+         treatment="Planned: synthetic pseudo-data only (`DEMO_MODE`), isolated/throwaway auth, "
+                    "scheduled resets — none of this is built yet, so this row's rating will drop "
+                    "once the demo harness (tasks #29-31) lands",
+         residual="Medium until `DEMO_MODE` isolation is built", owner="Jason"),
+]
+
+
+def _read_risk_register():
+    """Returns {"rows": [...], "next_number": int}. Seeds from _RISK_REGISTER_SEED (one time
+    only) if RISK_REGISTER_FILE doesn't exist yet."""
+    try:
+        reg = store.read_json_strict(RISK_REGISTER_FILE)
+        if reg and reg.get("rows"):
+            return reg
+    except Exception:
+        pass
+    seeded = {"rows": [dict(r, status="open", closed_reason=None, closed_date=None,
+                             created="2026-06-23", updated="2026-07-27")
+                       for r in _RISK_REGISTER_SEED],
+              "next_number": 15}
+    store.write_json(RISK_REGISTER_FILE, seeded)
+    return seeded
+
+
+def _write_risk_register(reg):
+    store.write_json(RISK_REGISTER_FILE, reg)
+
+
+def _render_risk_register_markdown(reg):
+    """Renders the SAME document structure/prose the static file used to have, but from live
+    data — see the module comment above RISK_REGISTER_FILE for why this can't just be a file on
+    disk. Open rows go in the main table; closed/retired rows get their own section underneath so
+    the register stays an honest audit trail (RISK-REGISTER-PROCESS.md §3) rather than losing
+    history the moment something is resolved."""
+    rows = reg.get("rows") or []
+    open_rows = [r for r in rows if r.get("status", "open") == "open"]
+    closed_rows = [r for r in rows if r.get("status") == "closed"]
+    lines = []
+    lines.append("# Fiduciary — Risk Register\n")
+    lines.append(
+        "**Scope:** the `portfolio-api` application and its data volume, self-hosted, "
+        "single-household deployment. Written as a portfolio/demo GRC artifact — likelihood/impact "
+        "ratings reflect this app's actual scale (one household, one host, no external tenants), "
+        "not generic enterprise assumptions. Owner is \"Jason\" throughout since there is one "
+        "operator; the column is kept for format-completeness and to make clear risk acceptance is "
+        "a deliberate, named act, not a default.\n")
+    lines.append(
+        "**Rating scale:** Likelihood and Impact are each Low / Medium / High. Inherent risk = the "
+        "combination before any treatment; Residual risk = after the mitigations actually in place "
+        "today (not after planned/queued ones — a queued mitigation doesn't reduce risk until it's "
+        "built).\n")
+    lines.append("| # | Asset | Threat | Likelihood | Impact | Inherent | Existing treatment | "
+                  "Residual | Owner |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for r in open_rows:
+        lines.append(f"| {r['id']} | {r['asset']} | {r['threat']} | {r['likelihood']} | "
+                      f"{r['impact']} | {r['inherent']} | {r['treatment']} | {r['residual']} | "
+                      f"{r['owner']} |")
+    lines.append("")
+    if closed_rows:
+        lines.append("## Closed / retired risks\n")
+        lines.append("Retained per this register's own process (never deleted — see "
+                      "`RISK-REGISTER-PROCESS.md` §3) so the register stays an honest audit trail "
+                      "of what was assessed and when, not just current-day concerns.\n")
+        lines.append("| # | Asset | Threat | Closed | Reason |")
+        lines.append("|---|---|---|---|---|")
+        for r in closed_rows:
+            lines.append(f"| {r['id']} | {r['asset']} | {r['threat']} | "
+                          f"{r.get('closed_date') or ''} | {r.get('closed_reason') or ''} |")
+        lines.append("")
+    lines.append("---")
+    lines.append(
+        "*Generated live from the app's own data store (SETTINGS → SECURITY → SECURITY POSTURE → "
+        "Risk Register editor, admin-only) — see `RISK-REGISTER-PROCESS.md` for how rows get "
+        "added, monitored, and closed. Companion documents: `compliance/STATEMENT-OF-"
+        "APPLICABILITY.md` (control-by-control ISO 27001 Annex A status), `compliance/IR-"
+        "RUNBOOK.md` (response procedure), `RESUME-TRACKER.md` (build history and the SEC-1..SEC-8 "
+        "backlog that treats several of the rows above).*")
+    return "\n".join(lines) + "\n"
+
 
 @app.get("/api/compliance/controls")
 def get_compliance_controls():
@@ -1485,6 +1681,7 @@ def get_compliance_controls():
 # arbitrary file from the mount or escaping it via "..".
 _COMPLIANCE_DOCS = {
     "RISK-REGISTER.md": "Risk Register",
+    "RISK-REGISTER-PROCESS.md": "Risk Register — Maintenance Process",
     "STATEMENT-OF-APPLICABILITY.md": "Statement of Applicability (ISO 27001 Annex A)",
     "DATA-RETENTION-SCHEDULE.md": "Data Retention Schedule",
     "IR-RUNBOOK.md": "Incident Response Runbook",
@@ -1502,22 +1699,141 @@ def list_compliance_docs():
     return {"docs": [{"name": k, "title": v} for k, v in _COMPLIANCE_DOCS.items()]}
 
 
-@app.get("/api/compliance/doc")
-def get_compliance_doc(name: str):
-    """Serves one compliance/*.md file's raw text, allowlisted by exact filename match against
-    _COMPLIANCE_DOCS above — never a path join of caller input, so there's no traversal surface
-    even though this is read-only. Same COMPLIANCE_DIR bind mount as controls.json above."""
+def _compliance_doc_data(name):
+    """Plain-dict core of the compliance-doc read, shared by the GET route below (which wraps
+    errors in a JSONResponse) AND the chat get_compliance_doc tool (2026-07-27, see FIDUCIARY_TOOLS
+    / _fiduciary_dispatch) which needs a plain dict either way — a tool result isn't an HTTP
+    response. RISK-REGISTER.md is special-cased to render LIVE from the app's own writable data
+    store (see _read_risk_register/_render_risk_register_markdown) instead of reading a static
+    file, because compliance/ is a read-only bind mount (docker-compose.yml's `:ro`) / baked into
+    the image at build time (Dockerfile.demo) — there is no on-disk file to write the register's
+    edits back into, so the "file" is generated fresh on every read from the live JSON instead.
+    Every other doc is still a genuinely static file, read as before."""
     if name not in _COMPLIANCE_DOCS:
-        return JSONResponse({"error": "unknown document"}, status_code=404)
+        return {"error": "unknown document", "_status": 404}
+    if name == "RISK-REGISTER.md":
+        return {"name": name, "title": _COMPLIANCE_DOCS[name],
+                "content": _render_risk_register_markdown(_read_risk_register())}
     path = os.path.join(COMPLIANCE_DIR, name)
     try:
         with open(path, "r") as f:
             return {"name": name, "title": _COMPLIANCE_DOCS[name], "content": f.read()}
     except FileNotFoundError:
-        return JSONResponse({"error": f"{name} not found at {path} — is the compliance/ folder "
-                                       "mounted? (see docker-compose.yml)"}, status_code=404)
+        return {"error": f"{name} not found at {path} — is the compliance/ folder mounted? (see "
+                          "docker-compose.yml)", "_status": 404}
     except Exception as e:
-        return JSONResponse({"error": f"failed to read {name}: {e}"}, status_code=500)
+        return {"error": f"failed to read {name}: {e}", "_status": 500}
+
+
+@app.get("/api/compliance/doc")
+def get_compliance_doc(name: str):
+    """Serves one compliance/*.md file's raw text, allowlisted by exact filename match against
+    _COMPLIANCE_DOCS above — never a path join of caller input, so there's no traversal surface
+    even though this is read-only. Same COMPLIANCE_DIR bind mount as controls.json above."""
+    data = _compliance_doc_data(name)
+    if "error" in data:
+        return JSONResponse({"error": data["error"]}, status_code=data.get("_status", 500))
+    return data
+
+
+_RISK_REGISTER_REQUIRED_FIELDS = ["asset", "threat", "likelihood", "impact", "inherent",
+                                   "treatment", "residual"]
+_RISK_REGISTER_RATINGS = {"Low", "Medium", "High", "Low-Medium", "Medium-High"}
+
+
+@app.get("/api/compliance/risk-register")
+def get_risk_register_rows():
+    """Structured rows (open + closed) for the Security Posture page's Risk Register editor panel
+    — the table-shaped counterpart to /api/compliance/doc?name=RISK-REGISTER.md's rendered
+    markdown. A GET, so no RBAC change needed: viewers already have full read access everywhere."""
+    return _read_risk_register()
+
+
+@app.post("/api/compliance/risk-register/row")
+async def post_risk_register_row(req: Request):
+    """Add a new risk. Admin-only by omission from _VIEWER_ALLOWED_WRITE_PATHS (see that set's own
+    comment) — the global _security_and_auth_gate middleware already 403s a non-admin session
+    before this handler ever runs, so there is deliberately no second role check duplicated here.
+    Assigns the next sequential R-number per RISK-REGISTER-PROCESS.md §1 (never reuses a retired
+    one — next_number only ever increments, even across closures)."""
+    body = await req.json()
+    missing = [f for f in _RISK_REGISTER_REQUIRED_FIELDS if not str(body.get(f) or "").strip()]
+    if missing:
+        return JSONResponse({"error": f"missing required field(s): {', '.join(missing)}"},
+                            status_code=400)
+    with _risk_register_lock:
+        reg = _read_risk_register()
+        rid = f"R-{reg['next_number']}"
+        today = datetime.date.today().isoformat()
+        row = {"id": rid, "status": "open", "closed_reason": None, "closed_date": None,
+               "created": today, "updated": today, "owner": str(body.get("owner") or "Jason").strip()}
+        for f in _RISK_REGISTER_REQUIRED_FIELDS:
+            row[f] = str(body[f]).strip()
+        reg["rows"].append(row)
+        reg["next_number"] += 1
+        _write_risk_register(reg)
+    audit.emit("compliance.risk_register.row_added", request=req, actor=req.session.get("uid"),
+               resource="/api/compliance/risk-register/row", detail={"id": rid, "asset": row["asset"]})
+    return {"ok": True, "row": row}
+
+
+@app.put("/api/compliance/risk-register/row/{row_id}")
+async def put_risk_register_row(row_id: str, req: Request):
+    """Edit an OPEN row's fields (partial update — only keys present in the body change).
+    Deliberately rejects editing an already-closed row: RISK-REGISTER-PROCESS.md §3 treats a
+    closure as a dated, reasoned historical fact, not something to silently rewrite later — reopen
+    is not supported by design; if a closed risk genuinely recurs, it should become a NEW row so
+    the closed one's history stays intact."""
+    body = await req.json()
+    with _risk_register_lock:
+        reg = _read_risk_register()
+        row = next((r for r in reg["rows"] if r["id"] == row_id), None)
+        if not row:
+            return JSONResponse({"error": f"no such row: {row_id}"}, status_code=404)
+        if row.get("status") == "closed":
+            return JSONResponse({"error": f"{row_id} is closed — closed rows are not editable, "
+                                          "see RISK-REGISTER-PROCESS.md §3"}, status_code=409)
+        editable = _RISK_REGISTER_REQUIRED_FIELDS + ["owner"]
+        changed = {}
+        for f in editable:
+            if f in body and str(body[f]).strip() and str(body[f]).strip() != row.get(f):
+                changed[f] = {"from": row.get(f), "to": str(body[f]).strip()}
+                row[f] = str(body[f]).strip()
+        if changed:
+            row["updated"] = datetime.date.today().isoformat()
+            _write_risk_register(reg)
+    audit.emit("compliance.risk_register.row_updated", request=req, actor=req.session.get("uid"),
+               resource=f"/api/compliance/risk-register/row/{row_id}",
+               detail={"id": row_id, "changed_fields": list(changed.keys()) if changed else []})
+    return {"ok": True, "row": row, "changed_fields": list(changed.keys()) if changed else []}
+
+
+@app.post("/api/compliance/risk-register/row/{row_id}/close")
+async def post_risk_register_row_close(row_id: str, req: Request):
+    """Close (retire) a row in place. Body: {reason (required), date? (defaults to today)}. Never
+    deletes — the row and its R-number stay in the register permanently under "Closed / retired
+    risks" (RISK-REGISTER-PROCESS.md §3), same convention already used for RESUME-TRACKER.md's
+    backlog-item closures."""
+    body = await req.json()
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        return JSONResponse({"error": "reason is required to close a risk"}, status_code=400)
+    with _risk_register_lock:
+        reg = _read_risk_register()
+        row = next((r for r in reg["rows"] if r["id"] == row_id), None)
+        if not row:
+            return JSONResponse({"error": f"no such row: {row_id}"}, status_code=404)
+        if row.get("status") == "closed":
+            return JSONResponse({"error": f"{row_id} is already closed"}, status_code=409)
+        row["status"] = "closed"
+        row["closed_reason"] = reason
+        row["closed_date"] = str(body.get("date") or datetime.date.today().isoformat())
+        row["updated"] = row["closed_date"]
+        _write_risk_register(reg)
+    audit.emit("compliance.risk_register.row_closed", request=req, actor=req.session.get("uid"),
+               resource=f"/api/compliance/risk-register/row/{row_id}/close",
+               detail={"id": row_id, "reason": reason})
+    return {"ok": True, "row": row}
 
 
 # ============================================================================
@@ -11100,6 +11416,12 @@ FIDUCIARY_PROMPT = (
     "estate-planning-mechanics reference doc for this — it's the foundational layer beneath the tax-strategy "
     "one. Always frame this as preparation for a licensed estate-planning attorney (what to ask for, what to "
     "expect), never as a substitute for drafting the actual documents.\n"
+    "Security/compliance questions about the APP ITSELF (not {user}'s investments) — 'what happens if "
+    "there's a breach', 'what vulnerabilities are known and accepted', 'how long is my data kept', 'is "
+    "this ISO 27001 compliant', 'what's the incident response plan' — are answered from "
+    "list_compliance_docs / get_compliance_doc (the Risk Register, Statement of Applicability, IR "
+    "Runbook, Privacy Notice, Retention Schedule, ROPA, DPIA), NOT search_knowledge (that's external "
+    "tax/investing/estate reference material, a different corpus entirely). Cite the specific document.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
     "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
     "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
@@ -11198,6 +11520,30 @@ FIDUCIARY_TOOLS = [
             "days": {"type": "number", "description": "Look-back window in days (default 14)."},
             "max_results": {"type": "number", "description": "Max articles (default 5)."}},
             "required": ["query"]}}},
+    # 2026-07-27, Jason's call: chat previously had NO way to answer questions about the app's OWN
+    # security/GRC program (Risk Register, incident response, ISO 27001 control status, privacy
+    # program) — search_knowledge only covers external tax/investing/estate reference docs, a
+    # completely separate corpus from compliance/. These two tools close that gap.
+    {"type": "function", "function": {"name": "list_compliance_docs",
+        "description": "List the available security/compliance (GRC) documents: Risk Register, "
+                       "Statement of Applicability (ISO 27001 Annex A control status), Incident "
+                       "Response Runbook, Privacy Notice, Data Retention Schedule, ROPA, DPIA. Use "
+                       "this when {user} asks what security/compliance documentation exists, then "
+                       "call get_compliance_doc for the one that's actually relevant.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_compliance_doc",
+        "description": "Full text of one named security/compliance document (see "
+                       "list_compliance_docs for valid names). Use this for questions about the "
+                       "app's own security posture, known/risk-accepted vulnerabilities, incident "
+                       "response process, data retention, or privacy program — e.g. 'what happens "
+                       "if there's a breach', 'what CVEs are currently accepted', 'how long is my "
+                       "data kept', 'is this ISO 27001 compliant'. This describes the APP's own "
+                       "security program, not investing/tax/estate guidance (use search_knowledge "
+                       "for that instead).",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Exact filename from list_compliance_docs, "
+                                                        "e.g. \"RISK-REGISTER.md\"."}},
+            "required": ["name"]}}},
 ]
 
 
@@ -11243,6 +11589,8 @@ def _fiduciary_dispatch(name, args):
             return {"results": _tavily_results(str(args.get("query") or ""),
                                                days=int(args.get("days") or 14),
                                                max_results=int(args.get("max_results") or 5))}
+        if name == "list_compliance_docs":     return list_compliance_docs()
+        if name == "get_compliance_doc":       return _compliance_doc_data(str(args.get("name") or ""))
         return {"error": f"unknown tool {name}"}
     except Exception as e:
         return {"error": f"{name} failed: {e}"}

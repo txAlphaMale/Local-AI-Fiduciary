@@ -412,6 +412,7 @@ let COMPLIANCE_CONTROLS=null;  // Demo harness (2026-07-25) — Security Posture
 let POSTURE_FILTER=null;  // Demo harness — client-side theme filter for the Security Posture table
 let COMPLIANCE_DOC_CATALOG=null, COMPLIANCE_DOC_OPEN=null;  // 2026-07-26 — GRC document viewer (risk register/IR runbook/SoA/privacy docs) on the Security Posture page
 const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cached for the session
+let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
@@ -848,7 +849,7 @@ async function load(refresh, bg){
 //  help by adding one W(...) line. Rendered in the WIKI tab (searchable, by category)
 //  and deep-linked from per-section "?" affordances via wikiLink(id).
 // ============================================================================
-const WIKI_CATS = ['Getting started','Dashboard','Positions','Research','Insights & risk','Planning','Taxes & audits','Automation','Glossary'];
+const WIKI_CATS = ['Getting started','Dashboard','Positions','Research','Insights & risk','Planning','Taxes & audits','Automation','Security & Compliance','Glossary'];
 const WIKI = [];
 let WIKI_FOCUS=null, WIKI_OPEN={}, WIKI_Q='';
 function W(id,cat,title,def,read,use){ WIKI.push({id,cat,title,def,read,use}); }
@@ -1186,9 +1187,42 @@ W('backtest','Taxes & audits','Decision backtest (vs SPY)',
   'Use it to answer the only question that matters about the AI\'s research: is it adding value over just buying the index? Judge trends across horizons, not single cells — small samples are noisy.');
 
 // ---- Glossary (finance vocabulary & abbreviations, distinct from the feature-explainer
-// entries above). Grouped by discipline rather than one-term-per-card, since the search box
-// already matches substrings across def/read/use — searching "delta" finds the options card
-// even though the card title is the group name, not the term. RESUME-TRACKER backlog item 2.
+// 2026-07-27, Jason's ask: every advanced security/GRC feature should be discoverable here, not
+// just to people who already know to look at SETTINGS -> SECURITY -> SECURITY POSTURE. Each entry
+// below explains the feature in plain terms and points at the specific document/panel for the
+// full detail, rather than duplicating the whole document's content into the Wiki card itself.
+W('security-overview','Security & Compliance','What actually protects your data',
+  'This app treats your financial data like a real fiduciary would: encrypted at rest, access-controlled, and continuously logged — not just "behind a login." The concrete pieces: Fernet encryption for every sensitive table/file (holdings, income, secrets, chat history), Argon2 password hashing (not a fast/reversible hash), mandatory-by-default MFA, a tamper-evident (HMAC hash-chained) audit log, and role-based access (admin vs. viewer) enforced server-side on every request, not just hidden in the UI.',
+  'You do not need to configure any of this — it is on by default. What you CAN configure: HTTPS/certificates, MFA and backup codes, the encryption key backup, and household viewer accounts — each has its own Wiki entry above under "Getting started." This entry is the "why" behind all of those: SETTINGS → SECURITY → SECURITY POSTURE is where the actual evidence lives (see the next entry).',
+  'If you only read one thing here: back up `secrets.key` (see "Secrets encryption" above) and your recovery key (see "Account recovery" above) somewhere safe. Nothing else on this list can be recovered without them.');
+W('security-posture-page','Security & Compliance','Security Posture page & GRC documents (SETTINGS → SECURITY POSTURE)',
+  'A dedicated page showing this app\'s security program as real, checkable evidence rather than a marketing claim — built originally as a portfolio/interview artifact, but genuinely useful for anyone operating this deployment. Two layers: a machine-readable ISO/IEC 27001:2022 Annex A control table (generated from `compliance/generate_soa.py`), and the actual prose documents that table is generated from.',
+  'The control table shows every Annex A control as Applied / Partial / N/A with a real evidence pointer (a file, endpoint, or UI panel) — filterable by theme (Organizational/People/Physical/Technological). Below it, "GRC DOCUMENTS" lets you read each underlying document inline: the Risk Register, its own Maintenance Process document, the Statement of Applicability, the Incident Response Runbook, the Privacy Notice, the Data Retention Schedule, the ROPA, and the DPIA — click any title to expand it in place.',
+  'Start here for a security review of this deployment, or to answer "how does this app actually handle X" for yourself or anyone else evaluating it. Chat can also answer these questions directly now — ask the Fiduciary persona something like "what happens if there\'s a breach" or "what vulnerabilities are currently accepted" and it will pull the relevant document itself.');
+W('risk-register-wiki','Security & Compliance','Risk Register — what it tracks, and how it stays current',
+  'A living list of specific risks to this deployment (e.g. "master encryption key loss," "dependency supply-chain compromise"), each rated Low/Medium/High on Likelihood and Impact, before and after the mitigations actually in place today — not aspirational ones. It is editable through the app itself (admin-only), not a file you hand-edit.',
+  'Under SETTINGS → SECURITY POSTURE, the "RISK REGISTER (live)" panel lists every open risk with an Edit and Close action per row, plus "+ Add risk" for a new one. Closing a risk requires a written reason and never deletes it — closed risks move to their own "Closed / retired" list underneath, so the register stays an honest history rather than a snapshot that quietly loses context. The full rendered document (same data, prose form) is the "Risk Register" entry in GRC DOCUMENTS above it.',
+  'Add a row when something genuinely new needs tracking, not for every individual finding — a single CVE inside an already-tracked risk (like "dependency supply chain") is a detail under that row, not a new one. The full rules for when to add/edit/close a row are in the "Risk Register — Maintenance Process" document, also under GRC DOCUMENTS.');
+W('audit-log-detections','Security & Compliance','Security Audit Log & automated detections (SETTINGS → SECURITY)',
+  'Every security-relevant event — logins, password/MFA changes, config edits, admin actions, denied requests — is written to an append-only, tamper-evident log (each entry is HMAC-chained to the one before it, so a "GET /api/audit/verify" check can prove nothing was altered or deleted after the fact). A background rules engine also sweeps this log every 5 minutes looking for specific attack patterns.',
+  'The Security Audit Log panel supports free-text search, an outcome filter (success/denied/failure), and an "alerts only" toggle to see just what the detection rules flagged, without paging through routine logins. The 3 current detection rules: a failed-login burst (5+ failed logins for one username within 10 minutes), a first-seen source IP for an account with prior login history, and MFA-disabled-then-a-sensitive-change within 30 minutes (the classic account-takeover sequence). "RUN DETECTIONS NOW" triggers an immediate sweep instead of waiting for the next 5-minute cycle.',
+  'If something looks wrong — a login you don\'t recognize, a change you didn\'t make — this is where to look first, and the chain-verify status line tells you whether to trust what you\'re seeing. There is no separate paging/email/Slack alert system today; an alert IS an entry in this log. See the "Incident Response" entry below for what to do next.');
+W('viewer-roles','Security & Compliance','Household accounts & the viewer role (RBAC)',
+  'A second household member can get their own login (SETTINGS → IAM) as either another admin or a "viewer." Viewer means genuinely read-only: full visibility into everything (dashboard, research, planning, even the Security Posture page itself), but every mutating action anywhere in the app is blocked server-side, not just hidden in the UI.',
+  'Mutating buttons (RUN NOW, SAVE, DELETE, BUY/SELL, and similar) are visibly dimmed and disabled for a viewer session rather than silently 403ing when clicked. Chat is available to viewers too — it can research and answer questions using the same read-only tools an admin\'s chat uses, but cannot place trades, change config, or bypass any protection, since the underlying tools it calls are read-only by construction regardless of who is asking. Role transfer (making a viewer the admin, or vice versa) happens in place from SETTINGS → IAM, with a password + username confirmation step since it\'s an irreversible handoff for the current session.',
+  'Use a viewer account for a spouse/family member who should be able to see everything and ask the chat questions, but never change settings, trigger jobs, or execute strategist actions. Every denied attempt (if one ever happens) is itself logged as `authz.denied` in the Security Audit Log above.');
+W('incident-response','Security & Compliance','If something looks wrong: Incident Response',
+  'A written, step-by-step response procedure exists for this deployment — not aspirational, every step names a real endpoint, panel, or script that exists today. It covers detect, triage, contain, eradicate/recover, and a mandatory post-incident step (grow the detection rule set with whatever pattern was just missed).',
+  'The full runbook is the "Incident Response Runbook" document under SETTINGS → SECURITY POSTURE → GRC DOCUMENTS. In short: anything suspicious starts in the Security Audit Log (verify chain integrity first — a broken chain means treat this as evidence tampering, not just intrusion), gets classified by severity, then contained using the tools already in the app (force-logout via password change, MFA disable/re-enrollment, credential rotation in SETTINGS → SECRETS).',
+  'You do not need to memorize this — bookmark the document itself and read it when (if) you actually need it. The one thing worth doing now, not later: know where your recovery key and `secrets.key` backup are (see the "Account recovery" and "Secrets encryption" entries above) — several containment steps assume you can still get in.');
+W('dependency-scanning','Security & Compliance','Dependency & container vulnerability scanning (for anyone deploying/maintaining this app)',
+  'Every push/PR touching `requirements.txt` or the Dockerfile, plus a standing weekly scan, runs two checks in CI: `pip-audit` over pinned Python dependencies, and a Trivy scan of the actual built container image (catching OS-package CVEs pip-audit alone would miss). CRITICAL findings must patch within 7 days, HIGH within 30 — enforced by failing the build, not just a report someone might ignore.',
+  'When a CRITICAL/HIGH finding has no vendor fix available yet (or the vendor has permanently declined to patch it), it can be formally risk-accepted via a `.trivyignore` file at the repo root rather than leaving CI red indefinitely — each entry names the CVE, why it\'s accepted, and an expiry date. Once that date passes, Trivy automatically stops ignoring it and CI fails again on the next push or the weekly scan — a forced periodic review, not something that has to be tracked by memory.',
+  'This is a build/deploy-process control, not something to configure inside the running app — relevant if you\'re the one maintaining this codebase\'s CI pipeline. See `.github/workflows/dependency-scan.yml` and `.trivyignore`\'s own comments for the full detail, and this deployment\'s Risk Register (row R-10) for the current risk-acceptance status.');
+W('privacy-program','Security & Compliance','Privacy program: what data is kept, and for how long',
+  'Beyond encryption and access control, this app documents an actual privacy program: what personal/financial data it processes and why (the ROPA — Record of Processing Activities), a plain-language notice of what\'s collected and how it\'s used (Privacy Notice), how long each category of data is kept before disposal (Data Retention Schedule), and a formal assessment of privacy risk for the more sensitive data categories (DPIA).',
+  'All four documents are under SETTINGS → SECURITY POSTURE → GRC DOCUMENTS, readable inline. If you want your own data in a portable form, `GET /api/privacy/export` (surfaced in the Privacy panel under SETTINGS → SECURITY) produces a full export of your account\'s data — the technical mechanism behind any "what do you have on me" question.',
+  'Most relevant if this deployment is ever shown to someone outside your own household (a demo, an interview, a security review) — these documents are what let you answer "what happens to my data" precisely instead of from memory.');
 W('glossary-options','Glossary','Options & hedging — calls, puts, collars, greeks',
   'CALL = right to BUY 100 sh at the strike by expiration; PUT = right to SELL.\nSTRIKE = that fixed price.\nPREMIUM = the price paid/received for the contract (shown as a mid-quote here — the average of bid/ask, not a live tradeable price).\nDTE = days to expiration.\nITM/OTM/ATM = in/out/at the money, i.e. whether the strike is currently profitable to exercise.\nDELTA (Δ) = how much the option\'s value moves per $1 move in the stock, roughly the probability of finishing ITM (0.25 delta ≈ 25% chance of assignment).\nIMPLIED VOLATILITY (IV) = the market\'s annualized expected-swing estimate baked into the premium — higher IV means richer premiums on both calls and puts.\nASSIGNMENT = the option is exercised against you; on a covered call that means your shares are sold at the strike.\nCOVERED CALL = sell a call against shares you already own, collecting premium now in exchange for capping the upside above the strike.\nCOLLAR = buy a protective put and sell a call to fund it, trading upside above the call strike for a floor at the put strike; ZERO-COST/NET ≤ $0 means the call premium fully paid for the put.\nFLOOR/CAP = the worst/best price the collar leaves you at, in percent from spot.',
   'This app\'s HEDGING panel shows delta and IV per contract, plus the covered call\'s annualized yield and the collar\'s floor/cap/net cost — all computed from delayed chains (CBOE primary, Yahoo fallback), so treat them as sizing guides and re-quote live before any order.',
@@ -2941,6 +2975,144 @@ function _complianceDocOpen(name){
 function _postureBadgeClass(status){
   return status==='Applied'?'pos':status==='Partial'?'muted':'neg';
 }
+// 2026-07-27 — Risk Register structured editor: same data the "Risk Register" GRC document
+// renders as markdown (see _render_risk_register_markdown in app.py), but as an editable table.
+// Add/edit/close endpoints are admin-only by omission from _VIEWER_ALLOWED_WRITE_PATHS (app.py) —
+// the buttons below are ALSO mut-btn-gated so a viewer never sees a control they can't use, but
+// the real enforcement is server-side; this is UX, not the security boundary.
+function _riskRegisterRefresh(){
+  return fetch('/api/compliance/risk-register').then(r=>r.json()).then(d=>{
+    RISK_REGISTER=d; if(TAB==='settings') render();
+  }).catch(()=>{ RISK_REGISTER={rows:[],next_number:null,error:'failed to load'}; if(TAB==='settings') render(); });
+}
+const _RISK_FIELDS=['asset','threat','likelihood','impact','inherent','treatment','residual','owner'];
+function _riskRegisterOpenForm(mode,row){
+  RISK_REGISTER_FORM={mode, id: row?row.id:null};
+  _RISK_FIELDS.forEach(f=>{ RISK_REGISTER_FORM[f] = row ? (row[f]||'') : (f==='owner'?'Jason':''); });
+  render();
+  setTimeout(()=>{ const e=document.getElementById('risk-form-asset'); if(e) e.focus(); },0);
+}
+function _riskRegisterCancelForm(){ RISK_REGISTER_FORM=null; render(); }
+function _riskRegisterSaveForm(){
+  const f=RISK_REGISTER_FORM; if(!f) return;
+  const missing=_RISK_FIELDS.filter(k=>k!=='owner' && !String(f[k]||'').trim());
+  if(missing.length){ alert('Missing required field(s): '+missing.join(', ')); return; }
+  const body={}; _RISK_FIELDS.forEach(k=>body[k]=f[k]);
+  const url = f.mode==='edit' ? ('/api/compliance/risk-register/row/'+encodeURIComponent(f.id)) : '/api/compliance/risk-register/row';
+  const method = f.mode==='edit' ? 'PUT' : 'POST';
+  fetch(url,{method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(({ok,d})=>{
+      if(!ok){ alert(d.error||'save failed'); return; }
+      RISK_REGISTER_FORM=null; _riskRegisterRefresh();
+    }).catch(e=>alert('save failed: '+e.message));
+}
+function _riskRegisterClose(rowId){
+  const reason=prompt('Reason for closing '+rowId+' (required — this stays on the record permanently, see RISK-REGISTER-PROCESS.md §3):');
+  if(reason==null) return;
+  if(!reason.trim()){ alert('A reason is required to close a risk.'); return; }
+  fetch('/api/compliance/risk-register/row/'+encodeURIComponent(rowId)+'/close',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason})})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(({ok,d})=>{ if(!ok){ alert(d.error||'close failed'); return; } _riskRegisterRefresh(); })
+    .catch(e=>alert('close failed: '+e.message));
+}
+function _riskRegisterField(label,key,multiline){
+  const wrap=el('div'); wrap.style.cssText='margin-bottom:8px;';
+  const lab=el('div','muted',label+(key==='owner'?'':' *')); lab.style.cssText='font-size:var(--font-size-sm);margin-bottom:2px;';
+  wrap.appendChild(lab);
+  const inp=el(multiline?'textarea':'input');
+  if(multiline){ inp.rows=2; }
+  inp.id='risk-form-'+key; inp.style.cssText='width:100%;box-sizing:border-box;';
+  inp.value=RISK_REGISTER_FORM[key]||'';
+  inp.oninput=()=>{ RISK_REGISTER_FORM[key]=inp.value; };
+  wrap.appendChild(inp);
+  return wrap;
+}
+function _riskRegisterFormPanel(){
+  const f=RISK_REGISTER_FORM;
+  const box=el('div'); box.style.cssText='border:1px solid var(--color-accent);border-radius:4px;padding:var(--space-3);margin-bottom:var(--space-3);';
+  box.appendChild(el('div','ph', f.mode==='edit' ? ('Edit '+f.id) : 'Add a new risk'));
+  const grid=el('div'); grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:0 12px;';
+  grid.appendChild(_riskRegisterField('Asset','asset'));
+  grid.appendChild(_riskRegisterField('Owner','owner'));
+  box.appendChild(grid);
+  box.appendChild(_riskRegisterField('Threat','threat',true));
+  box.appendChild(_riskRegisterField('Treatment (existing mitigation)','treatment',true));
+  const grid2=el('div'); grid2.style.cssText='display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 12px;';
+  grid2.appendChild(_riskRegisterField('Likelihood (Low/Medium/High)','likelihood'));
+  grid2.appendChild(_riskRegisterField('Impact (Low/Medium/High)','impact'));
+  grid2.appendChild(_riskRegisterField('Inherent risk','inherent'));
+  box.appendChild(grid2);
+  box.appendChild(_riskRegisterField('Residual risk','residual'));
+  const btnRow=el('div'); btnRow.style.cssText='display:flex;gap:8px;margin-top:4px;';
+  const saveBtn=el('button',null,f.mode==='edit'?'Save changes':'Add risk'); saveBtn.onclick=_riskRegisterSaveForm;
+  const cancelBtn=el('button',null,'Cancel'); cancelBtn.onclick=_riskRegisterCancelForm;
+  btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+  return box;
+}
+function riskRegisterPanel(){
+  const box=el('div');
+  box.appendChild(el('div','ph','RISK REGISTER (live)'));
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  sub.textContent='The structured data behind the "Risk Register" document above — add, edit, or close a risk here rather than editing the file by hand. See "Risk Register — Maintenance Process" above for the rules this follows (never deleted, closed rows keep their reasoning).';
+  box.appendChild(sub);
+  if(!RISK_REGISTER){ box.appendChild(el('div','muted','Loading risk register…')); _riskRegisterRefresh(); return box; }
+  if(RISK_REGISTER.error){ box.appendChild(el('div','neg',RISK_REGISTER.error)); return box; }
+
+  if(RISK_REGISTER_FORM){ box.appendChild(_riskRegisterFormPanel()); }
+  else {
+    const addBtn=el('button','mut-btn','+ Add risk');
+    addBtn.style.cssText='margin-bottom:var(--space-2);';
+    addBtn.onclick=()=>_riskRegisterOpenForm('add',null);
+    box.appendChild(addBtn);
+  }
+
+  const rows=RISK_REGISTER.rows||[];
+  const open=rows.filter(r=>(r.status||'open')==='open');
+  const closed=rows.filter(r=>r.status==='closed');
+
+  const tbl=el('table','tbl-compact'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  const thead=el('tr'); ['#','Asset','Threat','Likelihood','Impact','Residual','Owner',''].forEach(h=>{
+    const th=el('th',null,h); th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'; thead.appendChild(th);
+  });
+  tbl.appendChild(thead);
+  open.forEach(r=>{
+    const tr=el('tr');
+    [r.id,r.asset,r.threat,r.likelihood,r.impact,r.residual,r.owner].forEach(v=>{
+      const td=el('td',null,v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
+    });
+    const actionTd=el('td'); actionTd.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);white-space:nowrap;';
+    const editBtn=el('button','mut-btn','Edit'); editBtn.style.cssText='font-size:var(--font-size-sm);margin-right:4px;'; editBtn.onclick=()=>_riskRegisterOpenForm('edit',r);
+    const closeBtn=el('button','mut-btn','Close'); closeBtn.style.cssText='font-size:var(--font-size-sm);'; closeBtn.onclick=()=>_riskRegisterClose(r.id);
+    actionTd.appendChild(editBtn); actionTd.appendChild(closeBtn);
+    tr.appendChild(actionTd);
+    tbl.appendChild(tr);
+  });
+  box.appendChild(tbl);
+
+  const toggleBtn=el('button',null,(RISK_REGISTER_SHOW_CLOSED?'▾ ':'▸ ')+'Closed / retired risks ('+closed.length+')');
+  toggleBtn.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  toggleBtn.onclick=()=>{ RISK_REGISTER_SHOW_CLOSED=!RISK_REGISTER_SHOW_CLOSED; render(); };
+  box.appendChild(toggleBtn);
+  if(RISK_REGISTER_SHOW_CLOSED && closed.length){
+    const ctbl=el('table','tbl-compact'); ctbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);margin-bottom:var(--space-3);';
+    const chead=el('tr'); ['#','Asset','Closed','Reason'].forEach(h=>{
+      const th=el('th',null,h); th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'; chead.appendChild(th);
+    });
+    ctbl.appendChild(chead);
+    closed.forEach(r=>{
+      const tr=el('tr');
+      [r.id,r.asset,r.closed_date,r.closed_reason].forEach(v=>{
+        const td=el('td','muted',v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
+      });
+      ctbl.appendChild(tr);
+    });
+    box.appendChild(ctbl);
+  }
+  return box;
+}
 function securityPostureContent(){
   const box=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
@@ -2991,6 +3163,8 @@ function securityPostureContent(){
     viewWrap.innerHTML = content!=null ? mdToHtml(content) : '<span class="muted">Loading…</span>';
     box.appendChild(viewWrap);
   }
+
+  box.appendChild(riskRegisterPanel());
 
   // Simple client-side theme filter (Organizational/People/Physical/Technological/All) — cheap
   // and useful given there are 93 rows; no server round-trip needed since the whole file is
