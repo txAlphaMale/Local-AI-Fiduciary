@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# backup.sh -- SEC-7: encrypted backup of the portfolio-api data volume.
+# backup.sh -- SEC-7a (Backup & Disaster Recovery): encrypted backup of the portfolio-api data
+# volume. Renamed 2026-07-27 from the old shared "SEC-7" label (which covered this AND dependency/
+# container scanning together) into 7a/7b once each grew enough independent history to deserve its
+# own identity — see RESUME-TRACKER.md's 2026-07-27 rename entry.
 #
 # Controls: ISO/IEC 27001:2022 A.8.13 (Information backup) · NIST SP 800-53 CP-9/CP-10 ·
 # SOC 2 (2017 TSC) A1.2/CC7.1.
@@ -30,16 +33,24 @@
 # anyone who gets the backup archive would also need the passphrase, and if the passphrase lived
 # alongside the very key files it's meant to protect, a single stolen archive would be
 # self-decrypting). Store it in a password manager or a secrets manager separate from this host.
-# RPO/RTO are documented in compliance/DATA-RETENTION-SCHEDULE.md and RESUME-TRACKER.md's SEC-7
-# entry -- summary: run this daily via host cron (RPO ~24h), restore.sh completes in well under
-# a minute for this app's realistic data size (RTO ~minutes, evidenced by the restore test run
-# alongside this script's build).
+# RPO/RTO are documented in compliance/DATA-RETENTION-SCHEDULE.md and RESUME-TRACKER.md's SEC-7a
+# entry -- summary: run this daily via host cron/systemd timer (RPO ~24h; see
+# scripts/install-local-backup.sh for the actual installer, 2026-07-27), restore.sh completes in
+# well under a minute for this app's realistic data size (RTO ~minutes, evidenced by the restore
+# test run alongside this script's build).
+#
+# RETENTION (2026-07-27): set BACKUP_RETENTION_DAYS to auto-delete archives (and their .sha256
+# sidecars) OLDER than N days from OUT, after a successful new backup -- so a daily cron/timer
+# doesn't grow this directory forever. Unset/0 = keep everything (the original behavior, unchanged
+# if you don't opt in). Deletion only runs after the NEW backup succeeds, so a failed run never
+# prunes anything.
 
 set -euo pipefail
 
 SRC="${1:-${BACKUP_SOURCE_DIR:-/data}}"
 OUT="${BACKUP_OUTPUT_DIR:-./backups}"
 PASS="${BACKUP_PASSPHRASE:-}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-0}"
 
 if [ -z "$PASS" ]; then
   echo "ERROR: BACKUP_PASSPHRASE is not set. Refusing to write an unencrypted backup." >&2
@@ -62,3 +73,12 @@ sha256sum "$enc_path" > "$enc_path.sha256" 2>/dev/null || shasum -a 256 "$enc_pa
 echo "Backup written: $enc_path"
 echo "Checksum:       $enc_path.sha256"
 echo "Size:           $(du -h "$enc_path" | cut -f1)"
+
+if [ "$RETENTION_DAYS" -gt 0 ] 2>/dev/null; then
+  pruned="$(find "$OUT" -maxdepth 1 -name 'fiduciary-backup-*.tar.gz.enc*' -mtime "+$RETENTION_DAYS" -print)"
+  if [ -n "$pruned" ]; then
+    echo "$pruned" | xargs rm -f --
+    echo "Pruned (older than $RETENTION_DAYS days):"
+    echo "$pruned"
+  fi
+fi

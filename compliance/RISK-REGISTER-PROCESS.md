@@ -31,7 +31,7 @@ A register only stays true if something forces a look at it periodically, and if
 work updates it *as it happens* rather than in a separate "GRC cleanup" pass that never comes.
 Two mechanisms do this here, deliberately, so it doesn't depend on memory or discipline alone:
 
-- **Tied to real automation, where possible.** R-10 is the model: SEC-7's CI dependency scan runs
+- **Tied to real automation, where possible.** R-10 is the model: SEC-7b's CI dependency scan runs
   on every push touching dependency files, weekly regardless (Monday 09:00 UTC, `.github/workflows/
   dependency-scan.yml`), and any CVE risk-accepted via `.trivyignore` carries a 90-day `exp:` date
   that forces the scan to fail again automatically once it lapses — which is your cue to come back
@@ -90,4 +90,4 @@ see both the current risk picture and the process behind it.
 *Companion documents: `compliance/RISK-REGISTER.md` (the register itself),
 `compliance/STATEMENT-OF-APPLICABILITY.md`, `compliance/IR-RUNBOOK.md` (its post-incident step is
 the other trigger for a register update), `RESUME-TRACKER.md` (build history, including the R-10
-update and SEC-7 rollout this document references as its worked example).*
+update and SEC-7b rollout this document references as its worked example).*

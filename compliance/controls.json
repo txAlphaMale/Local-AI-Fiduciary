@@ -4,8 +4,8 @@
   "generated_from": "generate_soa.py",
   "summary": {
     "total": 93,
-    "Applied": 31,
-    "Partial": 24,
+    "Applied": 32,
+    "Partial": 23,
     "N/A": 38
   },
   "controls": [
@@ -62,7 +62,7 @@
       "title": "Threat intelligence",
       "theme": "Organizational",
       "status": "Partial",
-      "rationale": "No subscribed feed, but dependency/CVE awareness is informal via GitHub's own advisories; SEC-7 (CI dependency scanning) formalizes this.",
+      "rationale": "No subscribed feed, but dependency/CVE awareness is informal via GitHub's own advisories; SEC-7b (CI dependency scanning) formalizes this.",
       "evidence": "compliance/RISK-REGISTER.md"
     },
     {
@@ -174,7 +174,7 @@
       "title": "Managing information security in the ICT supply chain",
       "theme": "Organizational",
       "status": "Partial",
-      "rationale": "Dependencies are pinned in requirements files; SEC-7 adds automated CVE scanning in CI.",
+      "rationale": "Dependencies are pinned in requirements files; SEC-7b adds automated CVE scanning in CI.",
       "evidence": ".github/workflows"
     },
     {
@@ -238,7 +238,7 @@
       "title": "Information security during disruption",
       "theme": "Organizational",
       "status": "Partial",
-      "rationale": "No formal continuity plan yet; SEC-7 (backup/restore) is the first concrete piece.",
+      "rationale": "No formal continuity plan yet; SEC-7a (backup/restore) is the first concrete piece.",
       "evidence": "compliance/RISK-REGISTER.md"
     },
     {
@@ -246,7 +246,7 @@
       "title": "ICT readiness for business continuity",
       "theme": "Organizational",
       "status": "Partial",
-      "rationale": "Same as 5.29 -- backup exists informally (manual key-file backup note) but no tested restore/RTO-RPO yet (SEC-7, queued).",
+      "rationale": "SEC-7a: encrypted backup/restore scripts (evidenced restore test, byte-for-byte diff-verified, documented RPO/RTO) now have an actual scheduler wired up -- a systemd timer installer for local hosting, an EventBridge Scheduler rule for the AWS demo -- built 2026-07-27. Still Partial, not Applied: the installers/schedules themselves have not yet been run for real and confirmed live in either environment (see RESUME-TRACKER.md's 2026-07-27 backup-automation entry) -- flip to Applied once Jason confirms both.",
       "evidence": null
     },
     {
@@ -541,9 +541,9 @@
       "id": "A.8.8",
       "title": "Management of technical vulnerabilities",
       "theme": "Technological",
-      "status": "Partial",
-      "rationale": "Dependencies are pinned; automated CVE/dependency scanning in CI is SEC-7, queued.",
-      "evidence": "compliance/RISK-REGISTER.md"
+      "status": "Applied",
+      "rationale": "SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), blocking on CRITICAL/HIGH per a documented 7/30-day patch SLA, with a formal .trivyignore risk-acceptance mechanism (90-day exp: dates) for genuinely unpatched upstream findings.",
+      "evidence": ".github/workflows/dependency-scan.yml, .trivyignore"
     },
     {
       "id": "A.8.9",
@@ -582,8 +582,8 @@
       "title": "Information backup",
       "theme": "Technological",
       "status": "Partial",
-      "rationale": "Manual backup guidance exists per sensitive key file; automated encrypted backup + a tested restore is SEC-7, queued.",
-      "evidence": "compliance/RISK-REGISTER.md"
+      "rationale": "SEC-7a: encrypted backup/restore scripts (evidenced, byte-for-byte-verified restore test, documented RPO/RTO) plus a systemd-timer installer (local) and an EventBridge Scheduler rule (AWS demo) to actually run them automatically -- built 2026-07-27, not yet Applied pending Jason confirming each is live (see RESUME-TRACKER.md's 2026-07-27 backup-automation entry).",
+      "evidence": "scripts/backup.sh, scripts/restore.sh, scripts/install-local-backup.sh, scripts/aws-demo/schedule-backup.sh"
     },
     {
       "id": "A.8.14",

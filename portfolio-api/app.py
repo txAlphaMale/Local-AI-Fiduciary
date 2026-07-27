@@ -1524,9 +1524,18 @@ _RISK_REGISTER_SEED = [
     dict(id="R-8", asset="Backup / disaster recovery",
          threat="No tested restore path today — a corrupted DB or lost host means real data loss",
          likelihood="Medium", impact="High", inherent="Medium-High",
-         treatment="Manual \"back up this key file\" guidance only; no automated encrypted backup "
-                    "or evidenced restore test yet",
-         residual="**High** — SEC-7 (queued) is the direct treatment for this row", owner="Jason"),
+         treatment="SEC-7a: encrypted backup/restore scripts exist with an evidenced, "
+                    "byte-for-byte-verified restore test and documented RPO/RTO (`scripts/"
+                    "backup.sh`/`restore.sh`), plus (2026-07-27) an actual scheduler — a systemd "
+                    "timer installer for local hosting (`scripts/install-local-backup.sh`) and an "
+                    "EventBridge Scheduler rule for the AWS demo (`scripts/aws-demo/"
+                    "schedule-backup.sh`) — so backups run automatically instead of relying on "
+                    "someone remembering to trigger them",
+         residual="Medium-High — down from High now that automation exists, but not yet Low: "
+                   "neither installer has been run for real and confirmed live in either "
+                   "environment yet, and local backups aren't copied off-host (no off-site copy "
+                   "= no protection if the host itself is lost, stolen, or destroyed)",
+         owner="Jason"),
     dict(id="R-9", asset="Third-party API credentials (market data, LLM providers, SnapTrade)",
          threat="Leaked API key used for unauthorized calls (cost/abuse, not data breach — these "
                 "are outbound-only, read-scoped)",
@@ -1537,7 +1546,7 @@ _RISK_REGISTER_SEED = [
     dict(id="R-10", asset="Dependency supply chain (Python/JS packages)",
          threat="A vulnerable or malicious transitive dependency",
          likelihood="Medium", impact="Medium", inherent="Low-Medium",
-         treatment="SEC-7 CI dependency scanning is live: `pip-audit` on every push/PR touching "
+         treatment="SEC-7b CI dependency scanning is live: `pip-audit` on every push/PR touching "
                     "dependency files + a weekly Monday scan (catches newly-disclosed CVEs against "
                     "unchanged pins), and a Trivy image scan of the actual built container (OS "
                     "packages, not just Python deps) blocking on CRITICAL/HIGH per the 7/30-day "
@@ -1567,17 +1576,28 @@ _RISK_REGISTER_SEED = [
          threat="No formal DSAR/export-delete workflow, privacy notice, or DPIA yet for data that "
                 "is, in substance, sensitive financial PII",
          likelihood="Medium", impact="Medium", inherent="Medium",
-         treatment="Strong technical controls (encryption, RBAC) exist; the *programmatic* privacy "
-                    "layer is SEC-8, still queued",
-         residual="Medium — treatment queued, not yet reducing residual risk", owner="Jason"),
+         treatment="SEC-8 built in full: `PRIVACY-NOTICE.md`, `ROPA.md` (11-row data inventory), "
+                    "`DPIA.md`, and a working DSAR access/export flow (`GET /api/privacy/export`, "
+                    "scoped to the caller's own identity + security history, verified end-to-end "
+                    "via TestClient) — erasure reuses the existing SEC-5 account-deletion path "
+                    "rather than a second parallel delete mechanism",
+         residual="Low-Medium — strong technical + programmatic controls now both in place; "
+                   "residual is mainly that this is a portfolio/demo-grade program, not a "
+                   "third-party-audited one", owner="Jason"),
     dict(id="R-14", asset="Demo/portfolio instance itself",
          threat="Publishing a public demo instance widens the attack surface beyond the private "
                 "household deployment",
          likelihood="Medium", impact="Low-Medium", inherent="Low-Medium",
-         treatment="Planned: synthetic pseudo-data only (`DEMO_MODE`), isolated/throwaway auth, "
-                    "scheduled resets — none of this is built yet, so this row's rating will drop "
-                    "once the demo harness (tasks #29-31) lands",
-         residual="Medium until `DEMO_MODE` isolation is built", owner="Jason"),
+         treatment="`DEMO_MODE` built and confirmed live at demo.bentleybuilds.tech: synthetic "
+                    "pseudo-data only (no real financial data ever enters this instance), "
+                    "isolated/throwaway admin credentials, and a periodic automated reset — plus "
+                    "(2026-07-27) a real client-IP-aware audit log, so scanner/bot traffic against "
+                    "the public instance (e.g. Shodan) is visible and denied-by-default like "
+                    "everything else",
+         residual="Low-Medium — the planned isolation is actually built and running, not just "
+                   "designed; residual is the inherent reality of any public-internet-facing "
+                   "instance being scanned/probed continuously, which DEMO_MODE isolation bounds "
+                   "the impact of rather than eliminates", owner="Jason"),
 ]
 
 

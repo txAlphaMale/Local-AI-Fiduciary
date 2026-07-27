@@ -1,4 +1,6 @@
-# Trivy risk-acceptance ignore list -- SEC-7 / RISK-REGISTER.md (R-10)
+# Trivy risk-acceptance ignore list -- SEC-7b (Dependency & Container Vulnerability Management) /
+# RISK-REGISTER.md (R-10) -- renamed 2026-07-27 from the old shared "SEC-7" label, see
+# dependency-scan.yml's matching header comment.
 #
 # Every entry below is a CRITICAL finding from the 2026-07-27 scan of the bookworm-pinned
 # portfolio-api image that has NO available vendor fix (or an explicit permanent will_not_fix),

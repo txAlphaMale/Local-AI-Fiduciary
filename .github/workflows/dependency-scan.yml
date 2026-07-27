@@ -1,6 +1,9 @@
 name: Dependency & container vulnerability scan
 
-# SEC-7 (2026-07-25) -- ISO/IEC 27001:2022 A.8.8 (Management of technical vulnerabilities) ·
+# SEC-7b (Dependency & Container Vulnerability Management) -- ISO/IEC 27001:2022 A.8.8 · renamed
+# 2026-07-27 from the old shared "SEC-7" label (which also covered backup/restore, now SEC-7a) once
+# this half grew its own multi-round history (trivy-action supply-chain pin, SARIF permissions,
+# base-image drift, .trivyignore risk acceptance) — see RESUME-TRACKER.md's rename entry.
 # NIST SP 800-53 RA-5/SI-2 · SOC 2 (2017 TSC) CC7.1/CC8.1.
 #
 # Two scans, both against what's actually shipped:

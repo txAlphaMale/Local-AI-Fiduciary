@@ -30,7 +30,7 @@ credentials the household supplies. Full detail: `compliance/ROPA.md`.
 
 | Risk | Likelihood | Impact | Assessment |
 |---|---|---|---|
-| Unauthorized access to financial/PII data via a compromised session or stolen backup | Low | High | Mitigated by encryption-at-rest, MFA, RBAC, and (as of SEC-7) encrypted backups — see `compliance/RISK-REGISTER.md` R-1/R-2 |
+| Unauthorized access to financial/PII data via a compromised session or stolen backup | Low | High | Mitigated by encryption-at-rest, MFA, RBAC, and (as of SEC-7a) encrypted backups — see `compliance/RISK-REGISTER.md` R-1/R-2 |
 | Sensitive financial context sent to an external LLM provider retained/logged beyond this app's control | Low-Medium | Medium | Mitigated by the household's ability to choose a local-only model; NOT eliminated for any household that opts into a cloud LLM provider — this is an accepted, disclosed trade-off of using that feature, stated in `compliance/PRIVACY-NOTICE.md` | 
 | A viewer-role household member seeing more than intended | Low | Low | Mitigated — viewers get read access to shared dashboards by design (that's the intended use case: a spouse reviewing the household's finances), not a data-minimization failure; the risk that matters is a viewer gaining WRITE/admin capability, which is denied by RBAC (SEC-5) |
 | Chat transcripts persisting indefinitely with no automatic expiry | Medium | Medium | **Real, disclosed gap** — see `compliance/DATA-RETENTION-SCHEDULE.md`'s flagged-gaps section; not yet remediated |

@@ -2,7 +2,7 @@
 
 **Scope:** the `portfolio-api` application and its data volume, self-hosted, single-household deployment. Authored as a portfolio/demo GRC artifact, not a certified third-party audit — every "Applied"/"Partial" status names real, checkable evidence in this codebase; every "N/A" is justified by this deployment's actual scale (no employees, no facility, single tenant), not used to hide a real gap.
 
-**Summary:** 31/93 Applied · 24/93 Partial · 38/93 Not Applicable.
+**Summary:** 32/93 Applied · 23/93 Partial · 38/93 Not Applicable.
 
 ---
 
@@ -16,7 +16,7 @@
 | A.5.4 | Management responsibilities | **N/A** | No management hierarchy -- single household operator. |
 | A.5.5 | Contact with authorities | **N/A** | No regulatory relationship; not a regulated financial institution. |
 | A.5.6 | Contact with special interest groups | **N/A** | No formal ISAC/threat-sharing membership for a personal project. |
-| A.5.7 | Threat intelligence | **Partial** | No subscribed feed, but dependency/CVE awareness is informal via GitHub's own advisories; SEC-7 (CI dependency scanning) formalizes this. _(`compliance/RISK-REGISTER.md`)_ |
+| A.5.7 | Threat intelligence | **Partial** | No subscribed feed, but dependency/CVE awareness is informal via GitHub's own advisories; SEC-7b (CI dependency scanning) formalizes this. _(`compliance/RISK-REGISTER.md`)_ |
 | A.5.8 | Information security in project management | **Applied** | Every feature build in this engagement is annotated with its control mapping before/while being written (see RESUME-TRACKER.md's SEC-1..SEC-8 backlog) -- security is designed in, not bolted on after. _(`RESUME-TRACKER.md`)_ |
 | A.5.9 | Inventory of information and other associated assets | **Applied** | The app's own data model IS the asset inventory -- every table/JSON file in store.py and SECRET_SPECS/CONFIG_SPECS is a documented, named data asset. _(`portfolio-api/store.py, secrets_crypto.py`)_ |
 | A.5.10 | Acceptable use of information and other associated assets | **N/A** | Single-user/household context -- no separate user population needing an AUP. |
@@ -30,7 +30,7 @@
 | A.5.18 | Access rights | **Applied** | Role is always server-assigned at account-creation time, never client-supplied -- structurally impossible for a session to self-escalate from viewer to admin. _(`portfolio-api/app.py POST /api/auth/users`)_ |
 | A.5.19 | Information security in supplier relationships | **Partial** | External data providers (market-data APIs, LLM providers, SnapTrade) are used read-only with scoped credentials, but no formal supplier register/risk-tiering exists yet. _(`compliance/RISK-REGISTER.md`)_ |
 | A.5.20 | Addressing information security within supplier agreements | **N/A** | Consumer-tier API terms-of-service, not negotiated contracts -- not applicable at this scale. |
-| A.5.21 | Managing information security in the ICT supply chain | **Partial** | Dependencies are pinned in requirements files; SEC-7 adds automated CVE scanning in CI. _(`.github/workflows`)_ |
+| A.5.21 | Managing information security in the ICT supply chain | **Partial** | Dependencies are pinned in requirements files; SEC-7b adds automated CVE scanning in CI. _(`.github/workflows`)_ |
 | A.5.22 | Monitoring, review and change management of supplier services | **N/A** | No SLA-bound supplier relationships to formally review. |
 | A.5.23 | Information security for use of cloud services | **Partial** | Currently self-hosted (no cloud dependency for core data); a documented hybrid-LLM path exists for a future AWS deployment but isn't live. _(`AWS-HOSTING-GUIDE.md (internal)`)_ |
 | A.5.24 | Information security incident management planning and preparation | **Applied** | A written, followable IR runbook exists mapping detect->triage->contain->eradicate->recover->post-incident to real app features. _(`compliance/IR-RUNBOOK.md`)_ |
@@ -38,8 +38,8 @@
 | A.5.26 | Response to information security incidents | **Applied** | Concrete containment actions are documented and directly executable from the app's own UI (password/MFA/recovery-key rotation, key rotation, viewer removal). _(`compliance/IR-RUNBOOK.md`)_ |
 | A.5.27 | Learning from information security incidents | **Applied** | The runbook's post-incident section requires recording what happened and turning any real gap into a new, scoped detection rule rather than a vague action item. _(`compliance/IR-RUNBOOK.md`)_ |
 | A.5.28 | Collection of evidence | **Applied** | The audit log is HMAC hash-chained (tamper-evident) specifically so it can serve as trustworthy evidence, not just a record. _(`portfolio-api/audit.py verify_chain()`)_ |
-| A.5.29 | Information security during disruption | **Partial** | No formal continuity plan yet; SEC-7 (backup/restore) is the first concrete piece. _(`compliance/RISK-REGISTER.md`)_ |
-| A.5.30 | ICT readiness for business continuity | **Partial** | Same as 5.29 -- backup exists informally (manual key-file backup note) but no tested restore/RTO-RPO yet (SEC-7, queued). |
+| A.5.29 | Information security during disruption | **Partial** | No formal continuity plan yet; SEC-7a (backup/restore) is the first concrete piece. _(`compliance/RISK-REGISTER.md`)_ |
+| A.5.30 | ICT readiness for business continuity | **Partial** | SEC-7a: encrypted backup/restore scripts (evidenced restore test, byte-for-byte diff-verified, documented RPO/RTO) now have an actual scheduler wired up -- a systemd timer installer for local hosting, an EventBridge Scheduler rule for the AWS demo -- built 2026-07-27. Still Partial, not Applied: the installers/schedules themselves have not yet been run for real and confirmed live in either environment (see RESUME-TRACKER.md's 2026-07-27 backup-automation entry) -- flip to Applied once Jason confirms both. |
 | A.5.31 | Legal, statutory, regulatory and contractual requirements | **N/A** | Personal household app, not a regulated entity offering services to others. |
 | A.5.32 | Intellectual property rights | **N/A** | No third-party IP licensing concerns beyond standard open-source dependency licenses. |
 | A.5.33 | Protection of records | **Applied** | Financial/PII data and the audit log are both encrypted at rest (Fernet) and access-gated; the audit log additionally can't be silently altered (hash chain). _(`portfolio-api/secrets_crypto.py, audit.py`)_ |
@@ -91,12 +91,12 @@
 | A.8.5 | Secure authentication | **Applied** | Argon2 + TOTP MFA + rate-limited login attempts + single-use backup codes. _(`portfolio-api/auth.py`)_ |
 | A.8.6 | Capacity management | **Partial** | Job-trigger rate limiting exists (prevents unbounded GPU/network-heavy background jobs per session), but no formal capacity-planning process for the host hardware. _(`portfolio-api/app.py JOB_RATE_LIMIT_PER_MIN`)_ |
 | A.8.7 | Protection against malware | **Partial** | Standard host-OS malware protection assumed; no application-layer file-upload scanning beyond type/size validation on the knowledge-RAG ingestion path. _(`portfolio-api/knowledge.py`)_ |
-| A.8.8 | Management of technical vulnerabilities | **Partial** | Dependencies are pinned; automated CVE/dependency scanning in CI is SEC-7, queued. _(`compliance/RISK-REGISTER.md`)_ |
+| A.8.8 | Management of technical vulnerabilities | **Applied** | SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), blocking on CRITICAL/HIGH per a documented 7/30-day patch SLA, with a formal .trivyignore risk-acceptance mechanism (90-day exp: dates) for genuinely unpatched upstream findings. _(`.github/workflows/dependency-scan.yml, .trivyignore`)_ |
 | A.8.9 | Configuration management | **Applied** | Every security-relevant config change (policy, retirement config, TLS state, etc.) is diffed old->new and logged as a config.changed audit event. _(`portfolio-api/app.py _emit_config_changed`)_ |
 | A.8.10 | Information deletion | **Applied** | The audit log has an automated retention/disposal job that deletes events past the retention window and logs the disposal itself as evidence. _(`portfolio-api/audit.py purge_expired`)_ |
 | A.8.11 | Data masking | **Applied** | The audit-log viewer masks source IPs and never surfaces secret VALUES (only key names) even to an authenticated admin session. _(`portfolio-api/audit.py read_recent(redact_ip=)`)_ |
 | A.8.12 | Data leakage prevention | **Partial** | Encryption-at-rest and RBAC reduce exposure surface; no dedicated DLP/egress-monitoring tooling (disproportionate at this scale). |
-| A.8.13 | Information backup | **Partial** | Manual backup guidance exists per sensitive key file; automated encrypted backup + a tested restore is SEC-7, queued. _(`compliance/RISK-REGISTER.md`)_ |
+| A.8.13 | Information backup | **Partial** | SEC-7a: encrypted backup/restore scripts (evidenced, byte-for-byte-verified restore test, documented RPO/RTO) plus a systemd-timer installer (local) and an EventBridge Scheduler rule (AWS demo) to actually run them automatically -- built 2026-07-27, not yet Applied pending Jason confirming each is live (see RESUME-TRACKER.md's 2026-07-27 backup-automation entry). _(`scripts/backup.sh, scripts/restore.sh, scripts/install-local-backup.sh, scripts/aws-demo/schedule-backup.sh`)_ |
 | A.8.14 | Redundancy of information processing facilities | **N/A** | Single-host household deployment -- no redundant facility is proportionate here. |
 | A.8.15 | Logging | **Applied** | Append-only, encrypted, structured security event log covering auth, config, secrets, TLS, RBAC, and detections -- one row per event with actor/IP/outcome/resource. _(`portfolio-api/audit.py`)_ |
 | A.8.16 | Monitoring activities | **Applied** | A rules engine sweeps the log every 5 minutes (and on demand) for failed-login bursts, first-seen IPs, and MFA-disable-then-change sequences. _(`portfolio-api/detections.py`)_ |

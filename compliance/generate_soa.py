@@ -38,7 +38,7 @@ CONTROLS = [
      "No formal ISAC/threat-sharing membership for a personal project.", None),
     ("5.7", "Threat intelligence", "Organizational", "Partial",
      "No subscribed feed, but dependency/CVE awareness is informal via GitHub's own advisories; "
-     "SEC-7 (CI dependency scanning) formalizes this.", "compliance/RISK-REGISTER.md"),
+     "SEC-7b (CI dependency scanning) formalizes this.", "compliance/RISK-REGISTER.md"),
     ("5.8", "Information security in project management", "Organizational", "Applied",
      "Every feature build in this engagement is annotated with its control mapping before/while "
      "being written (see RESUME-TRACKER.md's SEC-1..SEC-8 backlog) -- security is designed in, "
@@ -85,7 +85,7 @@ CONTROLS = [
      "Consumer-tier API terms-of-service, not negotiated contracts -- not applicable at this "
      "scale.", None),
     ("5.21", "Managing information security in the ICT supply chain", "Organizational", "Partial",
-     "Dependencies are pinned in requirements files; SEC-7 adds automated CVE scanning in CI.",
+     "Dependencies are pinned in requirements files; SEC-7b adds automated CVE scanning in CI.",
      ".github/workflows"),
     ("5.22", "Monitoring, review and change management of supplier services", "Organizational", "N/A",
      "No SLA-bound supplier relationships to formally review.", None),
@@ -109,11 +109,15 @@ CONTROLS = [
      "The audit log is HMAC hash-chained (tamper-evident) specifically so it can serve as "
      "trustworthy evidence, not just a record.", "portfolio-api/audit.py verify_chain()"),
     ("5.29", "Information security during disruption", "Organizational", "Partial",
-     "No formal continuity plan yet; SEC-7 (backup/restore) is the first concrete piece.",
+     "No formal continuity plan yet; SEC-7a (backup/restore) is the first concrete piece.",
      "compliance/RISK-REGISTER.md"),
     ("5.30", "ICT readiness for business continuity", "Organizational", "Partial",
-     "Same as 5.29 -- backup exists informally (manual key-file backup note) but no tested "
-     "restore/RTO-RPO yet (SEC-7, queued).", None),
+     "SEC-7a: encrypted backup/restore scripts (evidenced restore test, byte-for-byte "
+     "diff-verified, documented RPO/RTO) now have an actual scheduler wired up -- a systemd timer "
+     "installer for local hosting, an EventBridge Scheduler rule for the AWS demo -- built "
+     "2026-07-27. Still Partial, not Applied: the installers/schedules themselves have not yet "
+     "been run for real and confirmed live in either environment (see RESUME-TRACKER.md's "
+     "2026-07-27 backup-automation entry) -- flip to Applied once Jason confirms both.", None),
     ("5.31", "Legal, statutory, regulatory and contractual requirements", "Organizational", "N/A",
      "Personal household app, not a regulated entity offering services to others.", None),
     ("5.32", "Intellectual property rights", "Organizational", "N/A",
@@ -208,9 +212,11 @@ CONTROLS = [
     ("8.7", "Protection against malware", "Technological", "Partial",
      "Standard host-OS malware protection assumed; no application-layer file-upload scanning "
      "beyond type/size validation on the knowledge-RAG ingestion path.", "portfolio-api/knowledge.py"),
-    ("8.8", "Management of technical vulnerabilities", "Technological", "Partial",
-     "Dependencies are pinned; automated CVE/dependency scanning in CI is SEC-7, queued.",
-     "compliance/RISK-REGISTER.md"),
+    ("8.8", "Management of technical vulnerabilities", "Technological", "Applied",
+     "SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), "
+     "blocking on CRITICAL/HIGH per a documented 7/30-day patch SLA, with a formal .trivyignore "
+     "risk-acceptance mechanism (90-day exp: dates) for genuinely unpatched upstream findings.",
+     ".github/workflows/dependency-scan.yml, .trivyignore"),
     ("8.9", "Configuration management", "Technological", "Applied",
      "Every security-relevant config change (policy, retirement config, TLS state, etc.) is "
      "diffed old->new and logged as a config.changed audit event.",
@@ -226,8 +232,12 @@ CONTROLS = [
      "Encryption-at-rest and RBAC reduce exposure surface; no dedicated DLP/egress-monitoring "
      "tooling (disproportionate at this scale).", None),
     ("8.13", "Information backup", "Technological", "Partial",
-     "Manual backup guidance exists per sensitive key file; automated encrypted backup + a tested "
-     "restore is SEC-7, queued.", "compliance/RISK-REGISTER.md"),
+     "SEC-7a: encrypted backup/restore scripts (evidenced, byte-for-byte-verified restore test, "
+     "documented RPO/RTO) plus a systemd-timer installer (local) and an EventBridge Scheduler rule "
+     "(AWS demo) to actually run them automatically -- built 2026-07-27, not yet Applied pending "
+     "Jason confirming each is live (see RESUME-TRACKER.md's 2026-07-27 backup-automation entry).",
+     "scripts/backup.sh, scripts/restore.sh, scripts/install-local-backup.sh, "
+     "scripts/aws-demo/schedule-backup.sh"),
     ("8.14", "Redundancy of information processing facilities", "Technological", "N/A",
      "Single-host household deployment -- no redundant facility is proportionate here.", None),
     ("8.15", "Logging", "Technological", "Applied",

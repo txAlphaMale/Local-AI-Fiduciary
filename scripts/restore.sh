@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# restore.sh -- SEC-7: decrypt + restore a backup produced by backup.sh.
+# restore.sh -- SEC-7a (Backup & Disaster Recovery): decrypt + restore a backup produced by
+# backup.sh. Renamed 2026-07-27 from the old shared "SEC-7" label — see backup.sh's header.
 #
 # Controls: ISO/IEC 27001:2022 A.8.13 · NIST SP 800-53 CP-9/CP-10 · SOC 2 A1.2/CC7.1.
 # Auditors ask for the RESTORE TEST, not the backup -- this script's whole job is to make that

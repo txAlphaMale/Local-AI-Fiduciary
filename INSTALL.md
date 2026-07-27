@@ -92,6 +92,43 @@ in `.env`, default 8443; the plain-HTTP port stops serving the app once HTTPS is
 keeps answering with a redirect to 8443 — see below). See the in-app WIKI (Getting started →
 "HTTPS / certificates") for the full walkthrough of each method.
 
+## Backups (recommended — one command, then forget about it)
+
+`scripts/backup.sh` encrypts the entire `/data` volume (SQLite DBs, encryption key material, TLS
+certs, config) into a single AES-256 archive; `scripts/restore.sh` reverses it, checksum-verified.
+Both existed before this, but nothing scheduled them — you had to remember to run `backup.sh` by
+hand. This installs a systemd timer that runs it every day automatically:
+
+```bash
+sudo ./scripts/install-local-backup.sh
+```
+
+You'll be prompted for a passphrase (store it in a password manager too — there is no recovery
+without it) and the data volume's path (find it with
+`docker volume inspect fiduciary_portfolio-data --format '{{ .Mountpoint }}'` if you don't already
+know it). The passphrase is stored at `/etc/fiduciary-backup.env`, root-only (mode 600) — a
+necessary tradeoff for unattended automation, kept deliberately OUTSIDE `/data` so a stolen data
+volume alone can't self-decrypt its own backup.
+
+```bash
+systemctl list-timers fiduciary-backup.timer     # confirm it's scheduled
+sudo systemctl start fiduciary-backup.service    # trigger one run right now instead of waiting
+journalctl -u fiduciary-backup.service -n 50     # see the last run's output
+```
+
+**Do a real restore drill at least once** — a backup you've never restored is a guess, not a plan:
+
+```bash
+sudo BACKUP_PASSPHRASE=$(sudo grep BACKUP_PASSPHRASE /etc/fiduciary-backup.env | cut -d= -f2-) \
+  ./scripts/restore.sh /var/backups/fiduciary/fiduciary-backup-<timestamp>.tar.gz.enc /tmp/restore-test
+```
+
+**What this does not do:** copy backups off this host. A backup sitting on the same disk as the
+data it protects doesn't survive that disk/host being lost, stolen, or destroyed — only accidental
+deletion, a bad upgrade, or corruption. For real disaster-recovery coverage, periodically copy
+`/var/backups/fiduciary` (or wherever `BACKUP_OUTPUT_DIR` points) somewhere else — a NAS, an
+external drive, or `rclone` to any cloud storage of your choice.
+
 Once HTTPS is active, the old plain-HTTP port (8097 by default) doesn't go dark: it stays open
 just to 307-redirect any request to the same address on `HTTPS_PORT`, so an old bookmark or
 typed `http://` URL still gets you there automatically instead of a connection error.

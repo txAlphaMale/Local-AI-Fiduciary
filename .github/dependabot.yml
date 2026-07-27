@@ -1,6 +1,7 @@
 version: 2
 updates:
-  # SEC-7 (2026-07-25) -- automated version-bump PRs complement dependency-scan.yml's vulnerability
+  # SEC-7b (Dependency & Container Vulnerability Management, renamed 2026-07-27 from the old shared
+  # "SEC-7" label) -- automated version-bump PRs complement dependency-scan.yml's vulnerability
   # SCANNING with actual proposed FIXES, so a CVE finding isn't just a report with no next step.
   - package-ecosystem: "pip"
     directory: "/portfolio-api"
