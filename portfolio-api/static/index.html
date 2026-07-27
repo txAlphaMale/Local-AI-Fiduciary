@@ -3090,15 +3090,28 @@ function riskRegisterPanel(){
   const open=rows.filter(r=>(r.status||'open')==='open');
   const closed=rows.filter(r=>r.status==='closed');
 
+  // Column widths + .l/.wrap classes (2026-07-27 fix -- Jason caught real text overlapping between
+  // columns live): every td/th in this app defaults to white-space:nowrap unless a cell opts into
+  // wrapping (see the app's shared <style> block, ~line 190/196) -- this table never opted in, so
+  // Asset/Threat/Residual (all genuinely long free text, e.g. "Low-Medium (residual risk is real —
+  // a stolen current-version key...)") just overflowed straight into the next column instead of
+  // wrapping or scrolling. Same table-layout:fixed + explicit width + class="l wrap" pattern
+  // already established (and documented) at the Security Posture / SoA table above -- reused here
+  // rather than inventing a second way to solve the same problem.
   const tbl=el('table','tbl-compact'); tbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  const COLW = {'#':'32px','Asset':'16%','Threat':'22%','Likelihood':'80px','Impact':'80px','Residual':'22%','Owner':'70px','':'118px'};
+  const WRAP = new Set(['Asset','Threat','Residual']);
   const thead=el('tr'); ['#','Asset','Threat','Likelihood','Impact','Residual','Owner',''].forEach(h=>{
-    const th=el('th',null,h); th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'; thead.appendChild(th);
+    const th=el('th','l'+(WRAP.has(h)?' wrap':'')); th.textContent=h;
+    th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);width:'+COLW[h]+';'; thead.appendChild(th);
   });
   tbl.appendChild(thead);
+  const COLS=['#','Asset','Threat','Likelihood','Impact','Residual','Owner'];
   open.forEach(r=>{
     const tr=el('tr');
-    [r.id,r.asset,r.threat,r.likelihood,r.impact,r.residual,r.owner].forEach(v=>{
-      const td=el('td',null,v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
+    [r.id,r.asset,r.threat,r.likelihood,r.impact,r.residual,r.owner].forEach((v,i)=>{
+      const key=COLS[i];
+      const td=el('td','l'+(WRAP.has(key)?' wrap':''), v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
     });
     const actionTd=el('td'); actionTd.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);white-space:nowrap;';
     const editBtn=el('button','mut-btn','Edit'); editBtn.style.cssText='font-size:var(--font-size-sm);margin-right:4px;'; editBtn.onclick=()=>_riskRegisterOpenForm('edit',r);
@@ -3114,15 +3127,23 @@ function riskRegisterPanel(){
   toggleBtn.onclick=()=>{ RISK_REGISTER_SHOW_CLOSED=!RISK_REGISTER_SHOW_CLOSED; render(); };
   box.appendChild(toggleBtn);
   if(RISK_REGISTER_SHOW_CLOSED && closed.length){
+    // Same wrap fix as the open-risks table above -- Asset/Reason are free text and need to opt
+    // into wrapping; Closed (a date) doesn't.
+    const CCOLW = {'#':'32px','Asset':'20%','Closed':'90px','Reason':''};
+    const CWRAP = new Set(['Asset','Reason']);
     const ctbl=el('table','tbl-compact'); ctbl.style.cssText='width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--font-size-sm);margin-bottom:var(--space-3);';
     const chead=el('tr'); ['#','Asset','Closed','Reason'].forEach(h=>{
-      const th=el('th',null,h); th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'; chead.appendChild(th);
+      const th=el('th','l'+(CWRAP.has(h)?' wrap':'')); th.textContent=h;
+      th.style.cssText='text-align:left;padding:4px 6px;border-bottom:1px solid var(--border-color,#333);'+(CCOLW[h]?('width:'+CCOLW[h]+';'):'');
+      chead.appendChild(th);
     });
     ctbl.appendChild(chead);
+    const CCOLS=['#','Asset','Closed','Reason'];
     closed.forEach(r=>{
       const tr=el('tr');
-      [r.id,r.asset,r.closed_date,r.closed_reason].forEach(v=>{
-        const td=el('td','muted',v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
+      [r.id,r.asset,r.closed_date,r.closed_reason].forEach((v,i)=>{
+        const key=CCOLS[i];
+        const td=el('td','muted l'+(CWRAP.has(key)?' wrap':''),v||''); td.style.cssText='padding:4px 6px;border-bottom:1px solid var(--border-color,#222);vertical-align:top;'; tr.appendChild(td);
       });
       ctbl.appendChild(tr);
     });
