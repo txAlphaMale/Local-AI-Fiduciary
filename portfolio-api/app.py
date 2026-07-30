@@ -4221,13 +4221,19 @@ def get_realestate():
         last = None
     holdings, total = _realestate_holdings()
     avm = None
+    deed_fraud = None
     try:
         addr = _read_insurance_cfg().get("home_address")
         avm = _rentcast_avm(addr) if addr else None
     except Exception:
         avm = None
+    try:
+        deed_fraud = _deed_fraud_guidance(addr) if addr else None
+    except Exception:
+        deed_fraud = None
     return {"last": last, "existing_holdings": holdings, "existing_total": total,
             "home_avm": avm,
+            "deed_fraud": deed_fraud,
             "defaults": _re_defaults(),
             "note": "Underwrite a rental deal (income → financing → tax → after-tax IRR). Existing "
                     "real-estate accounts are surfaced here since they're excluded from the "
@@ -6731,6 +6737,112 @@ def run_hedging():
 # ============ P1: RentCast free-tier AVM (50 calls/mo — one home = one call/mo) ============
 RENTCAST_FILE = os.environ.get("RENTCAST_FILE", "/data/rentcast.json")
 RENTCAST_TTL = int(os.environ.get("RENTCAST_TTL", str(30 * 86400)))   # monthly refresh fits the free tier
+
+
+# ============ Deed/property fraud alert guidance (2026-07-30) ============
+# Option 2 of the 2026-07-27 backlog item (option 1, the informational-only tip, already shipped).
+# Research pass (2026-07-30) confirmed the owner's own suspicion that there's no single national API
+# or registry for county recorder "property fraud alert" signups -- BUT found more than "very
+# limited options": a real semi-national aggregator (propertyfraudalert.com, run by Fidlar,
+# spanning many counties across several states) and one genuinely complete, actively-maintained
+# STATEWIDE list (Florida's Court Clerks & Comptrollers association, all ~65 counties with direct
+# sign-up links). Texas and most other states remain pure per-county patchwork with no state list.
+# Jason's direction: identify the county from the tracked address and point the user at the best
+# available resource, as far as that's buildable without a giant hand-curated (and quickly stale)
+# table of individual county URLs.
+_STATE_FIPS_TO_ABBR = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT", "10": "DE",
+    "11": "DC", "12": "FL", "13": "GA", "15": "HI", "16": "ID", "17": "IL", "18": "IN", "19": "IA",
+    "20": "KS", "21": "KY", "22": "LA", "23": "ME", "24": "MD", "25": "MA", "26": "MI", "27": "MN",
+    "28": "MS", "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH", "34": "NJ", "35": "NM",
+    "36": "NY", "37": "NC", "38": "ND", "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI",
+    "45": "SC", "46": "SD", "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA",
+    "54": "WV", "55": "WI", "56": "WY", "72": "PR",
+}
+CENSUS_GEOCODE_TTL = 180 * 86400   # a county practically never changes for a given address
+
+# Deliberately NOT a giant hand-curated table of individual county sign-up URLs -- those are
+# per-office pages that rot silently and there are 3000+ counties. Only entries the research pass
+# confirmed are a single page actively maintained by a state/industry body, not one county office.
+DEED_FRAUD_STATE_RESOURCES = {
+    "FL": {"label": "Florida Court Clerks & Comptrollers — statewide list (all counties, direct sign-up links)",
+          "url": "https://www.flclerks.com/page/PropertyAlertServices"},
+}
+# California SB 255 (2025) mandates EVERY CA county stand up a recorder notification program by
+# 2027-01-01 (LA County runs its own equivalent program instead); only a handful of CA counties
+# have one live as of this research pass, so there's no complete list to link the way Florida's is
+# -- this note is surfaced instead of a (currently incomplete, would-go-stale-fast) link table.
+DEED_FRAUD_STATE_NOTES = {
+    "CA": "California law (SB 255) requires every county to offer this notification service by "
+          "January 1, 2027 — only a handful do today, so if your county isn't live yet, check "
+          "back closer to that date or contact your county recorder directly.",
+}
+
+
+def _county_lookup(address):
+    """Resolves a US mailing address to {"county": "<Name> County", "state": "<USPS abbr>"} via
+    the Census Bureau's free, keyless Geocoder API -- no signup, no paid tier, same bar as the
+    app's other free-government-data pulls (FRED T-bill, SEC EDGAR). Cached via store.cached_fetch
+    with a long (~180d) TTL since a county is effectively permanent for a given address. Returns
+    None on any failure (unparseable/partial address, API down, no match) -- callers fall back to
+    the generic (non-personalized) tip rather than erroring."""
+    addr = (address or "").strip()
+    if not addr:
+        return None
+
+    def _compute():
+        try:
+            r = requests.get("https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress",
+                             params={"address": addr, "benchmark": "Public_AR_Current",
+                                     "vintage": "Current_Current", "format": "json"}, timeout=20)
+            if r.status_code >= 400:
+                return None
+            matches = ((r.json() or {}).get("result") or {}).get("addressMatches") or []
+            if not matches:
+                return None
+            geo = matches[0].get("geographies") or {}
+            counties = geo.get("Counties") or next(
+                (v for k, v in geo.items() if "count" in k.lower() and v), [])
+            if not counties:
+                return None
+            c = counties[0]
+            county_name = c.get("NAME")
+            if not county_name:
+                return None
+            abbr = _STATE_FIPS_TO_ABBR.get(str(c.get("STATE") or "").zfill(2))
+            return {"county": county_name, "state": abbr}
+        except Exception:
+            return None
+
+    try:
+        value, _meta = store.cached_fetch("census_geocode", addr, CENSUS_GEOCODE_TTL, _compute,
+                                          is_ok=lambda v: v is not None)
+        return value
+    except Exception:
+        return None
+
+
+def _deed_fraud_guidance(address):
+    """Best-effort 'where do I actually sign up' guidance: resolves the tracked home address to a
+    county/state (see _county_lookup), then returns a small set of links -- a known-good statewide
+    resource when one exists (currently just Florida), the semi-national propertyfraudalert.com
+    aggregator (coverage varies by county, no guarantee), and a pre-filled web-search link that
+    always resolves to something useful regardless of coverage. Returns None if the address can't
+    be geocoded -- caller falls back to the generic, non-personalized tip."""
+    loc = _county_lookup(address)
+    if not loc or not loc.get("county"):
+        return None
+    import urllib.parse
+    county, state = loc["county"], loc.get("state")
+    q = f"{county} {state or ''} property fraud alert deed notification sign up".strip()
+    links = []
+    if state and state in DEED_FRAUD_STATE_RESOURCES:
+        links.append(DEED_FRAUD_STATE_RESOURCES[state])
+    links.append({"label": "propertyfraudalert.com — search for your county (multi-state aggregator, coverage varies)",
+                 "url": "https://propertyfraudalert.com/"})
+    links.append({"label": f"Web search: “{q}”", "url": "https://www.google.com/search?q=" + urllib.parse.quote(q)})
+    return {"county": county, "state": state, "links": links,
+           "note": DEED_FRAUD_STATE_NOTES.get(state)}
 
 
 def _rentcast_avm(address):

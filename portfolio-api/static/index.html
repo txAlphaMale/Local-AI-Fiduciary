@@ -1100,7 +1100,7 @@ W('irmaa','Planning','IRMAA (Medicare surcharge)',
   'Use it to avoid nudging MAGI just over an IRMAA threshold with a conversion or gain.');
 W('realestate','Planning','Real-estate underwriter',
   'Underwrites a prospective rental deal: net operating income, cap rate, debt-service coverage (DSCR), cash-on-cash, and a levered after-tax IRR that accounts for depreciation recapture and capital-gains tax at sale.',
-  'Enter the deal inputs and it returns the full set; DSCR below ~1.2 and thin cash-on-cash are warning signs. Existing real-estate accounts are surfaced separately.',
+  'Enter the deal inputs and it returns the full set; DSCR below ~1.2 and thin cash-on-cash are warning signs. Existing real-estate accounts are surfaced separately, along with a property/deed fraud alert tip (2026-07-27) — if a home address is on file (PLAN → INSURANCE), it\'s personalized (2026-07-30): the address is resolved to a county via the free Census Geocoder API and matched against a known statewide resource (currently Florida\'s complete Court Clerks & Comptrollers list), the semi-national propertyfraudalert.com aggregator, and a pre-filled web search — no single national registry covers every county, so this is best-effort, not a guaranteed direct link everywhere.',
   'Use it to compare a specific property against your other avenues on an apples-to-apples after-tax IRR before committing.');
 W('business','Planning','Business-acquisition underwriter',
   'Underwrites buying a small business: seller discretionary earnings multiple, DSCR, cash-on-cash, payback, and a levered after-tax IRR including the QSBS section 1202 gain exclusion where it applies.',
@@ -5976,12 +5976,28 @@ function realEstateContent(){
     // Informational only, no per-county lookup/API — matches the app's existing read-only,
     // "not financial advice" nudge posture (see other Glossary/checklist tips).
     const pf=el('div'); pf.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin:0 0 12px;padding:8px 10px;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);';
-    pf.innerHTML=`💡 <b>Property/deed fraud alert:</b> many county recorder or clerk offices offer a `+
-      `<i>free</i> service that emails you when a document (deed, lien, etc.) is recorded against `+
-      `your name or parcel — an early warning against deed/title fraud. Coverage varies by county `+
-      `(not all offer it). Worth checking your county recorder/clerk's website for a "property fraud `+
-      `alert" or "document alert" sign-up for each property above. This is separate from, and free `+
-      `unlike, paid commercial "title lock" monitoring products.`;
+    // 2026-07-30: personalized version when the home address (PLAN -> INSURANCE) resolved to a
+    // county (R.deed_fraud, from get_realestate()'s _deed_fraud_guidance) -- falls back to the
+    // original generic tip (2026-07-27) when there's no address on file or it couldn't be geocoded.
+    const df=R.deed_fraud;
+    if(df && df.county){
+      const linksHtml=(df.links||[]).map(l=>`<a href="${l.url}" target="_blank" rel="noopener">${(l.label||l.url).replace(/</g,'&lt;')}</a>`).join(' &nbsp;·&nbsp; ');
+      pf.innerHTML=`💡 <b>Property/deed fraud alert</b> — your home address resolves to <b>${df.county}${df.state?', '+df.state:''}</b>. `+
+        `Many county recorder/clerk offices offer a <i>free</i> service that emails you when a document `+
+        `(deed, lien, etc.) is recorded against your name or parcel — an early warning against deed/title `+
+        `fraud, separate from (and free unlike) paid "title lock" monitoring products. There's no single `+
+        `national registry for this, so coverage varies by county — try: ${linksHtml}.`+
+        (df.note?`<br><span class="muted">${df.note}</span>`:'');
+    } else {
+      pf.innerHTML=`💡 <b>Property/deed fraud alert:</b> many county recorder or clerk offices offer a `+
+        `<i>free</i> service that emails you when a document (deed, lien, etc.) is recorded against `+
+        `your name or parcel — an early warning against deed/title fraud. Coverage varies by county `+
+        `(not all offer it). Worth checking your county recorder/clerk's website for a "property fraud `+
+        `alert" or "document alert" sign-up for each property above. This is separate from, and free `+
+        `unlike, paid commercial "title lock" monitoring products. `+
+        `<span class="muted">Set your home address in PLAN → INSURANCE and this app can look up your `+
+        `county and link you straight to what's available.</span>`;
+    }
     wrap.appendChild(pf);
   }
   // P1: RentCast AVM second opinion (free tier; address set in PLAN→INSURANCE, key in secrets)
