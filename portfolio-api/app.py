@@ -5426,6 +5426,11 @@ def _valuation_percentile(sym):
                    "peer_count": len(pes), "cheapness_percentile": pct, "verdict": verdict}
     except Exception:
         res = None
+    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed/
+    # empty re-check evict a previously-good cached percentile -- return this call's result as-is,
+    # but keep the last-good value cached for the next caller.
+    if res is None and hit and hit[1] is not None:
+        return res
     _VALCTX_CACHE[sym] = (now, res)
     return res
 
@@ -5465,6 +5470,11 @@ def _insider_signal(sym):
                    "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
     except Exception as e:
         res = {"ticker": t, "available": False, "reason": f"insider fetch error: {e}"}
+    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed
+    # re-check evict a previously-good cached signal -- return this call's failure as-is, but keep
+    # the last-good entry cached for the next caller.
+    if not res.get("available") and hit and (hit[1] or {}).get("available"):
+        return res
     _INSIDER_CACHE[t] = (now, res)
     return res
 
@@ -5534,6 +5544,12 @@ def _manager_13f(cik):
     if hit and now - hit[0] < INST_MGR_TTL:
         return hit[1]
     fils = edgar.recent_13f(cik, n=2)
+    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): recent_13f() swallows
+    # its own fetch errors and returns [] the same as a genuine "no filings" result -- don't let
+    # that evict a previously-good cached set. Return this call's (possibly empty) result as-is,
+    # but keep the last-good entry cached for the next caller.
+    if not fils and hit and hit[1]:
+        return fils
     _MGR13F_CACHE[cik] = (now, fils)
     return fils
 
@@ -9699,7 +9715,13 @@ def _profile(sym):
         prof = r.json() if r.status_code < 400 else {}
     except Exception:
         prof = {}
-    _profile_cache[sym] = (now, prof if isinstance(prof, dict) else {})
+    prof = prof if isinstance(prof, dict) else {}
+    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed/
+    # empty re-fetch evict a previously-good cached profile -- return this call's (possibly empty)
+    # result as-is, but keep the last-good entry cached for the next caller.
+    if not prof and hit and hit[1]:
+        return prof
+    _profile_cache[sym] = (now, prof)
     return _profile_cache[sym][1]
 
 

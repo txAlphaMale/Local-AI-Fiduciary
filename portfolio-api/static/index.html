@@ -5856,6 +5856,22 @@ function realEstateContent(){
     const eh=el('div','ph','EXISTING REAL ESTATE (excluded from securities analysis)'); eh.style.cssText='font-size:var(--font-size-base);'; wrap.appendChild(eh);
     R.existing_holdings.forEach(h=>{ const d=el('div','muted'); d.style.cssText='font-size:var(--font-size-base);'; d.textContent=`${h.name||'—'}: ${usd(h.value)}`; wrap.appendChild(d); });
     const tt=el('div'); tt.style.cssText='font-size:var(--font-size-base);margin:2px 0 8px;'; tt.innerHTML=`<b>Total: ${usd(R.existing_total)}</b>`; wrap.appendChild(tt);
+    // RESUME-TRACKER (2026-07-27, informational-only scope) — property/deed fraud alert tip.
+    // Shown only when real-property holdings are actually on record (gated on existing_holdings
+    // above, same condition), never unconditionally. Many (not all) US county recorder/clerk
+    // offices offer a FREE deed/title-record monitoring service that emails the owner when a
+    // document (deed, lien, etc.) is recorded against their name or parcel — distinct from paid
+    // commercial "title lock" monitoring products, which this note deliberately doesn't push.
+    // Informational only, no per-county lookup/API — matches the app's existing read-only,
+    // "not financial advice" nudge posture (see other Glossary/checklist tips).
+    const pf=el('div'); pf.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin:0 0 12px;padding:8px 10px;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);';
+    pf.innerHTML=`💡 <b>Property/deed fraud alert:</b> many county recorder or clerk offices offer a `+
+      `<i>free</i> service that emails you when a document (deed, lien, etc.) is recorded against `+
+      `your name or parcel — an early warning against deed/title fraud. Coverage varies by county `+
+      `(not all offer it). Worth checking your county recorder/clerk's website for a "property fraud `+
+      `alert" or "document alert" sign-up for each property above. This is separate from, and free `+
+      `unlike, paid commercial "title lock" monitoring products.`;
+    wrap.appendChild(pf);
   }
   // P1: RentCast AVM second opinion (free tier; address set in PLAN→INSURANCE, key in secrets)
   if(R.home_avm && (R.home_avm.value||R.home_avm.rent)){
@@ -7468,6 +7484,14 @@ function authInitApp(){
   document.getElementById('gear').onclick=()=>{ TAB=(TAB==='settings'?'positions':'settings'); render(); };
   load(false);
   setInterval(()=>{ if(userBusy()) return; load(false, true); }, 300000);  // re-poll every 5 min (server caches); bg=true preserves scroll
+  // RESUME-TRACKER (2026-07-29) — start the job/alert/demo-status pollers only once a session
+  // actually exists. Previously these fired unconditionally at script-load time, including on the
+  // bare login screen, which meant every unauthenticated page view hit /api/jobs, /api/alerts, and
+  // /api/demo/status with no cookie yet and got logged as a burst of authz.denied "no_session"
+  // events ahead of the real login — benign (client-side badge polling), but it read like probing
+  // activity in the Security Audit Log. Starting them here also fixes a real side-effect: since
+  // pollDemoStatus() never re-ran after login, the DEMO_MODE banner was silently never showing.
+  startBackgroundPolling();
 }
 async function authCheckAndInit(){
   try{
@@ -7512,7 +7536,8 @@ function pollJobs(){
     } else { b.textContent=''; }
   }).catch(()=>{});
 }
-pollJobs(); setInterval(pollJobs, 15000);
+// (bootstrapped from startBackgroundPolling(), called by authInitApp() once a session exists —
+// see RESUME-TRACKER (2026-07-29) note above authInitApp())
 
 // Alerting/monitoring push layer (built 2026-07-18): poll /api/alerts and show a materiality-
 // filtered action/warn count in the header, visible from ANY tab — not just when you remember to
@@ -7532,7 +7557,7 @@ function pollAttn(){
   }).catch(()=>{});
 }
 document.getElementById('attn').onclick=()=>{ TAB='insights'; SUBTAB['insights']='attention'; render(); };
-pollAttn(); setInterval(pollAttn, 60000);
+// (bootstrapped from startBackgroundPolling(), see note above authInitApp())
 
 // Demo harness (2026-07-25) — shows a persistent, unmissable banner when this deployment is
 // running with DEMO_MODE=1 (see demo_seed.py), so nobody mistakes synthetic demo data for a real
@@ -7551,7 +7576,16 @@ function pollDemoStatus(){
     }
   }).catch(()=>{});
 }
-pollDemoStatus();
+// Gate: only start once, only after a real session exists (see RESUME-TRACKER 2026-07-29 note
+// above authInitApp()) — never fired for an unauthenticated page view.
+let _bgPollingStarted=false;
+function startBackgroundPolling(){
+  if(_bgPollingStarted) return;
+  _bgPollingStarted=true;
+  pollJobs(); setInterval(pollJobs, 15000);
+  pollAttn(); setInterval(pollAttn, 60000);
+  pollDemoStatus();
+}
 </script>
 </body>
 </html>

@@ -349,6 +349,12 @@ def fund_holdings(ticker, ttl=604800, top=600, name=None):
         return hit[1]
 
     def _stash(res):
+        # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): a failed re-resolve
+        # must not evict a previously-resolved good result. Report the failure for THIS call, but
+        # leave the last-good cache entry in place so a later successful call isn't starting from
+        # zero. A ticker with no prior good result still caches its failure as before (unchanged).
+        if not res.get("resolved") and hit:
+            return res
         _FUND_CACHE[tkr] = (time.time(), res)
         return res
 
@@ -614,6 +620,12 @@ def fundamentals(ticker, ttl=None):
     if hit and (now - hit[0] < ttl):
         return hit[1]
     res = _compute(key)
+    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): a fetch failure must
+    # never evict a previously-good cached result. Report the failure for THIS call only; leave
+    # the last-good entry in place so the very next call still serves it instead of starting from
+    # zero. A ticker with no prior good result still caches its failure as before (unchanged).
+    if res.get("available") is False and hit:
+        return res
     _CACHE[key] = (now, res)
     return res
 
