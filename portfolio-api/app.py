@@ -2714,6 +2714,8 @@ def build():
         notifications.record_integration_result(p, ok=True)
     except Exception:
         pass
+    d = _apply_manual_liabilities(d)   # 2026-07-30 -- overlay hand-entered loans/credit cards
+                                       # (see the "Manual liability accounts" section below)
     d["portfolio_provider"] = p   # 2026-07-24 -- lets the frontend know which provider is active
                                   # (e.g. to badge the HOLDINGS panel as live vs. staged-but-inactive)
     _snapshot_value(d)          # record today's value for the accruing risk-metrics history
@@ -7207,6 +7209,219 @@ async def post_insurance_config(req: Request):
                          summarize_keys={"policies", "contacts", "estate_docs",
                                          "income_sources_self", "income_sources_spouse"})
     return {"ok": True, "config": cfg}
+
+
+# ============ Manual liability accounts (2026-07-30) ============
+# Gap: PORTFOLIO_PROVIDER=csv (and snaptrade) users had NO way to record a loan/credit card --
+# _build_csv()/_build_snaptrade() hardcode is_asset:True on every account and total_liabilities
+# stays 0.0, so CASH·DEBT, net worth, the estate binder's liabilities list, etc. all silently see
+# a household as debt-free the moment they leave Monarch. Deliberately NOT an extension of the
+# holdings.csv row shape (HOLDINGS_CSV_COLUMNS) -- that table requires a ticker + positive share
+# quantity (built for tradable positions); a liability has neither, so bolting it on would mean
+# awkward blank ticker/quantity cells with unclear validation. Instead: a small separate
+# name-keyed register (manual_liabilities.json), applied as an OVERLAY inside build() itself
+# (see _apply_manual_liabilities) rather than inside any one provider function -- so it works for
+# EVERY provider with one code path, not three (a Monarch household could use it too, e.g. for a
+# private family loan Monarch itself never syncs).
+#
+# rate_pct/min_payment/pay_in_full/mortgage-classification are deliberately NOT duplicated into
+# manual_liabilities.json -- they're read from and written straight into insurance.json's existing
+# debt_rates/debt_min_payments/pay_in_full_overrides/is_mortgage_overrides dicts, the exact same
+# name-keyed fields Monarch-sourced debts already use (see get_cashdebt()). One source of truth:
+# SETTINGS -> PLAN CASH·DEBT and this editor can never disagree about the same account's rate.
+MANUAL_LIABILITIES_FILE = os.environ.get("MANUAL_LIABILITIES_FILE", "/data/manual_liabilities.json")
+LIABILITY_TYPE_HINTS = ["Credit Card", "Auto Loan", "Student Loan", "Personal Loan", "HELOC",
+                        "Mortgage", "Other Loan"]
+
+
+def _read_manual_liability_rows():
+    """Saved liability identities (name/institution/type/balance/notes) merged with their
+    rate_pct/min_payment/pay_in_full/is_mortgage read back from insurance.json, for display in the
+    editor. is_mortgage falls back to (type == "Mortgage") when no explicit override exists yet --
+    matches what a fresh row would get stamped with on its first save (see
+    _write_manual_liability_rows)."""
+    try:
+        rows = store.read_json_strict(MANUAL_LIABILITIES_FILE) or []
+    except Exception:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
+    cfg = _read_insurance_cfg()
+    rates = cfg.get("debt_rates") or {}
+    mins = cfg.get("debt_min_payments") or {}
+    pif = cfg.get("pay_in_full_overrides") or {}
+    mort = cfg.get("is_mortgage_overrides") or {}
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        nm = r.get("name") or ""
+        out.append({
+            "name": nm,
+            "institution": r.get("institution") or "",
+            "type": r.get("type") or "Other Loan",
+            "balance": r.get("balance"),
+            "notes": r.get("notes") or "",
+            "rate_pct": rates.get(nm),
+            "min_payment": mins.get(nm),
+            "pay_in_full": bool(pif.get(nm)),
+            "is_mortgage": bool(mort[nm]) if nm in mort else (r.get("type") == "Mortgage"),
+        })
+    return out
+
+
+def _validate_manual_liability_rows(rows):
+    """Mirrors _validate_holdings_rows' all-or-nothing contract: a save fails loudly with every
+    row's error rather than silently dropping or mis-saving one."""
+    clean, errors = [], []
+    seen = set()
+    for i, r in enumerate(rows, start=1):
+        if not isinstance(r, dict):
+            errors.append({"row": i, "message": "Malformed row."})
+            continue
+        nm = (r.get("name") or "").strip()
+        if not nm:
+            errors.append({"row": i, "message": "Name is required."})
+            continue
+        if nm.lower() in seen:
+            errors.append({"row": i, "message": f"{nm}: duplicate liability name (names must be unique)."})
+            continue
+        seen.add(nm.lower())
+        try:
+            bal = float(r.get("balance") or 0)
+        except (TypeError, ValueError):
+            errors.append({"row": i, "message": f"{nm}: balance must be a number."})
+            continue
+        if bal <= 0:
+            errors.append({"row": i, "message": f"{nm}: balance must be greater than 0."})
+            continue
+        rate_pct = r.get("rate_pct")
+        if rate_pct not in (None, ""):
+            try:
+                rate_pct = float(rate_pct)
+            except (TypeError, ValueError):
+                errors.append({"row": i, "message": f"{nm}: rate % must be a number."})
+                continue
+            if rate_pct < 0 or rate_pct > 100:
+                errors.append({"row": i, "message": f"{nm}: rate % must be between 0 and 100."})
+                continue
+        else:
+            rate_pct = None
+        min_payment = r.get("min_payment")
+        if min_payment not in (None, ""):
+            try:
+                min_payment = float(min_payment)
+            except (TypeError, ValueError):
+                errors.append({"row": i, "message": f"{nm}: min payment must be a number."})
+                continue
+            if min_payment < 0:
+                errors.append({"row": i, "message": f"{nm}: min payment can't be negative."})
+                continue
+        else:
+            min_payment = None
+        clean.append({
+            "name": nm,
+            "institution": (r.get("institution") or "").strip(),
+            "type": (r.get("type") or "").strip() or "Other Loan",
+            "balance": round(bal, 2),
+            "notes": (r.get("notes") or "").strip(),
+            "rate_pct": rate_pct,
+            "min_payment": min_payment,
+            "pay_in_full": bool(r.get("pay_in_full")),
+        })
+    return clean, errors
+
+
+def _write_manual_liability_rows(clean_rows):
+    """Splits each clean row across the two stores described above, then invalidates the
+    portfolio cache so the next /api/portfolio read reflects the change instead of serving a
+    stale build for up to TTL seconds (same as _write_holdings_csv_rows)."""
+    identity_rows = [{"name": r["name"], "institution": r["institution"], "type": r["type"],
+                      "balance": r["balance"], "notes": r["notes"]} for r in clean_rows]
+    store.write_json(MANUAL_LIABILITIES_FILE, identity_rows)
+
+    cfg = _read_insurance_cfg()
+    rates = dict(cfg.get("debt_rates") or {})
+    mins = dict(cfg.get("debt_min_payments") or {})
+    pif = dict(cfg.get("pay_in_full_overrides") or {})
+    mort = dict(cfg.get("is_mortgage_overrides") or {})
+    for r in clean_rows:
+        nm = r["name"]
+        if r["rate_pct"] is not None:
+            rates[nm] = r["rate_pct"]
+        if r["min_payment"] is not None:
+            mins[nm] = r["min_payment"]
+        pif[nm] = r["pay_in_full"]
+        if r["type"] == "Mortgage":
+            mort[nm] = True
+    cfg["debt_rates"] = rates
+    cfg["debt_min_payments"] = mins
+    cfg["pay_in_full_overrides"] = pif
+    cfg["is_mortgage_overrides"] = mort
+    store.write_json(INSURANCE_FILE, cfg)
+    _cache["data"] = None
+
+
+def _apply_manual_liabilities(d):
+    """Overlay manually-entered liability accounts onto whichever provider built `d` -- called once,
+    at the very end of build(), so CSV/SnapTrade users (no native liability sync) and Monarch users
+    (tracking something Monarch itself doesn't see) are all covered by one code path. Each manual
+    row becomes an is_asset:False account in EXACTLY the shape _build_monarch() produces, so
+    cashdebt.py/estate.py/tax-audit/the continuity binder -- every existing is_asset consumer --
+    needs zero changes to recognize it."""
+    rows = _read_manual_liability_rows()
+    if not rows:
+        return d
+    accounts = d.get("accounts") or []
+    existing_names = {(a.get("name") or "").strip().lower() for a in accounts}
+    added_liab = 0.0
+    for r in rows:
+        bal = r.get("balance") or 0
+        if not bal or bal <= 0:
+            continue
+        nm = r.get("name") or "Manual Liability"
+        if nm.strip().lower() in existing_names:
+            continue   # a same-named provider-synced account already covers it -- don't double-count
+        accounts.append({
+            "id": "manual:" + nm, "name": nm, "institution": r.get("institution") or None,
+            "type": r.get("type") or "Other Loan", "balance": round(bal, 2),
+            "holdings_count": 0, "is_asset": False, "include_nw": True, "manual": True,
+        })
+        added_liab += bal
+    if added_liab:
+        d["accounts"] = accounts
+        d["account_count"] = len(accounts)
+        d["total_liabilities"] = round((d.get("total_liabilities") or 0) + added_liab, 2)
+        d["net_worth"] = round((d.get("net_worth") or 0) - added_liab, 2)
+    return d
+
+
+@app.get("/api/manual-liabilities")
+def get_manual_liabilities():
+    """Manually-entered liability accounts (loans/credit cards) -- most useful for csv/snaptrade
+    users with no native liability sync, but available regardless of active provider (same as
+    /api/holdings-csv)."""
+    return {"rows": _read_manual_liability_rows(), "type_hints": LIABILITY_TYPE_HINTS}
+
+
+@app.post("/api/manual-liabilities")
+async def post_manual_liabilities(req: Request):
+    """Replace the manual liability list wholesale from the in-app table editor. Body:
+    {"rows": [{"name","institution","type","balance","rate_pct","min_payment","pay_in_full",
+    "notes"}...]}. All-or-nothing (same contract as /api/holdings-csv): any row failing validation
+    aborts the whole save with every error returned together."""
+    body = await req.json()
+    rows = body.get("rows")
+    if not isinstance(rows, list):
+        return JSONResponse({"error": "Body must be {\"rows\": [...]}."}, status_code=400)
+    clean, errors = _validate_manual_liability_rows(rows)
+    if errors:
+        return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+    old_cfg = _read_insurance_cfg()
+    _write_manual_liability_rows(clean)
+    new_cfg = _read_insurance_cfg()
+    _emit_config_changed(req, "/api/manual-liabilities", old_cfg, new_cfg)
+    return {"ok": True, "rows_written": len(clean)}
 
 
 @app.get("/api/insurance")

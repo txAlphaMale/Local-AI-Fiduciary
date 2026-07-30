@@ -427,7 +427,7 @@ const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cache
 let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
 let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
 // always reflects the saved state), then mutated in place by add/remove-row clicks and synced
@@ -834,18 +834,18 @@ async function load(refresh, bg){
       // Also fetch HOLDCSV here: if the failure IS the portfolio provider (e.g. Monarch down),
       // switching to the CSV provider + HOLDINGS tab is the actual escape hatch -- it must stay
       // reachable, not just SETTINGS.
-      const [setg,secg,hcsv]=await Promise.all([gj('/api/settings'), gj('/api/secrets'), gj('/api/holdings-csv')]);
-      SETTINGS_CFG=setg; SECRETS_CFG=secg; HOLDCSV=hcsv;
+      const [setg,secg,hcsv,mlia]=await Promise.all([gj('/api/settings'), gj('/api/secrets'), gj('/api/holdings-csv'), gj('/api/manual-liabilities')]);
+      SETTINGS_CFG=setg; SECRETS_CFG=secg; HOLDCSV=hcsv; MANLIAB=mlia;
       document.getElementById('body').innerHTML='<div class="err">'+d.error
         +'<br><br><span class="muted" style="font-size:var(--font-size-sm);">Portfolio data is unavailable, but SETTINGS (⚙, top right) and the HOLDINGS tab still work — no brokerage account required if you switch to CSV.</span></div>';
       return;
     }
     DATA=d;
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
-    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv,mlia]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv'),gj('/api/manual-liabilities')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv; MANLIAB=mlia;
     // keep the scenario switcher pointed at a real scenario: adopt the server's resolved default
     // the first time (nothing chosen yet), or if a previously-selected scenario_id was deleted.
     if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
@@ -4592,7 +4592,102 @@ function holdingsContent(){
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
   foot.textContent='ticker and quantity are required (quantity is a dollar amount for Cash rows); cost_basis/name/institution are optional; account defaults to "Brokerage" if left blank. A save fails all-or-nothing with row-level errors shown above rather than silently dropping a bad row.';
   wrap.appendChild(foot);
+
+  wrap.appendChild(manualLiabilitiesSection());
   return wrap;
+}
+// ============================================================================
+// MANUAL LIABILITIES (2026-07-30) — loans/credit cards for households with no native liability
+// sync (csv/snaptrade providers; Monarch users can use it too for anything Monarch itself doesn't
+// see). A deliberately SEPARATE table from the holdings editor above, not an extra row type on
+// it — that table requires a ticker + positive share quantity, which a liability has neither of.
+// Mirrors app.py's /api/manual-liabilities (GET rows+type_hints / POST rows). rate_pct/
+// min_payment/pay_in_full are the SAME fields SETTINGS -> PLAN CASH·DEBT edits (debt_rates/
+// debt_min_payments/pay_in_full_overrides, keyed by this row's name) — editing either place keeps
+// both in sync, there's no separate copy to drift.
+// ============================================================================
+function manualLiabilitiesSection(){
+  const sect=el('div'); sect.style.cssText='margin-top:var(--space-6);padding-top:var(--space-5);border-top:1px solid var(--color-border);';
+  const h=el('div','ph','LIABILITIES (loans, credit cards, etc.)'); sect.appendChild(h);
+  const m=MANLIAB||{rows:[],type_hints:['Credit Card','Auto Loan','Student Loan','Personal Loan','HELOC','Mortgage','Other Loan']};
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin:4px 0 var(--space-3);line-height:1.5;';
+  sub.textContent='Enter what you owe by hand — no brokerage/aggregator sync needed. These count against net worth and feed PLAN → CASH·DEBT (payoff-vs-invest, avalanche) exactly like a synced account.';
+  sect.appendChild(sub);
+
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);align-items:center;margin-bottom:var(--space-3);flex-wrap:wrap;';
+  const addBtn=el('button',null,'+ ADD LIABILITY'); bar.appendChild(addBtn);
+  const saveBtn=el('button','mut-btn','↳ SAVE LIABILITIES'); bar.appendChild(saveBtn);
+  sect.appendChild(bar);
+
+  const errBox=el('div'); errBox.style.cssText='color:var(--color-negative);font-size:var(--font-size-sm);margin-bottom:var(--space-2);white-space:pre-line;';
+  sect.appendChild(errBox);
+
+  const table=document.createElement('table'); table.style.cssText='width:100%;border-collapse:collapse;';
+  const thead=document.createElement('thead');
+  thead.innerHTML='<tr>'+['Name','Institution','Type','Balance owed','Rate %','Min payment','Pay in full monthly?','Notes',''].map(x=>
+    `<th style="text-align:left;font-size:var(--font-size-sm);padding:4px 6px;border-bottom:1px solid var(--color-border);">${x}</th>`).join('')+'</tr>';
+  table.appendChild(thead);
+  const tbody=document.createElement('tbody');
+  table.appendChild(tbody);
+
+  const mkCell=(row,key)=>{
+    const td=document.createElement('td'); td.style.cssText='padding:2px 6px;';
+    if(key==='type'){
+      const sel=document.createElement('select'); sel.className='liab-inp'; sel.dataset.key=key; sel.style.cssText='width:100%;';
+      (m.type_hints||[]).forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; if(t===row.type) o.selected=true; sel.appendChild(o); });
+      if(row.type && !(m.type_hints||[]).includes(row.type)){ const o=document.createElement('option'); o.value=row.type; o.textContent=row.type; o.selected=true; sel.appendChild(o); }
+      td.appendChild(sel);
+    } else if(key==='pay_in_full'){
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.className='liab-inp'; cb.dataset.key=key; cb.checked=!!row.pay_in_full;
+      td.appendChild(cb);
+    } else {
+      const inp=document.createElement('input'); inp.className='liab-inp'; inp.dataset.key=key;
+      inp.value=(row[key]==null?'':row[key]); inp.style.cssText='width:100%;';
+      if(key==='balance'||key==='rate_pct'||key==='min_payment') inp.placeholder=(key==='rate_pct'?'APR':(key==='min_payment'?'$/mo':'$ owed'));
+      td.appendChild(inp);
+    }
+    return td;
+  };
+  const addRow=(row)=>{
+    row=row||{name:'',institution:'',type:'Credit Card',balance:'',rate_pct:'',min_payment:'',pay_in_full:false,notes:''};
+    const tr=document.createElement('tr'); tr.className='liab-row';
+    ['name','institution','type','balance','rate_pct','min_payment','pay_in_full','notes'].forEach(k=>tr.appendChild(mkCell(row,k)));
+    const delTd=document.createElement('td');
+    const delBtn=el('button',null,'✕'); delBtn.title='remove row'; delBtn.onclick=()=>tr.remove();
+    delTd.appendChild(delBtn); tr.appendChild(delTd);
+    tbody.appendChild(tr);
+  };
+  (m.rows && m.rows.length ? m.rows : []).forEach(r=>addRow(r));
+  sect.appendChild(table);
+
+  addBtn.onclick=()=>addRow(null);
+  saveBtn.onclick=()=>{
+    const rows=[];
+    tbody.querySelectorAll('tr.liab-row').forEach(tr=>{
+      const row={};
+      tr.querySelectorAll('.liab-inp').forEach(inp=>{
+        row[inp.dataset.key]= inp.type==='checkbox' ? inp.checked : inp.value;
+      });
+      if(!row.name || !String(row.name).trim()) return;   // skip a fully-blank row instead of erroring on it
+      rows.push(row);
+    });
+    errBox.textContent='';
+    fetch('/api/manual-liabilities',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})})
+      .then(r=>r.json().then(d=>({status:r.status,d})))
+      .then(({status,d})=>{
+        if(status!==200 || d.ok===false){
+          errBox.textContent=(d.errors||[]).map(e=>'Row '+e.row+': '+e.message).join('\n')||d.error||'Save failed.';
+          return;
+        }
+        alert('Saved '+d.rows_written+' liability(ies).');
+        load(false);
+      }).catch(e=>{ errBox.textContent='Save failed: '+e; });
+  };
+
+  const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-3);line-height:1.5;';
+  foot.textContent='Name is required and must be unique; balance must be a positive number (enter what you owe, not a credit limit). Rate/min payment/pay-in-full are optional and are the same fields SETTINGS → PLAN CASH·DEBT edits for any account by name — set them here or there, whichever is more convenient. Type "Mortgage" auto-excludes the row from the debt avalanche the same way a synced mortgage does.';
+  sect.appendChild(foot);
+  return sect;
 }
 function secretsContent(){
   const wrap=el('div'); const s=SECRETS_CFG;
