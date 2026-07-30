@@ -18,12 +18,15 @@ import datetime
 import re
 import requests
 import xml.etree.ElementTree as ET
+import store
 
 SEC_UA = os.environ.get("SEC_USER_AGENT", "Local AI Fiduciary admin@example.com")
 EDGAR_TTL = int(os.environ.get("EDGAR_TTL", "86400"))   # cache fundamentals ~1 day
 
 _CIK = {"ts": 0.0, "map": {}}
-_CACHE = {}   # ticker -> (ts, result)
+# 2026-07-30: fundamentals()/fund_holdings() caching moved onto store.cached_fetch() (disk-
+# persisted, survives restarts -- see store.py's "external_cache" table) -- no more bare
+# module-level dicts here.
 
 # Curated fund/ETF NET expense ratios (%). Authoritative source: each fund's prospectus /
 # fact sheet. A ticker NOT listed here shows "unknown" in the fee audit — just add it.
@@ -107,7 +110,6 @@ def get_cik(ticker):
 # NPORT-P for that series, and parse its holdings so the portfolio's TRUE single-name exposure
 # (direct positions + positions held inside funds) can be aggregated.
 _MF = {"ts": 0.0, "map": {}}      # ticker -> {cik, seriesId, classId}
-_FUND_CACHE = {}                  # ticker -> (ts, result)
 
 
 def _ln(tag):
@@ -340,41 +342,38 @@ def fund_holdings(ticker, ttl=604800, top=600, name=None):
     """Underlying holdings of a fund/ETF from its latest SEC NPORT-P. Resolves the fund by ticker
     (SEC ticker map), or — if the ticker isn't mapped (some share classes aren't) — by NAME via
     EDGAR full-text search with match verification. Returns {resolved, as_of, count, total_pct,
-    holdings:[...]}. Cached ~7 days; resolved=False with a reason if it can't be built."""
+    holdings:[...], _cache_fetched_at, _cache_stale}. Cached ~7 days (disk-persisted via
+    store.cached_fetch, 2026-07-30 -- survives a restart); resolved=False with a reason if it
+    can't be built."""
     tkr = (ticker or "").upper().strip()
     if not tkr:
         return None
-    hit = _FUND_CACHE.get(tkr)
-    if hit and (time.time() - hit[0] < ttl):
-        return hit[1]
 
-    def _stash(res):
-        # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): a failed re-resolve
-        # must not evict a previously-resolved good result. Report the failure for THIS call, but
-        # leave the last-good cache entry in place so a later successful call isn't starting from
-        # zero. A ticker with no prior good result still caches its failure as before (unchanged).
-        if not res.get("resolved") and hit:
-            return res
-        _FUND_CACHE[tkr] = (time.time(), res)
-        return res
+    def _compute():
+        info = fund_series(tkr)
+        if info:
+            cik, series = info["cik"], info.get("seriesId")
+            doc = _latest_nport(cik, series)
+            if not doc:
+                return {"ticker": tkr, "resolved": False, "cik": cik, "series": series,
+                        "reason": "no NPORT-P filing found"}
+            return _parse_nport(doc[0], doc[1], tkr, top, series)
+        # ticker not in SEC map -> try resolving by fund name (verified)
+        if name:
+            doc = _nport_by_name(name)
+            if doc:
+                return _parse_nport(doc[0], doc[1], tkr, top)
+            return {"ticker": tkr, "resolved": False,
+                    "reason": "not in SEC ticker map; name search found no verified NPORT-P"}
+        return {"ticker": tkr, "resolved": False,
+                "reason": "not in SEC mutual-fund/ETF ticker map"}
 
-    info = fund_series(tkr)
-    if info:
-        cik, series = info["cik"], info.get("seriesId")
-        doc = _latest_nport(cik, series)
-        if not doc:
-            return _stash({"ticker": tkr, "resolved": False, "cik": cik, "series": series,
-                           "reason": "no NPORT-P filing found"})
-        return _stash(_parse_nport(doc[0], doc[1], tkr, top, series))
-    # ticker not in SEC map -> try resolving by fund name (verified)
-    if name:
-        doc = _nport_by_name(name)
-        if doc:
-            return _stash(_parse_nport(doc[0], doc[1], tkr, top))
-        return _stash({"ticker": tkr, "resolved": False,
-                       "reason": "not in SEC ticker map; name search found no verified NPORT-P"})
-    return _stash({"ticker": tkr, "resolved": False,
-                   "reason": "not in SEC mutual-fund/ETF ticker map"})
+    res, meta = store.cached_fetch("edgar_fund_holdings", tkr, ttl, _compute,
+                                   is_ok=lambda r: bool(r.get("resolved")))
+    res = dict(res)
+    res["_cache_fetched_at"] = meta.get("fetched_at")
+    res["_cache_stale"] = meta.get("stale", False)
+    return res
 
 
 # 8-K item codes -> human labels (a filed 8-K IS a material-event disclosure)
@@ -612,21 +611,17 @@ def _companyfacts(cik):
 
 
 def fundamentals(ticker, ttl=None):
-    """GAAP fundamentals + ratios for a ticker (cached), or {'available': False, 'reason': ...}."""
+    """GAAP fundamentals + ratios for a ticker (cached, disk-persisted via store.cached_fetch,
+    2026-07-30 -- survives a restart), or {'available': False, 'reason': ...}. Also carries
+    `_cache_fetched_at`/`_cache_stale` so a caller that renders this to the user can show when the
+    data was actually retrieved (RESUME-TRACKER "last-known-good cache" item, Part 2)."""
     key = (ticker or "").upper()
     ttl = EDGAR_TTL if ttl is None else ttl
-    now = time.time()
-    hit = _CACHE.get(key)
-    if hit and (now - hit[0] < ttl):
-        return hit[1]
-    res = _compute(key)
-    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): a fetch failure must
-    # never evict a previously-good cached result. Report the failure for THIS call only; leave
-    # the last-good entry in place so the very next call still serves it instead of starting from
-    # zero. A ticker with no prior good result still caches its failure as before (unchanged).
-    if res.get("available") is False and hit:
-        return res
-    _CACHE[key] = (now, res)
+    res, meta = store.cached_fetch("edgar_fundamentals", key, ttl, lambda: _compute(key),
+                                   is_ok=lambda r: r.get("available") is not False)
+    res = dict(res)
+    res["_cache_fetched_at"] = meta.get("fetched_at")
+    res["_cache_stale"] = meta.get("stale", False)
     return res
 
 

@@ -234,10 +234,104 @@ def init_db():
                 filename TEXT,
                 removed_at INTEGER NOT NULL
             )""")
+            # ---- external_cache (2026-07-30, "last-known-good cache" backlog item, Part 2) ----
+            # Generic disk-persisted cache for EVERY external data dependency (EDGAR, Finnhub,
+            # Tavily, ...), replacing the plain in-memory module-level dicts each one used to keep
+            # separately. Two things that couldn't be fixed with an in-memory dict alone:
+            # (1) survives a container restart/redeploy (common during active development, per
+            # RESUME-TRACKER's own log of rebuild cycles) -- previously "last known good" only
+            # lasted as long as the process did; (2) one shared success/failure discipline instead
+            # of six near-identical hand-rolled dicts each getting it slightly differently (Part 1,
+            # 2026-07-30 earlier this session, already fixed the worst instance of this
+            # inconsistency -- this table is the generalization that was deferred at the time).
+            # `source` is a short tag (e.g. "edgar_fundamentals", "tavily"), `key` is whatever that
+            # source uses to distinguish cache entries (a ticker, a search query) -- composite
+            # primary key so ON CONFLICT can upsert per (source, key) pair.
+            c.execute("""CREATE TABLE IF NOT EXISTS external_cache(
+                source TEXT NOT NULL,
+                key TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL,
+                value TEXT,
+                PRIMARY KEY(source, key)
+            )""")
         try:
             os.chmod(STORE_DB, 0o600)
         except Exception:
             pass
+
+
+# ---- external_cache: generic disk-persisted last-known-good cache, typed read/write API ----
+# 2026-07-30: `value` is ENCRYPTED (JSON-encoded then Fernet-encrypted) -- these are third-party
+# API responses (company financials, valuation multiples, news snippets), not secrets in the
+# credential sense, but still real financial-research detail worth protecting at rest, matching
+# this app's blanket "everything sensitive is encrypted" posture established 2026-07-24.
+def ext_cache_get(source, key):
+    """Returns (fetched_at, value) for the most recent successful fetch of this (source, key), or
+    None if nothing has ever been cached. Callers decide for themselves whether the age is
+    acceptable to serve as a fallback -- this function just returns what's on disk, no TTL logic
+    here (that stays in each caller, same as before -- this table is the FALLBACK tier, not a
+    replacement for each call site's own in-memory TTL check)."""
+    with _conn() as c:
+        row = c.execute("SELECT fetched_at, value FROM external_cache WHERE source=? AND key=?",
+                        (source, key)).fetchone()
+    if not row:
+        return None
+    try:
+        return row["fetched_at"], json.loads(_dec(row["value"]))
+    except Exception:
+        return None
+
+
+def ext_cache_set(source, key, value, fetched_at=None):
+    """Upserts the last-known-good value for (source, key). Only ever called on a SUCCESSFUL
+    fetch (callers are responsible for that -- this function has no concept of success/failure,
+    it just persists whatever it's given)."""
+    fetched_at = int(fetched_at) if fetched_at is not None else int(time.time())
+    with _conn() as c:
+        c.execute("""INSERT INTO external_cache(source,key,fetched_at,value) VALUES(?,?,?,?)
+                     ON CONFLICT(source,key) DO UPDATE SET fetched_at=excluded.fetched_at, value=excluded.value""",
+                  (source, key, fetched_at, _enc(json.dumps(value))))
+
+
+# ---- cached_fetch: the shared two-tier helper every external-data call site converts to ----
+# 2026-07-30. In-memory hot cache (fast, TTL-gated, cleared on restart) backed by external_cache
+# (disk, survives restart). This is the ONE reusable pattern the "last-known-good cache" backlog
+# item's Part 1 (earlier this session) explicitly deferred generalizing -- Part 1 hand-fixed
+# EDGAR/Finnhub's failure-overwrite bug per call site; this replaces those hand-fixes with one
+# shared implementation plus the disk-persistence Part 1 didn't attempt.
+_MEM_CACHE = {}   # (source, key) -> (fetched_at, value)
+
+
+def cached_fetch(source, key, ttl, compute_fn, is_ok=None):
+    """`compute_fn()` performs the fresh fetch (must not raise -- every current caller already
+    catches its own fetch exceptions internally and returns a shaped failure value instead, same
+    contract as before this helper existed). `is_ok(value)` decides success vs failure for caching
+    purposes (default: anything is a success -- for callers with no failure concept).
+
+    Returns (value, meta) where meta = {"fetched_at": epoch seconds or None, "stale": bool}.
+    `fetched_at` is None only when NOTHING has ever succeeded for this (source, key), anywhere
+    (this process's memory or disk) -- the caller is getting today's failure with nothing to fall
+    back to, same as before this helper existed."""
+    is_ok = is_ok or (lambda v: True)
+    now = time.time()
+    hit = _MEM_CACHE.get((source, key))
+    if hit and (now - hit[0] < ttl):
+        return hit[1], {"fetched_at": hit[0], "stale": False}
+    res = compute_fn()
+    if is_ok(res):
+        _MEM_CACHE[(source, key)] = (now, res)
+        ext_cache_set(source, key, res, now)
+        return res, {"fetched_at": now, "stale": False}
+    # failure/empty this call -- fall back to the last-known-good: memory first (cheaper, this
+    # process), then disk (survives a restart -- the whole point of Part 2).
+    if hit:
+        return hit[1], {"fetched_at": hit[0], "stale": True}
+    disk = ext_cache_get(source, key)
+    if disk:
+        fetched_at, val = disk
+        _MEM_CACHE[(source, key)] = (fetched_at, val)   # rehydrate memory so this process's later calls skip the disk hit
+        return val, {"fetched_at": fetched_at, "stale": True}
+    return res, {"fetched_at": None, "stale": True}
 
 
 # ============================================================================

@@ -5215,7 +5215,7 @@ def get_research(ticker: str):
         g = _grounded(t)
         val = _valuation(t) or {}
         fund = edgar.fundamentals(t)
-        news = _news(t, t)
+        news, news_meta = _news(t, t, with_meta=True)
         llm = _llm(t, t, None, None, g, news, fund, val)
         llm = _verify_and_apply(t, t, llm, g, news, fund, val, force=True)   # on-demand → always verify
         ins = inst = None
@@ -5227,8 +5227,18 @@ def get_research(ticker: str):
             inst = _inst_for(t)        # G15 forward-13F watched-holders slice (from cached build)
         except Exception:
             inst = None
-        result = {"ticker": t, "generated_at": int(time.time()), "grounded": g,
-                  "valuation": val, "fundamentals": fund, "llm": llm,
+        # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): the OLDEST successful fetch
+        # among the cached external inputs actually used for this brief -- fundamentals, insider
+        # signal, news -- so the frontend can show "Based on data retrieved <date>" and flag it if
+        # ANY component fell back to a stale/last-known-good value. Distinct from `generated_at`
+        # below, which is just when the LLM synthesis ran (always "now" -- it's never cached).
+        fetch_times = [m for m in (fund.get("_cache_fetched_at"), (ins or {}).get("_cache_fetched_at"),
+                                    news_meta.get("fetched_at")) if m is not None]
+        result = {"ticker": t, "generated_at": int(time.time()),
+                  "cache_fetched_at": min(fetch_times) if fetch_times else None,
+                  "cache_stale": bool(fund.get("_cache_stale")) or bool((ins or {}).get("_cache_stale"))
+                                 or bool(news_meta.get("stale")),
+                  "grounded": g, "valuation": val, "fundamentals": fund, "llm": llm,
                   "insider": ins, "institutional": inst}
         _save_research_result(t, result)   # persist so navigating away/reloading can recover it
         return result
@@ -5343,14 +5353,27 @@ def _grounded(sym):
             "target_low": pt.get("targetLow"), "period": latest.get("period")}
 
 
-def _news(sym, name):
-    try:
-        r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                          headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                          json={"query": f"{sym} {name} stock", "days": 7, "max_results": 5}, timeout=45)
-        return r.text[:2500] if r.status_code < 400 else ""
-    except Exception:
-        return ""
+def _news(sym, name, with_meta=False):
+    """Raw Tavily news blob (truncated) for the LLM's research-brief prompt context -- a SEPARATE
+    direct call from _tavily_results()/_company_news() (different endpoint usage: raw text, not
+    parsed articles). Disk-persisted last-known-good cache (2026-07-30) -- this path had NO
+    caching at all before, the same gap the "last-known-good cache" backlog item flagged for
+    _tavily_results(), just not separately named since this call site wasn't inventoried at the
+    time. `with_meta=True` also returns {"fetched_at", "stale"} for a caller (get_research) that
+    surfaces "data as of" to the user."""
+    query = f"{sym} {name} stock"
+
+    def _compute():
+        try:
+            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
+                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+                              json={"query": query, "days": 7, "max_results": 5}, timeout=45)
+            return r.text[:2500] if r.status_code < 400 else ""
+        except Exception:
+            return ""
+
+    text, meta = store.cached_fetch("tavily_news_raw", query, TAVILY_CACHE_TTL, _compute, is_ok=lambda r: bool(r))
+    return (text, meta) if with_meta else text
 
 
 def _valuation(sym):
@@ -5391,47 +5414,46 @@ def _price(sym):
     return c if c else None
 
 
-_VALCTX_CACHE = {}
-_INSIDER_CACHE = {}   # ticker -> (ts, signal dict)
 INSIDER_TTL = int(os.environ.get("INSIDER_TTL", "21600"))   # cache the insider signal ~6h
+# 2026-07-30: valuation-percentile/insider-signal caching moved onto store.cached_fetch() --
+# see _valuation_percentile()/_insider_signal() -- no more bare module-level dicts here.
 
 
 def _valuation_percentile(sym):
     """Sector-relative valuation (Part-4): where the ticker's forward P/E sits vs its Finnhub
     peer set — a CHEAPNESS percentile (0 = cheapest of the group, 100 = richest). A relative-value
     read that own-multiple-in-a-vacuum misses; a rich reading is a candidate EXIT trigger. Cached
-    ~1 day in-process. None if peers/valuation are unavailable (foreign, funds, no key)."""
-    now = time.time()
-    hit = _VALCTX_CACHE.get(sym)
-    if hit and now - hit[0] < 86400:
-        return hit[1]
-    res = None
-    try:
-        peers = [str(p).upper() for p in (_finnhub("stock/peers", sym) or []) if p][:8]
-        universe = list(dict.fromkeys([sym.upper()] + peers))
-        pes = {}
-        for p in universe:
-            v = _valuation(p) or {}
-            pe = v.get("pe_forward") or v.get("pe_ttm")
-            if pe and pe > 0:
-                pes[p] = pe
-        mine = pes.get(sym.upper())
-        if mine is not None and len(pes) >= 3:
-            vals = sorted(pes.values())
-            below = sum(1 for x in vals if x < mine)
-            pct = round(below / len(vals) * 100)
-            med = vals[len(vals) // 2]
-            verdict = "cheap vs peers" if pct <= 33 else ("rich vs peers" if pct >= 67 else "in line")
-            res = {"forward_pe": round(mine, 1), "peer_median_pe": round(med, 1),
-                   "peer_count": len(pes), "cheapness_percentile": pct, "verdict": verdict}
-    except Exception:
-        res = None
-    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed/
-    # empty re-check evict a previously-good cached percentile -- return this call's result as-is,
-    # but keep the last-good value cached for the next caller.
-    if res is None and hit and hit[1] is not None:
-        return res
-    _VALCTX_CACHE[sym] = (now, res)
+    ~1 day, disk-persisted via store.cached_fetch (2026-07-30 -- survives a restart). None if
+    peers/valuation are unavailable (foreign, funds, no key)."""
+    def _compute():
+        try:
+            peers = [str(p).upper() for p in (_finnhub("stock/peers", sym) or []) if p][:8]
+            universe = list(dict.fromkeys([sym.upper()] + peers))
+            pes = {}
+            for p in universe:
+                v = _valuation(p) or {}
+                pe = v.get("pe_forward") or v.get("pe_ttm")
+                if pe and pe > 0:
+                    pes[p] = pe
+            mine = pes.get(sym.upper())
+            if mine is not None and len(pes) >= 3:
+                vals = sorted(pes.values())
+                below = sum(1 for x in vals if x < mine)
+                pct = round(below / len(vals) * 100)
+                med = vals[len(vals) // 2]
+                verdict = "cheap vs peers" if pct <= 33 else ("rich vs peers" if pct >= 67 else "in line")
+                return {"forward_pe": round(mine, 1), "peer_median_pe": round(med, 1),
+                       "peer_count": len(pes), "cheapness_percentile": pct, "verdict": verdict}
+        except Exception:
+            pass
+        return None
+
+    res, meta = store.cached_fetch("valuation_percentile", sym, 86400, _compute,
+                                   is_ok=lambda r: r is not None)
+    if res is not None:
+        res = dict(res)
+        res["_cache_fetched_at"] = meta.get("fetched_at")
+        res["_cache_stale"] = meta.get("stale", False)
     return res
 
 
@@ -5447,35 +5469,33 @@ def get_valuation_context(ticker: str):
 
 def _insider_signal(sym):
     """G15: net OPEN-MARKET insider buy/sell signal for a ticker from its recent SEC Form 4 filings.
-    Context-only. Fetches the issuer's Form 4s (EDGAR), parses each, and aggregates. Cached ~6h
-    in-process (an EDGAR pull per ticker). None-ish {available:false} for foreign/funds/no filings."""
+    Context-only. Fetches the issuer's Form 4s (EDGAR), parses each, and aggregates. Cached ~6h,
+    disk-persisted via store.cached_fetch (2026-07-30 -- survives a restart). None-ish
+    {available:false} for foreign/funds/no filings."""
     t = (sym or "").upper().strip()
     if not t:
         return None
-    now = time.time()
-    hit = _INSIDER_CACHE.get(t)
-    if hit and now - hit[0] < INSIDER_TTL:
-        return hit[1]
     days = int(_knob("insider_lookback_days"))
-    res = None
-    try:
-        raw = edgar.recent_form4(t, days=days, limit=int(_knob("insider_max_filings")))
-        parsed = [insider.parse_form4(f.get("xml")) for f in raw]
-        parsed = [p for p in parsed if p]
-        if parsed:
-            res = insider.aggregate(parsed, t, days)
-            res["available"] = True
-        else:
-            res = {"ticker": t, "available": False,
-                   "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
-    except Exception as e:
-        res = {"ticker": t, "available": False, "reason": f"insider fetch error: {e}"}
-    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed
-    # re-check evict a previously-good cached signal -- return this call's failure as-is, but keep
-    # the last-good entry cached for the next caller.
-    if not res.get("available") and hit and (hit[1] or {}).get("available"):
-        return res
-    _INSIDER_CACHE[t] = (now, res)
+
+    def _compute():
+        try:
+            raw = edgar.recent_form4(t, days=days, limit=int(_knob("insider_max_filings")))
+            parsed = [insider.parse_form4(f.get("xml")) for f in raw]
+            parsed = [p for p in parsed if p]
+            if parsed:
+                r = insider.aggregate(parsed, t, days)
+                r["available"] = True
+                return r
+            return {"ticker": t, "available": False,
+                    "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
+        except Exception as e:
+            return {"ticker": t, "available": False, "reason": f"insider fetch error: {e}"}
+
+    res, meta = store.cached_fetch("insider_signal", t, INSIDER_TTL, _compute,
+                                   is_ok=lambda r: bool(r.get("available")))
+    res = dict(res)
+    res["_cache_fetched_at"] = meta.get("fetched_at")
+    res["_cache_stale"] = meta.get("stale", False)
     return res
 
 
@@ -5509,7 +5529,7 @@ INSTITUTIONAL_FILE = os.environ.get("INSTITUTIONAL_FILE", "/data/institutional.j
 INSTITUTIONAL_TTL = int(os.environ.get("INSTITUTIONAL_TTL", "259200"))   # 13F is quarterly → ~3-day cache
 INST_MGR_TTL = int(os.environ.get("INST_MGR_TTL", "604800"))             # per-manager filings ~7 days
 _inst_lock = threading.Lock()
-_MGR13F_CACHE = {}   # cik -> (ts, [filings])
+# 2026-07-30: per-manager 13F caching moved onto store.cached_fetch() -- see _manager_13f().
 
 
 def _read_managers():
@@ -5538,31 +5558,28 @@ def _holdings_for_inst():
 
 
 def _manager_13f(cik):
-    """Latest two 13F-HR information tables for a manager CIK (cached ~7d in-process)."""
-    now = time.time()
-    hit = _MGR13F_CACHE.get(cik)
-    if hit and now - hit[0] < INST_MGR_TTL:
-        return hit[1]
-    fils = edgar.recent_13f(cik, n=2)
-    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): recent_13f() swallows
-    # its own fetch errors and returns [] the same as a genuine "no filings" result -- don't let
-    # that evict a previously-good cached set. Return this call's (possibly empty) result as-is,
-    # but keep the last-good entry cached for the next caller.
-    if not fils and hit and hit[1]:
-        return fils
-    _MGR13F_CACHE[cik] = (now, fils)
-    return fils
+    """Latest two 13F-HR information tables for a manager CIK (cached ~7d, disk-persisted via
+    store.cached_fetch, 2026-07-30 -- survives a restart, unlike the plain in-process dict this
+    used before). Returns (filings_list, meta) -- meta = {"fetched_at", "stale"}, see
+    store.cached_fetch()."""
+    return store.cached_fetch("edgar_manager_13f", cik, INST_MGR_TTL,
+                              lambda: edgar.recent_13f(cik, n=2), is_ok=lambda r: bool(r))
 
 
 def _institutional():
     holdings = _holdings_for_inst()
     mgrs = _read_managers()
     views = []
+    oldest_fetch, any_stale = None, False
     for cik, label in mgrs.items():
         try:
-            fils = _manager_13f(cik)
+            fils, meta = _manager_13f(cik)
         except Exception:
-            fils = []
+            fils, meta = [], {"fetched_at": None, "stale": True}
+        fa = meta.get("fetched_at")
+        if fa is not None and (oldest_fetch is None or fa < oldest_fetch):
+            oldest_fetch = fa
+        any_stale = any_stale or bool(meta.get("stale"))
         if not fils:
             views.append({"manager": label, "cik": cik, "as_of": None, "matches": [],
                           "unavailable": True})
@@ -5576,6 +5593,12 @@ def _institutional():
         views.append(mv)
     by_holding = inst13f.aggregate_holdings(views, holdings)
     return {"status": "ready", "generated_at": int(time.time()),
+            # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): when this was actually
+            # fetched from EDGAR (oldest across the watched managers, so ANY stale manager flags
+            # the whole panel), as opposed to `generated_at` above, which is just when this
+            # response was assembled -- the frontend's "Based on data retrieved ..." label reads
+            # this pair, not generated_at.
+            "cache_fetched_at": oldest_fetch, "cache_stale": any_stale,
             "managers": [{"cik": c, "label": l} for c, l in mgrs.items()],
             "manager_views": views, "by_holding": by_holding,
             "note": "Forward 13F whale-tracking: of the managers you watch, who holds each of your "
@@ -6181,7 +6204,7 @@ def _sleeve(c):
         manual_intl = (_read_policy() or {}).get("intl_tickers") or {}
         if manual_intl.get(tkr):
             return "Intl Equity"
-        country = (_profile(tkr).get("country") or "").upper()
+        country = ((_profile(tkr)[0] or {}).get("country") or "").upper()
         if country and country != "US":
             return "Intl Equity"
     if typ in ("Stock", "Mutual Fund", "ETF"):
@@ -9698,31 +9721,27 @@ def run_fees_liquidity():
 EXP_FILE = os.environ.get("EXP_FILE", "/data/exposure.json")
 EXP_TTL = int(os.environ.get("EXP_TTL", "43200"))    # cache exposure ~12h
 _exp_lock = threading.Lock()
-_profile_cache = {}   # ticker -> (ts, profile dict)
+# 2026-07-30: company-profile caching moved onto store.cached_fetch() -- see _profile().
 
 
 def _profile(sym):
-    """Finnhub company profile (sector via finnhubIndustry). Cached in-process ~1 day."""
+    """Finnhub company profile (sector via finnhubIndustry). Cached ~1 day, disk-persisted via
+    store.cached_fetch (2026-07-30 -- survives a restart). Returns (profile_dict, meta) -- meta =
+    {"fetched_at", "stale"}, see store.cached_fetch(). `profile_dict` is {} (no keys to read) if
+    Finnhub isn't configured or nothing has ever been fetched successfully."""
     if not FINNHUB:
-        return {}
-    now = time.time()
-    hit = _profile_cache.get(sym)
-    if hit and now - hit[0] < 86400:
-        return hit[1]
-    try:
-        r = requests.get("https://finnhub.io/api/v1/stock/profile2",
-                         params={"symbol": sym, "token": FINNHUB}, timeout=15)
-        prof = r.json() if r.status_code < 400 else {}
-    except Exception:
-        prof = {}
-    prof = prof if isinstance(prof, dict) else {}
-    # RESUME-TRACKER (2026-07-29, Part 1 of "last-known-good cache" item): don't let a failed/
-    # empty re-fetch evict a previously-good cached profile -- return this call's (possibly empty)
-    # result as-is, but keep the last-good entry cached for the next caller.
-    if not prof and hit and hit[1]:
-        return prof
-    _profile_cache[sym] = (now, prof)
-    return _profile_cache[sym][1]
+        return {}, {"fetched_at": None, "stale": True}
+
+    def _compute():
+        try:
+            r = requests.get("https://finnhub.io/api/v1/stock/profile2",
+                             params={"symbol": sym, "token": FINNHUB}, timeout=15)
+            prof = r.json() if r.status_code < 400 else {}
+        except Exception:
+            prof = {}
+        return prof if isinstance(prof, dict) else {}
+
+    return store.cached_fetch("finnhub_profile", sym, 86400, _compute, is_ok=lambda r: bool(r))
 
 
 STRESS_SCENARIOS = [
@@ -9782,6 +9801,7 @@ def _exposure():
     cons = [c for c in d.get("consolidated", []) if c.get("ticker")]
     invested = round(sum(c.get("value") or 0 for c in cons), 2)
     by_sector, beta_num, beta_den, positions = {}, 0.0, 0.0, []
+    oldest_fetch, any_stale = None, False
     for c in cons:
         tkr, typ, val = c["ticker"], (c.get("type") or ""), (c.get("value") or 0)
         if typ == "Cash":
@@ -9789,8 +9809,13 @@ def _exposure():
         elif typ in ("Mutual Fund", "ETF"):
             sector, beta = "Funds (no look-through)", (_valuation(tkr) or {}).get("beta")
         else:
-            sector = ((_profile(tkr).get("finnhubIndustry") or "").strip() or "Other")
+            prof, pmeta = _profile(tkr)
+            sector = ((prof.get("finnhubIndustry") or "").strip() or "Other")
             beta = (_valuation(tkr) or {}).get("beta")
+            fa = pmeta.get("fetched_at")
+            if fa is not None and (oldest_fetch is None or fa < oldest_fetch):
+                oldest_fetch = fa
+            any_stale = any_stale or bool(pmeta.get("stale"))
         by_sector[sector] = round(by_sector.get(sector, 0) + val, 2)
         if beta is not None:
             beta_num += val * beta
@@ -9837,7 +9862,13 @@ def _exposure():
                "est_portfolio_pct": round(pbeta * s["market_pct"], 1) if pbeta is not None else None,
                "est_dollar_impact": round(invested * pbeta * s["market_pct"] / 100.0) if (pbeta is not None and invested) else None}
               for s in STRESS_SCENARIOS]
-    return {"generated_at": int(time.time()), "invested_value": invested,
+    return {"generated_at": int(time.time()),
+            # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): when the sector
+            # classification data underlying `by_sector` was actually fetched (oldest across every
+            # ticker profiled, so any one stale profile flags the whole panel) -- distinct from
+            # `generated_at` above, which is just when this response was assembled.
+            "cache_fetched_at": oldest_fetch, "cache_stale": any_stale,
+            "invested_value": invested,
             "portfolio_beta": pbeta,
             "portfolio_beta_coverage_pct": round(beta_den / invested * 100, 1) if invested else None,
             "portfolio_beta_cash_diluted": round(beta_num / invested, 2) if invested else None,
@@ -10133,39 +10164,56 @@ def _parse_tavily_text(text):
     return arts
 
 
-def _tavily_results(query, days=14, max_results=5):
-    """Tavily news search via mcpo -> list of article dicts. mcpo returns a TEXT blob (not JSON)."""
-    try:
-        r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                          headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                          json={"query": query, "days": days, "max_results": max_results}, timeout=45)
-        if r.status_code >= 400:
-            return []
-        try:
-            data = r.json()
-        except ValueError:
-            data = r.text
-    except Exception:
-        return []
-    if isinstance(data, str):
-        return _parse_tavily_text(data)
-    if isinstance(data, dict) and isinstance(data.get("results"), list):
-        return data["results"]
-    found = []                                  # fallback: first list of article-like dicts
+TAVILY_CACHE_TTL = int(os.environ.get("TAVILY_CACHE_TTL", "7200"))   # ~2h -- news moves fast, but
+# an outage should still serve the last successful pull for this exact query, not come up empty.
 
-    def walk(o):
-        if found:
-            return
-        if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("title", "url", "content")):
-            found.extend(o)
-        elif isinstance(o, dict):
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-    walk(data)
-    return found
+
+def _tavily_results(query, days=14, max_results=5, with_meta=False):
+    """Tavily news search via mcpo -> list of article dicts. mcpo returns a TEXT blob (not JSON).
+    Disk-persisted last-known-good cache (2026-07-30, RESUME-TRACKER "last-known-good cache" item
+    -- Tavily previously had NO caching/fallback at all: any error (rate-limit, quota, non-200,
+    timeout, exception) returned [] outright, meaning a Tavily outage lost access to PREVIOUSLY
+    successful results too, not just new ones). Cache key is the exact (query, days, max_results)
+    triple -- different phrasing/windows are deliberately different cache entries, not merged.
+    `with_meta=True` also returns the {"fetched_at", "stale"} dict (see store.cached_fetch) for a
+    caller that wants to surface "data as of" to the user; default False keeps the plain-list
+    contract every existing caller (web_search tool, _company_news, discovery) already expects."""
+    def _compute():
+        try:
+            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
+                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+                              json={"query": query, "days": days, "max_results": max_results}, timeout=45)
+            if r.status_code >= 400:
+                return []
+            try:
+                data = r.json()
+            except ValueError:
+                data = r.text
+        except Exception:
+            return []
+        if isinstance(data, str):
+            return _parse_tavily_text(data)
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            return data["results"]
+        found = []                                  # fallback: first list of article-like dicts
+
+        def walk(o):
+            if found:
+                return
+            if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("title", "url", "content")):
+                found.extend(o)
+            elif isinstance(o, dict):
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(data)
+        return found
+
+    key = f"{query}|{days}|{max_results}"
+    results, meta = store.cached_fetch("tavily", key, TAVILY_CACHE_TTL, _compute, is_ok=lambda r: bool(r))
+    return (results, meta) if with_meta else results
 
 
 def _company_news(sym, name, days=14, max_results=4):
@@ -10195,12 +10243,18 @@ def _holdings_alerts(d, limit):
     return alerts
 
 
-def _discover(d, crit):
-    """Tavily news + one LLM extraction -> candidate tickers, then screen them (excludes held names)."""
+def _discover(d, crit, _tavily_meta_acc=None):
+    """Tavily news + one LLM extraction -> candidate tickers, then screen them (excludes held
+    names). `_tavily_meta_acc`, if given a list, gets each query's cache {fetched_at, stale} dict
+    appended -- lets the caller (_do_discovery) surface an overall "data as of" for the panel
+    without changing this function's own return shape."""
     cfg = _read_scanner()
     snippets = []
     for q in (cfg.get("discovery_queries") or [])[:4]:
-        for a in _tavily_results(q, days=10, max_results=5):
+        arts, meta = _tavily_results(q, days=10, max_results=5, with_meta=True)
+        if _tavily_meta_acc is not None:
+            _tavily_meta_acc.append(meta)
+        for a in arts:
             ttl = (a.get("title") or "")
             if ttl:
                 snippets.append(f"- {ttl}. {(a.get('content') or a.get('snippet') or '')[:180]}")
@@ -10259,9 +10313,18 @@ def _do_discovery():
         _disc_state.update(status="running", started=int(time.time()))
         d = _data()
         cfg = _read_scanner()
+        tavily_meta = []
+        discovered = _discover(d, cfg.get("criteria") or {}, _tavily_meta_acc=tavily_meta)
+        fetch_times = [m["fetched_at"] for m in tavily_meta if m.get("fetched_at") is not None]
         out = {"generated_at": int(time.time()),
+               # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): when the underlying
+               # Tavily news pulls actually succeeded (oldest across this run's discovery queries,
+               # so any one stale/fallback query flags the whole panel) -- distinct from
+               # generated_at above, which is just when this discovery pass ran.
+               "cache_fetched_at": min(fetch_times) if fetch_times else None,
+               "cache_stale": any(m.get("stale") for m in tavily_meta),
                "alerts": _holdings_alerts(d, cfg.get("alert_holdings_limit") or 15),
-               "discovered": _discover(d, cfg.get("criteria") or {}),
+               "discovered": discovered,
                "note": "News-discovered ideas + material-news alerts on holdings. Read-only research, not advice."}
         store.write_json(DISCOVERY_FILE, out)
         _disc_state["status"] = "idle"

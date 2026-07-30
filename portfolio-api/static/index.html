@@ -2010,11 +2010,24 @@ function scannerContent(){
   return wrap;
 }
 
+// RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2) -- shared label for any panel that
+// renders cached external data (research briefs, sector exposure, discovery/news, ...). Jason's
+// spec: a simple "Based on data retrieved <date>" line at the top of the panel; color-flags it
+// (rather than adding more text) when the backend reports the panel fell back to a stale/last-
+// known-good value instead of a fresh fetch.
+function _cacheAgeLabel(fetchedAt, stale){
+  if(!fetchedAt) return '';
+  const dt=new Date(fetchedAt*1000).toLocaleString();
+  const color=stale?'var(--color-accent)':'var(--color-text-muted)';
+  return `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);color:${color};">`+
+    `Based on data retrieved ${dt}${stale?' — a source was unavailable; showing the last successful retrieval':''}</div>`;
+}
 function researchBrief(d){
   const wrap=el('div'); wrap.style.cssText='padding:6px 0;font-size:var(--font-size-md);line-height:1.5;';
   const m=d.llm||{}, g=d.grounded||{}, va=d.valuation||{};
   const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
-  let html=`<span style="color:var(--color-accent)">${d.ticker}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:''):'');
+  let html=_cacheAgeLabel(d.cache_fetched_at, d.cache_stale)+
+    `<span style="color:var(--color-accent)">${d.ticker}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:''):'');
   if(g.target_mean) html+=` <span class="muted">· analyst target $${(+g.target_mean).toFixed(2)}</span>`;
   const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));
   if(th) html+=`<div style="color:var(--color-text);margin-top:var(--space-1)">${th}</div>`;
@@ -2139,6 +2152,7 @@ function discoveredContent(){
     wrap.appendChild(el('div','muted','No newsfeed-discovered ideas yet — run discovery (or the daily job) to populate this.')); return wrap; }
   const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='discovered from the newsfeed · research ideas, not advice'; wrap.appendChild(sub);
+  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale); wrap.appendChild(cl);
   DISCO.discovered.forEach(i=>{
     const m=i.llm||{}, g=i.grounded||{};
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
@@ -2167,6 +2181,7 @@ function alertsContent(){
   if(typeof DISCO==='undefined' || !DISCO || !DISCO.alerts || !DISCO.alerts.length){
     wrap.appendChild(el('div','muted','No holdings news alerts right now.')); return wrap; }
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='material news / SEC 8-K on your largest positions'; wrap.appendChild(sub);
+  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale); wrap.appendChild(cl);
   DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid var(--color-border);'; let html=`<span style="color:var(--color-accent)">${a.ticker}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
   return wrap;
 }
@@ -5469,6 +5484,7 @@ function exposureContent(){
   // ---- TRUE EXPOSURE: sector allocation + portfolio beta + concentration ----
   const ex=EXP;
   if(ex && !ex.error){
+    const cl=el('div'); cl.innerHTML=_cacheAgeLabel(ex.cache_fetched_at, ex.cache_stale); wrap.appendChild(cl);
     const eh=el('div','ph','TRUE EXPOSURE · SECTOR / BETA / CONCENTRATION'); eh.style.marginTop='18px'; wrap.appendChild(eh);
     const c=ex.concentration||{};
     // headline metrics row
