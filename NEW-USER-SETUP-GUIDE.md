@@ -65,6 +65,7 @@ Same household-register file as Insurance, different panel.
 | Deposit yield (checking/savings APY) | Idle-cash drag $/yr | |
 | Per-debt APR (inline on each avalanche row) | Debt-payoff ranking | Only debts missing a rate show as `set-rate` |
 | Mortgage? checkbox (per debt row) | Correctly excludes the real mortgage from the avalanche table | Only needed if the account name doesn't obviously say "mortgage" (e.g. a Rocket-branded loan) |
+| Manually-entered liabilities (HOLDINGS tab → LIABILITIES, new 2026-07-30) | Any loan/credit card, for CSV/SnapTrade users (or a Monarch household tracking a debt Monarch itself doesn't sync) | Rate/min-payment can be set right on the liability row or here — same saved value either way |
 
 ## Tier 2 — benefits (PLAN → BENEFITS)
 
@@ -89,6 +90,7 @@ Same household-register file again.
 | API keys (Finnhub, Tavily) | SETTINGS → SECRETS (2026-07-24 — was `.env`-only) | Research briefs, news alerts, opportunity scanning | `.env` still works as a fallback/seed value, but the UI is the preferred path now — see the in-app WIKI → "Secrets encryption & the secrets.key backup" entry. |
 | AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |
 | No brokerage account? Portfolio data source (CSV) | HOLDINGS tab + SETTINGS → ADVANCED KNOBS | A full portfolio with no Monarch/SnapTrade account needed at all | See "No-brokerage-account holdings (CSV)" below — new 2026-07-24, this used to require hand-placing a file on the host. |
+| Manual liabilities (loans, credit cards) | HOLDINGS tab → LIABILITIES (below the positions table) | Debt shows up in net worth and PLAN → CASH·DEBT even with no Monarch/SnapTrade sync | New 2026-07-30 — see "No-brokerage-account holdings (CSV)" below; previously `csv`/`snaptrade` accounts could never represent debt at all. |
 | Notifications (push and/or email) | SETTINGS → NOTIFICATIONS (+ SETTINGS → SECRETS & KEYS for email) | Security alerts and portfolio-outage warnings pushed/emailed to you, instead of only showing up in the audit log | New 2026-07-26 — see "Notifications" below. |
 
 ---
@@ -129,7 +131,7 @@ entry.
 
 ---
 
-## No-brokerage-account holdings (CSV) — the HOLDINGS tab
+## No-brokerage-account holdings (CSV) — the HOLDINGS tab, plus manual liabilities
 
 Don't use Monarch Money and don't have a SnapTrade-supported brokerage? You don't need either.
 The **HOLDINGS** tab (top-level, always visible) is a full portfolio data source with zero
@@ -157,7 +159,34 @@ now.
 
 This is also the fastest way back onto a working dashboard if Monarch/mcpo is ever down —
 switch to CSV temporarily instead of staring at a portfolio-load error. Full detail in the in-app
-**WIKI → Getting started → "No brokerage account? The HOLDINGS tab (CSV positions)"** entry.
+**WIKI → Getting started → "No brokerage account? The HOLDINGS tab (CSV positions + manual
+liabilities)"** entry.
+
+### Manual liabilities (loans, credit cards) — new 2026-07-30
+
+**Before this,** `csv` and `snaptrade` accounts were always treated as pure assets — there was no
+way to represent a loan or credit card at all, so net worth for anyone on those two providers was
+assets-only, and PLAN → CASH·DEBT had nothing to show. This is now fixed with a small, separate
+**LIABILITIES** table directly below the HOLDINGS positions table (same tab, same page — nothing
+new to navigate to):
+
+- **Not part of the CSV/positions table above** — that table requires a ticker and a positive
+  share quantity, which a liability has neither of. Liabilities get their own table instead, with
+  fields that actually fit a debt: name (required, must be unique), institution, type (Credit
+  Card/Auto Loan/Student Loan/Personal Loan/HELOC/Mortgage/Other Loan), and balance owed (required,
+  a positive number).
+- **Rate % and minimum payment are optional, right on the same row** — and they write into the
+  exact same saved fields SETTINGS → PLAN CASH·DEBT already edits for any debt by name. Fill them
+  in on either screen; there's no second copy to keep in sync.
+- **Marking a row "Mortgage"** automatically excludes it from the debt avalanche and routes it into
+  mortgage payoff-vs-invest instead — the same effect as the "Mortgage?" checkbox on a
+  Monarch-synced account.
+- **Works no matter which provider is active** — `csv`, `snaptrade`, and even `monarch` (for a
+  debt Monarch itself never syncs, like a private family loan). A saved liability counts against
+  net worth and shows up in PLAN → CASH·DEBT and the CONTINUITY binder's liabilities list
+  immediately, exactly like a synced account.
+- There's no CSV-upload or hand-edited file equivalent for this table (unlike the positions editor
+  above) — it's in-app only, backed by `GET`/`POST /api/manual-liabilities`.
 
 ---
 

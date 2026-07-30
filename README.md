@@ -108,8 +108,9 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
 
 - **`csv`** *(most portable — no brokerage account required)*: maintain a simple
   `holdings.csv` (see **`holdings.csv.example`**: ticker, quantity, cost_basis, account,
-  institution, type). Export from your broker or fill it by hand. Put "IRA/Roth/401k" in
-  the account name so the tax audit classifies it. Path via `HOLDINGS_CSV`
+  institution, type) — or just use the in-app **HOLDINGS** tab, which edits the same file
+  through an editable table/CSV-upload with no host file access needed. Put "IRA/Roth/401k"
+  in the account name so the tax audit classifies it. Path via `HOLDINGS_CSV`
   (default `/data/holdings.csv`); prices are fetched live from Finnhub.
 - **`snaptrade`** *(live, many brokerages incl. Robinhood)*: one connection aggregates
   holdings across brokerages via [SnapTrade](https://snaptrade.com/) (free dev tier). Set
@@ -120,6 +121,16 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
 
 > All three plug into the same `build()` interface, so you can switch providers with one
 > env var without touching anything else.
+
+**Liabilities (loans, credit cards, etc.) — 2026-07-30:** `csv`/`snaptrade` never had a way
+to represent debt (every account was hardcoded as an asset, so net worth for those two
+providers was assets-only). A separate **LIABILITIES** table, right below the HOLDINGS
+editor, fixes this for any provider — including `monarch`, for a debt Monarch itself
+doesn't sync. Enter name/institution/type/balance owed (rate % and minimum payment are
+optional and write straight into the same debt config PLAN → CASH·DEBT already uses), and
+it counts against net worth and feeds the debt-payoff desk exactly like a synced account.
+Backed by `GET`/`POST /api/manual-liabilities` — see the in-app WIKI → Getting started →
+"No brokerage account? The HOLDINGS tab" entry for full field-by-field detail.
 
 ---
 
