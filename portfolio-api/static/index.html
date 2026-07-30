@@ -6293,16 +6293,148 @@ function scenarioCreateToggle(){
   }
   const p=document.getElementById('scenario-createpanel'); if(p) p.style.display=(p.style.display==='none'?'block':'none');
 }
+// ---------------------------------------------------------------------------
+// Strategist GOALS (2026-07-30) — full structured goal parameters per AI scenario, beyond the
+// risk-mandate preset. Shared field-builder used by BOTH the create panel and the per-card edit
+// panel (same prefix-based id scheme so multiple instances never collide), matching the app's
+// existing convention of inline styles driven by var(--...) tokens rather than hardcoded colors —
+// this feature needs to look right in every theme variant (dark amber, ocean, high-contrast,
+// sepia), not just the one it was designed against.
+// ---------------------------------------------------------------------------
+const GOAL_RISK_DEFAULTS={conservative:{cash_buffer_pct:10,max_position_pct:10,turnover_tolerance:'low'},
+  moderate:{cash_buffer_pct:5,max_position_pct:15,turnover_tolerance:'medium'},
+  aggressive:{cash_buffer_pct:2,max_position_pct:25,turnover_tolerance:'high'}};
+function _goalDefaultsFor(rp){
+  return Object.assign({time_horizon_years:10,target_return_mode:'benchmark',target_return_pct:null,
+    favor_sectors:[],avoid_sectors:[]}, GOAL_RISK_DEFAULTS[rp]||GOAL_RISK_DEFAULTS.moderate);
+}
+function _goalMeta(){
+  const sc=SCENARIOS||{};
+  return {sectors:sc.goal_sectors||['Technology','Healthcare','Financials','Energy','Industrials',
+      'Consumer Discretionary','Consumer Staples','Utilities','Real Estate','Materials','Communication Services'],
+    turnover:sc.turnover_levels||['low','medium','high'],
+    bounds:sc.goal_bounds||{time_horizon_years:[1,40],cash_buffer_pct:[0,50],max_position_pct:[2,60],target_return_pct:[-50,100]}};
+}
+function _goalSummaryText(g){
+  const bench=(g.target_return_mode==='absolute'&&g.target_return_pct!=null)
+    ?`an absolute ~${g.target_return_pct}%/yr return`:'beating the S&P 500';
+  let s=`${g.time_horizon_years}-year horizon, aiming for ${bench}, ~${g.cash_buffer_pct}% cash buffer, `+
+    `positions capped at ${g.max_position_pct}%, ${g.turnover_tolerance} turnover.`;
+  if((g.favor_sectors||[]).length) s+=' Favors '+g.favor_sectors.join(', ')+'.';
+  if((g.avoid_sectors||[]).length) s+=' Avoids '+g.avoid_sectors.join(', ')+'.';
+  return s;
+}
+function _goalFieldsHtml(prefix, goal){
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const m=_goalMeta(), g=goal||_goalDefaultsFor('moderate');
+  const bd=m.bounds;
+  const turnOpts=m.turnover.map(t=>`<option value="${t}"${g.turnover_tolerance===t?' selected':''}>${t.charAt(0).toUpperCase()+t.slice(1)}${t==='low'?' (buy & hold)':t==='high'?' (active)':''}</option>`).join('');
+  const isAbs=g.target_return_mode==='absolute';
+  const sectorRow=(label,cls,active)=>{
+    const chips=m.sectors.map(s=>{
+      const on=(active||[]).includes(s);
+      const bg=on?(cls==='fav'?'var(--color-positive)':'var(--color-negative)'):'transparent';
+      const fg=on?'var(--color-panel)':'var(--color-text-muted)';
+      const bd2=on?(cls==='fav'?'var(--color-positive)':'var(--color-negative)'):'var(--color-border-strong)';
+      return `<span class="goal-chip ${prefix}-chip-${cls}" data-sec="${esc(s)}" data-on="${on?1:0}" `+
+        `style="cursor:pointer;font-size:var(--font-size-sm);padding:2px var(--space-2);border-radius:10px;`+
+        `border:1px solid ${bd2};background:${bg};color:${fg};margin:2px;display:inline-block;">${esc(s)}</span>`;
+    }).join('');
+    return `<div style="margin-bottom:4px;"><span class="muted" style="font-size:var(--font-size-sm);margin-right:6px;">${label}</span>${chips}</div>`;
+  };
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3) var(--space-4);margin-bottom:var(--space-3);">`+
+    `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
+    `<span>TIME HORIZON</span><span id="${prefix}-out-horizon">${g.time_horizon_years} yr</span></label>`+
+    `<input id="${prefix}-horizon" type="range" min="${bd.time_horizon_years[0]}" max="${bd.time_horizon_years[1]}" step="1" value="${g.time_horizon_years}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
+    `<span>CASH BUFFER TARGET</span><span id="${prefix}-out-cash">${g.cash_buffer_pct}%</span></label>`+
+    `<input id="${prefix}-cash" type="range" min="${bd.cash_buffer_pct[0]}" max="${bd.cash_buffer_pct[1]}" step="1" value="${g.cash_buffer_pct}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
+    `<span>MAX POSITION SIZE</span><span id="${prefix}-out-maxpos">${g.max_position_pct}%</span></label>`+
+    `<input id="${prefix}-maxpos" type="range" min="${bd.max_position_pct[0]}" max="${bd.max_position_pct[1]}" step="1" value="${g.max_position_pct}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<div><label style="display:block;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">TURNOVER TOLERANCE</label>`+
+    `<select id="${prefix}-turnover" onchange="_goalLiveUpdate('${prefix}')" style="width:100%;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${turnOpts}</select></div>`+
+    `</div>`+
+    `<div style="margin-bottom:var(--space-3);">`+
+    `<label style="display:block;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">TARGET RETURN / BENCHMARK</label>`+
+    `<select id="${prefix}-benchmode" onchange="_goalLiveUpdate('${prefix}')" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<option value="benchmark"${!isAbs?' selected':''}>Beat S&amp;P 500</option>`+
+    `<option value="absolute"${isAbs?' selected':''}>Target absolute annual %</option></select> `+
+    `<input id="${prefix}-benchval" type="number" value="${g.target_return_pct!=null?g.target_return_pct:12}" oninput="_goalLiveUpdate('${prefix}')" `+
+    `style="width:60px;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);display:${isAbs?'inline-block':'none'};"/> `+
+    `<span id="${prefix}-benchsuffix" class="muted" style="font-size:var(--font-size-sm);display:${isAbs?'inline':'none'};">%/yr</span></div>`+
+    `<div style="margin-bottom:var(--space-3);">`+
+    `<label style="display:block;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:4px;">SECTOR TILT (optional)</label>`+
+    sectorRow('FAVOR','fav',g.favor_sectors)+sectorRow('AVOID','avoid',g.avoid_sectors)+
+    `</div>`+
+    `<div style="border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);background:var(--color-panel-alt);">`+
+    `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:3px;">WHAT THIS SCENARIO IS TRYING TO DO</div>`+
+    `<div id="${prefix}-summary" style="font-size:var(--font-size-base);line-height:1.5;">${esc(_goalSummaryText(g))}</div></div>`;
+}
+function _goalReadForm(prefix){
+  const num=id=>{ const v=document.getElementById(id); return v?parseFloat(v.value):null; };
+  const val=id=>{ const v=document.getElementById(id); return v?v.value:null; };
+  const chipSectors=cls=>[...document.querySelectorAll(`.${prefix}-chip-${cls}`)].filter(c=>c.dataset.on==='1').map(c=>c.dataset.sec);
+  const benchmode=val(`${prefix}-benchmode`)||'benchmark';
+  return {time_horizon_years:num(`${prefix}-horizon`), cash_buffer_pct:num(`${prefix}-cash`),
+    max_position_pct:num(`${prefix}-maxpos`), turnover_tolerance:val(`${prefix}-turnover`)||'medium',
+    target_return_mode:benchmode, target_return_pct:benchmode==='absolute'?num(`${prefix}-benchval`):null,
+    favor_sectors:chipSectors('fav'), avoid_sectors:chipSectors('avoid')};
+}
+function _goalLiveUpdate(prefix){
+  const oh=document.getElementById(`${prefix}-out-horizon`), oc=document.getElementById(`${prefix}-out-cash`),
+        om=document.getElementById(`${prefix}-out-maxpos`);
+  const horizon=document.getElementById(`${prefix}-horizon`), cash=document.getElementById(`${prefix}-cash`),
+        maxpos=document.getElementById(`${prefix}-maxpos`);
+  if(oh&&horizon) oh.textContent=horizon.value+' yr';
+  if(oc&&cash) oc.textContent=cash.value+'%';
+  if(om&&maxpos) om.textContent=maxpos.value+'%';
+  const isAbs=(document.getElementById(`${prefix}-benchmode`)||{}).value==='absolute';
+  const bv=document.getElementById(`${prefix}-benchval`), bs=document.getElementById(`${prefix}-benchsuffix`);
+  if(bv) bv.style.display=isAbs?'inline-block':'none';
+  if(bs) bs.style.display=isAbs?'inline':'none';
+  const sum=document.getElementById(`${prefix}-summary`);
+  if(sum) sum.textContent=_goalSummaryText(_goalReadForm(prefix));
+}
+function _goalWireChips(prefix){
+  document.querySelectorAll(`.${prefix}-chip-fav, .${prefix}-chip-avoid`).forEach(c=>{
+    c.onclick=()=>{
+      const on=c.dataset.on==='1'; c.dataset.on=on?'0':'1';
+      const isFav=c.classList.contains(`${prefix}-chip-fav`);
+      c.style.background=!on?(isFav?'var(--color-positive)':'var(--color-negative)'):'transparent';
+      c.style.color=!on?'var(--color-panel)':'var(--color-text-muted)';
+      c.style.borderColor=!on?(isFav?'var(--color-positive)':'var(--color-negative)'):'var(--color-border-strong)';
+      // a sector can't be both favored and avoided -- turn off the opposite chip if it was on
+      const oppCls=isFav?`${prefix}-chip-avoid`:`${prefix}-chip-fav`;
+      if(!on){
+        const opp=document.querySelector(`.${oppCls}[data-sec="${CSS.escape(c.dataset.sec)}"]`);
+        if(opp && opp.dataset.on==='1'){ opp.dataset.on='0'; opp.style.background='transparent'; opp.style.color='var(--color-text-muted)'; opp.style.borderColor='var(--color-border-strong)'; }
+      }
+      _goalLiveUpdate(prefix);
+    };
+  });
+}
 function scenarioCreateModeToggle(){
   const seed=document.getElementById('sc-mode').value==='seed';
   const sf=document.getElementById('sc-scratch-fields'); if(sf) sf.style.display=seed?'none':'block';
   const ef=document.getElementById('sc-seed-fields'); if(ef) ef.style.display=seed?'block':'none';
 }
+function scenarioCreateRiskChanged(){
+  const rp=document.getElementById('sc-risk').value;
+  const d=_goalDefaultsFor(rp);
+  const horizon=document.getElementById('sc-horizon');
+  if(horizon){
+    document.getElementById('sc-cash').value=d.cash_buffer_pct;
+    document.getElementById('sc-maxpos').value=d.max_position_pct;
+    document.getElementById('sc-turnover').value=d.turnover_tolerance;
+    _goalLiveUpdate('sc');
+  }
+}
 function scenarioCreateSubmit(){
   const name=(document.getElementById('sc-name').value||'').trim();
   if(!name){ alert('Enter a name for the scenario.'); return; }
   const rp=document.getElementById('sc-risk').value;
-  const body={kind:'ai', name:name, risk_profile:rp};
+  const body={kind:'ai', name:name, risk_profile:rp, goal:_goalReadForm('sc')};
   if(document.getElementById('sc-mode').value==='seed'){
     const tickers=[...document.querySelectorAll('.sc-seedck')].filter(x=>x.checked).map(x=>x.getAttribute('data-ticker'));
     if(!tickers.length){ alert('Select at least one holding to seed, or switch to "start from scratch".'); return; }
@@ -6325,7 +6457,7 @@ function scenarioCreatePanel(){
   wrap.innerHTML=
     `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">NEW AI SCENARIO</div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Name <input id="sc-name" type="text" placeholder="e.g. Aggro Growth" style="width:180px;"/> `+
-    `&nbsp; Risk mandate <select id="sc-risk" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${rpOpts}</select></div>`+
+    `&nbsp; Risk mandate <select id="sc-risk" onchange="scenarioCreateRiskChanged()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${rpOpts}</select></div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Start `+
     `<select id="sc-mode" onchange="scenarioCreateModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
     `<option value="scratch">from scratch (cash only)</option><option value="seed">seeded from my real holdings</option></select></div>`+
@@ -6335,7 +6467,10 @@ function scenarioCreatePanel(){
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('sc-seedck')}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
     `</div>`+
+    `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">GOAL PARAMETERS</div>`+
+    _goalFieldsHtml('sc', _goalDefaultsFor('moderate'))+
     `<div><button class="mut-btn" onclick="scenarioCreateSubmit()">✓ CREATE</button> <button onclick="scenarioCreateToggle()">cancel</button></div>`;
+  setTimeout(()=>{ _goalWireChips('sc'); _goalLiveUpdate('sc'); }, 0);
   return wrap;
 }
 function scenarioSetRiskProfile(sid, rp){
@@ -6344,6 +6479,19 @@ function scenarioSetRiskProfile(sid, rp){
   if(SCENARIOS && SCENARIOS.scenarios){ const s=SCENARIOS.scenarios.find(x=>x.id===sid); if(s){ s.risk_profile=rp; if(TAB==='strategist') render(); } }
   fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/risk_profile',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({risk_profile:rp})})
+    .then(r=>r.json()).then(d=>{ if(d&&d.error) alert('Update failed: '+d.error); _scenariosRefresh(); })
+    .catch(e=>alert('Update failed: '+e));
+}
+function scenarioSaveGoal(sid){
+  const goal=_goalReadForm('goaledit-'+sid);
+  // optimistic — same pattern as scenarioSetRiskProfile above: mutate the local copy + render now,
+  // reconcile from the server after.
+  if(SCENARIOS && SCENARIOS.scenarios){
+    const s=SCENARIOS.scenarios.find(x=>x.id===sid);
+    if(s){ s.goal=goal; s.goal_summary=_goalSummaryText(goal); if(TAB==='strategist') render(); }
+  }
+  fetch('/api/paper/scenarios/'+encodeURIComponent(sid)+'/goal',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(goal)})
     .then(r=>r.json()).then(d=>{ if(d&&d.error) alert('Update failed: '+d.error); _scenariosRefresh(); })
     .catch(e=>alert('Update failed: '+e));
 }
@@ -6387,6 +6535,7 @@ function scenarioSwitcher(){
   wrap.appendChild(scenarioCreatePanel());
   const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);';
   const rps=sc.risk_profiles||['conservative','moderate','aggressive'];
+  const goalEditPrefixes=[];
   aiScens.forEach(s=>{
     const active=s.id===CURRENT_SCENARIO_ID;
     const archived=s.status==='archived';
@@ -6406,7 +6555,16 @@ function scenarioSwitcher(){
     rpSel.className='mut-btn'; rpSel.onchange=()=>scenarioSetRiskProfile(s.id, rpSel.value);
     rpRow.appendChild(rpSel);
     card.appendChild(rpRow);
+    // GOAL (2026-07-30) — plain-language summary of the structured goal parameters, the direct
+    // answer to "what is this scenario trying to do" (previously nothing in the UI said this at
+    // all beyond the risk-mandate label above).
+    const goalSum=el('div','muted'); goalSum.style.cssText='margin-top:4px;font-size:var(--font-size-sm);line-height:1.4;max-width:280px;';
+    goalSum.textContent=s.goal_summary||''; card.appendChild(goalSum);
     const acts=el('div'); acts.style.cssText='margin-top:4px;display:flex;gap:8px;font-size:var(--font-size-sm);';
+    const goalPrefix='goaledit-'+s.id;
+    const editGoal=el('span','mut-btn','✎ goal'); editGoal.style.cssText='cursor:pointer;color:var(--color-accent);';
+    editGoal.onclick=()=>{ const gp=document.getElementById(goalPrefix); if(gp) gp.style.display=(gp.style.display==='none'?'block':'none'); };
+    acts.appendChild(editGoal);
     if(archived){
       const a1=el('span','mut-btn','reactivate'); a1.style.cssText='cursor:pointer;color:var(--color-accent);'; a1.onclick=()=>scenarioActivate(s.id,s.name); acts.appendChild(a1);
     } else {
@@ -6414,9 +6572,17 @@ function scenarioSwitcher(){
     }
     if(aiScens.length>1){ const a2=el('span','mut-btn','delete'); a2.style.cssText='cursor:pointer;color:var(--color-negative);'; a2.onclick=()=>scenarioDelete(s.id,s.name); acts.appendChild(a2); }
     card.appendChild(acts);
+    const goalPanel=el('div'); goalPanel.id=goalPrefix;
+    goalPanel.style.cssText='display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-strong);min-width:280px;max-width:360px;';
+    goalPanel.innerHTML=_goalFieldsHtml(goalPrefix, s.goal)+
+      `<div><button class="mut-btn" onclick="scenarioSaveGoal('${s.id}')">✓ SAVE GOAL</button> `+
+      `<button onclick="document.getElementById('${goalPrefix}').style.display='none';">cancel</button></div>`;
+    card.appendChild(goalPanel);
+    goalEditPrefixes.push(goalPrefix);
     row.appendChild(card);
   });
   wrap.appendChild(row);
+  setTimeout(()=>{ goalEditPrefixes.forEach(p=>{ _goalWireChips(p); }); }, 0);
   const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);line-height:1.4;'; note.textContent=sc.note||''; wrap.appendChild(note);
   return wrap;
 }

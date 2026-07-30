@@ -132,6 +132,18 @@ def _conn():
     return c
 
 
+def _ensure_column(c, table, col, decl):
+    """Idempotent ALTER TABLE ADD COLUMN -- SQLite has no 'ADD COLUMN IF NOT EXISTS', so check
+    PRAGMA table_info first. Safe to call every boot: no-ops once the column exists. Used for
+    additive schema changes to tables that pre-date this helper (2026-07-30, Strategist GOALS)
+    rather than reproducing the CREATE TABLE IF NOT EXISTS pattern, which only helps brand-new
+    installs -- an existing table's shape is frozen the first time CREATE TABLE IF NOT EXISTS runs
+    against it, so a new column needs an explicit ALTER on every pre-existing database."""
+    cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+    if col not in cols:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def init_db():
     with _lock:
         with _conn() as c:
@@ -189,6 +201,11 @@ def init_db():
                 summary TEXT
             )""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_paper_reports_scenario_ts ON paper_reports(scenario_id, ts)")
+            # 2026-07-30 (Strategist GOALS) -- snapshot of the goal parameters ACTUALLY active when
+            # this report was written, so a report stays interpretable after the scenario's goal is
+            # later edited. Encrypted (same sensitivity class as summary/total_value above).
+            _ensure_column(c, "paper_reports", "goal_snapshot", "TEXT")
+            _ensure_column(c, "strategist_runs", "goal_snapshot", "TEXT")
             # ---- Knowledge/RAG DB-backed storage (2026-07-24h) ----
             c.execute("""CREATE TABLE IF NOT EXISTS knowledge_docs(
                 hash TEXT PRIMARY KEY,
@@ -377,17 +394,21 @@ def value_history_set_funded_ratio(date, funded_ratio):
 def strategist_run_log(rec):
     """Appends one telemetry record. No cap in storage (Stage B removes the old
     STRAT_RUN_LOG_MAX-based trim entirely) -- `limit` at read time is now a pure display/API
-    cap, never a data-loss one."""
+    cap, never a data-loss one. `goal_snapshot` (2026-07-30, Strategist GOALS): the goal-parameter
+    dict active for this run, JSON-encoded then encrypted -- same rationale as paper_reports'
+    column of the same name."""
+    gs = rec.get("goal_snapshot")
     with _conn() as c:
         c.execute("""INSERT INTO strategist_runs(ts,scenario_id,scenario_name,risk_profile,max_iter,
                         iterations,tool_calls_json,repeat_calls,trades,search_calls,search_budget,
-                        nudged,converged,ended,error,duration_s)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        nudged,converged,ended,error,duration_s,goal_snapshot)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (rec.get("ts"), rec.get("scenario_id"), _enc(rec.get("scenario_name")), rec.get("risk_profile"),
                    rec.get("max_iter"), rec.get("iterations"), _enc(json.dumps(rec.get("tool_calls") or {})),
                    rec.get("repeat_calls"), rec.get("trades"), rec.get("search_calls"), rec.get("search_budget"),
                    int(bool(rec.get("nudged"))), int(bool(rec.get("converged"))), rec.get("ended"),
-                   _enc(rec.get("error")), rec.get("duration_s")))
+                   _enc(rec.get("error")), rec.get("duration_s"),
+                   _enc(json.dumps(gs)) if gs is not None else None))
 
 
 def strategist_runs_read(limit=None):
@@ -406,6 +427,11 @@ def strategist_runs_read(limit=None):
         r["tool_calls"] = json.loads(_dec(r.pop("tool_calls_json")) or "{}")
         r["nudged"] = bool(r["nudged"])
         r["converged"] = bool(r["converged"])
+        gs_raw = r.get("goal_snapshot")
+        try:
+            r["goal_snapshot"] = json.loads(_dec(gs_raw)) if gs_raw is not None else None
+        except Exception:
+            r["goal_snapshot"] = None
     return rows
 
 
@@ -450,26 +476,42 @@ def paper_tx_recent(scenario_id, limit=40):
 
 # 2026-07-24: total_value/return_pct/summary are ENCRYPTED (real dollar figures + LLM-written
 # commentary that can reference actual holdings/reasoning).
-def paper_report_append(scenario_id, ts, total_value, return_pct, summary):
+def paper_report_append(scenario_id, ts, total_value, return_pct, summary, goal_snapshot=None):
+    """`goal_snapshot` (2026-07-30, Strategist GOALS): the scenario's goal-parameter dict at the
+    moment this report was logged, JSON-encoded then encrypted -- lets a report stay interpretable
+    even if the scenario's goal is edited later. None for reports logged before this existed, or
+    for a caller that doesn't pass one (kept optional so existing call sites need no change)."""
     with _conn() as c:
-        c.execute("INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary) VALUES(?,?,?,?,?)",
-                  (scenario_id, ts, _enc(total_value), _enc(return_pct), _enc(summary)))
+        c.execute("INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary,goal_snapshot) "
+                  "VALUES(?,?,?,?,?,?)",
+                  (scenario_id, ts, _enc(total_value), _enc(return_pct), _enc(summary),
+                   _enc(json.dumps(goal_snapshot)) if goal_snapshot is not None else None))
+
+
+def _paper_report_row(r):
+    gs = None
+    raw = r["goal_snapshot"] if "goal_snapshot" in r.keys() else None
+    if raw is not None:
+        try:
+            gs = json.loads(_dec(raw))
+        except Exception:
+            gs = None
+    return {"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
+            "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"]), "goal_snapshot": gs}
 
 
 def paper_reports_all(scenario_id):
     with _conn() as c:
-        rows = c.execute("SELECT ts,total_value,return_pct,summary FROM paper_reports "
+        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts ASC, id ASC", (scenario_id,)).fetchall()
-    return [{"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
-            "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"])} for r in rows]
+    return [_paper_report_row(r) for r in rows]
 
 
 def paper_reports_recent(scenario_id, limit=12):
     with _conn() as c:
-        rows = c.execute("SELECT ts,total_value,return_pct,summary FROM paper_reports "
+        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts DESC, id DESC LIMIT ?", (scenario_id, limit)).fetchall()
-    out = [{"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
-           "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"])} for r in rows]
+    out = [_paper_report_row(r) for r in rows]
     return out[::-1]
 
 

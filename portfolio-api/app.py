@@ -10346,6 +10346,156 @@ MAX_ACTIVE_SCENARIOS = int(os.environ.get("PAPER_MAX_ACTIVE_SCENARIOS", "2"))
 MAX_USER_SCENARIOS = int(os.environ.get("PAPER_MAX_USER_SCENARIOS", "1"))
 RISK_PROFILES = ("conservative", "moderate", "aggressive")
 
+# ---------------------------------------------------------------------------
+# Strategist GOALS (2026-07-30, Jason -- see RESUME-TRACKER's "user-visible/settable Strategist
+# GOALS" item + its follow-up design-analysis entry). Full structured knobs (option 2 from that
+# analysis, chosen over free-text or hybrid): every AI scenario gets an explicit, editable stance
+# on time horizon, benchmark/target, cash buffer, position-size ceiling, turnover, and sector
+# tilt -- not just the risk-mandate preset. Each knob is its own field (not one free-text blob) so
+# it can be validated, rendered compactly on the scenario card, and summarized in plain language
+# (see _goal_summary_text()) without asking the model to interpret prose.
+# ---------------------------------------------------------------------------
+GOAL_SECTORS = ("Technology", "Healthcare", "Financials", "Energy", "Industrials",
+                "Consumer Discretionary", "Consumer Staples", "Utilities", "Real Estate",
+                "Materials", "Communication Services")
+TURNOVER_LEVELS = ("low", "medium", "high")
+TARGET_RETURN_MODES = ("benchmark", "absolute")
+GOAL_BOUNDS = {"time_horizon_years": (1, 40), "cash_buffer_pct": (0, 50),
+               "max_position_pct": (2, 60), "target_return_pct": (-50, 100)}
+
+# Risk-profile-conditioned defaults for a scenario's goal, used both for brand-new scenarios
+# (nothing chosen yet) and to migrate scenarios created BEFORE this feature existed -- a scenario
+# with no "goal" key on disk gets these on next read (see _scenario_goal()), rather than a
+# migration script. This is a DISCLOSED behavior change for pre-existing scenarios (their next
+# weekly run gains explicit numeric constraints they didn't have before, e.g. a position-size
+# ceiling) -- not silent, and roughly matches what each risk_profile's existing prose guidance
+# already implied loosely, so it isn't a sharp discontinuity in practice.
+_GOAL_DEFAULTS_BY_RISK = {
+    "conservative": {"cash_buffer_pct": 10, "max_position_pct": 10, "turnover_tolerance": "low"},
+    "moderate":     {"cash_buffer_pct": 5,  "max_position_pct": 15, "turnover_tolerance": "medium"},
+    "aggressive":   {"cash_buffer_pct": 2,  "max_position_pct": 25, "turnover_tolerance": "high"},
+}
+
+
+def _default_goal_fields(risk_profile="moderate"):
+    base = dict(_GOAL_DEFAULTS_BY_RISK.get(risk_profile, _GOAL_DEFAULTS_BY_RISK["moderate"]))
+    base.update({"time_horizon_years": 10, "target_return_mode": "benchmark",
+                 "target_return_pct": None, "favor_sectors": [], "avoid_sectors": []})
+    return base
+
+
+def _clamp(v, lo, hi):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return max(lo, min(hi, v))
+
+
+def _normalize_goal(body, risk_profile, base=None):
+    """Validates/coerces a (possibly partial) goal dict from a request body, layered onto `base`
+    (an existing scenario's current goal, or risk-profile defaults for a new one) -- so a PATCH-
+    style update only touching one field (e.g. just turnover_tolerance) can't blank out the rest.
+    Unknown sector names and out-of-range numbers are dropped/clamped rather than rejecting the
+    whole request -- keeps the endpoint forgiving of a slightly-stale frontend."""
+    g = dict(base) if base else _default_goal_fields(risk_profile)
+    if not isinstance(body, dict):
+        return g
+    if "time_horizon_years" in body:
+        lo, hi = GOAL_BOUNDS["time_horizon_years"]
+        v = _clamp(body["time_horizon_years"], lo, hi)
+        if v is not None:
+            g["time_horizon_years"] = int(round(v))
+    if "cash_buffer_pct" in body:
+        lo, hi = GOAL_BOUNDS["cash_buffer_pct"]
+        v = _clamp(body["cash_buffer_pct"], lo, hi)
+        if v is not None:
+            g["cash_buffer_pct"] = round(v, 1)
+    if "max_position_pct" in body:
+        lo, hi = GOAL_BOUNDS["max_position_pct"]
+        v = _clamp(body["max_position_pct"], lo, hi)
+        if v is not None:
+            g["max_position_pct"] = round(v, 1)
+    if "turnover_tolerance" in body:
+        t = str(body["turnover_tolerance"] or "").lower()
+        if t in TURNOVER_LEVELS:
+            g["turnover_tolerance"] = t
+    if "target_return_mode" in body:
+        m = str(body["target_return_mode"] or "").lower()
+        if m in TARGET_RETURN_MODES:
+            g["target_return_mode"] = m
+    if "target_return_pct" in body:
+        raw = body["target_return_pct"]
+        if raw in (None, ""):
+            g["target_return_pct"] = None
+        else:
+            lo, hi = GOAL_BOUNDS["target_return_pct"]
+            v = _clamp(raw, lo, hi)
+            if v is not None:
+                g["target_return_pct"] = round(v, 1)
+    if g.get("target_return_mode", "benchmark") != "absolute":
+        g["target_return_pct"] = None   # no dangling target when mode isn't absolute
+    if "favor_sectors" in body and isinstance(body["favor_sectors"], list):
+        g["favor_sectors"] = [s for s in body["favor_sectors"] if s in GOAL_SECTORS]
+    if "avoid_sectors" in body and isinstance(body["avoid_sectors"], list):
+        g["avoid_sectors"] = [s for s in body["avoid_sectors"] if s in GOAL_SECTORS]
+    # a sector can't be both favored and avoided -- avoid wins (more conservative to honor a
+    # restriction than a preference if the frontend ever sends a contradictory pair)
+    g["favor_sectors"] = [s for s in g.get("favor_sectors", []) if s not in g.get("avoid_sectors", [])]
+    return g
+
+
+def _scenario_goal(s):
+    """The fully-populated goal dict for a scenario -- whatever's actually stored under s["goal"],
+    with any missing keys backfilled from that scenario's risk-profile defaults (covers scenarios
+    created before this feature existed, and any partial dict from an older frontend build)."""
+    defaults = _default_goal_fields(s.get("risk_profile") or "moderate")
+    stored = s.get("goal") if isinstance(s.get("goal"), dict) else {}
+    out = dict(defaults)
+    out.update({k: v for k, v in stored.items() if k in defaults})
+    return out
+
+
+def _goal_summary_text(goal):
+    """Plain-language one-liner for the scenario card / prompt header -- the direct answer to
+    'what is this scenario trying to do' that the tracker item flagged as missing entirely."""
+    bench = (f"an absolute ~{goal['target_return_pct']}%/yr return" if goal.get("target_return_mode") == "absolute"
+             and goal.get("target_return_pct") is not None else "beating the S&P 500")
+    parts = [f"{goal.get('time_horizon_years', 10)}-year horizon, aiming for {bench}",
+             f"~{goal.get('cash_buffer_pct', 5)}% cash buffer",
+             f"positions capped at {goal.get('max_position_pct', 15)}%",
+             f"{goal.get('turnover_tolerance', 'medium')} turnover"]
+    s = ", ".join(parts) + "."
+    if goal.get("favor_sectors"):
+        s += " Favors " + ", ".join(goal["favor_sectors"]) + "."
+    if goal.get("avoid_sectors"):
+        s += " Avoids " + ", ".join(goal["avoid_sectors"]) + "."
+    return s
+
+
+def _goal_guidance_text(goal):
+    """Rendered into STRATEGIST_PROMPT's {goal_guidance} placeholder -- the structured knobs as
+    directive instructions, layered alongside (not replacing) the risk-mandate guidance."""
+    bench = (f"an absolute annual return of roughly {goal['target_return_pct']}%"
+             if goal.get("target_return_mode") == "absolute" and goal.get("target_return_pct") is not None
+             else "beating the S&P 500 over the horizon below")
+    turnover_note = {"low": "favor buy-and-hold — avoid trading just to stay active; only trade on a real thesis change",
+                     "medium": "balanced turnover — trade when your thesis meaningfully changes, don't churn",
+                     "high": "you may trade more actively when your read on a name changes, but every trade still needs a thesis"
+                     }.get(goal.get("turnover_tolerance", "medium"), "")
+    lines = [f"GOAL PARAMETERS for this scenario (in addition to the risk mandate above):",
+             f"- Time horizon: roughly {goal.get('time_horizon_years', 10)} years. Target: {bench}.",
+             f"- Cash buffer: keep roughly {goal.get('cash_buffer_pct', 5)}% of total value in cash as a "
+             f"buffer rather than fully deploying every dollar.",
+             f"- Position-size ceiling: keep any single position under about {goal.get('max_position_pct', 15)}% "
+             f"of total value — a concentration limit, not a target.",
+             f"- Turnover: {turnover_note}."]
+    if goal.get("favor_sectors"):
+        lines.append(f"- Favor sectors when you have a comparably strong idea: {', '.join(goal['favor_sectors'])}.")
+    if goal.get("avoid_sectors"):
+        lines.append(f"- Avoid entirely — do not initiate new positions in: {', '.join(goal['avoid_sectors'])}.")
+    return "\n".join(lines)
+
 
 def _new_scenario_id():
     return uuid.uuid4().hex[:12]
@@ -10524,8 +10674,10 @@ def _paper_marked(p):
     contributed = round(p.get("contributed") or 0.0, 2)
     seed_basis = round(p.get("seed_basis") or 0.0, 2)    # cost of positions the book was seeded with
     basis = start + contributed + seed_basis             # capital actually put in (cash + deposits + seeded cost)
+    goal = _scenario_goal(p) if p.get("kind", "ai") == "ai" else None
     return {"id": p.get("id"), "name": p.get("name"), "status": p.get("status"),
             "kind": p.get("kind", "ai"), "risk_profile": p.get("risk_profile"),
+            "goal": goal, "goal_summary": _goal_summary_text(goal) if goal else None,
             "starting_cash": start, "contributed": contributed, "seed_basis": seed_basis,
             "seeded_from": p.get("seeded_from"), "invested_capital": round(basis, 2),
             "cash": cash, "holdings_value": round(holdings_val, 2),
@@ -10555,7 +10707,7 @@ def get_paper_scenarios():
     for s in scens:
         m = _paper_marked(s)
         out.append({"id": m["id"], "name": m["name"], "status": m["status"], "kind": m["kind"],
-                    "risk_profile": m["risk_profile"],
+                    "risk_profile": m["risk_profile"], "goal": m["goal"], "goal_summary": m["goal_summary"],
                     "total_value": m["total_value"], "return_pct": m["return_pct"],
                     "invested_capital": m["invested_capital"], "created": m["created"],
                     "seeded_from": m["seeded_from"], "position_count": len(m["positions"])})
@@ -10565,6 +10717,8 @@ def get_paper_scenarios():
             "max_user_ledgers": MAX_USER_SCENARIOS,
             "user_ledger_count": len(_active_scenarios(reg, kind="user")),
             "risk_profiles": list(RISK_PROFILES),
+            "goal_sectors": list(GOAL_SECTORS), "turnover_levels": list(TURNOVER_LEVELS),
+            "goal_bounds": GOAL_BOUNDS,
             "note": f"Up to {MAX_ACTIVE_SCENARIOS} AI scenarios can be active (Strategist-managed) "
                     "at once — each active scenario gets its own weekly LLM review, so the cap "
                     "bounds GPU load. Archive one to free a slot without losing its history; "
@@ -10578,9 +10732,11 @@ async def post_paper_scenario(req: Request):
     """Create a new scenario. Body: {name, cash (from-scratch starting cash, ignored if seed given),
     seed: {tickers: [...]|'all', cash, basis: 'current'|'real'} | omitted for from-scratch,
     kind: 'ai'|'user' (default 'ai'), risk_profile: 'conservative'|'moderate'|'aggressive'
-    (kind='ai' only, default 'moderate')}. Enforces the cap for whichever kind is being created —
-    MAX_ACTIVE_SCENARIOS for 'ai', MAX_USER_SCENARIOS for 'user' — separately from each other, so
-    creating your one manual ledger never competes with the AI scenario slots or vice versa."""
+    (kind='ai' only, default 'moderate'), goal: {...} (kind='ai' only, optional -- see
+    _normalize_goal(); any field left out gets that risk profile's default)}. Enforces the cap for
+    whichever kind is being created — MAX_ACTIVE_SCENARIOS for 'ai', MAX_USER_SCENARIOS for
+    'user' — separately from each other, so creating your one manual ledger never competes with
+    the AI scenario slots or vice versa."""
     body = await req.json()
     kind = str(body.get("kind") or "ai").lower()
     if kind not in ("ai", "user"):
@@ -10615,11 +10771,14 @@ async def post_paper_scenario(req: Request):
         fields = _empty_scenario_fields(cash)
     ts = int(time.time())
     risk_profile = None
+    goal = None
     if kind == "ai":
         risk_profile = str(body.get("risk_profile") or "moderate").lower()
         if risk_profile not in RISK_PROFILES:
             risk_profile = "moderate"
-    scenario = dict(fields, id=sid, name=name, status="active", created=ts, kind=kind, risk_profile=risk_profile)
+        goal = _normalize_goal(body.get("goal"), risk_profile)
+    scenario = dict(fields, id=sid, name=name, status="active", created=ts, kind=kind,
+                    risk_profile=risk_profile, goal=goal)
     reg.setdefault("scenarios", {})[sid] = scenario
     _write_registry(reg)
     out = {"ok": True, "scenario": _paper_marked(scenario)}
@@ -10699,6 +10858,26 @@ async def post_paper_risk_profile(scenario_id: str, req: Request):
     if s.get("kind", "ai") != "ai":
         return JSONResponse({"error": "risk profile only applies to AI-managed scenarios"}, status_code=400)
     s["risk_profile"] = rp
+    _write_registry(reg)
+    return {"ok": True, "scenario": _paper_marked(s)}
+
+
+@app.post("/api/paper/scenarios/{scenario_id}/goal")
+async def post_paper_goal(scenario_id: str, req: Request):
+    """Update an AI scenario's structured GOAL parameters (2026-07-30) — time horizon, target
+    return/benchmark, cash buffer, position-size ceiling, turnover tolerance, sector tilt — without
+    resetting its ledger, same in-place/no-reset/next-run-applies contract as risk_profile above.
+    Body is a (possibly partial) goal dict — see _normalize_goal(); any field omitted keeps its
+    current value, so the frontend can PATCH a single slider without resending the whole form."""
+    body = await req.json()
+    reg = _read_registry()
+    s = (reg.get("scenarios") or {}).get(scenario_id)
+    if not s:
+        return JSONResponse({"error": "scenario not found"}, status_code=404)
+    if s.get("kind", "ai") != "ai":
+        return JSONResponse({"error": "goal parameters only apply to AI-managed scenarios"}, status_code=400)
+    current = _scenario_goal(s)
+    s["goal"] = _normalize_goal(body, s.get("risk_profile") or "moderate", base=current)
     _write_registry(reg)
     return {"ok": True, "scenario": _paper_marked(s)}
 
@@ -10819,14 +10998,17 @@ async def paper_seed(req: Request):
             **seed_meta}
 
 
-def _log_report(summary, scenario_id=None):
-    """Append a weekly report + snapshot total value to one scenario. Returns {ok, report_count}."""
+def _log_report(summary, scenario_id=None, goal_snapshot=None):
+    """Append a weekly report + snapshot total value to one scenario. `goal_snapshot` (2026-07-30,
+    Strategist GOALS): the goal parameters active for the run that produced this report, stamped
+    in so history stays interpretable even after the scenario's goal is later edited. Returns
+    {ok, report_count}."""
     p = _read_paper(scenario_id)
     sid = p["id"]
     marked = _paper_marked(p)
     ts = int(time.time())
     store.paper_report_append(sid, ts, marked["total_value"], marked["return_pct"],
-                              str(summary or "")[:4000])
+                              str(summary or "")[:4000], goal_snapshot=goal_snapshot)
     return {"ok": True, "report_count": store.paper_reports_count(sid), "scenario_id": sid}
 
 
@@ -10959,6 +11141,7 @@ STRATEGIST_PROMPT = (
     "ONLY this one scenario's ledger, so decide and report as if it's the only book that exists for this "
     "session.\n"
     "{risk_guidance}\n"
+    "{goal_guidance}\n"
     "ACCOUNT TOOLS: get_paper_portfolio (your cash, positions, P/L, return vs. start — call this FIRST); "
     "paper_buy(ticker, dollars); paper_sell(ticker, shares — omit shares to sell the whole position); "
     "log_report(summary — call this LAST, exactly once).\n"
@@ -11076,11 +11259,13 @@ def _log_strategist_run(rec):
         pass
 
 
-def _strategist_dispatch(name, args, scenario_id=None):
+def _strategist_dispatch(name, args, scenario_id=None, goal=None):
     """Run one tool call in-process and return a JSON-serializable result. `scenario_id` scopes
     the paper-ledger tools to ONE scenario for the duration of a run — the weekly loop below fixes
     it per pass (never exposed as a model-choosable tool argument, so the model can't accidentally
-    trade the wrong scenario); advisory/read-only chat callers resolve it to the default scenario."""
+    trade the wrong scenario); advisory/read-only chat callers resolve it to the default scenario.
+    `goal` (2026-07-30, Strategist GOALS): the scenario's active goal dict, stamped onto log_report
+    only — never model-choosable, same reasoning as scenario_id above."""
     args = args or {}
     try:
         if name == "get_paper_portfolio":
@@ -11094,7 +11279,7 @@ def _strategist_dispatch(name, args, scenario_id=None):
                                    scenario_id=scenario_id)
             return res or {"error": err}
         if name == "log_report":
-            return _log_report(args.get("summary"), scenario_id=scenario_id)
+            return _log_report(args.get("summary"), scenario_id=scenario_id, goal_snapshot=goal)
         if name == "get_opportunities":
             return _opportunities()
         if name == "get_discovery":
@@ -11129,21 +11314,26 @@ def _strategist_dispatch(name, args, scenario_id=None):
         return {"error": f"{name} failed: {e}"}
 
 
-def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moderate"):
+def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moderate", goal=None):
     """One full ReAct pass against ONE AI-kind scenario. Returns the run's telemetry dict. Caller
     (below) holds `_strat_lock` for the whole multi-scenario job, only ever iterates 'ai'-kind
     ACTIVE scenarios (a 'user' ledger is never passed here — see `_do_strategist`), and drives one
     of these per scenario, sequentially — never in parallel, so this never adds concurrent GPU
-    load beyond the single existing `_gpu_slot()` serialization point."""
+    load beyond the single existing `_gpu_slot()` serialization point. `goal` (2026-07-30,
+    Strategist GOALS): the scenario's structured goal dict (see _scenario_goal()) -- defaults to
+    that risk profile's goal defaults if the caller doesn't have one handy."""
+    goal = goal or _default_goal_fields(risk_profile)
     _t0 = time.time()
     telem = {"ts": int(_t0), "scenario_id": scenario_id, "scenario_name": scenario_name,
-             "risk_profile": risk_profile, "max_iter": max_iter, "iterations": 0, "tool_calls": {},
-             "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
+             "risk_profile": risk_profile, "goal_snapshot": goal, "max_iter": max_iter, "iterations": 0,
+             "tool_calls": {}, "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
     try:
         risk_guidance = _RISK_PROFILE_GUIDANCE.get(risk_profile, _RISK_PROFILE_GUIDANCE["moderate"])
-        prompt = STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name).replace("{risk_guidance}", risk_guidance)
+        goal_guidance = _goal_guidance_text(goal)
+        prompt = (STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name)
+                  .replace("{risk_guidance}", risk_guidance).replace("{goal_guidance}", goal_guidance))
         messages = [
             {"role": "system", "content": _sys(prompt)},
             {"role": "user", "content": f"Perform your weekly review of the '{scenario_name}' scenario now: "
@@ -11218,9 +11408,9 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                                            "research you've already gathered and finish your review."}
                     else:
                         search_calls += 1
-                        result = _strategist_dispatch(nm, a, scenario_id=scenario_id)
+                        result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal)
                 else:
-                    result = _strategist_dispatch(nm, a, scenario_id=scenario_id)
+                    result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
                     reported = True
                 # Trim large tool results by SHRINKING FIELDS, never by chopping the serialized JSON
@@ -11245,7 +11435,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
             final = next((m["content"] for m in reversed(messages)
                           if m.get("role") == "assistant" and m.get("content")), "")
             _log_report(final or "Weekly run ended without an explicit report (may have hit the step cap).",
-                       scenario_id=scenario_id)
+                       scenario_id=scenario_id, goal_snapshot=goal)
         telem["converged"] = reported
     finally:
         telem["duration_s"] = round(time.time() - _t0, 1)
@@ -11275,7 +11465,8 @@ def _do_strategist(max_iter=20):
         for idx, s in enumerate(active):
             _strat_state.update(scenario=s.get("name"), scenario_id=s.get("id"), iterations=0)
             telem = _do_strategist_one(s["id"], s.get("name") or s["id"], max_iter,
-                                       risk_profile=s.get("risk_profile") or "moderate")
+                                       risk_profile=s.get("risk_profile") or "moderate",
+                                       goal=_scenario_goal(s))
             _log_strategist_run(telem)
             _strat_state["scenarios_done"] = idx + 1
         _strat_state.update(status="idle", finished=int(time.time()), scenario=None)
