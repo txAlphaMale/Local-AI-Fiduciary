@@ -9,6 +9,7 @@ Roth IRA (direct if MAGI allows) → after-tax 401(k) / mega-backdoor capacity (
 2026 constants VERIFIED 2026-07-17 against IRS Notice 2025-67 / irs.gov newsroom (see
 LIMITS_2026 sources; registered in the G13 grounding watchdog). Educational, not advice.
 """
+import datetime
 
 LIMITS_YEAR = 2026
 LIMITS_2026 = {
@@ -66,14 +67,56 @@ def pay_periods_per_year(pay_frequency, pay_periods_custom=None):
     return PAY_FREQUENCIES_PER_YEAR.get(pf, 26)
 
 
-def run(facts, limits=None):
+def _roth_pacing(limit, contributed, monthly, today=None):
+    """2026-07-30 stretch goal (RESUME-TRACKER 2026-07-20 Roth item, part 3 -- "on pace to max by
+    December" vs "behind pace"). Projects a single spouse's Roth IRA contributions against
+    `limit` for the rest of the calendar year, given what's already been contributed YTD
+    (`contributed`) and an optional recurring monthly amount (`monthly`).
+
+    `months_left` counts the CURRENT month as still contributable (checking on the 3rd of the
+    month doesn't mean that month's contribution already happened), so a check on Dec 1 still
+    reports 1 month left, not 0 -- only Jan 1 of the FOLLOWING year would report 12 again.
+
+    Returns a dict with `status` one of:
+      "maxed"         — already at or over the limit; nothing left to project.
+      "no_monthly_set" — remaining room exists but no recurring monthly figure was entered,
+                         so there's nothing to project against (not itself a problem — mirrors
+                         the HSA section's "not entered" info-only treatment, not an alert).
+      "on_pace"       — at the entered monthly rate, projected to reach the limit by Dec 31.
+      "behind_pace"   — at the entered monthly rate, projected to fall short.
+    `required_monthly` is always populated (except when already maxed) so a "behind_pace" status
+    can be paired with the concrete catch-up number, not just a yes/no verdict."""
+    today = today or datetime.date.today()
+    remaining = round(max(0.0, limit - contributed), 2)
+    if remaining <= 0:
+        return {"status": "maxed", "months_left": 0, "projected_total": round(contributed, 2),
+               "required_monthly": 0.0}
+    months_left = 13 - today.month   # inclusive of the current month (Jan=12 left, Dec=1 left)
+    monthly = _f(monthly)
+    projected_total = round(contributed + monthly * months_left, 2)
+    required_monthly = round(remaining / months_left, 2) if months_left > 0 else remaining
+    if not monthly:
+        status = "no_monthly_set"
+    elif projected_total >= limit - 0.01:
+        status = "on_pace"
+    else:
+        status = "behind_pace"
+    return {"status": status, "months_left": months_left, "projected_total": projected_total,
+           "required_monthly": required_monthly}
+
+
+def run(facts, limits=None, today=None):
     """facts: {salary, age, spouse_age, pretax_pct, aftertax_pct, match_t1_pct, match_t1_rate,
     match_t2_pct, match_t2_rate, plan_aftertax(bool), inservice_rollover('yes'/'no'/'unknown'),
     hsa_coverage('self'/'family'), hsa_contribution, hsa_invested(bool), magi, biweekly_total,
-    pay_frequency('weekly'/'biweekly'/'semimonthly'/'monthly'/'custom'), pay_periods_custom}.
+    pay_frequency('weekly'/'biweekly'/'semimonthly'/'monthly'/'custom'), pay_periods_custom,
+    roth_contributed_self/_spouse (YTD $), roth_monthly_self/_spouse (optional recurring $/mo,
+    2026-07-30 pacing stretch goal)}.
     `biweekly_total` is really "per-paycheck total (employee+match)" now — the key name is kept
     for backward compatibility with already-saved config, but it's multiplied by whatever
-    pay_frequency resolves to, not hardcoded to 26 anymore."""
+    pay_frequency resolves to, not hardcoded to 26 anymore. `today` is an optional override
+    (defaults to the real date) purely so pacing math is exactly testable without monkeypatching
+    the datetime module."""
     L = {**LIMITS_2026, **(limits or {})}
     f = facts or {}
     salary, age = _f(f.get("salary")), _f(f.get("age"))
@@ -177,11 +220,26 @@ def run(facts, limits=None):
     else:
         ira_status, ira_msg = "backdoor", ("Over the phase-out — the backdoor route (watch "
                                            "pro-rata if any pre-tax IRA exists)." + contributed_note)
+    monthly_self = _f(f.get("roth_monthly_self"))
+    monthly_spouse = _f(f.get("roth_monthly_spouse"))
+    pacing_self = _roth_pacing(per_spouse, contributed_self, monthly_self, today)
+    pacing_spouse = _roth_pacing(per_spouse, contributed_spouse, monthly_spouse, today)
     out["sections"]["roth_ira"] = {"status": ira_status, "per_spouse_limit": per_spouse,
                                    "phaseout_mfj": [lo, hi], "msg": ira_msg,
                                    "contributed_self": contributed_self, "contributed_spouse": contributed_spouse,
                                    "remaining_self": remaining_self, "remaining_spouse": remaining_spouse,
-                                   "remaining_total": remaining_total}
+                                   "remaining_total": remaining_total,
+                                   "monthly_self": monthly_self, "monthly_spouse": monthly_spouse,
+                                   "pacing_self": pacing_self, "pacing_spouse": pacing_spouse}
+    for who, pacing in (("self", pacing_self), ("spouse", pacing_spouse)):
+        if pacing["status"] == "behind_pace":
+            out["actions"].append({"level": "action",
+                                   "msg": f"Roth IRA ({who}) is BEHIND PACE to max out this year — "
+                                          f"at ${(monthly_self if who=='self' else monthly_spouse):,.0f}/mo "
+                                          f"you're projected to reach ${pacing['projected_total']:,.0f} of "
+                                          f"the ${per_spouse:,.0f} limit. Raise it to "
+                                          f"${pacing['required_monthly']:,.0f}/mo for the rest of the year "
+                                          f"({pacing['months_left']} mo left) to max out."})
 
     # ---- Mega-backdoor capacity (§415(c)) ----
     total_415 = ee_dollars + m["earned_match_dollars"] + salary * _f(f.get("aftertax_pct")) / 100.0

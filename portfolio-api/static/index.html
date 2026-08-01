@@ -145,6 +145,52 @@
     --overlay-negative-weak: rgba(200,30,30,0.12);
     --overlay-info-weak: rgba(29,78,216,0.12);
   }
+
+  /* ---- Catppuccin flavors (2026-07-31) — four more Tier-1 overrides, same mechanism as
+     cobalt/highcontrast/daylight above: only --bg/--panel/--panel2/--bd/--bd2/--amber/--txt/
+     --mut/--dim/--grn/--red/--blu are touched, so the whole app re-colors with zero JS/HTML
+     changes. Values are the official hex swatches from https://catppuccin.com/palette
+     (flavors: Latte, Frappé, Macchiato, Mocha). Catppuccin is a community-maintained,
+     MIT-licensed color scheme — copyright (c) 2021 Catppuccin, https://github.com/catppuccin/
+     catppuccin/blob/main/LICENSE. Palette values are used here as inert data (hex codes are
+     generally not independently copyrightable), but the MIT license and full attribution are
+     kept below and also surfaced in the SETTINGS -> THEME panel UI (see themeContent()) as a
+     courtesy credit to the project, not because it's strictly required for color values alone.
+
+     Mapping convention (same "panel lightest, panel2 middle, bg darkest" layering used by every
+     theme above): --bg <- flavor's Crust, --panel2 <- Mantle, --panel <- Base; --bd <- Surface0,
+     --bd2 <- Surface1; --txt <- Text, --mut <- Subtext0, --dim <- Overlay0; --amber (this app's
+     accent slot) <- Peach, the closest warm/orange analog in the Catppuccin set since Catppuccin
+     has no direct "amber" swatch; --grn/--red/--blu <- Green/Red/Blue. Latte (the one LIGHT
+     flavor) additionally re-derives the --overlay-*-weak tokens from its own signal colors, same
+     fix as the DAYLIGHT theme above and for the identical reason (the base :root overlay rgba()
+     literals are tuned to the DARK theme's amber and read wrong-hued on a light background). */
+  :root[data-theme="catppuccin-latte"]{
+    --bg:#dce0e8; --panel:#eff1f5; --panel2:#e6e9ef; --bd:#ccd0da; --bd2:#bcc0cc;
+    --amber:#fe640b; --txt:#4c4f69; --mut:#6c6f85; --dim:#9ca0b0;
+    --grn:#40a02b; --red:#d20f39; --blu:#1e66f5;
+    --overlay-accent-weak: rgba(254,100,11,0.13);
+    --overlay-accent-weaker: rgba(254,100,11,0.07);
+    --overlay-positive-weak: rgba(64,160,43,0.12);
+    --overlay-negative-weak: rgba(210,15,57,0.12);
+    --overlay-info-weak: rgba(30,102,245,0.12);
+  }
+  :root[data-theme="catppuccin-frappe"]{
+    --bg:#232634; --panel:#303446; --panel2:#292c3c; --bd:#414559; --bd2:#51576d;
+    --amber:#ef9f76; --txt:#c6d0f5; --mut:#a5adce; --dim:#737994;
+    --grn:#a6d189; --red:#e78284; --blu:#8caaee;
+  }
+  :root[data-theme="catppuccin-macchiato"]{
+    --bg:#181926; --panel:#24273a; --panel2:#1e2030; --bd:#363a4f; --bd2:#494d64;
+    --amber:#f5a97f; --txt:#cad3f5; --mut:#a5adcb; --dim:#6e738d;
+    --grn:#a6da95; --red:#ed8796; --blu:#8aadf4;
+  }
+  :root[data-theme="catppuccin-mocha"]{
+    --bg:#11111b; --panel:#1e1e2e; --panel2:#181825; --bd:#313244; --bd2:#45475a;
+    --amber:#fab387; --txt:#cdd6f4; --mut:#a6adc8; --dim:#6c7086;
+    --grn:#a6e3a1; --red:#f38ba8; --blu:#89b4fa;
+  }
+
   *{box-sizing:border-box;}
   body{margin:0;background:var(--color-bg);color:var(--color-text);
     font-family:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
@@ -450,7 +496,8 @@ let CHAT_PENDING_IMAGES = [];   // array of base64 strings (data-URL prefix kept
 // Theme (step 3, 2026-07-19 — UI-THEMING-DESIGN-TOKEN-PROPOSAL.md): swaps ONLY the Tier-1 color
 // primitives (see :root[data-theme] blocks in <style>) via an attribute on <html>. Applied here,
 // as early in the script as possible, so there's no visible flash of the default theme on load.
-const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'},{key:'daylight',label:'DAYLIGHT'}];
+const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'},{key:'daylight',label:'DAYLIGHT'},
+  {key:'catppuccin-latte',label:'CATPPUCCIN LATTE'},{key:'catppuccin-frappe',label:'CATPPUCCIN FRAPPÉ'},{key:'catppuccin-macchiato',label:'CATPPUCCIN MACCHIATO'},{key:'catppuccin-mocha',label:'CATPPUCCIN MOCHA'}];
 let THEME='amber'; try{ THEME=localStorage.getItem('fidTheme')||'amber'; }catch(_){ THEME='amber'; }
 function applyTheme(key){
   THEME=key||'amber';
@@ -1174,8 +1221,8 @@ W('earnings-trigger','Automation','Post-earnings brief refresh (event-driven res
   'You don\'t need to do anything — this rides the ⚠ ATTENTION "Earnings" flags already on your dashboard. If a print seems to have landed but the brief still looks stale the next morning, check #jobs for `earnings_brief` or force it manually; known gap: a before-market report on a day the calendar hadn\'t yet surfaced (rare, free-tier data lag) can be missed until the NEXT scheduled analysis run.');
 W('benefits','Planning','Benefits & contribution room',
   'The guaranteed-return ladder for the next saved dollar: employer-match capture (instant 50-100% return), HSA headroom (the only triple-tax-advantaged account), 401(k) employee-limit headroom with age catch-ups (and the >$150k mandatory-Roth catch-up rule), direct-vs-backdoor Roth IRA eligibility against the MFJ phase-out (now net of what you\'ve actually contributed this year, not the gross annual limit — see below), and mega-backdoor capacity (§415(c) limit minus everything already going in). All 2026 limits are IRS-verified and registered in the AUDITS→GROUNDING watchdog, so they re-flag themselves every January.',
-  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income. The PER-PAYCHECK TOTAL field (employee+match) has its own pay-frequency selector — weekly, bi-weekly, semi-monthly (1st/15th), monthly, or a custom periods/year for irregular pay (e.g. gig work) — used to annualize it for the salary cross-check line. Pick the one that matches your actual payroll; picking the wrong one silently mis-prices the implied salary (a weekly payroll read as bi-weekly understates it by 2x). **Roth IRA contributed YTD (2026-07-22)**: two new fields (you / spouse) track what you\'ve actually put into a Roth IRA so far this year — the NEXT MARGINAL DOLLAR table\'s "Roth IRA ×2" line now shows what\'s actually still open, not the full annual limit as if $0 had gone in; if both spouses have already maxed out, the line drops off the table entirely rather than falsely still recommending it.',
-  'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier. Update the Roth YTD fields whenever you make a contribution so the remaining-room figure stays honest through the year.');
+  'PLAN → BENEFITS. Green = captured/eligible; amber actions = free money or one plan question away (the in-service-rollover question to the administrator is the classic unlock). Enter plan facts once in the editor; salary comes from the household register income. The PER-PAYCHECK TOTAL field (employee+match) has its own pay-frequency selector — weekly, bi-weekly, semi-monthly (1st/15th), monthly, or a custom periods/year for irregular pay (e.g. gig work) — used to annualize it for the salary cross-check line. Pick the one that matches your actual payroll; picking the wrong one silently mis-prices the implied salary (a weekly payroll read as bi-weekly understates it by 2x). **Roth IRA contributed YTD (2026-07-22)**: two new fields (you / spouse) track what you\'ve actually put into a Roth IRA so far this year — the NEXT MARGINAL DOLLAR table\'s "Roth IRA ×2" line now shows what\'s actually still open, not the full annual limit as if $0 had gone in; if both spouses have already maxed out, the line drops off the table entirely rather than falsely still recommending it. **Roth IRA pacing (2026-07-30, optional)**: two more fields (you / spouse) for a recurring $/mo contribution, if you have one — with that entered, the ROTH IRA line projects whether you\'re ON PACE or BEHIND PACE to reach the annual limit by December 31, and (if behind) exactly what $/mo the rest of the year would take to still max out. Leave it blank and nothing changes — this is purely additive to the YTD tracking above.',
+  'Revisit at annual enrollment, on any raise (percentages drift against fixed limits), and each January when limits re-index. Contribution room is the one guaranteed-return decision in investing — capture it before optimizing anything riskier. Update the Roth YTD fields whenever you make a contribution so the remaining-room figure stays honest through the year; if your Roth contribution comes out of every paycheck as a fixed amount, enter it once in the recurring $/mo field and let the pacing check do the arithmetic instead of eyeballing it each month.');
 W('narrative','Dashboard','State of the Wealth (weekly letter)',
   'A plain-language weekly note the AI writes to the household by composing every module\'s cached headline — net worth and its week change, funded ratio, YTD vs your own policy, concentration and attention flags, harvestable losses, earnings ahead, and the AI\'s own track record — ending with a single THIS WEEK\'S FOCUS action. The family-office quarterly letter, weekly and personal.',
   'Top of the DASHBOARD tab. Writes itself Monday mornings through the job queue (SETTINGS → TASK SCHEDULE), or GENERATE NOW any time (watch the #jobs badge). It cites only numbers the modules actually computed — nothing is invented. It is a single one-shot generation (not a per-ticker loop like the research briefs), so on this hardware it can legitimately take several minutes; it has its own timeout (NARR_LLM_TIMEOUT, separate from the research pipeline\'s) sized for that.',
@@ -1197,7 +1244,7 @@ W('continuity','Planning','Continuity binder + document currency',
   'PLAN → CONTINUITY. The checklist up top is meant to be read first under stress; the document-currency table, account map, and debts below it are the supporting detail. Both sections regenerate from live data/config on every load, so neither can silently drift the way a one-time printed binder or a "I\'ll remember when I last updated my will" mental note would — though a PRINTED copy (🖶 PRINT button) obviously freezes at print time, so reprint after any major change. A stale or never-recorded document also surfaces on the ⚠ ATTENTION header badge (Estate hygiene category) so it doesn\'t require remembering to check this tab.',
   'Fill in the contacts, executor/will-location fields, and each document\'s last-reviewed year once — that\'s the part the app can\'t infer from your accounts. The 3-year cadence is a hygiene reminder, not a legal deadline: the real trigger to re-review any of these is a life event (marriage, divorce, birth, death, home purchase/sale, move to a new state) whenever it happens, cadence or not. Print a copy and put it somewhere a survivor or co-executor would actually find it; this is decision-support, not a substitute for the actual will/POA/trust documents, which still need a licensed attorney.');
 W('theme','Automation','Theme (color palette)',
-  'Three color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders) — swapped by overriding a handful of CSS color variables. Nothing else changes: layout, spacing, and type sizes are identical across all three, because every one of the app\'s ~700 styled elements reads its color through a shared token instead of a hardcoded value.',
+  'Eight color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders), DAYLIGHT (light mode), and the four CATPPUCCIN flavors (LATTE, light; FRAPPÉ/MACCHIATO/MOCHA, dark, in increasing darkness/contrast) — swapped by overriding a handful of CSS color variables. Nothing else changes: layout, spacing, and type sizes are identical across all eight, because every one of the app\'s ~700 styled elements reads its color through a shared token instead of a hardcoded value. The Catppuccin flavors use that project\'s official published palette (credited, with license link, at the bottom of this panel and in the CSS source) — see catppuccin.com.',
   'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices).',
   'Purely cosmetic — pick whichever is easiest on your eyes/lighting. This also doubles as proof the color system is centralized: if a future palette ever looks wrong somewhere, that\'s a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
@@ -2958,7 +3005,11 @@ function themeContent(){
       const swatchColors={amber:{'--bg':'#0a0b0d','--panel':'#121417','--amber':'#f0a823','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4a9eff'},
         cobalt:{'--bg':'#080b12','--panel':'#0d1420','--amber':'#4d9bff','--grn':'#2ec27e','--red':'#ff5d5d','--blu':'#4ad4ff'},
         highcontrast:{'--bg':'#050505','--panel':'#0d0d0d','--amber':'#ffb020','--grn':'#3ddb8f','--red':'#ff6b6b','--blu':'#5eb3ff'},
-        daylight:{'--bg':'#ece7dc','--panel':'#ffffff','--amber':'#a0530a','--grn':'#0f7a38','--red':'#c81e1e','--blu':'#1d4ed8'}}[t.key];
+        daylight:{'--bg':'#ece7dc','--panel':'#ffffff','--amber':'#a0530a','--grn':'#0f7a38','--red':'#c81e1e','--blu':'#1d4ed8'},
+        'catppuccin-latte':{'--bg':'#dce0e8','--panel':'#eff1f5','--amber':'#fe640b','--grn':'#40a02b','--red':'#d20f39','--blu':'#1e66f5'},
+        'catppuccin-frappe':{'--bg':'#232634','--panel':'#303446','--amber':'#ef9f76','--grn':'#a6d189','--red':'#e78284','--blu':'#8caaee'},
+        'catppuccin-macchiato':{'--bg':'#181926','--panel':'#24273a','--amber':'#f5a97f','--grn':'#a6da95','--red':'#ed8796','--blu':'#8aadf4'},
+        'catppuccin-mocha':{'--bg':'#11111b','--panel':'#1e1e2e','--amber':'#fab387','--grn':'#a6e3a1','--red':'#f38ba8','--blu':'#89b4fa'}}[t.key];
       const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${swatchColors[varname]};border:1px solid var(--color-border-strong);`;
       dots.appendChild(sw);
     });
@@ -2970,6 +3021,16 @@ function themeContent(){
     row.appendChild(card);
   });
   wrap.appendChild(row);
+  // Attribution (2026-07-31): the 4 CATPPUCCIN flavors' colors are the official palette from
+  // https://catppuccin.com, a community project released under the MIT License
+  // (https://github.com/catppuccin/catppuccin/blob/main/LICENSE, Copyright (c) 2021 Catppuccin).
+  // Credited here as a courtesy alongside the license notice kept in the CSS source
+  // (:root[data-theme="catppuccin-*"] blocks, this same file) — not itself using any Catppuccin
+  // code or website assets, only the published hex swatches for its own theme variables.
+  const credit=el('div','muted');
+  credit.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-border);';
+  credit.innerHTML='The four CATPPUCCIN palettes (Latte, Frappé, Macchiato, Mocha) are from the <a href="https://catppuccin.com" target="_blank" rel="noopener noreferrer">Catppuccin</a> project — © 2021 Catppuccin contributors, used under the <a href="https://github.com/catppuccin/catppuccin/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a>.';
+  wrap.appendChild(credit);
   return wrap;
 }
 // ---------------------------------------------------------------------------
@@ -4925,8 +4986,24 @@ function benefitsContent(){
   }
   const ri=S.roth_ira||{};
   if(ri.status){ const s3=el('div'); s3.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
+    // 2026-07-30 pacing stretch goal: renders next to the pre-existing YTD-contributed line
+    // whenever a spouse has a recurring monthly figure entered (bn-roth-monthly-* below) --
+    // "no_monthly_set" deliberately renders nothing (an info gap, not a status worth a badge),
+    // mirroring how the HSA section only speaks up once a contribution is actually entered.
+    const paceLine=(label,pacing,monthly)=>{
+      if(!pacing || pacing.status==='no_monthly_set') return '';
+      const badge = pacing.status==='maxed' ? '<span class="pos">✓ maxed</span>'
+                  : pacing.status==='on_pace' ? '<span class="pos">✓ on pace</span>'
+                  : '<span class="neg">⚠ behind pace</span>';
+      const detail = pacing.status==='maxed' ? ''
+                  : ` — at ${u(monthly)}/mo, projected ${u(pacing.projected_total)} of ${u(ri.per_spouse_limit)} by Dec 31`+
+                    (pacing.status==='behind_pace'?` (raise to ${u(pacing.required_monthly)}/mo, ${pacing.months_left} mo left, to max out)`:'');
+      return `<br/><span class="muted" style="font-size:var(--font-size-sm);">${label} pace: ${badge}${detail}</span>`;
+    };
     s3.innerHTML=`<b>ROTH IRA</b> — <b class="${ri.status==='direct'?'pos':''}">${esc(ri.status).toUpperCase()}</b>: <span class="muted">${esc(ri.msg)}</span>`+
-      ((ri.contributed_self||ri.contributed_spouse)?`<br/><span class="muted" style="font-size:var(--font-size-sm);">YTD contributed — you: ${u(ri.contributed_self)} (${u(ri.remaining_self)} room left) · spouse: ${u(ri.contributed_spouse)} (${u(ri.remaining_spouse)} room left)</span>`:'');
+      ((ri.contributed_self||ri.contributed_spouse)?`<br/><span class="muted" style="font-size:var(--font-size-sm);">YTD contributed — you: ${u(ri.contributed_self)} (${u(ri.remaining_self)} room left) · spouse: ${u(ri.contributed_spouse)} (${u(ri.remaining_spouse)} room left)</span>`:'')+
+      paceLine('You', ri.pacing_self, ri.monthly_self)+
+      paceLine('Spouse', ri.pacing_spouse, ri.monthly_spouse);
     wrap.appendChild(s3); }
   const mb=S.mega_backdoor||{};
   if(mb.sec415c_limit){ const s4=el('div'); s4.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
@@ -4959,7 +5036,9 @@ function benefitsContent(){
     `contribution/yr <input id="bn-hsa" type="number" step="50" value="${pv(f.hsa_contribution)}" style="width:70px;"/> `+
     `invested <select id="bn-hi"><option value="1"${f.hsa_invested?' selected':''}>yes</option><option value="0"${!f.hsa_invested?' selected':''}>no</option></select><br/>`+
     `Roth IRA contributed YTD — you <input id="bn-roth-self" type="number" step="50" value="${pv(f.roth_contributed_self)}" style="width:70px;" title="how much you've already put into a Roth IRA this year"/> `+
-    `spouse <input id="bn-roth-spouse" type="number" step="50" value="${pv(f.roth_contributed_spouse)}" style="width:70px;" title="how much your spouse has already put into a Roth IRA this year"/> `+
+    `spouse <input id="bn-roth-spouse" type="number" step="50" value="${pv(f.roth_contributed_spouse)}" style="width:70px;" title="how much your spouse has already put into a Roth IRA this year"/><br/>`+
+    `Roth IRA recurring $/mo <span class="muted" style="font-size:var(--font-size-sm);">(optional — projects on-pace/behind-pace to Dec 31)</span> — you <input id="bn-roth-monthly-self" type="number" step="10" value="${pv(f.roth_monthly_self)}" style="width:70px;" title="what you're currently putting into a Roth IRA per month, if it's a recurring amount"/> `+
+    `spouse <input id="bn-roth-monthly-spouse" type="number" step="10" value="${pv(f.roth_monthly_spouse)}" style="width:70px;" title="what your spouse is currently putting into a Roth IRA per month, if it's a recurring amount"/> `+
     `<button id="bn-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
@@ -4976,7 +5055,9 @@ function benefitsContent(){
           hsa_coverage:g('bn-hc').value, hsa_contribution:numOrNull(g('bn-hsa').value),
           hsa_invested:g('bn-hi').value==='1',
           roth_ira_contribution_self:numOrNull(g('bn-roth-self').value),
-          roth_ira_contribution_spouse:numOrNull(g('bn-roth-spouse').value)})});
+          roth_ira_contribution_spouse:numOrNull(g('bn-roth-spouse').value),
+          roth_ira_monthly_self:numOrNull(g('bn-roth-monthly-self').value),
+          roth_ira_monthly_spouse:numOrNull(g('bn-roth-monthly-spouse').value)})});
       load(false); };
   },0);
   const sc=r.salary_crosscheck;

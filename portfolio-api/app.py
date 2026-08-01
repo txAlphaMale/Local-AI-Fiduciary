@@ -6955,7 +6955,9 @@ def get_benefits():
              "hsa_invested": cfg.get("hsa_invested"),
              "magi": (cfg.get("income_self") or 0) + (cfg.get("income_spouse") or 0),
              "roth_contributed_self": cfg.get("roth_ira_contribution_self"),
-             "roth_contributed_spouse": cfg.get("roth_ira_contribution_spouse")}
+             "roth_contributed_spouse": cfg.get("roth_ira_contribution_spouse"),
+             "roth_monthly_self": cfg.get("roth_ira_monthly_self"),
+             "roth_monthly_spouse": cfg.get("roth_ira_monthly_spouse")}
     res = benefits.run(facts)
     res["facts"] = facts
     res["generated_at"] = int(time.time())
@@ -7149,6 +7151,13 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None,
                      # this, benefits.py's roth_ira headroom always assumed $0 contributed and
                      # ranked the full annual limit x2, with no way to know if it was already maxed.
                      "roth_ira_contribution_self": None, "roth_ira_contribution_spouse": None,
+                     # roth_ira_monthly_self/_spouse (2026-07-30, the "pacing/projection" stretch
+                     # goal from the same 2026-07-20 backlog item): an OPTIONAL recurring $/mo
+                     # figure, used only to project whether the YTD contribution above is on pace
+                     # to reach the annual limit by December — see benefits._roth_pacing(). Leaving
+                     # either blank just means no projection is shown for that spouse (matches the
+                     # YTD field's own "blank = not tracked" behavior), not an error.
+                     "roth_ira_monthly_self": None, "roth_ira_monthly_spouse": None,
                      # OPP-5 continuity binder (PLAN→CONTINUITY): key-contacts register — attorney,
                      # CPA, financial advisor, insurance agent, executor, guardian, etc. Nothing here
                      # is computed; it's just surfaced verbatim into the binder for the survivor.
@@ -7229,7 +7238,8 @@ async def post_insurance_config(req: Request):
               "k401_pretax_pct", "k401_aftertax_pct", "k401_match_t1_pct", "k401_match_t1_rate",
               "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total",
               "k401_pay_periods_custom", "hsa_contribution",
-              "debt_extra_monthly", "roth_ira_contribution_self", "roth_ira_contribution_spouse"):
+              "debt_extra_monthly", "roth_ira_contribution_self", "roth_ira_contribution_spouse",
+              "roth_ira_monthly_self", "roth_ira_monthly_spouse"):
         if k in body:
             try:
                 cfg[k] = None if body[k] in (None, "") else float(body[k])
