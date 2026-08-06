@@ -1951,6 +1951,19 @@ function analysisContent(a){
     return out.join('');
   };
   const briefs=a.briefs;
+  // 2026-08-06: panel-level staleness banner. The daily briefs now carry the same
+  // cache_fetched_at/cache_stale provenance the on-demand research panel has always shown
+  // (_cacheAgeLabel). Before this, a Tavily/Finnhub/EDGAR outage was INVISIBLE here — the
+  // last-known-good fallback kept feeding the model old inputs and the resulting thesis read
+  // exactly as confident as a fresh one. Counted rather than repeated per row: with ~46 holdings
+  // a per-row "as of" line on every brief would drown the theses; the red chip below only appears
+  // on the rows that actually fell back.
+  const staleN=Object.keys(briefs||{}).filter(k=>(briefs[k]||{}).cache_stale).length;
+  if(staleN){
+    const wn=el('div'); wn.style.cssText='border:1px solid var(--color-negative);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);color:var(--color-negative);';
+    wn.innerHTML=`⚠ ${staleN} of ${Object.keys(briefs).length} briefs were built on STALE inputs — a data source (news, analyst consensus, valuation or SEC fundamentals) was unavailable and the last successful retrieval was used instead. Treat those theses as dated, not current.`;
+    wrap.appendChild(wn);
+  }
   // sort: actionable calls first (Buy, Sell, then Hold), then by model confidence, then ticker
   const RANK={Buy:0,Sell:1,Hold:2}, CONF={high:0,med:1,low:2};
   const sortedKeys=Object.keys(briefs).sort((x,y)=>{
@@ -1977,9 +1990,14 @@ function analysisContent(a){
     const ratingCell = b.is_cit
       ? '<span class="muted" style="font-size:var(--font-size-sm)">CIT · not publicly traded</span>'
       : `${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}`;
+    // Per-row stale chip — only on rows that actually fell back to a last-known-good input, so
+    // the reader can tell WHICH theses are dated (the banner above only gives the count).
+    const staleChip = b.cache_stale
+      ? `<span class="neg" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="One or more of this brief's inputs could not be refreshed; the last successful retrieval was used.">⚠ STALE INPUTS${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
+      : '';
     row.innerHTML=`<span style="color:var(--color-accent)">${t}</span>`+
       `<span>${ratingCell}</span>`+
-      `<span style="line-height:1.45"><span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
+      `<span style="line-height:1.45">${staleChip}<span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
     wrap.appendChild(row);
   });
   return wrap;

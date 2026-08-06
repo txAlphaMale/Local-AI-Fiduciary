@@ -5355,32 +5355,91 @@ async def post_analysis(req: Request):
 
 
 # ---------------- daily analysis (Buy/Sell/Hold: grounded + LLM, side by side) ----------------
-def _finnhub(path, sym):
+# 2026-08-06: _grounded()/_valuation() were the LAST two external fetchers still bypassing
+# store.cached_fetch -- every other call site (EDGAR, Tavily, insider, 13F, valuation-percentile)
+# got the last-known-good treatment on 2026-07-30 and these two were simply missed. They had no
+# cache, no fallback, and swallowed every failure to None/{}, which is exactly why the boot-merge
+# ciphertext bug (see _boot_merge) degraded silently for two weeks: Finnhub answered
+# `{"error":"Please use an API key."}` and the app just rendered a blank ANALYST column and
+# honestly-low-confidence briefs instead of surfacing an outage. Now converted.
+FINNHUB_TTL = int(os.environ.get("FINNHUB_TTL", "21600"))   # 6h -- analyst consensus and the
+# Basic-Financials metric block both move on a daily-at-most cadence, and the free tier is
+# 60 calls/min shared across the whole book, so re-pulling per brief run is pure waste.
+
+
+def _finnhub_json(path, sym, extra=None):
+    """(payload, transport_ok). The second element distinguishes "Finnhub ANSWERED, and this
+    symbol genuinely has no data" from "the call FAILED" (missing/garbled key, 429, 403 on a
+    premium endpoint, timeout). cached_fetch needs that distinction: an empty-but-successful
+    answer for a legitimately uncovered micro-cap should be CACHED (otherwise every run re-hammers
+    the free tier for a result we know will be empty), while a real outage must fall back to the
+    last known good instead of overwriting it with nothing.
+
+    Note the explicit 200-with-an-error-body check: Finnhub returns HTTP 200 and
+    {"error": "Please use an API key."} for auth problems rather than a 4xx, so a naive
+    `status_code < 400` test reads an auth failure as success -- which would have poisoned this
+    cache with empty values the moment it was introduced."""
     if not FINNHUB:
-        return None
+        return None, False
+    params = {"symbol": sym, "token": FINNHUB}
+    if extra:
+        params.update(extra)
     try:
-        r = requests.get(f"https://finnhub.io/api/v1/{path}",
-                         params={"symbol": sym, "token": FINNHUB}, timeout=20)
-        return r.json() if r.status_code < 400 else None
+        r = requests.get(f"https://finnhub.io/api/v1/{path}", params=params, timeout=20)
+        if r.status_code >= 400:
+            return None, False
+        try:
+            data = r.json()
+        except ValueError:
+            return None, False
     except Exception:
-        return None
+        return None, False
+    if isinstance(data, dict) and data.get("error"):
+        return None, False
+    return data, True
 
 
-def _grounded(sym):
-    rec = _finnhub("stock/recommendation", sym) or []
-    latest = rec[0] if rec else {}
-    pt = _finnhub("stock/price-target", sym) or {}
-    buys = (latest.get("strongBuy") or 0) + (latest.get("buy") or 0)
-    holds = latest.get("hold") or 0
-    sells = (latest.get("sell") or 0) + (latest.get("strongSell") or 0)
-    total = buys + holds + sells
-    rating = None
-    if total:
-        rating = "Buy" if buys >= holds and buys >= sells else ("Sell" if sells > buys and sells > holds else "Hold")
-    return {"rating": rating, "analyst_total": total,
-            "counts": {k: latest.get(k) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")},
-            "target_mean": pt.get("targetMean"), "target_high": pt.get("targetHigh"),
-            "target_low": pt.get("targetLow"), "period": latest.get("period")}
+def _finnhub(path, sym):
+    """Back-compat thin wrapper -- callers that only want the payload (quote, peers) keep the
+    original None-on-any-failure contract."""
+    return _finnhub_json(path, sym)[0]
+
+
+_EMPTY_GROUNDED = {"rating": None, "analyst_total": 0, "counts": {}, "target_mean": None,
+                   "target_high": None, "target_low": None, "period": None}
+
+
+def _grounded(sym, with_meta=False):
+    """Analyst consensus + price targets from Finnhub. Disk-persisted last-known-good cache
+    (2026-08-06). Return shape is UNCHANGED for every existing caller -- the cache envelope's
+    bookkeeping keys are stripped before returning, deliberately: this dict is fed verbatim into
+    the brief prompt via `json.dumps(grounded)`, so a stray `_ok`/`_cache_*` key would leak into
+    the model's context as if it were market data. `with_meta=True` returns the
+    {"fetched_at", "stale"} dict alongside, for callers that surface "data as of" to the user."""
+    def _compute():
+        rec, rec_ok = _finnhub_json("stock/recommendation", sym)
+        pt, pt_ok = _finnhub_json("stock/price-target", sym)
+        rec = rec if isinstance(rec, list) else []
+        pt = pt if isinstance(pt, dict) else {}
+        latest = rec[0] if rec else {}
+        buys = (latest.get("strongBuy") or 0) + (latest.get("buy") or 0)
+        holds = latest.get("hold") or 0
+        sells = (latest.get("sell") or 0) + (latest.get("strongSell") or 0)
+        total = buys + holds + sells
+        rating = None
+        if total:
+            rating = "Buy" if buys >= holds and buys >= sells else ("Sell" if sells > buys and sells > holds else "Hold")
+        return {"_ok": bool(rec_ok or pt_ok),   # price-target is premium (403 on free) -- either
+                                                # endpoint answering counts as "Finnhub is up"
+                "data": {"rating": rating, "analyst_total": total,
+                         "counts": {k: latest.get(k) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")},
+                         "target_mean": pt.get("targetMean"), "target_high": pt.get("targetHigh"),
+                         "target_low": pt.get("targetLow"), "period": latest.get("period")}}
+
+    env, meta = store.cached_fetch("finnhub_grounded", sym, FINNHUB_TTL, _compute,
+                                   is_ok=lambda e: bool(e.get("_ok")))
+    g = dict(env.get("data") or _EMPTY_GROUNDED)
+    return (g, meta) if with_meta else g
 
 
 def _news(sym, name, with_meta=False):
@@ -5406,35 +5465,41 @@ def _news(sym, name, with_meta=False):
     return (text, meta) if with_meta else text
 
 
-def _valuation(sym):
+def _valuation(sym, with_meta=False):
     """Valuation multiples from Finnhub Basic Financials (/stock/metric). Read-only.
-    Returns None if no data (e.g. foreign listing not in Finnhub, or no key)."""
-    if not FINNHUB:
-        return None
-    try:
-        r = requests.get("https://finnhub.io/api/v1/stock/metric",
-                         params={"symbol": sym, "metric": "all", "token": FINNHUB}, timeout=20)
-        if r.status_code >= 400:
-            return None
-        m = (r.json() or {}).get("metric") or {}
-    except Exception:
-        return None
-    pe = m.get("peTTM") or m.get("peExclExtraTTM")
-    out = {
-        "pe_ttm": pe,
-        "pe_forward": m.get("peNTM") or m.get("forwardPE"),
-        "pb": m.get("pbAnnual") or m.get("pbQuarterly"),
-        "ps_ttm": m.get("psTTM"),
-        "dividend_yield_pct": m.get("dividendYieldIndicatedAnnual") or m.get("currentDividendYieldTTM"),
-        "beta": m.get("beta"),
-        "market_cap_musd": m.get("marketCapitalization"),
-        "avg_volume_10d_m": m.get("10DayAverageTradingVolume"),    # millions of shares/day
-        "avg_volume_3m_m": m.get("3MonthAverageTradingVolume"),    # millions of shares/day
-        "eps_ttm": m.get("epsTTM"),
-        "high_52w": m.get("52WeekHigh"), "low_52w": m.get("52WeekLow"),
-        "earnings_yield_pct": round(100 / pe, 2) if (pe and pe != 0) else None,
-    }
-    return out if any(v is not None for v in out.values()) else None
+    Returns None if no data (e.g. foreign listing not in Finnhub, or no key) -- contract UNCHANGED
+    for the ~12 existing callers, all of which do `_valuation(x) or {}`. Disk-persisted
+    last-known-good cache (2026-08-06); same envelope-and-strip approach as _grounded() above and
+    for the same reason (this dict is json.dumps'd straight into the brief prompt)."""
+    def _compute():
+        data, ok = _finnhub_json("stock/metric", sym, {"metric": "all"})
+        if not ok:
+            return {"_ok": False, "data": None}      # outage -> keep whatever we last had
+        m = (data or {}).get("metric") or {}
+        pe = m.get("peTTM") or m.get("peExclExtraTTM")
+        out = {
+            "pe_ttm": pe,
+            "pe_forward": m.get("peNTM") or m.get("forwardPE"),
+            "pb": m.get("pbAnnual") or m.get("pbQuarterly"),
+            "ps_ttm": m.get("psTTM"),
+            "dividend_yield_pct": m.get("dividendYieldIndicatedAnnual") or m.get("currentDividendYieldTTM"),
+            "beta": m.get("beta"),
+            "market_cap_musd": m.get("marketCapitalization"),
+            "avg_volume_10d_m": m.get("10DayAverageTradingVolume"),    # millions of shares/day
+            "avg_volume_3m_m": m.get("3MonthAverageTradingVolume"),    # millions of shares/day
+            "eps_ttm": m.get("epsTTM"),
+            "high_52w": m.get("52WeekHigh"), "low_52w": m.get("52WeekLow"),
+            "earnings_yield_pct": round(100 / pe, 2) if (pe and pe != 0) else None,
+        }
+        # A genuine "Finnhub has nothing for this symbol" (every field None -- normal for OTC
+        # foreign listings) is a SUCCESS, cached as None so we stop re-asking every run.
+        return {"_ok": True, "data": out if any(v is not None for v in out.values()) else None}
+
+    env, meta = store.cached_fetch("finnhub_valuation", sym, FINNHUB_TTL, _compute,
+                                   is_ok=lambda e: bool(e.get("_ok")))
+    v = env.get("data")
+    v = dict(v) if isinstance(v, dict) else None
+    return (v, meta) if with_meta else v
 
 
 def _price(sym):
@@ -6115,13 +6180,26 @@ def _do_analysis(limit, tickers=None):
                 out = {"updated_at": int(time.time()), "briefs": briefs}
                 store.write_json(ANALYSIS_FILE, out)
                 continue
-            g = _grounded(c["ticker"])
-            news = _news(c["ticker"], c["name"])
+            g, g_meta = _grounded(c["ticker"], with_meta=True)
+            news, news_meta = _news(c["ticker"], c["name"], with_meta=True)
             fund = edgar.fundamentals(c["ticker"])
-            val = _valuation(c["ticker"])
+            val, val_meta = _valuation(c["ticker"], with_meta=True)
             llm = _llm(c["ticker"], c["name"], c.get("weight_pct"), c.get("gain_pct"), g, news, fund, val)
             llm = _verify_and_apply(c["ticker"], c["name"], llm, g, news, fund, val)  # Buy/Sell only (not Holds)
+            # 2026-08-06: carry the same "data as of" provenance the on-demand /api/research path
+            # has always recorded (see get_research) onto the DAILY briefs too. Until now
+            # _do_analysis called _news() WITHOUT with_meta, so a stored brief had no way to say
+            # its news was a month old -- which is precisely the blind spot the 2026-07-30
+            # last-known-good work created: a Tavily outage stopped producing an empty "recent
+            # news: NONE" prompt and started producing a confident thesis built on stale articles,
+            # with nothing on screen to flag it. Oldest successful fetch across the cached inputs
+            # actually used, plus a stale flag if ANY of them fell back.
+            _metas = [g_meta, news_meta, val_meta,
+                      {"fetched_at": fund.get("_cache_fetched_at"), "stale": fund.get("_cache_stale")}]
+            _times = [m.get("fetched_at") for m in _metas if m.get("fetched_at") is not None]
             briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
+                                   "cache_fetched_at": min(_times) if _times else None,
+                                   "cache_stale": any(bool(m.get("stale")) for m in _metas),
                                    "valuation": val, "llm": llm, "updated_at": int(time.time())}
             _log_rating(c["ticker"], llm)   # record rating+price for the AI scorecard
             _run_state["analyzed"] += 1
