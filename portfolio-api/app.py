@@ -18,6 +18,9 @@ import time
 import math
 import random
 import re
+import hashlib   # 2026-08-06: session-cookie fingerprinting for the session.expired audit event
+                 # (the cookie VALUE is never logged -- only a truncated digest, so repeated
+                 # sightings of the same dead cookie can be deduped without storing a credential)
 import datetime
 import threading
 import queue
@@ -660,10 +663,47 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
 }
 
 
+# SEC-1 leftover (2026-08-06): `session.expired` was declared in audit.EVENT_TYPES but never
+# emitted -- the SEC-1 entry itself flagged it as "no real gap yet found where they'd fire."
+# There IS one, it just isn't observable from a login handler: Starlette's SessionMiddleware
+# silently DROPS a cookie whose signature has aged past SESSION_MAX_AGE, so `request.session`
+# simply comes back empty and nothing anywhere notices the difference between "never logged in"
+# and "was logged in, session aged out." The distinction matters when reading the log -- the
+# latter explains an otherwise-suspicious burst of no_session denials from a known IP.
+#
+# Detected here: a `session` COOKIE was sent but decoded to no uid. Deduped by cookie value with
+# a TTL, because the browser keeps re-sending that same dead cookie on every request until it's
+# overwritten at next login -- emitting per request would flood the log with the same event,
+# which is the exact failure mode the pre-login authz.denied noise item was about. Bounded so a
+# hostile client can't grow it without limit.
+_SESSION_EXPIRED_SEEN = {}          # cookie fingerprint -> last-emitted epoch
+_SESSION_EXPIRED_DEDUPE_S = 900     # 15 min
+_SESSION_EXPIRED_MAX = 512
+
+
+def _note_session_expired(request, path):
+    raw = request.cookies.get("session")
+    if not raw:
+        return                       # no cookie at all -> genuinely never authenticated, not an expiry
+    fp = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]   # never log the cookie itself
+    now = time.time()
+    last = _SESSION_EXPIRED_SEEN.get(fp)
+    if last is not None and (now - last) < _SESSION_EXPIRED_DEDUPE_S:
+        return
+    if len(_SESSION_EXPIRED_SEEN) >= _SESSION_EXPIRED_MAX:
+        for _k, _ts in sorted(_SESSION_EXPIRED_SEEN.items(), key=lambda kv: kv[1])[:_SESSION_EXPIRED_MAX // 2]:
+            _SESSION_EXPIRED_SEEN.pop(_k, None)
+    _SESSION_EXPIRED_SEEN[fp] = now
+    audit.emit("session.expired", outcome="failure", request=request, resource=path,
+               detail={"reason": "session_cookie_present_but_no_longer_valid",
+                       "cookie_fingerprint": fp, "max_age_days": auth.SESSION_MAX_AGE_DAYS})
+
+
 @app.middleware("http")
 async def _security_and_auth_gate(request: Request, call_next):
     path = request.url.path
     if path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
+        _note_session_expired(request, path)
         audit.emit("authz.denied", outcome="denied", request=request, resource=path,
                    detail={"reason": "no_session", "method": request.method})
         return JSONResponse({"error": "authentication required"}, status_code=401)
@@ -815,7 +855,16 @@ def auth_status(request: Request):
     uid = request.session.get("uid")
     user = auth.get_user_by_id(uid) if uid else None
     return {"has_user": has_user, "authenticated": bool(user),
-            "user": auth.public_user(user) if user else None}
+            "user": auth.public_user(user) if user else None,
+            # SEC-5 UX gap #2, completed 2026-08-06: the frontend needs to know WHICH writes a
+            # viewer may perform so it can refuse the rest client-side (see the fetch guard in
+            # static/index.html). Served from the server's own set rather than re-typed in JS --
+            # a hand-copied duplicate would drift the first time a path is added here, and it
+            # would drift SILENTLY (the UI would block something the backend allows, or worse,
+            # allow something it doesn't, producing a confusing 403 instead of a clean message).
+            # Exposing it leaks nothing: these are the paths a viewer is already permitted to
+            # call, and the real enforcement stays server-side in _security_and_auth_gate.
+            "viewer_allowed_write_paths": sorted(_VIEWER_ALLOWED_WRITE_PATHS)}
 
 
 @app.post("/api/auth/first-run")
@@ -831,6 +880,14 @@ async def auth_first_run(request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     request.session["uid"] = uid
+    # 2026-08-06: session.created is emitted at the two (and only two) points that actually mint a
+    # session cookie -- here and in auth_login below. SEC-1 noted this "would need to hook the
+    # session-cookie-issuance point, not just login success"; that's exactly what this is. It is
+    # deliberately NOT redundant with auth.login.success: first-run account creation issues a
+    # session WITHOUT any login event at all, so without this the very first session in a
+    # deployment's life has no issuance record anywhere in the chain.
+    audit.emit("session.created", request=request, actor=uid, actor_name=body.get("username"),
+               resource="/api/auth/first-run", detail={"via": "first_run_account_creation"})
     # recovery_key (2026-07-24, Account Recovery Tier 2) is returned ONCE, here, and never again --
     # only its argon2 hash is stored. This is the host-CLI fallback (`auth.py --reset-credentials`)
     # for when a user has no working MFA AND forgets the password; without it, host/container
@@ -875,6 +932,14 @@ async def auth_login(request: Request):
     audit.emit("auth.login.success", request=request,
                actor=user["id"], actor_name=user.get("username"), resource="/api/auth/login",
                detail={"mfa_used": bool(user["totp_enabled"])})
+    # 2026-08-06 (see the first-run handler above): the credential check and the session issuance
+    # are separate facts. Keeping them as separate events means a future change that authenticates
+    # without minting a session (or vice versa) shows up as a mismatch in the log rather than
+    # hiding inside one overloaded event.
+    audit.emit("session.created", request=request, actor=user["id"], actor_name=user.get("username"),
+               resource="/api/auth/login",
+               detail={"via": "password_login", "mfa_used": bool(user["totp_enabled"]),
+                       "role": user.get("role") or "admin"})
     return {"ok": True, "user": auth.public_user(user)}
 
 
@@ -6197,7 +6262,19 @@ def _do_analysis(limit, tickers=None):
             _metas = [g_meta, news_meta, val_meta,
                       {"fetched_at": fund.get("_cache_fetched_at"), "stale": fund.get("_cache_stale")}]
             _times = [m.get("fetched_at") for m in _metas if m.get("fetched_at") is not None]
+            # RESUME-TRACKER 2026-07-11 queued follow-up (1), built 2026-08-06: surface the 13F
+            # WATCHED-HOLDERS line on the main RESEARCH -> BRIEFS tab. _inst_for() is a pure
+            # dictionary lookup into the already-built institutional cache (_read_institutional) --
+            # NO network call and NO EDGAR pull happens here, which is why this can ride along in
+            # the nightly loop without slowing it down or spending an API budget. Returns None when
+            # the 13F build hasn't run yet or no watched manager holds the name; the frontend just
+            # renders nothing in that case, same as it already does on the on-demand research panel.
+            try:
+                _inst = _inst_for(c["ticker"])
+            except Exception:
+                _inst = None      # never let a cache-shape surprise kill the whole nightly run
             briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
+                                   "institutional": _inst,
                                    "cache_fetched_at": min(_times) if _times else None,
                                    "cache_stale": any(bool(m.get("stale")) for m in _metas),
                                    "valuation": val, "llm": llm, "updated_at": int(time.time())}
@@ -9070,7 +9147,7 @@ _write_mcpo_secrets_file()   # regenerate on every portfolio-api boot too, not j
 
 
 @app.get("/api/secrets")
-def get_secrets():
+def get_secrets(request: Request):
     """Status ONLY — never returns secret VALUES. Per secret: whether it's set and from where
     (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable
     here. 2026-07-24: editable no longer requires NOT env_locked -- you can stage a replacement
@@ -9079,6 +9156,28 @@ def get_secrets():
     container's existing environment and never sees an edited .env at all). A staged value has
     zero effect until the .env entry is actually removed."""
     stored = _read_secrets()
+    # 2026-08-06: the third of SEC-1's three declared-but-never-emitted event types. Worth being
+    # precise about what this event does and does NOT mean, because "secret.read" reads like
+    # "someone retrieved a credential" and that is NOT what happened: this endpoint is write-only
+    # by design and never returns a VALUE. What it does return is the credential INVENTORY -- which
+    # keys exist, which are configured, which are staged behind .env -- and that inventory is
+    # exactly what reconnaissance looks like ahead of a targeted attempt, so viewing it is a
+    # genuine access event under SOC 2 CC6.1 / NIST AC-6(9) (auditing privileged-function use).
+    # Emitting per-VALUE-decrypt instead would be useless noise -- _read_secrets() runs constantly
+    # in normal operation (every SMTP send, every backup) and would drown the log.
+    # NOTE: `data.shared` remains declared-but-unemitted; unlike these three it has no current code
+    # path at all (nothing in this app shares data outbound), so inventing a trigger would be worse
+    # than leaving the vocabulary entry reserved.
+    try:
+        _uid = request.session.get("uid")
+        _u = auth.get_user_by_id(_uid) if _uid else None
+        audit.emit("secret.read", request=request, actor=_uid,
+                   actor_name=(_u or {}).get("username"), resource="/api/secrets",
+                   detail={"scope": "inventory_metadata_only_no_values",
+                           "keys_configured": sorted(k for k in stored if stored.get(k)),
+                           "spec_count": len(SECRET_SPECS)})
+    except Exception:
+        pass   # audit.emit is already fail-safe; this guard covers the session/user lookup too
     out = []
     for spec in SECRET_SPECS:
         k = spec["key"]
@@ -9664,6 +9763,12 @@ def _opportunities():
     cfg = _read_scanner()
     crit = cfg.get("criteria") or {}
     tickers = list(dict.fromkeys([str(t).upper() for t in (cfg.get("watchlist") or []) if t]))
+    # RESUME-TRACKER 2026-07-11 queued follow-up (2), built 2026-08-06: a ticker the user TYPED
+    # into the watchlist is an explicit instruction, not a screening candidate -- it must never be
+    # silently dropped for failing the growth/price/PE filters the way an auto-discovered peer
+    # should be. Captured HERE, before the peer expansion below appends to `tickers`, so
+    # "user_added" means exactly "came from cfg['watchlist']" and can never leak onto a peer.
+    user_added = set(tickers)
     held = set()
     try:
         held = {c.get("ticker") for c in _data()["consolidated"] if c.get("ticker")}
@@ -9678,9 +9783,11 @@ def _opportunities():
     ideas = []
     for t in tickers[:25]:
         try:
-            ideas.append({**_screen_one(t, crit), "already_held": t in held})
+            ideas.append({**_screen_one(t, crit), "already_held": t in held,
+                          "user_added": t in user_added})
         except Exception as e:
-            ideas.append({"ticker": t, "available": False, "error": str(e)})
+            ideas.append({"ticker": t, "available": False, "error": str(e),
+                          "user_added": t in user_added})
     # Rank by the quality-weighted forward return (opportunity_score), then raw fit, then
     # expected return — replaces the old "fit then revenue-growth" order so the best
     # expected return PER DOLLAR (never per share) floats up. Fit gate still applies below.
@@ -9698,18 +9805,52 @@ def _opportunities():
             return False
         return True
 
-    screened = len(ideas)
-    ideas = [i for i in ideas if i.get("available") and _price_ok(i)
+    all_ideas = ideas
+    screened = len(all_ideas)
+    # The screen applies to auto-discovered peers exactly as before. A user-added watchlist name
+    # that fails the price cap or the fit gate is no longer discarded -- it moves to a separate
+    # `unscreened_watchlist` list instead, so it's always visible WITH its metrics and the reason
+    # it wouldn't have qualified, rather than disappearing with no explanation. Two deliberate
+    # limits on the bypass: (1) it does NOT exempt `available` -- a ticker that returned no data at
+    # all has nothing to display, and is surfaced as `unavailable_watchlist` so a typo'd symbol is
+    # still visible as a problem; (2) these stay OUT of `ideas`, so the ranked idea list keeps
+    # meaning "passed your screen" and the OPP_MAX_IDEAS cap can't be crowded out by watchlist
+    # entries. The alternative -- mixing them into `ideas` -- would have made "fit >= min_fit" no
+    # longer true of everything in that list, quietly breaking every downstream consumer of it.
+    ideas = [i for i in all_ideas if i.get("available") and _price_ok(i)
              and (i.get("fit_score") or 0) >= OPP_MIN_FIT][:OPP_MAX_IDEAS]
+    kept = {i.get("ticker") for i in ideas}
+    unscreened_watchlist, unavailable_watchlist = [], []
+    for i in all_ideas:
+        if not i.get("user_added") or i.get("ticker") in kept:
+            continue
+        if not i.get("available"):
+            unavailable_watchlist.append({"ticker": i.get("ticker"),
+                                          "reason": i.get("error") or "no data returned for this symbol"})
+            continue
+        why = []
+        if not _price_ok(i):
+            p = i.get("price")
+            why.append(f"share price {('$' + format(p, '.2f')) if p is not None else 'unknown'} outside your "
+                       f"{'$' + str(minp) if minp is not None else 'no min'}–"
+                       f"{'$' + str(maxp) if maxp is not None else 'no max'} cap")
+        if (i.get("fit_score") or 0) < OPP_MIN_FIT:
+            why.append(f"fit {i.get('fit_score') or 0}/{i.get('max_score') or 4} below the {OPP_MIN_FIT} minimum")
+        unscreened_watchlist.append({**i, "excluded_because": why or ["outside the top-ranked cap"]})
     return {"generated_at": int(time.time()), "criteria": crit, "strategy": cfg.get("strategy_description"),
             "watchlist": cfg.get("watchlist") or [], "include_holding_peers": bool(cfg.get("include_holding_peers")),
             "discovery_queries": cfg.get("discovery_queries") or [], "alert_holdings_limit": cfg.get("alert_holdings_limit"),
             "screened": screened, "count": len(ideas), "min_fit": OPP_MIN_FIT, "ideas": ideas,
+            "unscreened_watchlist": unscreened_watchlist,
+            "unavailable_watchlist": unavailable_watchlist,
             "note": f"Top {len(ideas)} of {screened} screened — only names scoring >= {OPP_MIN_FIT}/4 within your "
                     "price cap. Ranked by 'opportunity_score' = analyst-target-implied forward return WEIGHTED "
                     "by quality fit (a per-DOLLAR % return, never per share; a wild target on a low-quality name "
                     "won't top a solid one). Analyst targets are noisy and mean-reverting — research ideas, NOT "
-                    "advice; ask the Fiduciary to deep-dive any name."}
+                    "advice; ask the Fiduciary to deep-dive any name."
+                    + (f" Plus {len(unscreened_watchlist)} watchlist name(s) shown unscreened below — you added "
+                       "them explicitly, so they're never dropped for failing the screen."
+                       if unscreened_watchlist else "")}
 
 
 _opp_lock = threading.Lock()

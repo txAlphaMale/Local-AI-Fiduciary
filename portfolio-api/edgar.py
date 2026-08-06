@@ -715,6 +715,23 @@ def _compute(ticker):
         return {"ticker": ticker, "available": False, "reason": f"SEC fetch error: {e}"}
     if not facts:
         return {"ticker": ticker, "available": False, "reason": "no SEC company facts"}
+    # 2026-08-06 diagnostic split. Every extractor in this module reads ONLY the `us-gaap`
+    # taxonomy (see _latest/_merged_rows). A company that files with the SEC under IFRS -- a
+    # foreign private issuer on a 20-F/40-F, common for the Canadian and Australian listings in
+    # this portfolio -- has a perfectly valid CIK and real companyfacts, just under `ifrs-full`.
+    # Before this, that case fell through to a generic empty result and the UI rendered
+    # "GAAP: not SEC-filed", which is FLATLY WRONG: the company does file with the SEC, we just
+    # can't read its taxonomy. Distinguishing the two matters because they have different fixes
+    # (nothing to do vs. add IFRS tag mappings) and because telling a user a real filer doesn't
+    # file is the kind of quiet inaccuracy that erodes trust in every other number on the page.
+    _tax = (facts.get("facts") or {})
+    if not _tax.get("us-gaap"):
+        _other = sorted(k for k in _tax.keys() if k != "dei")
+        return {"ticker": ticker, "available": False, "cik": cik,
+                "sec_filer": True, "taxonomies": _other,
+                "reason": ("SEC filer, but reports under " + (", ".join(_other) or "an unrecognized taxonomy")
+                           + " — this module only parses us-gaap, so no ratios can be computed"
+                           if _other else "SEC filer, but companyfacts contains no financial taxonomy")}
 
     rev, rev_prev, fy_end = _latest(facts, "revenue")
     cor = _latest(facts, "cost_of_revenue")[0]
