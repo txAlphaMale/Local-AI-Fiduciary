@@ -99,21 +99,43 @@ _CONFIG_ENV_KEYS = ("ANALYSIS_MODEL", "LLM_TIMEOUT", "LLM_KEEP_ALIVE",
 _ENV_SECRETS_AT_BOOT = {_k for _k, _v in os.environ.items() if _v not in (None, "")}
 
 
-def _boot_merge(_path, _only=None):
+def _boot_merge(_path, _only=None, _decrypt=False):
     """Fill env GAPS from the store (Stage A, 2026-07-23e — was a raw JSON file read directly)
     BEFORE the config constants below read os.environ. Real env always wins (we never overwrite
-    a set var). _only restricts to a key allow-list."""
+    a set var). _only restricts to a key allow-list.
+
+    `_decrypt` (2026-08-06 fix) is REQUIRED for SECRETS_FILE and must stay off for
+    _SETTINGS_FILE_BOOT. Background: 2026-07-24's encryption-at-rest change made _write_secrets()
+    Fernet-encrypt each SECRETS_FILE value INDIVIDUALLY (store.py's own DB-layer _enc is a
+    separate, outer layer that read_json_strict already undoes). This function was written a day
+    earlier and reads the blob raw instead of going through _read_secrets(), so from the first
+    container recreate after that change it exported CIPHERTEXT as the env value — e.g.
+    os.environ["FINNHUB_API_KEY"] = "gAAAAAB...". Every consumer that reads such a key as a module
+    constant (FINNHUB at the bottom of this block; llm.py's LLM_API_KEY/EMBED_API_KEY;
+    shortint.py's FINRA_*; RENTCAST_API_KEY) then sent a garbage token upstream. Crucially the
+    ciphertext is TRUTHY, so every `if not FINNHUB:` guard passed and the failure was silent —
+    Finnhub simply answered "Please use an API key." and _grounded()/_valuation() swallowed it to
+    None/{}, which surfaced only as a blank ANALYST column and "low" confidence briefs (the
+    coverage line in _llm() honestly reported 1-of-4 inputs available). Secrets read LIVE through
+    _read_secrets() (SMTP_*, BACKUP_PASSPHRASE) were never affected, which is why the breakage
+    looked oddly selective. settings.json is NOT per-value encrypted (see _read_settings /
+    post_settings — plain store.read_json_strict / store.write_json), hence _decrypt=False there;
+    turning it on would be harmless anyway since decrypt_or_legacy() passes non-tokens through
+    untouched, but the flag documents which store is which."""
     try:
         for _k, _v in (store.read_json_strict(_path) or {}).items():
             if _only is not None and _k not in _only:
                 continue
+            if _decrypt:
+                # never raises; a legacy plaintext value (pre-2026-07-24) comes back as-is
+                _v = secrets_crypto.decrypt_or_legacy(_v)
             if _v not in (None, "") and not os.environ.get(_k):
                 os.environ[_k] = str(_v)
     except Exception:
         pass
 
 
-_boot_merge(SECRETS_FILE)                          # secrets (all keys)
+_boot_merge(SECRETS_FILE, _decrypt=True)           # secrets (all keys) — values are encrypted at rest
 _boot_merge(_SETTINGS_FILE_BOOT, _CONFIG_ENV_KEYS)  # restart-class non-secret config only
 
 MCPO = os.environ.get("MCPO_BASE_URL", "http://mcpo:8000").rstrip("/")
