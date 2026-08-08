@@ -302,36 +302,83 @@ def ext_cache_set(source, key, value, fetched_at=None):
 _MEM_CACHE = {}   # (source, key) -> (fetched_at, value)
 
 
-def cached_fetch(source, key, ttl, compute_fn, is_ok=None):
+# 2026-08-08 staleness rework. The 2026-07-30 contract equated "this call fell back to the
+# last-known-good copy" with "the user is reading stale data", and equated "the source returned
+# nothing" with "the source failed". Both were wrong often enough that the RESEARCH -> BRIEFS
+# banner sat at 26-of-26 permanently and stopped carrying information:
+#
+#   * FALLING BACK IS NOT THE SAME AS BEING OUT OF DATE. EDGAR fundamentals are QUARTERLY. A
+#     403 on today's refresh, falling back to a copy pulled 20 hours ago, leaves the brief
+#     reading exactly the numbers a successful fetch would have returned. Flagging that red
+#     teaches the reader to ignore the flag, which costs them the one case that matters.
+#     Staleness is now measured against `stale_after` -- how long THIS dataset stays true --
+#     not against whether one HTTP call happened to work.
+#   * "NOTHING TO REPORT" IS A RESULT, NOT AN OUTAGE. An ETF has no SEC company facts and a
+#     quiet week has no news; both used to be scored as fetch failures, so those rows were
+#     flagged forever and could never clear. `is_empty` classifies them as successes.
+#
+# The third state matters just as much and is NEW here: a source that errored with NOTHING
+# cached to fall back on is not stale, it is ABSENT -- the brief was built without that input
+# entirely. Suppressing that under the narrower stale rule would have re-opened exactly the
+# blind spot this provenance work was built to close, so it gets its own `error` flag and its
+# own banner rather than being folded into either bucket.
+_STALE_AFTER_DEFAULT_FLOOR = 86400      # never call a fallback stale until it has missed a full day
+
+
+def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_after=None):
     """`compute_fn()` performs the fresh fetch (must not raise -- every current caller already
     catches its own fetch exceptions internally and returns a shaped failure value instead, same
-    contract as before this helper existed). `is_ok(value)` decides success vs failure for caching
-    purposes (default: anything is a success -- for callers with no failure concept).
+    contract as before this helper existed).
 
-    Returns (value, meta) where meta = {"fetched_at": epoch seconds or None, "stale": bool}.
-    `fetched_at` is None only when NOTHING has ever succeeded for this (source, key), anywhere
-    (this process's memory or disk) -- the caller is getting today's failure with nothing to fall
-    back to, same as before this helper existed."""
+    Classification, in order:
+      `is_empty(value)` -- the source answered correctly and the answer is "there is nothing
+        here" (no SEC filings for an ETF, no news this week). A SUCCESS: cached, never flagged.
+      `is_ok(value)`    -- the fetch produced usable data (default: anything is a success).
+      otherwise         -- the fetch FAILED; fall back to the last-known-good copy if one exists.
+
+    `ttl` gates the in-memory hot cache (how often we re-ask). `stale_after` gates the honesty
+    flag (how long the data stays true once we cannot re-ask) and should reflect the dataset's
+    real cadence -- they are different questions and conflating them is what produced the
+    permanently-lit banner. Defaults to max(2*ttl, 1 day).
+
+    Returns (value, meta), meta =
+      {"fetched_at": epoch secs or None,   # when the returned value was actually retrieved
+       "age":        secs or None,         # how old the returned value is
+       "stale":      bool,                 # fell back to a copy older than `stale_after`
+       "fallback":   bool,                 # fell back at all (stale or not) -- informational
+       "empty":      bool,                 # a valid "nothing here" answer
+       "error":      bool}                 # fetch failed AND nothing was cached to fall back on
+    """
     is_ok = is_ok or (lambda v: True)
     now = time.time()
+    if stale_after is None:
+        stale_after = max(2 * ttl, _STALE_AFTER_DEFAULT_FLOOR)
+
+    def _meta(fetched_at, stale=False, fallback=False, empty=False, error=False):
+        return {"fetched_at": fetched_at, "stale": stale, "fallback": fallback,
+                "empty": empty, "error": error,
+                "age": (now - fetched_at) if fetched_at is not None else None}
+
     hit = _MEM_CACHE.get((source, key))
     if hit and (now - hit[0] < ttl):
-        return hit[1], {"fetched_at": hit[0], "stale": False}
+        return hit[1], _meta(hit[0])
     res = compute_fn()
-    if is_ok(res):
+    if (is_empty and is_empty(res)) or is_ok(res):
+        empty = bool(is_empty and is_empty(res))
         _MEM_CACHE[(source, key)] = (now, res)
         ext_cache_set(source, key, res, now)
-        return res, {"fetched_at": now, "stale": False}
-    # failure/empty this call -- fall back to the last-known-good: memory first (cheaper, this
+        return res, _meta(now, empty=empty)
+    # failure this call -- fall back to the last-known-good: memory first (cheaper, this
     # process), then disk (survives a restart -- the whole point of Part 2).
+    if not hit:
+        disk = ext_cache_get(source, key)
+        if disk:
+            hit = (disk[0], disk[1])
+            _MEM_CACHE[(source, key)] = hit   # rehydrate so this process's later calls skip the disk hit
     if hit:
-        return hit[1], {"fetched_at": hit[0], "stale": True}
-    disk = ext_cache_get(source, key)
-    if disk:
-        fetched_at, val = disk
-        _MEM_CACHE[(source, key)] = (fetched_at, val)   # rehydrate memory so this process's later calls skip the disk hit
-        return val, {"fetched_at": fetched_at, "stale": True}
-    return res, {"fetched_at": None, "stale": True}
+        return hit[1], _meta(hit[0], stale=(now - hit[0]) > stale_after, fallback=True)
+    # nothing has ever succeeded for this (source, key), anywhere -- absent, not stale.
+    return res, _meta(None, error=True)
 
 
 # ============================================================================

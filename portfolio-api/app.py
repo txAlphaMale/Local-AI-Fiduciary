@@ -5329,10 +5329,16 @@ def get_research(ticker: str):
         # below, which is just when the LLM synthesis ran (always "now" -- it's never cached).
         fetch_times = [m for m in (fund.get("_cache_fetched_at"), (ins or {}).get("_cache_fetched_at"),
                                     news_meta.get("fetched_at")) if m is not None]
+        # 2026-08-08: same two-flag split as the daily briefs (see _do_analysis) -- "fell back to
+        # data that has aged out" and "could not be retrieved at all" are different problems.
+        _missing = sorted({n for n, err in (("SEC fundamentals", fund.get("_cache_error")),
+                                            ("insider signal", (ins or {}).get("_cache_error")),
+                                            ("news", news_meta.get("error"))) if err})
         result = {"ticker": t, "generated_at": int(time.time()),
                   "cache_fetched_at": min(fetch_times) if fetch_times else None,
                   "cache_stale": bool(fund.get("_cache_stale")) or bool((ins or {}).get("_cache_stale"))
                                  or bool(news_meta.get("stale")),
+                  "cache_degraded": bool(_missing), "cache_missing": _missing,
                   "grounded": g, "valuation": val, "fundamentals": fund, "llm": llm,
                   "insider": ins, "institutional": inst}
         _save_research_result(t, result)   # persist so navigating away/reloading can recover it
@@ -5431,6 +5437,14 @@ FINNHUB_TTL = int(os.environ.get("FINNHUB_TTL", "21600"))   # 6h -- analyst cons
 # Basic-Financials metric block both move on a daily-at-most cadence, and the free tier is
 # 60 calls/min shared across the whole book, so re-pulling per brief run is pure waste.
 
+# 2026-08-08: `stale_after` is a SEPARATE question from `ttl` (see store.cached_fetch's header).
+# ttl = how often we re-ask. stale_after = how long the answer stays true if we cannot re-ask.
+# Analyst consensus and valuation multiples drift over days, not hours -- a 6h TTL miss is not a
+# reason to tell the user their brief is dated.
+FINNHUB_STALE_AFTER = int(os.environ.get("FINNHUB_STALE_AFTER", "172800"))   # 2d
+NEWS_STALE_AFTER = int(os.environ.get("NEWS_STALE_AFTER", "86400"))          # 1d -- news is the
+# one input where age genuinely invalidates the thesis, so it keeps the tightest window.
+
 
 def _finnhub_json(path, sym, extra=None):
     """(payload, transport_ok). The second element distinguishes "Finnhub ANSWERED, and this
@@ -5502,7 +5516,8 @@ def _grounded(sym, with_meta=False):
                          "target_low": pt.get("targetLow"), "period": latest.get("period")}}
 
     env, meta = store.cached_fetch("finnhub_grounded", sym, FINNHUB_TTL, _compute,
-                                   is_ok=lambda e: bool(e.get("_ok")))
+                                   is_ok=lambda e: bool(e.get("_ok")),
+                                   stale_after=FINNHUB_STALE_AFTER)
     g = dict(env.get("data") or _EMPTY_GROUNDED)
     return (g, meta) if with_meta else g
 
@@ -5526,7 +5541,12 @@ def _news(sym, name, with_meta=False):
         except Exception:
             return ""
 
-    text, meta = store.cached_fetch("tavily_news_raw", query, TAVILY_CACHE_TTL, _compute, is_ok=lambda r: bool(r))
+    # NOTE the failure signal here is an EMPTY body, which only happens on an HTTP error or an
+    # exception -- a 200 with no articles still returns a JSON envelope, so "quiet week" already
+    # scores as the success it is. Kept as a bare string rather than an envelope dict on purpose:
+    # changing the cached shape would orphan every existing disk entry for this source.
+    text, meta = store.cached_fetch("tavily_news_raw", query, TAVILY_CACHE_TTL, _compute,
+                                    is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER)
     return (text, meta) if with_meta else text
 
 
@@ -5561,7 +5581,8 @@ def _valuation(sym, with_meta=False):
         return {"_ok": True, "data": out if any(v is not None for v in out.values()) else None}
 
     env, meta = store.cached_fetch("finnhub_valuation", sym, FINNHUB_TTL, _compute,
-                                   is_ok=lambda e: bool(e.get("_ok")))
+                                   is_ok=lambda e: bool(e.get("_ok")),
+                                   stale_after=FINNHUB_STALE_AFTER)
     v = env.get("data")
     v = dict(v) if isinstance(v, dict) else None
     return (v, meta) if with_meta else v
@@ -5649,13 +5670,20 @@ def _insider_signal(sym):
             return {"ticker": t, "available": False,
                     "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
         except Exception as e:
-            return {"ticker": t, "available": False, "reason": f"insider fetch error: {e}"}
+            return {"ticker": t, "available": False, "error": True,
+                    "reason": f"insider fetch error: {e}"}
 
-    res, meta = store.cached_fetch("insider_signal", t, INSIDER_TTL, _compute,
-                                   is_ok=lambda r: bool(r.get("available")))
+    res, meta = store.cached_fetch(
+        "insider_signal", t, INSIDER_TTL, _compute,
+        is_ok=lambda r: bool(r.get("available")),
+        # "this issuer filed no Form 4s in the window" is the single most common outcome and is a
+        # real answer -- most of the book is funds and ADRs that never will. Not an outage.
+        is_empty=lambda r: bool(isinstance(r, dict) and not r.get("available") and not r.get("error")),
+        stale_after=int(os.environ.get("INSIDER_STALE_AFTER", "604800")))   # 7d
     res = dict(res)
     res["_cache_fetched_at"] = meta.get("fetched_at")
-    res["_cache_stale"] = meta.get("stale", False)
+    res["_cache_stale"] = bool(meta.get("stale"))
+    res["_cache_error"] = bool(meta.get("error"))
     return res
 
 
@@ -5679,6 +5707,30 @@ def get_insider(ticker: str):
     except Exception:
         pass
     return res
+
+
+@app.get("/api/edgar-status")
+def get_edgar_status():
+    """Health of the SEC EDGAR entry point (2026-08-08).
+
+    Added after a whole-book diagnosis was impossible from the outside: every EDGAR-backed
+    endpoint reported 'no SEC CIK (foreign-listed, fund/ETF, or not SEC-registered)' for names
+    like PLTR, because get_cik() swallowed the ticker-map fetch exception and returned None. That
+    string is indistinguishable from the truth, so a total outage looked like 28 unremarkable
+    classifications. This endpoint answers 'can we reach SEC at all' in one call, and probes a
+    known-good large-cap so a stale/short map is visible too."""
+    st = edgar.cik_map_status()
+    probe = None
+    if st.get("ok"):
+        try:
+            probe = {"ticker": "AAPL", "cik": edgar.get_cik("AAPL")}
+        except Exception as e:
+            probe = {"ticker": "AAPL", "error": f"{type(e).__name__}: {e}"}
+    return {"cik_map": st, "probe": probe, "user_agent": edgar.SEC_UA,
+            "user_agent_looks_like_placeholder":
+                bool(re.search(r"example\.com|you@", edgar.SEC_UA or "", re.I)),
+            "hint": "SEC returns 403 for generic User-Agents. Set SEC_USER_AGENT to a real "
+                    "contact string (e.g. 'Fiduciary yourname@yourdomain.com') and restart."}
 
 
 # ============ G15: institutional 13F forward whale-tracking (context-only) ============
@@ -6259,9 +6311,22 @@ def _do_analysis(limit, tickers=None):
             # news: NONE" prompt and started producing a confident thesis built on stale articles,
             # with nothing on screen to flag it. Oldest successful fetch across the cached inputs
             # actually used, plus a stale flag if ANY of them fell back.
-            _metas = [g_meta, news_meta, val_meta,
-                      {"fetched_at": fund.get("_cache_fetched_at"), "stale": fund.get("_cache_stale")}]
-            _times = [m.get("fetched_at") for m in _metas if m.get("fetched_at") is not None]
+            #
+            # 2026-08-08: split into TWO flags, because collapsing them made the banner useless.
+            #   cache_stale    -- an input fell back to a copy older than that source's own
+            #                     freshness window (store.cached_fetch's stale_after). The thesis
+            #                     rests on data that has actually gone out of date.
+            #   cache_degraded -- an input could not be retrieved AT ALL and nothing was cached to
+            #                     fall back on, so the thesis was built WITHOUT it. Strictly worse
+            #                     than stale and previously indistinguishable from it.
+            # `cache_missing` names the offending sources so the banner can say which one broke
+            # instead of listing all four as suspects.
+            _metas = [("analyst consensus", g_meta), ("news", news_meta), ("valuation", val_meta),
+                      ("SEC fundamentals",
+                       {"fetched_at": fund.get("_cache_fetched_at"), "stale": fund.get("_cache_stale"),
+                        "error": fund.get("_cache_error")})]
+            _times = [m.get("fetched_at") for _n, m in _metas if m.get("fetched_at") is not None]
+            _missing = sorted({n for n, m in _metas if m.get("error")})
             # RESUME-TRACKER 2026-07-11 queued follow-up (1), built 2026-08-06: surface the 13F
             # WATCHED-HOLDERS line on the main RESEARCH -> BRIEFS tab. _inst_for() is a pure
             # dictionary lookup into the already-built institutional cache (_read_institutional) --
@@ -6276,7 +6341,9 @@ def _do_analysis(limit, tickers=None):
             briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
                                    "institutional": _inst,
                                    "cache_fetched_at": min(_times) if _times else None,
-                                   "cache_stale": any(bool(m.get("stale")) for m in _metas),
+                                   "cache_stale": any(bool(m.get("stale")) for _n, m in _metas),
+                                   "cache_degraded": bool(_missing),
+                                   "cache_missing": _missing,
                                    "valuation": val, "llm": llm, "updated_at": int(time.time())}
             _log_rating(c["ticker"], llm)   # record rating+price for the AI scorecard
             _run_state["analyzed"] += 1
@@ -10790,7 +10857,8 @@ def _tavily_results(query, days=14, max_results=5, with_meta=False):
         return found
 
     key = f"{query}|{days}|{max_results}"
-    results, meta = store.cached_fetch("tavily", key, TAVILY_CACHE_TTL, _compute, is_ok=lambda r: bool(r))
+    results, meta = store.cached_fetch("tavily", key, TAVILY_CACHE_TTL, _compute,
+                                       is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER)
     return (results, meta) if with_meta else results
 
 

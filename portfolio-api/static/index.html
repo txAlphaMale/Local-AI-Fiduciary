@@ -2025,11 +2025,35 @@ function analysisContent(a){
   // exactly as confident as a fresh one. Counted rather than repeated per row: with ~46 holdings
   // a per-row "as of" line on every brief would drown the theses; the red chip below only appears
   // on the rows that actually fell back.
-  const staleN=Object.keys(briefs||{}).filter(k=>(briefs[k]||{}).cache_stale).length;
-  if(staleN){
-    const wn=el('div'); wn.style.cssText='border:1px solid var(--color-negative);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);color:var(--color-negative);';
-    wn.innerHTML=`⚠ ${staleN} of ${Object.keys(briefs).length} briefs were built on STALE inputs — a data source (news, analyst consensus, valuation or SEC fundamentals) was unavailable and the last successful retrieval was used instead. Treat those theses as dated, not current.`;
-    wrap.appendChild(wn);
+  // 2026-08-08: TWO banners, not one. The single banner above conflated three different things
+  // and consequently sat at "26 of 26" indefinitely, which is the same as showing nothing. Now:
+  //   DEGRADED (red)  — an input could not be retrieved at all and nothing was cached to fall back
+  //                     on, so the brief was written WITHOUT it. Names the source, because the old
+  //                     "news, analyst consensus, valuation or SEC fundamentals" list left the
+  //                     reader unable to tell a total EDGAR outage from a slow news week.
+  //   STALE (amber)   — an input fell back to a copy that has aged past that source's own
+  //                     freshness window. Real, but a rung below missing.
+  // Securities that legitimately have no data for a source (ETFs have no SEC company facts) no
+  // longer appear in either count — see store.cached_fetch's is_empty.
+  const keys=Object.keys(briefs||{}), total=keys.length;
+  const banner=(color,text)=>{
+    const wn=el('div');
+    wn.style.cssText=`border:1px solid ${color};border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);color:${color};`;
+    wn.innerHTML=text; wrap.appendChild(wn);
+  };
+  const degradedKeys=keys.filter(k=>(briefs[k]||{}).cache_degraded);
+  if(degradedKeys.length){
+    const srcs=[...new Set(degradedKeys.flatMap(k=>(briefs[k]||{}).cache_missing||[]))].sort();
+    banner('var(--color-negative)',
+      `⚠ ${degradedKeys.length} of ${total} briefs are MISSING an input entirely${srcs.length?' — '+srcs.join(', '):''}. `+
+      `The source could not be retrieved and no previous copy existed, so those theses were written without it. `+
+      `This is a live outage, not aged data — check the source's credentials/connectivity.`);
+  }
+  const staleKeys=keys.filter(k=>(briefs[k]||{}).cache_stale);
+  if(staleKeys.length){
+    banner('var(--color-accent)',
+      `⚠ ${staleKeys.length} of ${total} briefs used data past its freshness window — a source could not be refreshed `+
+      `and the last successful retrieval was old enough to matter. Treat those theses as dated.`);
   }
   // sort: actionable calls first (Buy, Sell, then Hold), then by model confidence, then ticker
   const RANK={Buy:0,Sell:1,Hold:2}, CONF={high:0,med:1,low:2};
@@ -2057,11 +2081,13 @@ function analysisContent(a){
     const ratingCell = b.is_cit
       ? '<span class="muted" style="font-size:var(--font-size-sm)">CIT · not publicly traded</span>'
       : `${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}`;
-    // Per-row stale chip — only on rows that actually fell back to a last-known-good input, so
-    // the reader can tell WHICH theses are dated (the banner above only gives the count).
-    const staleChip = b.cache_stale
-      ? `<span class="neg" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="One or more of this brief's inputs could not be refreshed; the last successful retrieval was used.">⚠ STALE INPUTS${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
-      : '';
+    // Per-row chip — the banners give counts, the chip says WHICH rows and why. Missing outranks
+    // stale: if an input is absent entirely there is no "as of" date worth printing for it.
+    const staleChip = b.cache_degraded
+      ? `<span class="neg" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="This input could not be retrieved and no previous copy existed — the thesis was written without it.">⚠ MISSING INPUT${(b.cache_missing||[]).length?' · '+b.cache_missing.join(', '):''}</span>`
+      : (b.cache_stale
+        ? `<span style="display:block;font-size:var(--font-size-sm);margin-bottom:2px;color:var(--color-accent)" title="An input could not be refreshed and the last successful retrieval is past its freshness window.">⚠ DATED INPUTS${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
+        : '');
     row.innerHTML=`<span style="color:var(--color-accent)">${t}</span>`+
       `<span>${ratingCell}</span>`+
       `<span style="line-height:1.45">${staleChip}<span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
@@ -2175,18 +2201,23 @@ function scannerContent(){
 // spec: a simple "Based on data retrieved <date>" line at the top of the panel; color-flags it
 // (rather than adding more text) when the backend reports the panel fell back to a stale/last-
 // known-good value instead of a fresh fetch.
-function _cacheAgeLabel(fetchedAt, stale){
-  if(!fetchedAt) return '';
+function _cacheAgeLabel(fetchedAt, stale, missing){
+  // `missing` (2026-08-08): array of source names that could not be retrieved at all. Rendered
+  // even when there is no fetchedAt to show — "nothing came back" is the case most worth saying.
+  const miss=(missing||[]).length
+    ? `<div style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);color:var(--color-negative);">⚠ Not retrieved: ${missing.join(', ')} — this analysis was built without it.</div>`
+    : '';
+  if(!fetchedAt) return miss;
   const dt=new Date(fetchedAt*1000).toLocaleString();
   const color=stale?'var(--color-accent)':'var(--color-text-muted)';
-  return `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);color:${color};">`+
-    `Based on data retrieved ${dt}${stale?' — a source was unavailable; showing the last successful retrieval':''}</div>`;
+  return miss+`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);color:${color};">`+
+    `Based on data retrieved ${dt}${stale?' — a source could not be refreshed and this copy is past its freshness window':''}</div>`;
 }
 function researchBrief(d){
   const wrap=el('div'); wrap.style.cssText='padding:6px 0;font-size:var(--font-size-md);line-height:1.5;';
   const m=d.llm||{}, g=d.grounded||{}, va=d.valuation||{};
   const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
-  let html=_cacheAgeLabel(d.cache_fetched_at, d.cache_stale)+
+  let html=_cacheAgeLabel(d.cache_fetched_at, d.cache_stale, d.cache_missing)+
     `<span style="color:var(--color-accent)">${d.ticker}</span> ${ratingBadge(g.rating)}`+(m.rating?` <span class="muted">·</span> ${ratingBadge(m.rating)}`+(m.confidence?` <span class="muted" style="font-size:var(--font-size-sm)">(${m.confidence})</span>`:''):'');
   if(g.target_mean) html+=` <span class="muted">· analyst target $${(+g.target_mean).toFixed(2)}</span>`;
   const th=dsc(m.thesis||m.summary||(m.error?'research error: '+m.error:''));

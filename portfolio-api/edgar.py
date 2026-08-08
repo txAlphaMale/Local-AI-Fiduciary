@@ -23,6 +23,22 @@ import store
 SEC_UA = os.environ.get("SEC_USER_AGENT", "Local AI Fiduciary admin@example.com")
 EDGAR_TTL = int(os.environ.get("EDGAR_TTL", "86400"))   # cache fundamentals ~1 day
 
+# How long the DATA stays true once we can no longer refresh it -- distinct from EDGAR_TTL, which
+# only says how often we re-ask (see store.cached_fetch). GAAP fundamentals come from 10-Q/10-K
+# filings, so a copy pulled last week is the same copy a successful fetch would return today;
+# calling that "stale" the moment one request 403s is noise, and noise gets ignored.
+EDGAR_STALE_AFTER = int(os.environ.get("EDGAR_STALE_AFTER", "2592000"))    # 30d (quarterly filings)
+NPORT_STALE_AFTER = int(os.environ.get("NPORT_STALE_AFTER", "7776000"))    # 90d (monthly, ~60d lag)
+
+
+def _apply_cache_meta(res, meta):
+    """Stamp store.cached_fetch provenance onto a returned dict, for callers that surface it."""
+    res["_cache_fetched_at"] = meta.get("fetched_at")
+    res["_cache_stale"] = bool(meta.get("stale"))
+    res["_cache_fallback"] = bool(meta.get("fallback"))
+    res["_cache_error"] = bool(meta.get("error"))
+    return res
+
 _CIK = {"ts": 0.0, "map": {}}
 # 2026-07-30: fundamentals()/fund_holdings() caching moved onto store.cached_fetch() (disk-
 # persisted, survives restarts -- see store.py's "external_cache" table) -- no more bare
@@ -83,25 +99,65 @@ def _headers():
     return {"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"}
 
 
+class CikMapUnavailable(Exception):
+    """SEC's ticker->CIK map could not be loaded, and no previously-loaded copy exists.
+
+    Raised rather than swallowed (2026-08-08). This map is the entry point to EVERY EDGAR call
+    in this module, so when it fails silently the whole SEC subsystem degrades into a lie:
+    get_cik() returned None for every ticker and fundamentals() reported
+    "no SEC CIK (foreign-listed, fund/ETF, or not SEC-registered)" -- a benign, permanent-sounding
+    classification -- for household S&P names. Nothing on screen distinguished that from the
+    truth, so 28 of 28 briefs were quietly built with no SEC fundamentals at all. The most
+    likely trigger is SEC_USER_AGENT still being the placeholder: SEC requires a real declared
+    contact string and 403s generic ones."""
+
+
 def _cik_map():
-    if _CIK["map"] and (time.time() - _CIK["ts"] < 604800):   # refresh weekly
+    """SEC ticker -> zero-padded CIK. Refreshed weekly, and disk-persisted (2026-08-08) so a
+    transient SEC 403/timeout can't take the entire EDGAR subsystem down until restart."""
+    if _CIK["map"] and (time.time() - _CIK["ts"] < 604800):
         return _CIK["map"]
-    r = requests.get("https://www.sec.gov/files/company_tickers.json", headers=_headers(), timeout=30)
-    r.raise_for_status()
-    m = {}
-    for row in (r.json() or {}).values():
-        t = (row.get("ticker") or "").upper()
-        if t:
-            m[t] = str(row.get("cik_str")).zfill(10)
-    _CIK.update(ts=time.time(), map=m)
+
+    def _compute():
+        try:
+            r = requests.get("https://www.sec.gov/files/company_tickers.json",
+                             headers=_headers(), timeout=30)
+            r.raise_for_status()
+            m = {}
+            for row in (r.json() or {}).values():
+                t = (row.get("ticker") or "").upper()
+                if t:
+                    m[t] = str(row.get("cik_str")).zfill(10)
+            return m
+        except Exception as e:
+            _CIK["last_error"] = f"{type(e).__name__}: {e}"
+            return {}
+
+    # A map with no entries is never a legitimate answer -- SEC always returns thousands.
+    m, meta = store.cached_fetch("sec_cik_map", "all", 604800, _compute, is_ok=lambda v: bool(v),
+                                 stale_after=2592000)   # the map changes glacially; 30d
+    if not m:
+        raise CikMapUnavailable(_CIK.get("last_error") or "SEC ticker map fetch returned nothing")
+    _CIK.update(ts=time.time(), map=m, from_cache=bool(meta.get("fallback")))
     return m
 
 
 def get_cik(ticker):
+    """CIK for a ticker, or None if the ticker genuinely isn't in SEC's map.
+
+    Propagates CikMapUnavailable when the MAP ITSELF could not be loaded -- callers must not
+    conflate "SEC has no such registrant" with "we couldn't ask SEC"."""
+    return _cik_map().get((ticker or "").upper())
+
+
+def cik_map_status():
+    """Health of the SEC ticker map, for diagnostics/UI. Never raises."""
     try:
-        return _cik_map().get((ticker or "").upper())
-    except Exception:
-        return None
+        m = _cik_map()
+        return {"ok": True, "entries": len(m), "served_from_cache": bool(_CIK.get("from_cache")),
+                "loaded_at": _CIK.get("ts")}
+    except CikMapUnavailable as e:
+        return {"ok": False, "entries": 0, "error": str(e)}
 
 
 # ---------------- Fund look-through via SEC N-PORT (free, authoritative) ----------------
@@ -134,38 +190,50 @@ def _sub_attr(elem, name, attr="value"):
 
 
 def _mf_map():
-    """SEC ticker -> {cik, seriesId, classId} for mutual funds / ETFs. Refreshed weekly."""
+    """SEC ticker -> {cik, seriesId, classId} for mutual funds / ETFs. Refreshed weekly,
+    disk-persisted (2026-08-08) for the same reason as _cik_map above."""
     if _MF["map"] and (time.time() - _MF["ts"] < 604800):
         return _MF["map"]
-    r = requests.get("https://www.sec.gov/files/company_tickers_mf.json",
-                     headers=_headers(), timeout=30)
-    r.raise_for_status()
-    j = r.json() or {}
-    fields = j.get("fields") or ["cik", "seriesId", "classId", "symbol"]
-    idx = {name: i for i, name in enumerate(fields)}
-    ci, si, li, yi = (idx.get("cik", 0), idx.get("seriesId", 1),
-                      idx.get("classId", 2), idx.get("symbol", 3))
-    m = {}
-    for row in (j.get("data") or []):
+
+    def _compute():
         try:
-            sym = (row[yi] or "").upper().strip()
-            if not sym:
+            r = requests.get("https://www.sec.gov/files/company_tickers_mf.json",
+                             headers=_headers(), timeout=30)
+            r.raise_for_status()
+            j = r.json() or {}
+        except Exception as e:
+            _MF["last_error"] = f"{type(e).__name__}: {e}"
+            return {}
+        fields = j.get("fields") or ["cik", "seriesId", "classId", "symbol"]
+        idx = {name: i for i, name in enumerate(fields)}
+        ci, si, li, yi = (idx.get("cik", 0), idx.get("seriesId", 1),
+                          idx.get("classId", 2), idx.get("symbol", 3))
+        m = {}
+        for row in (j.get("data") or []):
+            try:
+                sym = (row[yi] or "").upper().strip()
+                if not sym:
+                    continue
+                # first class per symbol wins (symbols are unique in this file anyway)
+                m.setdefault(sym, {"cik": str(row[ci]).zfill(10),
+                                   "seriesId": row[si], "classId": row[li]})
+            except Exception:
                 continue
-            # first class per symbol wins (symbols are unique in this file anyway)
-            m.setdefault(sym, {"cik": str(row[ci]).zfill(10),
-                               "seriesId": row[si], "classId": row[li]})
-        except Exception:
-            continue
+        return m
+
+    m, _meta = store.cached_fetch("sec_mf_map", "all", 604800, _compute,
+                                  is_ok=lambda v: bool(v), stale_after=2592000)
+    if not m:
+        raise CikMapUnavailable(_MF.get("last_error") or "SEC fund ticker map fetch returned nothing")
     _MF.update(ts=time.time(), map=m)
     return m
 
 
 def fund_series(ticker):
-    """Resolve a fund/ETF ticker to {cik, seriesId, classId}, or None if not a registered fund."""
-    try:
-        return _mf_map().get((ticker or "").upper().strip())
-    except Exception:
-        return None
+    """Resolve a fund/ETF ticker to {cik, seriesId, classId}, or None if not a registered fund.
+    Propagates CikMapUnavailable when the MAP could not be loaded (see get_cik) -- 'not a
+    registered fund' and 'we could not ask SEC' must not collapse into the same None."""
+    return _mf_map().get((ticker or "").upper().strip())
 
 
 def _nport_by_series(series_id):
@@ -350,7 +418,11 @@ def fund_holdings(ticker, ttl=604800, top=600, name=None):
         return None
 
     def _compute():
-        info = fund_series(tkr)
+        try:
+            info = fund_series(tkr)
+        except CikMapUnavailable as e:
+            return {"ticker": tkr, "resolved": False, "error": True,
+                    "reason": f"SEC fund ticker map unavailable ({e})"}
         if info:
             cik, series = info["cik"], info.get("seriesId")
             doc = _latest_nport(cik, series)
@@ -368,11 +440,15 @@ def fund_holdings(ticker, ttl=604800, top=600, name=None):
         return {"ticker": tkr, "resolved": False,
                 "reason": "not in SEC mutual-fund/ETF ticker map"}
 
-    res, meta = store.cached_fetch("edgar_fund_holdings", tkr, ttl, _compute,
-                                   is_ok=lambda r: bool(r.get("resolved")))
+    res, meta = store.cached_fetch(
+        "edgar_fund_holdings", tkr, ttl, _compute,
+        is_ok=lambda r: bool(r.get("resolved")),
+        # "this ticker isn't a registered fund / has filed no NPORT-P" is an ANSWER, not an
+        # outage -- it must never light a staleness flag, and it never resolves if it does.
+        is_empty=lambda r: bool(isinstance(r, dict) and not r.get("resolved") and not r.get("error")),
+        stale_after=NPORT_STALE_AFTER)
     res = dict(res)
-    res["_cache_fetched_at"] = meta.get("fetched_at")
-    res["_cache_stale"] = meta.get("stale", False)
+    _apply_cache_meta(res, meta)
     return res
 
 
@@ -390,7 +466,10 @@ EIGHTK_ITEMS = {
 
 def recent_8k(ticker, days=30, limit=4):
     """Recent 8-K (material-event) filings for a ticker from SEC EDGAR submissions — free, authoritative."""
-    cik = get_cik(ticker)
+    try:
+        cik = get_cik(ticker)
+    except CikMapUnavailable:
+        return []      # caller's contract is a plain list; the map outage surfaces via fundamentals()
     if not cik:
         return []
     try:
@@ -455,7 +534,10 @@ def recent_form4(ticker, days=120, limit=16):
     filings, then fetches each filing's ownershipDocument XML. Returns a list of
     {date, accession, xml} newest-first, bounded by `limit` and `days`. Free, authoritative public
     data. Empty list if the ticker has no CIK or on any fetch failure (defensive throughout)."""
-    cik = get_cik(ticker)
+    try:
+        cik = get_cik(ticker)
+    except CikMapUnavailable:
+        return []
     if not cik:
         return []
     try:
@@ -617,11 +699,18 @@ def fundamentals(ticker, ttl=None):
     data was actually retrieved (RESUME-TRACKER "last-known-good cache" item, Part 2)."""
     key = (ticker or "").upper()
     ttl = EDGAR_TTL if ttl is None else ttl
-    res, meta = store.cached_fetch("edgar_fundamentals", key, ttl, lambda: _compute(key),
-                                   is_ok=lambda r: r.get("available") is not False)
+    res, meta = store.cached_fetch(
+        "edgar_fundamentals", key, ttl, lambda: _compute(key),
+        is_ok=lambda r: r.get("available") is not False,
+        # available=False WITHOUT error=True means SEC genuinely has no us-gaap company facts for
+        # this security (ETF, fund, foreign private issuer). That is a correct, permanent answer.
+        # It used to be scored as a fetch failure, which is why every fund and ADR in the book
+        # carried a red STALE chip on every run with no way to ever clear it.
+        is_empty=lambda r: bool(isinstance(r, dict) and r.get("available") is False
+                                and not r.get("error")),
+        stale_after=EDGAR_STALE_AFTER)
     res = dict(res)
-    res["_cache_fetched_at"] = meta.get("fetched_at")
-    res["_cache_stale"] = meta.get("stale", False)
+    _apply_cache_meta(res, meta)
     return res
 
 
@@ -705,14 +794,23 @@ def _ttm_val(facts, tags):
 
 
 def _compute(ticker):
-    cik = get_cik(ticker)
+    # `error: True` marks a FETCH FAILURE, as opposed to SEC legitimately having nothing for this
+    # security. Both shapes say available=False, but only the former should ever raise a flag to
+    # the user -- see is_error()/is_absent() below and store.cached_fetch's classification.
+    try:
+        cik = get_cik(ticker)
+    except CikMapUnavailable as e:
+        return {"ticker": ticker, "available": False, "error": True,
+                "reason": f"SEC ticker map unavailable ({e}) — EDGAR could not be queried at all. "
+                          f"Check SEC_USER_AGENT: SEC requires a real declared contact string."}
     if not cik:
         return {"ticker": ticker, "available": False,
                 "reason": "no SEC CIK (foreign-listed, fund/ETF, or not SEC-registered)"}
     try:
         facts = _companyfacts(cik)
     except Exception as e:
-        return {"ticker": ticker, "available": False, "reason": f"SEC fetch error: {e}"}
+        return {"ticker": ticker, "available": False, "error": True,
+                "reason": f"SEC fetch error: {e}"}
     if not facts:
         return {"ticker": ticker, "available": False, "reason": "no SEC company facts"}
     # 2026-08-06 diagnostic split. Every extractor in this module reads ONLY the `us-gaap`
