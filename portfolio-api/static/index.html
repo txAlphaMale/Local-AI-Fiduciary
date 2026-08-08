@@ -5501,7 +5501,10 @@ function cashdebtContent(){
     // behind it is right. What the reader needs is how much cash is still spoken for.
     (ic.ef_covered_by_noncash>0
       ? (ic.ef_target_from_cash>0
-          ? ` <span class="muted" title="Non-cash designated EF sources cover part of the target; cash only has to hold the rest.">(non-cash EF sources cover most of the target — cash needs to hold ${u(ic.ef_target_from_cash)} of it)</span>`
+          // State both amounts rather than characterising the split — "cover most of the target"
+          // was simply false in the live case (2026-08-08: $19,051 of a $37,724 target is about
+          // half, not most), and any adjective here would be wrong at some other ratio anyway.
+          ? ` <span class="muted" title="Non-cash designated EF sources cover part of the emergency-fund target; cash only has to hold the remainder.">(non-cash EF sources cover ${u(ic.ef_covered_by_noncash)} of the target — cash needs to hold the other ${u(ic.ef_target_from_cash)})</span>`
           : ` <span class="muted" title="Your designated non-cash EF sources already cover the full emergency-fund target on their own, so none of this cash is reserved against it.">(non-cash EF sources already cover the full target — none of this cash is reserved)</span>`)
       : '');
   wrap.appendChild(s2);

@@ -9181,15 +9181,25 @@ _REGISTRY_GROUPS = [
 
 
 def _registry_group(a):
+    """Which registry section an account is listed under.
+
+    Tax status is checked BEFORE the cash-name heuristic, for the same reason _ef_tier() does it
+    (see that docstring): "IRA BROKERAGE CASH" contains "cash " and "Health Savings Account"
+    contains "savings", so the naive order files five tax-advantaged accounts under CASH &
+    LIQUIDITY. Fixing only _ef_tier left this half-fixed and visibly wrong (2026-08-08, caught by
+    reading the deployed UI): the EF checkbox correctly read "blocked", but the rows still sat in
+    the cash section, and because they're investment accounts they dragged DRIP and FRACTIONAL
+    columns into that section — leaving ten genuine cash accounts rendering two columns of "—".
+    Any future account classifier in this file wants this same ordering."""
     if a.get("is_asset") is False:
         return "liability"
-    if _is_cash_account(a):
-        return "cash"
     st = _account_tax_status(a.get("name"), a.get("type"))
     if st == "taxable":
         return "taxable"
     if st in ("roth", "deferred", "hsa"):
         return "advantaged"
+    if _is_cash_account(a):
+        return "cash"
     return "other"
 
 
