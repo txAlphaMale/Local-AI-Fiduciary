@@ -7283,12 +7283,27 @@ def _tbill_yield():
 
 
 def _cash_total(d):
-    """Actual cash: non-investment cash accounts (checking/savings/money market) + Cash-typed
-    positions inside investment accounts."""
+    """SPENDABLE household cash: non-investment cash accounts (checking/savings/money market)
+    plus Cash-typed positions inside investment accounts.
+
+    Tax-advantaged wrappers are excluded (fixed 2026-08-08). They weren't before, and the name
+    heuristic below happily matched "Health Savings Account" on the word "savings" and
+    "IRA BROKERAGE CASH" on "cash " — so ~$2.4k of HSA money was sitting inside the household's
+    "cash" figure, inflating both the emergency-fund fallback and the idle-cash drag. An HSA or
+    IRA sweep balance is not spendable emergency cash: reaching it costs ordinary income tax plus
+    a penalty. It is still idle and still worth investing, but that's an asset-location question,
+    not a household-liquidity one.
+
+    KNOWN LIMITATION (unchanged): the `consolidated` loop below counts Cash-typed POSITIONS across
+    all accounts without attribution, so cash held inside a 401(k)/IRA still slips in that way.
+    Today that's ~$48 of the household's total; it needs per-account position attribution to fix
+    properly and hasn't been worth the surgery yet."""
     tot = 0.0
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             continue
+        if _account_tax_status(a.get("name"), a.get("type")) != "na":
+            continue   # HSA / IRA / 401(k) / Roth / 529 wrapper — not spendable cash
         if _is_cash_account(a):
             tot += a.get("balance") or 0
     for c in d.get("consolidated") or []:
@@ -7316,11 +7331,19 @@ def _ef_tier(a):
     earnings) come out anytime tax- and penalty-free.
 
     Returns None for accounts that are not plausible EF sources at all — real estate, liabilities
-    — so the registry can hide the toggle entirely instead of offering a checkbox that lies."""
+    — so the registry can hide the toggle entirely instead of offering a checkbox that lies.
+
+    ORDER MATTERS, and getting it wrong was a real bug (found 2026-08-08 by reading the live
+    registry rather than the source): the tax-status check MUST run before the cash-name check.
+    `_is_cash_account()` matches on words in the account NAME, and the household has accounts named
+    "IRA BROKERAGE CASH" and "Health Savings Account" — the first contains "cash ", the second
+    contains "savings". With the cash check first, three IRA sweep accounts and two HSAs were
+    classified as tier `cash`, which offered them as fully eligible emergency-fund sources counted
+    at par. They are the exact opposite: money that costs income tax plus a 10% penalty (20% for a
+    non-medical HSA withdrawal) to reach. A wrapper's tax treatment always outranks what the
+    balance inside it happens to be invested in."""
     if a.get("is_asset") is False:
         return None
-    if _is_cash_account(a):
-        return "cash"
     st = _account_tax_status(a.get("name"), a.get("type"))
     if st == "roth":
         return "roth_basis"
@@ -7328,6 +7351,8 @@ def _ef_tier(a):
         return "deferred"
     if st == "taxable":
         return "taxable"
+    if _is_cash_account(a):
+        return "cash"
     atype = (a.get("type") or "").lower()
     if "real estate" in atype or "vehicle" in atype or "loan" in atype or "credit" in atype:
         return None

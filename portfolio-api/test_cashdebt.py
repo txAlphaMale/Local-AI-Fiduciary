@@ -194,6 +194,19 @@ class TestEmergencyFund(unittest.TestCase):
         ef = cd.emergency_fund(11081, 6288, 6.0, sources=cd.ef_sources([]))
         self.assertFalse(ef["designated"])
 
+    def test_undesignated_cash_is_surfaced_once_anything_is_designated(self):
+        # Designating one brokerage silently drops checking/savings OUT of a figure they used to
+        # sit inside (designation is all-or-nothing by design). That omission must be visible, or
+        # it reads as the reserve having shrunk for no reason.
+        src = cd.ef_sources([{"name": "B", "balance": 17482, "tier": "taxable"}], 20.0)
+        ef = cd.emergency_fund(11081, 6288, 6.0, sources=src)
+        self.assertEqual(ef["undesignated_cash"], 11081.0)
+        self.assertIn("not designated", ef["note"].lower())
+
+    def test_no_undesignated_figure_while_still_on_the_guess(self):
+        ef = cd.emergency_fund(11081, 6288, 6.0)
+        self.assertEqual(ef["undesignated_cash"], 0.0)   # the guess already counts that cash
+
     def test_no_essential_spend_yields_no_verdict_rather_than_a_crash(self):
         ef = cd.emergency_fund(11081, None, 6.0)
         self.assertIsNone(ef["months_covered"])

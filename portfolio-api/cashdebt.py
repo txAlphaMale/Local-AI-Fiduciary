@@ -264,6 +264,15 @@ def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
             return None
         return "ok" if mo >= target_months else ("low" if mo >= target_months / 2 else "critical")
 
+    # Designation is deliberately all-or-nothing: the moment ONE account is designated, the
+    # name-guess fallback switches off completely, because a figure that mixes "what you told me"
+    # with "what I guessed" is one nobody can interpret. Correct, but it has a sharp edge — the
+    # household that designates only its brokerage watches its checking accounts silently drop OUT
+    # of a number they were previously inside, which reads as the reserve shrinking. This surfaces
+    # the spendable cash that is NOT designated, so leaving it out is always a visible choice
+    # rather than an accident. (2026-08-08: hit immediately on the first real use.)
+    undesignated_cash = round(max(0.0, _f(cash_total, 0.0)), 2) if designated else 0.0
+
     note = ("Essential spend = annual expenses × the funded-ratio needs share. Cash beyond "
             "the target is strategic dry powder or investable — see idle-cash drag.")
     if designated:
@@ -271,6 +280,9 @@ def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
                  "cap. The stressed figure re-prices market-risk sources after a "
                  f"{_f(stress_drawdown_pct, 20.0):.0f}% drawdown, because the emergencies that "
                  "drain a reserve tend to arrive with bad markets attached.")
+        if undesignated_cash > 0:
+            note += (f" NOTE: ${undesignated_cash:,.0f} of spendable cash is NOT designated and so "
+                     "is not counted above — designate those accounts too if you'd draw on them.")
     else:
         note += (" No accounts are designated as EF sources yet, so this figure is the app GUESSING "
                  "from account names — it counts checking/savings/money-market only and is blind to "
@@ -283,6 +295,7 @@ def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
             "months_covered_stress": months_stress, "status_stress": _status(months_stress),
             "gap_dollars_stress": (round(max(0.0, target_months * m - c_stress), 2) if m else None),
             "basis": basis, "designated": designated,
+            "undesignated_cash": undesignated_cash,
             "stress_drawdown_pct": _f(stress_drawdown_pct, 20.0),
             "sources": (sources or {}).get("rows") or [],
             "noncash_total": (sources or {}).get("noncash_total", 0.0) if designated else 0.0,
@@ -611,6 +624,12 @@ def run(inputs, knobs=None):
                               f"only {ef['months_covered_stress']} after a "
                               f"{k['ef_stress_drawdown_pct']:.0f}% market drawdown — and a drawdown "
                               "is the environment that typically triggers the need."})
+    if ef.get("undesignated_cash", 0) > 0:
+        alerts.append({"level": "info",
+                       "msg": f"${ef['undesignated_cash']:,.0f} of spendable cash isn't designated "
+                              "as an emergency-fund source, so it isn't in the figure above. "
+                              "Designating one account switches off the name-based guess entirely "
+                              "— check your checking/savings accounts too if you'd draw on them."})
     for _s in efs["rows"]:
         if not _s["eligible"]:
             alerts.append({"level": "warn",

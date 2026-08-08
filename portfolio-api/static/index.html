@@ -3121,10 +3121,33 @@ const _REG_FIELD_META={
   is_mortgage:   {label:'MORTGAGE?', kind:'check', tip:'This IS the mortgage (name detection missed it) — moves it out of the non-mortgage debt table and into the mortgage payoff-vs-invest line.'},
 };
 
+// There is no SAVE button on the registry — every control commits on its own (checkboxes on
+// click, number fields on blur/Enter), matching the DRIP/fractional toggles that have always
+// behaved this way. 2026-08-08, Jason: "There's no Save button to commit the changes, unless it
+// saves automatically upon an entry change?" — it does, but silent success is indistinguishable
+// from nothing happening, so say so out loud. Attached to <body> rather than to the panel because
+// the panel is torn down and rebuilt by the render() call that follows every save.
+function _regToast(msg, bad){
+  const t=document.createElement('div');
+  t.textContent=msg;
+  t.style.cssText='position:fixed;right:18px;bottom:18px;z-index:9999;padding:8px 14px;'
+    +'border-radius:var(--radius-lg);font-size:var(--font-size-sm);letter-spacing:1px;'
+    +'border:1px solid '+(bad?'var(--color-negative)':'var(--color-positive,#4caf50)')+';'
+    +'background:var(--color-bg-elevated,#161616);'
+    +'color:'+(bad?'var(--color-negative)':'var(--color-positive,#4caf50)')+';'
+    +'opacity:0;transition:opacity .15s;';
+  document.body.appendChild(t);
+  requestAnimationFrame(()=>{ t.style.opacity='1'; });
+  setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(), 200); }, bad?3200:1500);
+}
+
 function saveAcctRegistry(name, patch, after){
   fetch('/api/account-registry',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(Object.assign({account:name}, patch))})
     .then(r=>r.json()).then(d=>{
+      const fields=Object.keys(patch).map(k=>(_REG_FIELD_META[k]||{}).label||k).join(', ');
+      if(d && d.ok && (d.saved||[]).length) _regToast('✓ SAVED · '+name+' · '+fields);
+      else if(!(d && (d.rejected||[]).length)) _regToast('⚠ NOT SAVED · '+name, true);
       // The server drops fields it won't accept (an EF box on a tax-deferred account) rather than
       // failing the whole save — say so out loud, otherwise the box appears to stick and the
       // number silently never moves.
@@ -3139,7 +3162,7 @@ function saveAcctRegistry(name, patch, after){
       if(after) after(d);
       render();
       load(false);
-    }).catch(e=>alert('Save failed: '+e));
+    }).catch(e=>{ _regToast('⚠ SAVE FAILED · '+name, true); alert('Save failed: '+e); });
 }
 
 function accountRegistryTable(opts){
@@ -3167,8 +3190,13 @@ function accountRegistryTable(opts){
       if(_REG_FIELD_META[f] && cols.indexOf(f)<0) cols.push(f); }));
     if(!cols.length) return;
     shown++;
-    wrap.appendChild(el('div','ph',g.label));
-    const t=el('table'); const hr=el('tr');
+    // Breathing room above each group heading (2026-08-08, Jason: the last row of one group ran
+    // straight into the next group's label with nothing separating them). Skipped on the FIRST
+    // group, which already sits directly under the panel's own header.
+    const gh=el('div','ph',g.label);
+    gh.style.cssText+=(shown>1?'margin-top:var(--space-5);':'')+'margin-bottom:var(--space-2);';
+    wrap.appendChild(gh);
+    const t=el('table'); t.style.marginBottom='var(--space-2)'; const hr=el('tr');
     hr.innerHTML='<th class="l">ACCOUNT</th><th>BALANCE</th>'+
       cols.map(f=>`<th title="${esc(_REG_FIELD_META[f].tip)}">${_REG_FIELD_META[f].label}</th>`).join('');
     t.appendChild(hr);
@@ -3227,7 +3255,8 @@ function accountRegistryContent(){
   const h=el('div','ph','ACCOUNTS · PER-ACCOUNT SETTINGS'); wrap.appendChild(h);
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);line-height:1.5;';
   sub.innerHTML='Everything the app lets you tell it about an individual account, in one place. Each group shows only the settings that mean something for that kind of account. '+
-    'These are the same values edited in AUDITS→ACCOUNTS and PLAN→CASH·DEBT — one stored copy, so they can never disagree. Saves are immediate.<br/>'+
+    'These are the same values edited in AUDITS→ACCOUNTS and PLAN→CASH·DEBT — one stored copy, so they can never disagree.<br/>'+
+    '<b>There is no SAVE button</b> — every control commits on its own: a checkbox the moment you click it, a number field when you leave it or press Enter. A confirmation appears bottom-right on each save.<br/>'+
     '<b>EF?</b> designates an account as an emergency-fund resource. Without at least one designation the emergency-fund gauge falls back to guessing from account names, which counts checking/savings/money-market only and is blind to a reserve you deliberately parked somewhere that earns a return. '+
     'Tax-deferred accounts are blocked: an early withdrawal costs income tax plus a 10% penalty, so they aren\'t emergency money. A Roth is allowed but should carry a cap equal to your contribution basis — only contributions come out free.';
   wrap.appendChild(sub);
@@ -5437,7 +5466,13 @@ function cashdebtContent(){
       const capBit=(s.cap!=null)?` <span title="counting up to $${Math.round(s.cap).toLocaleString()} of a $${Math.round(s.balance).toLocaleString()} balance">(cap ${u(s.cap)} of ${u(s.balance)})</span>`:'';
       const cls=s.eligible?'':'neg';
       return `<span class="${cls}" title="${esc(s.reason||s.tier_label)}">${esc(s.name)} ${u(s.counted)}</span>${capBit}`;
-    }).join(' · ')+` &nbsp;<a href="#" id="cd-ef-edit" style="color:var(--color-accent);">edit designations</a>`;
+    }).join(' · ')+
+      // Designating one account switches the name-guess off entirely, so previously-counted cash
+      // drops out. Say which cash is now excluded, right next to the sources it's excluded from.
+      (ef.undesignated_cash>0
+        ? ` · <span class="" style="color:var(--color-accent);" title="Designating any account replaces the name-based guess completely, so cash you haven't designated is no longer counted. Designate those accounts too if you'd draw on them in an emergency.">${u(ef.undesignated_cash)} of cash NOT designated</span>`
+        : '')+
+      ` &nbsp;<a href="#" id="cd-ef-edit" style="color:var(--color-accent);">edit designations</a>`;
     wrap.appendChild(src);
   } else {
     const src=el('div'); src.style.cssText='font-size:var(--font-size-sm);margin:0 0 6px 12px;line-height:1.5;color:var(--color-accent);';
