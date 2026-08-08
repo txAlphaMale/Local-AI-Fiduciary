@@ -298,6 +298,7 @@ SETTING_SPECS = {
     "tips_fallback_pct": {"env": "TIPS_FALLBACK_PCT", "default": 2.0, "cast": float, "label": "TIPS real yield fallback (%) when FRED is unreachable", "group": "Funded ratio"},
     "tbill_fallback_pct": {"env": "TBILL_FALLBACK_PCT", "default": 4.0, "cast": float, "label": "3-mo T-bill fallback (%) when FRED is unreachable (cash/debt desk)", "group": "Cash & debt"},
     "ef_target_months": {"env": "EF_TARGET_MONTHS", "default": 6.0, "cast": float, "label": "Emergency fund target (months of essential spend)", "group": "Cash & debt"},
+    "ef_stress_drawdown_pct": {"env": "EF_STRESS_DRAWDOWN_PCT", "default": 20.0, "cast": float, "label": "Emergency fund stress test: assumed equity drawdown (%) applied to market-risk EF sources", "group": "Cash & debt"},
     "rb_lower_band":  {"env": "RB_LOWER_BAND",  "default": 70,  "cast": float, "label": "Risk-based guardrails: cut spending when success < (%)", "group": "Monte Carlo"},
     "rb_upper_band":  {"env": "RB_UPPER_BAND",  "default": 99,  "cast": float, "label": "Risk-based guardrails: raise spending when success > (%)", "group": "Monte Carlo"},
     "rb_adjust_pct":  {"env": "RB_ADJUST_PCT",  "default": 10,  "cast": float, "label": "Risk-based guardrails: spending adjustment step (%)", "group": "Monte Carlo"},
@@ -2259,6 +2260,25 @@ def _scheduler_loop():
         time.sleep(20)
 if INTERNAL_SCHEDULER:
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
+
+
+# 2026-08-08: shout about a dead EDGAR entry point at BOOT rather than letting it present as 28
+# securities that are all coincidentally "not SEC-registered". A misconfigured SEC_USER_AGENT took
+# out fundamentals, insider signals, 8-K events and fund look-through for weeks without one line
+# of evidence anywhere. Warn only -- never block startup over a single degraded data source.
+def _warn_if_edgar_misconfigured():
+    try:
+        if edgar.ua_is_placeholder():
+            print("[startup] WARNING: SEC_USER_AGENT is blank or a placeholder "
+                  f"({edgar.SEC_UA!r}). SEC returns 403 for generic User-Agents, which disables "
+                  "ALL EDGAR data (fundamentals, Form 4 insider signals, 8-K events, NPORT fund "
+                  "look-through). Set it in .env to a real contact string. See /api/edgar-status.",
+                  flush=True)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_warn_if_edgar_misconfigured, daemon=True, name="edgar-cfg-warn").start()
 
 
 @app.get("/api/schedule")
@@ -5331,13 +5351,15 @@ def get_research(ticker: str):
                                     news_meta.get("fetched_at")) if m is not None]
         # 2026-08-08: same two-flag split as the daily briefs (see _do_analysis) -- "fell back to
         # data that has aged out" and "could not be retrieved at all" are different problems.
-        _missing = sorted({n for n, err in (("SEC fundamentals", fund.get("_cache_error")),
-                                            ("insider signal", (ins or {}).get("_cache_error")),
-                                            ("news", news_meta.get("error"))) if err})
+        _srcs = (("SEC fundamentals", fund.get("_cache_error"), fund.get("_cache_stale")),
+                 ("insider signal", (ins or {}).get("_cache_error"), (ins or {}).get("_cache_stale")),
+                 ("news", news_meta.get("error"), news_meta.get("stale")))
+        _missing = sorted({n for n, err, _s in _srcs if err})
+        _dated = sorted({n for n, _e, st in _srcs if st})
         result = {"ticker": t, "generated_at": int(time.time()),
                   "cache_fetched_at": min(fetch_times) if fetch_times else None,
-                  "cache_stale": bool(fund.get("_cache_stale")) or bool((ins or {}).get("_cache_stale"))
-                                 or bool(news_meta.get("stale")),
+                  "cache_stale": bool(_dated), "cache_dated": _dated,
+                  "cache_rules_version": CACHE_RULES_VERSION,
                   "cache_degraded": bool(_missing), "cache_missing": _missing,
                   "grounded": g, "valuation": val, "fundamentals": fund, "llm": llm,
                   "insider": ins, "institutional": inst}
@@ -5444,6 +5466,16 @@ FINNHUB_TTL = int(os.environ.get("FINNHUB_TTL", "21600"))   # 6h -- analyst cons
 FINNHUB_STALE_AFTER = int(os.environ.get("FINNHUB_STALE_AFTER", "172800"))   # 2d
 NEWS_STALE_AFTER = int(os.environ.get("NEWS_STALE_AFTER", "86400"))          # 1d -- news is the
 # one input where age genuinely invalidates the thesis, so it keeps the tightest window.
+# (All windows are measured in TRADING TIME -- see market_calendar. A Friday-evening pull read on
+#  Saturday is 6h old, not 15h, because no fresher value can exist while the market is shut.)
+
+# Bumped whenever the MEANING of a brief's cache_* flags changes. Briefs are persisted to
+# analysis.json and re-rendered on every page load, so a rules change silently reinterprets
+# months of stored output: right after the 2026-08-08 deploy, 28 pre-existing briefs carrying the
+# old any-fallback-is-stale boolean rendered under the new UI as "28 of 28 used data past its
+# freshness window", which was not what the new rules would have concluded at all. The frontend
+# now labels briefs written under older rules instead of misreporting them.
+CACHE_RULES_VERSION = 2
 
 
 def _finnhub_json(path, sym, extra=None):
@@ -5726,11 +5758,17 @@ def get_edgar_status():
             probe = {"ticker": "AAPL", "cik": edgar.get_cik("AAPL")}
         except Exception as e:
             probe = {"ticker": "AAPL", "error": f"{type(e).__name__}: {e}"}
-    return {"cik_map": st, "probe": probe, "user_agent": edgar.SEC_UA,
-            "user_agent_looks_like_placeholder":
-                bool(re.search(r"example\.com|you@", edgar.SEC_UA or "", re.I)),
-            "hint": "SEC returns 403 for generic User-Agents. Set SEC_USER_AGENT to a real "
-                    "contact string (e.g. 'Fiduciary yourname@yourdomain.com') and restart."}
+    raw = os.environ.get("SEC_USER_AGENT")
+    return {"cik_map": st, "probe": probe,
+            "user_agent": edgar.SEC_UA,
+            # The env var being PRESENT BUT EMPTY is its own failure mode and reads identically to
+            # "unset" in most diagnostics -- call it out explicitly. This is what actually happened.
+            "env_var": {"present": raw is not None, "blank": (raw is not None and not raw.strip())},
+            "user_agent_looks_like_placeholder": edgar.ua_is_placeholder(),
+            "hint": "SEC returns 403 for generic or empty User-Agents. Set SEC_USER_AGENT in .env "
+                    "to a real contact string (e.g. 'Fiduciary yourname@yourdomain.com'), then "
+                    "`docker compose up -d` to re-inject it. A blank value in .env is NOT the same "
+                    "as omitting it: compose passes it through as an empty string."}
 
 
 # ============ G15: institutional 13F forward whale-tracking (context-only) ============
@@ -6327,6 +6365,7 @@ def _do_analysis(limit, tickers=None):
                         "error": fund.get("_cache_error")})]
             _times = [m.get("fetched_at") for _n, m in _metas if m.get("fetched_at") is not None]
             _missing = sorted({n for n, m in _metas if m.get("error")})
+            _dated = sorted({n for n, m in _metas if m.get("stale")})
             # RESUME-TRACKER 2026-07-11 queued follow-up (1), built 2026-08-06: surface the 13F
             # WATCHED-HOLDERS line on the main RESEARCH -> BRIEFS tab. _inst_for() is a pure
             # dictionary lookup into the already-built institutional cache (_read_institutional) --
@@ -6341,9 +6380,11 @@ def _do_analysis(limit, tickers=None):
             briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
                                    "institutional": _inst,
                                    "cache_fetched_at": min(_times) if _times else None,
-                                   "cache_stale": any(bool(m.get("stale")) for _n, m in _metas),
+                                   "cache_stale": bool(_dated),
+                                   "cache_dated": _dated,
                                    "cache_degraded": bool(_missing),
                                    "cache_missing": _missing,
+                                   "cache_rules_version": CACHE_RULES_VERSION,
                                    "valuation": val, "llm": llm, "updated_at": int(time.time())}
             _log_rating(c["ticker"], llm)   # record rating+price for the AI scorecard
             _run_state["analyzed"] += 1
@@ -7248,14 +7289,85 @@ def _cash_total(d):
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             continue
-        t = ((a.get("type") or "") + " " + (a.get("name") or "")).lower()
-        if (a.get("holdings_count") or 0) == 0 and any(
-                w in t for w in ("checking", "savings", "money market", "cash management", "cash ")):
+        if _is_cash_account(a):
             tot += a.get("balance") or 0
     for c in d.get("consolidated") or []:
         if (c.get("type") or "") == "Cash":
             tot += c.get("value") or 0
     return round(tot, 2)
+
+
+def _is_cash_account(a):
+    """The same checking/savings/money-market recognizer _cash_total() uses, factored out so the
+    account registry and the EF tiering below agree with the idle-cash figure by construction
+    rather than by two copies of the same word list drifting apart."""
+    t = ((a.get("type") or "") + " " + (a.get("name") or "")).lower()
+    return (a.get("holdings_count") or 0) == 0 and any(
+        w in t for w in ("checking", "savings", "money market", "cash management", "cash "))
+
+
+def _ef_tier(a):
+    """Which cashdebt.EF_TIERS liquidity tier an ASSET account belongs to, for emergency-fund
+    purposes (2026-08-08). This is not the same question as _account_tax_status() — that one asks
+    "where should securities be located for tax efficiency", this one asks "how fast can this
+    become spendable money and what does it cost to get it out". They agree often enough to reuse
+    the classifier and disagree in exactly the place that matters: a Roth is a poor asset-location
+    answer for bonds but a legitimate LAST-RESORT emergency source, because contributions (never
+    earnings) come out anytime tax- and penalty-free.
+
+    Returns None for accounts that are not plausible EF sources at all — real estate, liabilities
+    — so the registry can hide the toggle entirely instead of offering a checkbox that lies."""
+    if a.get("is_asset") is False:
+        return None
+    if _is_cash_account(a):
+        return "cash"
+    st = _account_tax_status(a.get("name"), a.get("type"))
+    if st == "roth":
+        return "roth_basis"
+    if st in ("deferred", "hsa"):
+        return "deferred"
+    if st == "taxable":
+        return "taxable"
+    atype = (a.get("type") or "").lower()
+    if "real estate" in atype or "vehicle" in atype or "loan" in atype or "credit" in atype:
+        return None
+    # An asset account we can't classify (a manual "Other asset", say) is treated as cash-like at
+    # par. It is only ever counted if the household explicitly designates it, and the cap field is
+    # there for the case where only part of it is really liquid.
+    return "cash"
+
+
+def _ef_source_rows(d, cfg):
+    """The designated emergency-fund sources, in the shape cashdebt.ef_sources() consumes.
+
+    Designation lives in insurance.json's `ef_accounts` — {account name: {"on": bool, "cap":
+    float|None}} — keyed by account NAME, the same convention debt_rates / pay_in_full_overrides
+    already use, so one editor can write all of them and a renamed account fails visibly (its
+    designation stops matching) rather than silently attaching to the wrong balance.
+
+    Ineligible tiers are still RETURNED rather than filtered out, carrying their tier: cashdebt
+    counts them at $0 and raises an alert naming them. Dropping them here instead would make a
+    mis-designated 401(k) simply vanish from the panel, which is how a household ends up believing
+    it has a reserve it can't actually reach without a 10% penalty."""
+    ef_cfg = cfg.get("ef_accounts") or {}
+    if not isinstance(ef_cfg, dict):
+        return []
+    rows = []
+    for a in d.get("accounts") or []:
+        nm = a.get("name") or ""
+        ent = ef_cfg.get(nm)
+        if not isinstance(ent, dict) or not ent.get("on"):
+            continue
+        tier = _ef_tier(a)
+        if tier is None:
+            continue   # designation on a non-source account (real estate/liability): ignore
+        try:
+            cap = None if ent.get("cap") in (None, "") else float(ent["cap"])
+        except (TypeError, ValueError):
+            cap = None
+        rows.append({"name": nm, "institution": a.get("institution"),
+                     "balance": a.get("balance") or 0, "tier": tier, "cap": cap})
+    return rows
 
 
 def _is_mortgage_account(a, overrides):
@@ -7313,10 +7425,16 @@ def get_cashdebt():
               "refi_rate_pct": cfg.get("refi_rate_pct"),
               "refi_closing_costs": cfg.get("refi_closing_costs"),
               "debt_extra_monthly": cfg.get("debt_extra_monthly"),
+              # ef_sources (2026-08-08, Jason): the accounts the household explicitly designated as
+              # emergency-fund resources. cash_total above stays exactly what it was and still
+              # drives the idle-cash drag — a brokerage held AS the reserve isn't earning a deposit
+              # yield, so it must never land in that figure. See cashdebt.ef_sources().
+              "ef_sources": _ef_source_rows(d, cfg),
               "debts": debts}
     sinfo = _state_of_residence_info(ret, d)
     inputs["state"] = sinfo["code"]
-    res = cashdebt.run(inputs, {"ef_target_months": _knob("ef_target_months")})
+    res = cashdebt.run(inputs, {"ef_target_months": _knob("ef_target_months"),
+                                "ef_stress_drawdown_pct": _knob("ef_stress_drawdown_pct")})
     res["state_of_residence_source"] = sinfo["source"]
     res["inputs"] = inputs
     res["tbill_source"] = tb_src
@@ -7379,6 +7497,21 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None,
                      # account from 'pay-first' classification, avalanche alerts, and the payoff
                      # simulator regardless of its snapshot balance/APR.
                      "pay_in_full_overrides": {},
+                     # ef_accounts{name: {"on": bool, "cap": float|None}}: 2026-08-08, Jason -- the
+                     # emergency fund was sized from a name-substring guess at what counts as
+                     # "cash" (checking/savings/money-market). That guess is structurally blind to a
+                     # reserve deliberately parked somewhere that earns a real return -- Jason's
+                     # Wells Fargo investment account, opened because savings/HYSA yields weren't
+                     # worth it -- so the gauge read 1.8 months / "critical" for a household that
+                     # actually has a funded reserve. No heuristic can fix this: only the household
+                     # knows which balances are earmarked. `on` designates the account; `cap` is an
+                     # optional "count at most $X of it", which is what makes a partial earmark
+                     # honest and is the ONLY correct way to count a Roth (the withdrawable amount
+                     # is the contribution basis, which no feed exposes and which is nothing like
+                     # the balance). Same MERGE-not-replace save semantics as the two override
+                     # dicts above. Tiering/eligibility lives in _ef_tier(); the math is in
+                     # cashdebt.ef_sources().
+                     "ef_accounts": {},
                      # GAP-5 benefits facts (edited in PLAN→BENEFITS):
                      "k401_pretax_pct": None, "k401_aftertax_pct": 0.0,
                      "k401_match_t1_pct": None, "k401_match_t1_rate": None,
@@ -7519,6 +7652,30 @@ async def post_insurance_config(req: Request):
         for nm, v in list(body["pay_in_full_overrides"].items())[:30]:
             pf[str(nm)[:120]] = bool(v)
         cfg["pay_in_full_overrides"] = pf
+    if isinstance(body.get("ef_accounts"), dict):
+        # MERGE, same reasoning as the two override dicts above -- and load-bearing here for a
+        # second reason: the EF editor and the CASH·DEBT panel can both post this key, and a
+        # full-replace from either would silently drop designations the other one knows about.
+        # A value of None/false removes the entry outright rather than storing a dead {"on":false}
+        # row, so the cap doesn't linger invisibly and reappear if the box is re-checked later.
+        ea = dict(cfg.get("ef_accounts") or {})
+        for nm, v in list(body["ef_accounts"].items())[:100]:
+            key = str(nm)[:120]
+            if v in (None, False):
+                ea.pop(key, None)
+                continue
+            if not isinstance(v, dict):
+                continue
+            if not v.get("on"):
+                ea.pop(key, None)
+                continue
+            cap = v.get("cap")
+            try:
+                cap = None if cap in (None, "") else max(0.0, float(cap))
+            except (TypeError, ValueError):
+                cap = None
+            ea[key] = {"on": True, "cap": cap}
+        cfg["ef_accounts"] = ea
     if "home_address" in body:
         cfg["home_address"] = (str(body["home_address"]).strip()[:200] or None) \
             if body["home_address"] not in (None, "") else None
@@ -8975,6 +9132,227 @@ async def post_accounts_config(req: Request):
     return {"ok": True, "config": cfg}
 
 
+# ============ Unified account registry (2026-08-08, Jason) ============
+# Per-account settings had accreted into three unrelated places: DRIP/fractional under
+# AUDITS→ACCOUNTS (investment accounts only), APR/min-payment/paid-in-full/is-mortgage in the
+# PLAN→CASH·DEBT table and the manual-liabilities editor, and nothing at all for cash accounts.
+# There was no single screen that could answer "what does the app know about this account, and
+# what can I tell it?" -- which is how the emergency-fund designation had nowhere obvious to live.
+#
+# This endpoint is that screen's backend: ONE list of every known account, each carrying the set
+# of toggles that actually apply to it and nothing else (DRIP on a checking account is
+# meaningless; an APR on a brokerage account is meaningless). It deliberately does NOT introduce
+# a new store -- every field reads from and writes back to the exact same JSON the existing
+# editors use, so SETTINGS→ACCOUNTS, AUDITS→ACCOUNTS and PLAN→CASH·DEBT can never disagree about
+# the same account. That is the same one-source-of-truth rule _read_manual_liability_rows()
+# already follows for the liability editor.
+_REGISTRY_GROUPS = [
+    ("cash",        "CASH & LIQUIDITY"),
+    ("taxable",     "TAXABLE INVESTMENT"),
+    ("advantaged",  "TAX-ADVANTAGED"),
+    ("other",       "OTHER ASSETS"),
+    ("liability",   "LIABILITIES"),
+]
+
+
+def _registry_group(a):
+    if a.get("is_asset") is False:
+        return "liability"
+    if _is_cash_account(a):
+        return "cash"
+    st = _account_tax_status(a.get("name"), a.get("type"))
+    if st == "taxable":
+        return "taxable"
+    if st in ("roth", "deferred", "hsa"):
+        return "advantaged"
+    return "other"
+
+
+@app.get("/api/account-registry")
+def get_account_registry():
+    """Every known account with the per-account settings that apply to it, grouped by what the
+    account IS. `applicable` names the toggles the UI should render for that row; anything absent
+    from it is not a meaningful setting for that account type and should not be shown at all
+    (rather than shown greyed-out, which reads as "broken"). The one exception is `ef` on a
+    tax-deferred account: that IS rendered, disabled, with `ef_blocked_reason` -- the user needs to
+    see WHY their 401(k) can't be an emergency fund, not just find the box missing."""
+    d = _data()
+    acct_cfg = _read_accounts_cfg()
+    cfg = _read_insurance_cfg()
+    rates = cfg.get("debt_rates") or {}
+    mins = cfg.get("debt_min_payments") or {}
+    pif = cfg.get("pay_in_full_overrides") or {}
+    mort = cfg.get("is_mortgage_overrides") or {}
+    ef_cfg = cfg.get("ef_accounts") or {}
+    rows = []
+    for a in d.get("accounts") or []:
+        nm = a.get("name") or "?"
+        grp = _registry_group(a)
+        st = _account_tax_status(nm, a.get("type"))
+        tier = _ef_tier(a)
+        r = {"name": nm, "institution": a.get("institution"), "type": a.get("type"),
+             "balance": a.get("balance"), "is_asset": a.get("is_asset") is not False,
+             "group": grp, "tax_status": st, "manual": bool(a.get("manual")),
+             "holdings_count": a.get("holdings_count") or 0, "applicable": []}
+        if grp == "liability":
+            r["applicable"] = ["rate_pct", "min_payment", "pay_in_full", "is_mortgage"]
+            r["rate_pct"] = rates.get(nm)
+            r["min_payment"] = mins.get(nm)
+            r["pay_in_full"] = bool(pif.get(nm))
+            r["is_mortgage"] = (bool(mort[nm]) if nm in mort
+                                else _is_mortgage_account(a, mort))
+        else:
+            if st != "na":
+                fl = _account_flags(nm, acct_cfg)
+                r["applicable"] += ["drip", "fractional_ok"]
+                r["drip"] = fl["drip"]
+                r["fractional_ok"] = fl["fractional_ok"]
+            if tier is not None:
+                r["applicable"] += ["ef", "ef_cap"]
+                ent = ef_cfg.get(nm) if isinstance(ef_cfg.get(nm), dict) else {}
+                r["ef"] = bool(ent.get("on"))
+                r["ef_cap"] = ent.get("cap")
+                r["ef_tier"] = tier
+                r["ef_tier_label"] = cashdebt.EF_TIERS[tier]["label"]
+                r["ef_eligible"] = tier not in cashdebt.EF_INELIGIBLE_TIERS
+                if not r["ef_eligible"]:
+                    r["ef_blocked_reason"] = (
+                        "Tax-deferred. An early withdrawal is taxed as ordinary income AND takes a "
+                        "10% penalty (HSA: for non-medical spending; 529: on earnings), so it can't "
+                        "function as emergency money — it would be counted at $0 anyway.")
+                elif tier == "roth_basis":
+                    r["ef_cap_hint"] = (
+                        "Roth: only your CONTRIBUTION BASIS comes out tax- and penalty-free, and no "
+                        "feed exposes it. Set the cap to your total lifetime contributions — leaving "
+                        "it blank counts the whole balance and overstates your reserve.")
+                elif tier == "taxable":
+                    r["ef_cap_hint"] = (
+                        "Optional: count only part of this account as reserve. Leave blank to count "
+                        "the full balance. Market-risk sources are also shown after a drawdown "
+                        "haircut on the EF gauge.")
+        rows.append(r)
+    rows.sort(key=lambda x: ([g for g, _ in _REGISTRY_GROUPS].index(x["group"]),
+                             -abs(x.get("balance") or 0)))
+    return {"groups": [{"key": g, "label": lbl} for g, lbl in _REGISTRY_GROUPS],
+            "accounts": rows,
+            "ef_stress_drawdown_pct": _knob("ef_stress_drawdown_pct"),
+            "ef_target_months": _knob("ef_target_months")}
+
+
+@app.post("/api/account-registry")
+async def post_account_registry(req: Request):
+    """Save one account's settings from the unified editor. Body:
+    {"account": name, "drip": bool, "fractional_ok": bool, "ef": bool, "ef_cap": num|null,
+     "rate_pct": num|null, "min_payment": num|null, "pay_in_full": bool, "is_mortgage": bool}
+    -- only the keys present are touched. Fields are routed to whichever store already owns them
+    (accounts.json for the investment flags, insurance.json for everything else); this endpoint
+    adds no store of its own, so it cannot drift from the older editors that write the same keys.
+
+    A tax-deferred account cannot be designated as an EF source: the request is accepted but the
+    `ef` field is dropped and reported back in `rejected`, so the UI can say why instead of the
+    save appearing to work and the number never moving."""
+    body = await req.json()
+    nm = (body.get("account") or "").strip()
+    if not nm:
+        return JSONResponse({"error": 'Body must include {"account": name}.'}, status_code=400)
+    d = _data()
+    acct = next((a for a in (d.get("accounts") or []) if (a.get("name") or "") == nm), None)
+    if acct is None:
+        return JSONResponse({"error": f"No account named {nm!r}."}, status_code=404)
+    rejected, touched = [], []
+
+    if any(k in body for k in ("drip", "fractional_ok")):
+        old_ac = _read_accounts_cfg()
+        ac = _read_accounts_cfg()
+        cur = dict(ac["accounts"].get(nm) or {})
+        for k in ("drip", "fractional_ok"):
+            if k in body:
+                if _account_tax_status(nm, acct.get("type")) == "na":
+                    rejected.append({"field": k, "reason": "Not an investment account — DRIP and "
+                                                           "fractional-share settings don't apply."})
+                    continue
+                cur[k] = bool(body[k])
+                touched.append(k)
+        ac["accounts"][nm] = cur
+        store.write_json(ACCOUNTS_FILE, ac)
+        _emit_config_changed(req, "/api/account-registry", old_ac, ac, summarize_keys={"accounts"})
+
+    ins_keys = ("ef", "ef_cap", "rate_pct", "min_payment", "pay_in_full", "is_mortgage")
+    if any(k in body for k in ins_keys):
+        old_cfg = _read_insurance_cfg()
+        cfg = _read_insurance_cfg()
+        is_liab = acct.get("is_asset") is False
+        if "ef" in body or "ef_cap" in body:
+            tier = _ef_tier(acct)
+            if tier is None:
+                rejected.append({"field": "ef", "reason": "This account can't serve as an emergency-"
+                                                          "fund source."})
+            elif tier in cashdebt.EF_INELIGIBLE_TIERS:
+                rejected.append({"field": "ef", "reason": "Tax-deferred accounts can't be designated "
+                                                          "as emergency-fund sources — an early "
+                                                          "withdrawal costs income tax plus a 10% "
+                                                          "penalty."})
+            else:
+                ea = dict(cfg.get("ef_accounts") or {})
+                prev = ea.get(nm) if isinstance(ea.get(nm), dict) else {}
+                on = bool(body["ef"]) if "ef" in body else bool(prev.get("on"))
+                # Typing a cap on an undesignated account IS a designation -- there is no other
+                # reason to say "count $25,000 of this one". Without this, the cap would be
+                # written and then immediately discarded by the `not on` branch below, and the
+                # user would watch the number they just entered disappear.
+                if "ef" not in body and "ef_cap" in body and body["ef_cap"] not in (None, ""):
+                    on = True
+                if "ef_cap" in body:
+                    try:
+                        cap = None if body["ef_cap"] in (None, "") else max(0.0, float(body["ef_cap"]))
+                    except (TypeError, ValueError):
+                        cap = None
+                else:
+                    cap = prev.get("cap")
+                if on:
+                    ea[nm] = {"on": True, "cap": cap}
+                else:
+                    ea.pop(nm, None)   # don't keep a dead row; see post_insurance_config
+                cfg["ef_accounts"] = ea
+                touched += [k for k in ("ef", "ef_cap") if k in body]
+        for key, store_key, caster in (("rate_pct", "debt_rates", float),
+                                       ("min_payment", "debt_min_payments", float)):
+            if key not in body:
+                continue
+            if not is_liab:
+                rejected.append({"field": key, "reason": "Not a liability — APR and minimum payment "
+                                                         "don't apply."})
+                continue
+            dct = dict(cfg.get(store_key) or {})
+            if body[key] in (None, ""):
+                dct.pop(nm, None)
+            else:
+                try:
+                    dct[nm] = caster(body[key])
+                except (TypeError, ValueError):
+                    rejected.append({"field": key, "reason": "Must be a number."})
+                    continue
+            cfg[store_key] = dct
+            touched.append(key)
+        for key, store_key in (("pay_in_full", "pay_in_full_overrides"),
+                               ("is_mortgage", "is_mortgage_overrides")):
+            if key not in body:
+                continue
+            if not is_liab:
+                rejected.append({"field": key, "reason": "Not a liability."})
+                continue
+            dct = dict(cfg.get(store_key) or {})
+            dct[nm] = bool(body[key])
+            cfg[store_key] = dct
+            touched.append(key)
+        store.write_json(INSURANCE_FILE, cfg)
+        _emit_config_changed(req, "/api/account-registry", old_cfg, cfg,
+                             summarize_keys={"ef_accounts", "debt_rates", "debt_min_payments",
+                                             "pay_in_full_overrides", "is_mortgage_overrides"})
+    _cache["data"] = None
+    return {"ok": True, "account": nm, "saved": touched, "rejected": rejected}
+
+
 @app.get("/api/settings")
 def get_settings():
     """Advanced knobs with resolved value + source (env/settings/default) for the SETTINGS tab.
@@ -9559,6 +9937,11 @@ SETUP_FIELDS = [
     {"id": "debt_rates", "tier": 2, "group": "Per-debt APRs", "cfg": "insurance",
      "key": "debt_rates", "kind": "dict", "jump": ("plan", "cashdebt"),
      "note": "Only debts missing a rate show as set-rate on the avalanche table."},
+    {"id": "ef_accounts", "tier": 2, "group": "Emergency-fund source accounts", "cfg": "insurance",
+     "key": "ef_accounts", "kind": "dict", "jump": ("plan", "cashdebt"),
+     "note": "Until you designate them, the emergency-fund gauge guesses from account names — it "
+             "counts checking/savings/money-market only and is blind to a reserve held anywhere "
+             "that earns a real return."},
 
     # ---- Tier 2: PLAN -> BENEFITS (same insurance.json register) ----
     {"id": "k401_pretax", "tier": 2, "group": "401(k) % + match formula", "cfg": "insurance",

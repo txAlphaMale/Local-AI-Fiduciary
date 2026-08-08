@@ -514,7 +514,7 @@ const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cache
 let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
 let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
 // always reflects the saved state), then mutated in place by add/remove-row clicks and synced
@@ -930,10 +930,10 @@ async function load(refresh, bg){
     }
     DATA=d;
     render();   // show core dashboard immediately — never block the page on a slow secondary panel
-    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv,mlia]=await Promise.all([
+    const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv,mlia,areg]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
-      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv'),gj('/api/manual-liabilities')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv; MANLIAB=mlia;
+      gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv'),gj('/api/manual-liabilities'),gj('/api/account-registry')]);
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv; MANLIAB=mlia; ACCTREG=areg;
     // keep the scenario switcher pointed at a real scenario: adopt the server's resolved default
     // the first time (nothing chosen yet), or if a previously-selected scenario_id was deleted.
     if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
@@ -1277,7 +1277,7 @@ W('performance','Insights & risk','Performance vs policy (TWR)',
   'INSIGHTS → PERFORMANCE. EXCESS vs POLICY is the verdict column: green means your implementation (picks/tilts) beat the allocation itself; red means the plain policy mix would have done better. Coverage % tells you how much of the book had history; the flow-guard count tells you how approximate the tracked number is.',
   'Use it quarterly for the only honest self-review: "did my decisions add value over my own plan?" Persistent negative excess is the data telling you to index the sleeve. Money-weighted views (which include timing of contributions) live in ATTRIBUTION and the paper book.');
 W('cashdebt','Planning','Cash, liquidity & debt desk',
-  'The household-CFO hygiene panel: emergency-fund months (actual cash ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, an avalanche ranking of non-mortgage debts against the invest hurdle (now with a $-RANK column too — a large low-rate balance can cost more real dollars/yr than a tiny high-rate one, and the panel flags it when the two rankings disagree), and a PAYOFF SIMULATOR comparing avalanche vs snowball month-by-month.',
+  'The household-CFO hygiene panel: emergency-fund months (designated reserve ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, an avalanche ranking of non-mortgage debts against the invest hurdle (now with a $-RANK column too — a large low-rate balance can cost more real dollars/yr than a tiny high-rate one, and the panel flags it when the two rankings disagree), and a PAYOFF SIMULATOR comparing avalanche vs snowball month-by-month. **PMTS LEFT column (2026-08-08)**: payments remaining on each debt at its own current payment (the "if I change nothing" count), with the month it clears under the avalanche plan below it (rollover + extra $/mo included) — the two routinely differ by years, which is the whole argument for following the plan. **Emergency fund (2026-08-08)**: sized from the accounts you explicitly DESIGNATE as EF sources under SETTINGS → ACCOUNTS (or inline here), not from a guess at which account names look like cash — a reserve parked in a brokerage because savings yields are poor used to be invisible to the gauge. Each source can carry a cap so only part of an account counts, and the gauge also reports months covered after an assumed market drawdown, since the emergencies that drain a reserve tend to arrive with bad markets attached.',
   'PLAN → CASH · DEBT. Red alerts = underfunded EF or debts beating the hurdle; the drag line prices what parked cash forfeits per year. Enter mortgage rate/payment, deposit yield, refi candidates, and per-debt APRs in the editor — balances come from the live feed (Monarch/SnapTrade) **or from the HOLDINGS tab\'s LIABILITIES table (2026-07-30)** if you don\'t use either — both feed this desk identically, since the avalanche/payoff math only cares that an account is marked as debt, not where it came from; the T-bill comes from FRED daily. Rate %/minimum payment can be entered right here per debt OR on the liability\'s own row in HOLDINGS → LIABILITIES — either place edits the same saved value. **Payoff simulator (2026-07-22)**: enter a minimum payment per debt (next to its APR in the table) and an optional extra $/mo toward payoff, and it runs a real month-by-month amortization two ways — AVALANCHE (highest rate first) and SNOWBALL (smallest balance first) — each retired debt\'s own minimum payment rolls onto the rest of the queue permanently once it\'s paid off (true rollover, not just a one-time bump), reporting months-to-debt-free and total interest for each strategy side by side. A debt missing either its APR or minimum payment is listed as excluded rather than guessed at — enter both to include it.',
   'Use it monthly and on rate moves: it catches the quiet losses (idle cash, expensive debt) and answers the perennial "extra $1k: mortgage or market?" with the guaranteed-vs-expected framing instead of vibes. EF sizing judgment (job security, one vs two incomes) still overrides the spreadsheet. Avalanche always minimizes total interest paid — but snowball\'s faster small-balance wins are a legitimate behavioral tradeoff if that\'s what keeps you paying at all; the simulator shows both so it\'s your call, not a math verdict.');
 W('continuity','Planning','Continuity binder + document currency',
@@ -1619,6 +1619,7 @@ function render(){
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
     tc.appendChild(panelSubtabs('settings',[
+      {key:'accounts',label:'ACCOUNTS',build:()=>accountRegistryContent()},
       {key:'theme',label:'THEME',build:()=>themeContent()},
       {key:'iam',label:'IAM',build:()=>iamContent()},
       {key:'security',label:'SECURITY',build:()=>securityContent()},
@@ -2035,25 +2036,41 @@ function analysisContent(a){
   //                     freshness window. Real, but a rung below missing.
   // Securities that legitimately have no data for a source (ETFs have no SEC company facts) no
   // longer appear in either count — see store.cached_fetch's is_empty.
+  // 2026-08-08b: freshness windows are measured in TRADING time (market_calendar.py), so a
+  // Friday-evening pull read over the weekend is not flagged — the market has not opened since,
+  // and no fresher value exists to have missed.
+  const CACHE_RULES_VERSION=2;
   const keys=Object.keys(briefs||{}), total=keys.length;
   const banner=(color,text)=>{
     const wn=el('div');
     wn.style.cssText=`border:1px solid ${color};border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);color:${color};`;
     wn.innerHTML=text; wrap.appendChild(wn);
   };
-  const degradedKeys=keys.filter(k=>(briefs[k]||{}).cache_degraded);
+  // Briefs written BEFORE the current rules carry flags that meant something else (v1's
+  // cache_stale was "any fallback at all"). Re-rendering those under today's wording states a
+  // conclusion the current logic never reached — the first deploy of this banner did exactly
+  // that, reporting "28 of 28 dated" from stale v1 booleans. Label them; don't reinterpret them.
+  const legacyKeys=keys.filter(k=>((briefs[k]||{}).cache_rules_version||1)<CACHE_RULES_VERSION);
+  const currentKeys=keys.filter(k=>((briefs[k]||{}).cache_rules_version||1)>=CACHE_RULES_VERSION);
+  if(legacyKeys.length){
+    banner('var(--color-text-muted)',
+      `ℹ ${legacyKeys.length} of ${total} briefs were generated before the current data-freshness rules `+
+      `and their flags are not directly comparable. Re-run RESEARCH → BRIEFS to re-evaluate them.`);
+  }
+  const degradedKeys=currentKeys.filter(k=>(briefs[k]||{}).cache_degraded);
   if(degradedKeys.length){
     const srcs=[...new Set(degradedKeys.flatMap(k=>(briefs[k]||{}).cache_missing||[]))].sort();
     banner('var(--color-negative)',
-      `⚠ ${degradedKeys.length} of ${total} briefs are MISSING an input entirely${srcs.length?' — '+srcs.join(', '):''}. `+
+      `⚠ ${degradedKeys.length} of ${currentKeys.length} briefs are MISSING an input entirely${srcs.length?' — '+srcs.join(', '):''}. `+
       `The source could not be retrieved and no previous copy existed, so those theses were written without it. `+
       `This is a live outage, not aged data — check the source's credentials/connectivity.`);
   }
-  const staleKeys=keys.filter(k=>(briefs[k]||{}).cache_stale);
+  const staleKeys=currentKeys.filter(k=>(briefs[k]||{}).cache_stale);
   if(staleKeys.length){
+    const srcs=[...new Set(staleKeys.flatMap(k=>(briefs[k]||{}).cache_dated||[]))].sort();
     banner('var(--color-accent)',
-      `⚠ ${staleKeys.length} of ${total} briefs used data past its freshness window — a source could not be refreshed `+
-      `and the last successful retrieval was old enough to matter. Treat those theses as dated.`);
+      `⚠ ${staleKeys.length} of ${currentKeys.length} briefs used data past its freshness window${srcs.length?' — '+srcs.join(', '):''}. `+
+      `Measured in trading days, so weekends and market holidays are excluded. Treat those theses as dated.`);
   }
   // sort: actionable calls first (Buy, Sell, then Hold), then by model confidence, then ticker
   const RANK={Buy:0,Sell:1,Hold:2}, CONF={high:0,med:1,low:2};
@@ -2083,11 +2100,16 @@ function analysisContent(a){
       : `${badge(g.rating)}${tgt} <span class="muted">·</span> ${badge(m.rating)}${conf}`;
     // Per-row chip — the banners give counts, the chip says WHICH rows and why. Missing outranks
     // stale: if an input is absent entirely there is no "as of" date worth printing for it.
-    const staleChip = b.cache_degraded
-      ? `<span class="neg" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="This input could not be retrieved and no previous copy existed — the thesis was written without it.">⚠ MISSING INPUT${(b.cache_missing||[]).length?' · '+b.cache_missing.join(', '):''}</span>`
-      : (b.cache_stale
-        ? `<span style="display:block;font-size:var(--font-size-sm);margin-bottom:2px;color:var(--color-accent)" title="An input could not be refreshed and the last successful retrieval is past its freshness window.">⚠ DATED INPUTS${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
-        : '');
+    const _legacy=((b.cache_rules_version||1)<CACHE_RULES_VERSION);
+    const staleChip = _legacy
+      ? (b.cache_stale||b.cache_degraded
+        ? `<span class="muted" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="Generated under the previous freshness rules, where any cache fallback counted as stale. Re-run to re-evaluate.">◦ PRE-RULES BRIEF${b.cache_fetched_at?' · data from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
+        : '')
+      : (b.cache_degraded
+        ? `<span class="neg" style="display:block;font-size:var(--font-size-sm);margin-bottom:2px" title="This input could not be retrieved and no previous copy existed — the thesis was written without it.">⚠ MISSING INPUT${(b.cache_missing||[]).length?' · '+b.cache_missing.join(', '):''}</span>`
+        : (b.cache_stale
+          ? `<span style="display:block;font-size:var(--font-size-sm);margin-bottom:2px;color:var(--color-accent)" title="An input could not be refreshed and the last successful retrieval is past its freshness window, counted in trading days.">⚠ DATED INPUTS${(b.cache_dated||[]).length?' · '+b.cache_dated.join(', '):''}${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
+          : ''));
     row.innerHTML=`<span style="color:var(--color-accent)">${t}</span>`+
       `<span>${ratingCell}</span>`+
       `<span style="line-height:1.45">${staleChip}<span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
@@ -3072,30 +3094,163 @@ function saveAcct(name, field, val){
       load(false);
     }).catch(e=>alert('Save failed: '+e));
 }
-function accountsEditor(){
+// ---- unified account registry (2026-08-08, Jason) ----------------------------------------
+// One component, several mounts. Per-account settings had scattered across three screens with no
+// single place that answered "what does the app know about this account, and what can I tell it?"
+// — which is why the emergency-fund designation had nowhere natural to live. This renders every
+// account grouped by what it IS, showing each group only the toggles that actually mean something
+// for that kind of account (DRIP on a checking account, an APR on a brokerage account: both
+// nonsense). The column set per group is derived from the server's `applicable` list rather than
+// hardcoded, so adding a per-account setting server-side surfaces here automatically.
+//
+// Mounted three ways, all reading/writing the SAME stores via /api/account-registry:
+//   · SETTINGS → ACCOUNTS   — everything (the canonical screen)
+//   · AUDITS   → ACCOUNTS   — investment groups + DRIP/fractional (what that tab always showed)
+//   · PLAN → CASH·DEBT      — EF-source designation only, inline next to the EF gauge
+// Keeping the contextual mounts is deliberate: an APR belongs next to the avalanche table it
+// drives, and DRIP next to the asset-location audit it distorts. One store means they can't
+// disagree, so there's no cost to showing a setting in more than one place.
+const _REG_FIELD_META={
+  drip:          {label:'DRIP', kind:'check', tip:'Dividends auto-reinvested into the SAME holding — raises concentration, and in a TAXABLE account each reinvestment is phantom income taxed yearly plus a new tax lot.'},
+  fractional_ok: {label:'FRACTIONAL', kind:'check', tip:'Broker allows fractional-share buys — no cash drag on position sizing.'},
+  ef:            {label:'EF?', kind:'check', tip:'Designate this account as an emergency-fund resource. The EF gauge counts only designated accounts; without any designation it falls back to guessing from account names.'},
+  ef_cap:        {label:'EF CAP $', kind:'num', step:500, width:86, tip:'Optional — count at most this much of the account as reserve. Blank counts the full balance.'},
+  rate_pct:      {label:'APR %', kind:'num', step:0.1, width:56, tip:'Annual rate. Drives the avalanche ranking, the interest figure and the payment count.'},
+  min_payment:   {label:'MIN PMT/mo', kind:'num', step:5, width:70, tip:'Minimum monthly payment. Required (with the APR) for the payoff simulator and the payments-left count.'},
+  pay_in_full:   {label:'PAID IN FULL?', kind:'check', tip:'This card is paid off every statement — its balance is not real revolving debt. Excludes it from pay-first, alerts and the payoff simulator regardless of APR.'},
+  is_mortgage:   {label:'MORTGAGE?', kind:'check', tip:'This IS the mortgage (name detection missed it) — moves it out of the non-mortgage debt table and into the mortgage payoff-vs-invest line.'},
+};
+
+function saveAcctRegistry(name, patch, after){
+  fetch('/api/account-registry',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign({account:name}, patch))})
+    .then(r=>r.json()).then(d=>{
+      // The server drops fields it won't accept (an EF box on a tax-deferred account) rather than
+      // failing the whole save — say so out loud, otherwise the box appears to stick and the
+      // number silently never moves.
+      if(d && (d.rejected||[]).length) alert(d.rejected.map(x=>x.field+': '+x.reason).join('\n\n'));
+      // Optimistic local patch, same reasoning as everywhere else in this file: load()'s batch
+      // hasn't refetched yet, and the intervening render would repaint the pre-save value.
+      if(ACCTREG && ACCTREG.accounts){
+        const rejected=new Set((d&&d.rejected||[]).map(x=>x.field));
+        const row=ACCTREG.accounts.find(a=>a.name===name);
+        if(row) Object.keys(patch).forEach(k=>{ if(!rejected.has(k)) row[k]=patch[k]; });
+      }
+      if(after) after(d);
+      render();
+      load(false);
+    }).catch(e=>alert('Save failed: '+e));
+}
+
+function accountRegistryTable(opts){
+  opts=opts||{};
   const wrap=el('div');
-  if(!ACCTCFG || !ACCTCFG.accounts || !ACCTCFG.accounts.length) return wrap;
+  const reg=ACCTREG;
+  if(!reg || !reg.accounts || !reg.accounts.length){
+    wrap.appendChild(el('div','muted','Accounts not loaded yet.')); return wrap; }
+  const only=opts.groups?new Set(opts.groups):null;
+  const allow=opts.fields?new Set(opts.fields):null;
+  const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const u=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+  let shown=0;
+  (reg.groups||[]).forEach(g=>{
+    if(only && !only.has(g.key)) return;
+    let rows=reg.accounts.filter(a=>a.group===g.key);
+    if(allow) rows=rows.filter(a=>(a.applicable||[]).some(f=>allow.has(f)));
+    if(opts.filter) rows=rows.filter(opts.filter);
+    if(!rows.length) return;
+    // Columns = the union of what actually applies in this group, so a group never carries a
+    // column of dashes and no group needs its own hardcoded layout.
+    const cols=[];
+    rows.forEach(a=>(a.applicable||[]).forEach(f=>{
+      if(allow && !allow.has(f)) return;
+      if(_REG_FIELD_META[f] && cols.indexOf(f)<0) cols.push(f); }));
+    if(!cols.length) return;
+    shown++;
+    wrap.appendChild(el('div','ph',g.label));
+    const t=el('table'); const hr=el('tr');
+    hr.innerHTML='<th class="l">ACCOUNT</th><th>BALANCE</th>'+
+      cols.map(f=>`<th title="${esc(_REG_FIELD_META[f].tip)}">${_REG_FIELD_META[f].label}</th>`).join('');
+    t.appendChild(hr);
+    rows.forEach(a=>{
+      const tr=el('tr');
+      const nameTd=el('td','l sym');
+      nameTd.innerHTML=esc(a.name)+
+        `<br/><span class="sub muted" style="font-size:var(--font-size-sm);">${esc(a.institution||a.type||'—')}`+
+        (a.ef_tier_label && (allow?allow.has('ef'):true)?` · ${esc(a.ef_tier_label)}`:'')+'</span>';
+      tr.appendChild(nameTd);
+      const balTd=el('td'); balTd.className=a.is_asset?'':'neg';
+      balTd.textContent=(a.is_asset?'':'-')+u(Math.abs(a.balance||0)); tr.appendChild(balTd);
+      cols.forEach(f=>{
+        const td=el('td'); td.style.textAlign='center';
+        if((a.applicable||[]).indexOf(f)<0){ td.className='muted'; td.textContent='—'; tr.appendChild(td); return; }
+        const meta=_REG_FIELD_META[f];
+        if(meta.kind==='check'){
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!a[f];
+          if(f==='ef' && a.ef_eligible===false){
+            cb.disabled=true; cb.checked=false; cb.title=a.ef_blocked_reason||'Not eligible.';
+            td.appendChild(cb);
+            const why=el('div','muted'); why.style.cssText='font-size:var(--font-size-sm);';
+            why.textContent='blocked'; why.title=a.ef_blocked_reason||''; td.appendChild(why);
+          } else {
+            cb.title=meta.tip;
+            cb.onchange=()=>{ const p={}; p[f]=cb.checked; saveAcctRegistry(a.name,p); };
+            td.appendChild(cb);
+          }
+        } else {
+          const inp=document.createElement('input'); inp.type='number'; inp.step=meta.step;
+          inp.style.width=(meta.width||70)+'px';
+          inp.value=(a[f]!=null?a[f]:'');
+          inp.title=(f==='ef_cap' && a.ef_cap_hint)?a.ef_cap_hint:meta.tip;
+          if(f==='ef_cap' && !a.ef) inp.placeholder='full';
+          // 'change' (not 'input') — one save when the field is committed, not per keystroke.
+          inp.onchange=()=>{ const p={}; p[f]=(inp.value===''?null:parseFloat(inp.value));
+            saveAcctRegistry(a.name,p); };
+          td.appendChild(inp);
+          if(f==='ef_cap' && a.ef && a.ef_cap!=null && a.balance && a.ef_cap<a.balance){
+            const b=el('div','muted'); b.style.cssText='font-size:var(--font-size-sm);';
+            b.textContent='of '+u(a.balance); td.appendChild(b);
+          }
+        }
+        tr.appendChild(td);
+      });
+      t.appendChild(tr);
+    });
+    wrap.appendChild(t);
+  });
+  if(!shown) wrap.appendChild(el('div','muted','No accounts in this view.'));
+  return wrap;
+}
+
+function accountRegistryContent(){
+  const wrap=el('div');
+  const h=el('div','ph','ACCOUNTS · PER-ACCOUNT SETTINGS'); wrap.appendChild(h);
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);line-height:1.5;';
+  sub.innerHTML='Everything the app lets you tell it about an individual account, in one place. Each group shows only the settings that mean something for that kind of account. '+
+    'These are the same values edited in AUDITS→ACCOUNTS and PLAN→CASH·DEBT — one stored copy, so they can never disagree. Saves are immediate.<br/>'+
+    '<b>EF?</b> designates an account as an emergency-fund resource. Without at least one designation the emergency-fund gauge falls back to guessing from account names, which counts checking/savings/money-market only and is blind to a reserve you deliberately parked somewhere that earns a return. '+
+    'Tax-deferred accounts are blocked: an early withdrawal costs income tax plus a 10% penalty, so they aren\'t emergency money. A Roth is allowed but should carry a cap equal to your contribution basis — only contributions come out free.';
+  wrap.appendChild(sub);
+  if(ACCTREG && ACCTREG.ef_stress_drawdown_pct!=null){
+    const k=el('div','muted'); k.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+    k.textContent='EF target '+ACCTREG.ef_target_months+' months · stress test assumes a '+ACCTREG.ef_stress_drawdown_pct+'% equity drawdown on market-risk sources (both adjustable under ADVANCED KNOBS).';
+    wrap.appendChild(k);
+  }
+  wrap.appendChild(accountRegistryTable({}));
+  return wrap;
+}
+
+function accountsEditor(){
+  // AUDITS→ACCOUNTS: the investment-flag view of the shared registry above. Kept as its own mount
+  // (rather than redirected to SETTINGS) because DRIP is the setting that distorts the very
+  // asset-location and tax audits sitting in the adjacent subtabs.
+  const wrap=el('div');
   wrap.appendChild(el('div','ph','ACCOUNTS · DRIP / FRACTIONAL SHARES'));
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);line-height:1.45;';
-  sub.textContent='Per-brokerage settings the analysis factors in. DRIP = dividends auto-reinvested into the SAME holding (raises concentration; in TAXABLE accounts each reinvestment is phantom income taxed yearly + a new tax lot). Fractional = broker allows fractional-share buys (no cash drag on position sizing).';
+  sub.innerHTML='Per-brokerage settings the analysis factors in. DRIP = dividends auto-reinvested into the SAME holding (raises concentration; in TAXABLE accounts each reinvestment is phantom income taxed yearly + a new tax lot). Fractional = broker allows fractional-share buys (no cash drag on position sizing). '+
+    '<span class="muted">Every per-account setting, including cash and liability accounts, now lives together under SETTINGS → ACCOUNTS.</span>';
   wrap.appendChild(sub);
-  const t=el('table'); const hr=el('tr');
-  hr.innerHTML='<th class="l">ACCOUNT</th><th class="l">TAX</th><th>BALANCE</th><th>DRIP</th><th>FRACTIONAL</th>';
-  t.appendChild(hr);
-  ACCTCFG.accounts.filter(a=>a.locatable).forEach(a=>{
-    const tr=el('tr');
-    const td=(html,cls)=>{ const x=el('td',cls); x.innerHTML=html; return x; };
-    tr.appendChild(td((a.name||'').replace(/</g,'&lt;'),'l sym'));
-    tr.appendChild(td(a.tax_status||'','l muted'));
-    tr.appendChild(td(a.balance!=null?'$'+Math.round(a.balance).toLocaleString():'—'));
-    const mkChk=(field,on)=>{ const c=el('td'); c.style.textAlign='center';
-      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!on;
-      cb.onchange=()=>saveAcct(a.name, field, cb.checked); c.appendChild(cb); return c; };
-    tr.appendChild(mkChk('drip', a.drip));
-    tr.appendChild(mkChk('fractional_ok', a.fractional_ok));
-    t.appendChild(tr);
-  });
-  wrap.appendChild(t);
+  wrap.appendChild(accountRegistryTable({groups:['taxable','advantaged'], fields:['drip','fractional_ok']}));
   return wrap;
 }
 function saveSettings(){
@@ -5213,6 +5368,44 @@ function benefitsContent(){
   return wrap;
 }
 
+// Mirror of cashdebt.remaining_payments() (2026-08-08, Jason). Exists ONLY so the optimistic
+// post-save patch below can refresh the PMTS LEFT column immediately, the same way that patch
+// already recomputes priority/annual_interest locally — without it, editing an APR would leave a
+// stale payment count sitting next to a freshly-updated interest figure for several seconds.
+// The server value is authoritative on the next real load; keep the two formulas identical.
+function _remainingPaymentsJS(balance, apr, payment, payInFull){
+  const b=(balance==null||balance==='')?null:parseFloat(balance);
+  const r=(apr==null||apr==='')?null:parseFloat(apr);
+  const p=(payment==null||payment==='')?null:parseFloat(payment);
+  if(payInFull) return {months:null,status:'paid'};
+  if(b==null||isNaN(b)) return {months:null,status:'unknown'};
+  if(b<=0) return {months:0,status:'paid'};
+  if(r==null||isNaN(r)||p==null||isNaN(p)||p<=0) return {months:null,status:'unknown'};
+  const rm=r/100/12;
+  if(rm<=0) return {months:Math.ceil(b/p),status:'ok'};
+  if(p<=b*rm) return {months:null,status:'never'};
+  const n=Math.ceil(-Math.log(1-(rm*b/p))/Math.log(1+rm));
+  return n>600?{months:600,status:'capped'}:{months:n,status:'ok'};
+}
+// Two numbers, one cell: the standalone count on top, the avalanche-plan month below it. They
+// answer different questions and routinely disagree by years — a debt whose own minimum takes 60
+// months clears in 25 once the rollover reaches it — so showing only one of them would hide
+// exactly the thing that makes the payoff plan worth following.
+function _pmtsCell(x){
+  const st=x.remaining_payments_status, n=x.remaining_payments;
+  const miss=(x.remaining_payments_missing||[]).join(' + ');
+  const tip=(x.remaining_payments_note||'').replace(/"/g,'&quot;');
+  let top;
+  if(st==='ok'||st==='capped') top=`<span title="${tip}">${n}${st==='capped'?'+':''} mo</span>`;
+  else if(st==='paid')         top=`<span class="muted" title="${tip}">—</span>`;
+  else if(st==='never')        top=`<span class="neg" title="${tip}">never</span>`;
+  else                         top=`<span class="muted" title="${tip}">need ${miss||'data'}</span>`;
+  const plan=(x.plan_months!=null)
+    ? `<br/><span class="pos" style="font-size:var(--font-size-sm);" title="Month this debt clears under the AVALANCHE plan above — includes minimums freed by earlier payoffs and your extra $/mo.">→ ${x.plan_months} mo in plan</span>`
+    : '';
+  return top+plan;
+}
+
 function cashdebtContent(){
   // GAP-2 household-CFO desk: EF gauge, idle-cash drag, payoff-vs-invest, refi, avalanche.
   const r=CASHDEBT||{}, wrap=el('div');
@@ -5225,16 +5418,57 @@ function cashdebtContent(){
     w.textContent=(a2.level==='action'?'⚠ ':(a2.level==='warn'?'▸ ':'• '))+a2.msg; wrap.appendChild(w); });
   const ef=r.emergency_fund||{};
   const efc=ef.status==='ok'?'pos':(ef.status==='low'?'':'neg');
+  const efsc=ef.status_stress==='ok'?'pos':(ef.status_stress==='low'?'':'neg');
   const s1=el('div'); s1.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
-  s1.innerHTML=`<b>EMERGENCY FUND</b> — cash ${u(ef.cash_total)} ÷ essentials ${u(ef.essential_monthly)}/mo = `+
+  // Reserve label reflects WHERE the number came from: designated sources (authoritative) or the
+  // old name-based cash guess (which is blind to a reserve held in an investment account).
+  const efLabel=ef.designated?'designated reserve':'auto-detected cash';
+  const stressBit=(ef.designated && ef.months_covered_stress!=null && ef.months_covered_stress!==ef.months_covered)
+    ? ` · <span class="${efsc}" title="Market-risk EF sources re-priced after a ${ef.stress_drawdown_pct}% drawdown. The emergencies that drain a reserve — job loss above all — cluster in exactly the periods when equities are down, so the face-value figure quietly assumes an independence that doesn't hold.">${ef.months_covered_stress} months after a ${ef.stress_drawdown_pct}% drawdown</span>`
+    : '';
+  s1.innerHTML=`<b>EMERGENCY FUND</b> — ${efLabel} ${u(ef.ef_total!=null?ef.ef_total:ef.cash_total)} ÷ essentials ${u(ef.essential_monthly)}/mo = `+
     `<b class="${efc}">${ef.months_covered!=null?ef.months_covered+' months':'—'}</b> (target ${ef.target_months})`+
-    (ef.gap_dollars>0?` · gap <span class="neg">${u(ef.gap_dollars)}</span>`:' · <span class="pos">✓ funded</span>');
+    (ef.gap_dollars>0?` · gap <span class="neg">${u(ef.gap_dollars)}</span>`:' · <span class="pos">✓ funded</span>')+
+    stressBit;
   wrap.appendChild(s1);
+  if(ef.designated && (ef.sources||[]).length){
+    const src=el('div','muted'); src.style.cssText='font-size:var(--font-size-sm);margin:0 0 6px 12px;line-height:1.5;';
+    src.innerHTML='sources: '+ef.sources.map(s=>{
+      const capBit=(s.cap!=null)?` <span title="counting up to $${Math.round(s.cap).toLocaleString()} of a $${Math.round(s.balance).toLocaleString()} balance">(cap ${u(s.cap)} of ${u(s.balance)})</span>`:'';
+      const cls=s.eligible?'':'neg';
+      return `<span class="${cls}" title="${esc(s.reason||s.tier_label)}">${esc(s.name)} ${u(s.counted)}</span>${capBit}`;
+    }).join(' · ')+` &nbsp;<a href="#" id="cd-ef-edit" style="color:var(--color-accent);">edit designations</a>`;
+    wrap.appendChild(src);
+  } else {
+    const src=el('div'); src.style.cssText='font-size:var(--font-size-sm);margin:0 0 6px 12px;line-height:1.5;color:var(--color-accent);';
+    src.innerHTML='⚑ No accounts designated as emergency-fund sources — this figure is a guess from account names and counts checking/savings/money-market only. '+
+      'A reserve held in a brokerage or money-market fund is invisible to it. <a href="#" id="cd-ef-edit" style="color:var(--color-accent);">Designate your EF accounts</a>.';
+    wrap.appendChild(src);
+  }
+  // Inline EF-designation editor: the EF-only mount of the shared account registry, so the
+  // designation can be fixed in the same breath as noticing the gauge is wrong — no tab hunt.
+  // Same component, same store, same rows as SETTINGS → ACCOUNTS.
+  const efEd=el('div'); efEd.style.cssText='margin:0 0 var(--space-2) 12px;display:'+(CD_EF_EDIT_OPEN?'block':'none')+';';
+  if(CD_EF_EDIT_OPEN){
+    const hint=el('div','muted'); hint.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-1);line-height:1.45;';
+    hint.textContent='Check every account you would actually draw on in an emergency. Set a cap to count only part of one — required for a Roth, where only your contribution basis is reachable without tax and penalty. Tax-deferred accounts are blocked and explain why.';
+    efEd.appendChild(hint);
+    efEd.appendChild(accountRegistryTable({fields:['ef','ef_cap'], groups:['cash','taxable','advantaged','other']}));
+  }
+  wrap.appendChild(efEd);
   const ic=r.idle_cash||{};
   const s2=el('div'); s2.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
   s2.innerHTML=`<b>IDLE-CASH DRAG</b> — ${u(ic.cash_total)} at ~${ic.deposit_yield_pct}% vs T-bill ${ic.tbill_pct}% → `+
     `forfeiting <b class="${ic.drag_annual>=500?'neg':''}">${u(ic.drag_annual)}/yr</b>`+
-    (ic.excess_over_ef>0?` · ${u(ic.excess_over_ef)} sits beyond the EF target`:'' );
+    (ic.excess_over_ef>0?` · ${u(ic.excess_over_ef)} sits beyond the EF target`:'' )+
+    // Phrase this against the TARGET, not the raw designated total: saying "$152,000 of the EF
+    // target is covered" when the target is $37,728 reads as nonsense even though the arithmetic
+    // behind it is right. What the reader needs is how much cash is still spoken for.
+    (ic.ef_covered_by_noncash>0
+      ? (ic.ef_target_from_cash>0
+          ? ` <span class="muted" title="Non-cash designated EF sources cover part of the target; cash only has to hold the rest.">(non-cash EF sources cover most of the target — cash needs to hold ${u(ic.ef_target_from_cash)} of it)</span>`
+          : ` <span class="muted" title="Your designated non-cash EF sources already cover the full emergency-fund target on their own, so none of this cash is reserved against it.">(non-cash EF sources already cover the full target — none of this cash is reserved)</span>`)
+      : '');
   wrap.appendChild(s2);
   const m=r.mortgage||{};
   const s3=el('div'); s3.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
@@ -5261,7 +5495,7 @@ function cashdebtContent(){
       dn.textContent=`⚑ Highest real dollar cost is ${av.top_dollar_cost.name} (${u(av.top_dollar_cost.annual_interest)}/yr) — not the top-APR row below.`;
       wrap.appendChild(dn);
     }
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PMTS LEFT</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':((x.priority==='carry'||x.priority==='paid-in-full')?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
@@ -5274,6 +5508,7 @@ function cashdebtContent(){
       const paidFullCell=`<input class="cd-paidfull" data-nm="${esc(x.name)}" type="checkbox" ${x.pay_in_full?'checked':''} title="This card is always paid off in full — its balance isn't real revolving debt. Check + SAVE to pull it out of pay-first/alerts/the payoff simulator regardless of APR or snapshot balance."/>`;
       const mortCell=`<input class="cd-mort" data-nm="${esc(x.name)}" type="checkbox" title="This IS actually the mortgage (name detection missed it) — check + SAVE to move it out of this table and into the MORTGAGE line above."/>`;
       tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td><td>${minCell}</td>`+
+        `<td>${_pmtsCell(x)}</td>`+
         `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${paidFullCell}</td><td>${mortCell}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
@@ -5320,6 +5555,7 @@ function cashdebtContent(){
     `<button id="cd-save">SAVE</button></div>`;
   wrap.appendChild(ed);
   setTimeout(()=>{ const g=id=>document.getElementById(id);
+    if(g('cd-ef-edit')) g('cd-ef-edit').onclick=(e)=>{ e.preventDefault(); CD_EF_EDIT_OPEN=!CD_EF_EDIT_OPEN; render(); };
     if(g('cd-save')) g('cd-save').onclick=async()=>{
       const dr={}; document.querySelectorAll('.cd-dr').forEach(x=>{ if(x.value!=='') dr[x.dataset.nm]=parseFloat(x.value); });
       const dmp={}; document.querySelectorAll('.cd-minp').forEach(x=>{ if(x.value!=='') dmp[x.dataset.nm]=parseFloat(x.value); });
@@ -5357,6 +5593,13 @@ function cashdebtContent(){
             : ((hurdle!=null && row.rate_pct>hurdle) ? 'pay-first' : 'carry')));
           row.annual_interest = row.pay_in_full ? 0
             : (row.rate_pct!=null ? Math.round(row.balance*row.rate_pct/100*100)/100 : null);
+          const rp=_remainingPaymentsJS(row.balance, row.rate_pct, row.min_payment, row.pay_in_full);
+          row.remaining_payments=rp.months; row.remaining_payments_status=rp.status;
+          row.remaining_payments_missing=(rp.status==='unknown')
+            ? [row.rate_pct==null?'APR':null, !row.min_payment?'minimum payment':null].filter(Boolean) : [];
+          // plan_months deliberately NOT recomputed here: it comes from the server's full
+          // month-by-month avalanche simulation across every debt at once, which this local patch
+          // has no business re-deriving. It refreshes on the next load a second or two later.
         });
         const _PRIORITY_ORDER={'pay-first':0,'carry':1,'set-rate':2,'paid-in-full':3};
         av2.rows.sort((a,b)=>(_PRIORITY_ORDER[a.priority]??9)-(_PRIORITY_ORDER[b.priority]??9) || (b.rate_pct||-1)-(a.rate_pct||-1));

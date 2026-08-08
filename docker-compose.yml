@@ -124,8 +124,17 @@ services:
       - ANALYSIS_MODEL=${ANALYSIS_MODEL:-qwen3.6:27b}
       - LLM_TIMEOUT=${LLM_TIMEOUT:-1200}
       - LLM_KEEP_ALIVE=${LLM_KEEP_ALIVE:-30m}
+      # A blank SEC_USER_AGENT in .env passes through here as an EMPTY STRING, which is NOT the
+      # same as being unset: os.environ.get(k, default) then returns "" and the code default never
+      # applies. That sent `User-Agent: ""`, SEC 403'd every request, and the whole EDGAR subsystem
+      # reported "not SEC-registered" for every holding. edgar.py now uses `or` instead of a get()
+      # default so a blank can't win, but set a REAL contact address here — SEC rejects generic
+      # agents too. Check with GET /api/edgar-status.
       - SEC_USER_AGENT=${SEC_USER_AGENT}
       - EDGAR_TTL=86400
+      # Freshness windows are counted in TRADING time (weekends/NYSE holidays don't age data).
+      # Set to 0 to fall back to plain wall-clock aging everywhere.
+      - MARKET_CALENDAR_AGING=${MARKET_CALENDAR_AGING:-1}
       - PORTFOLIO_PROVIDER=${PORTFOLIO_PROVIDER:-csv}
       # Knowledge RAG (N12): drop .md/.txt/.pdf into ./knowledge on the host → indexed via bge-m3.
       - KNOWLEDGE_DIR=/knowledge

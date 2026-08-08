@@ -20,7 +20,23 @@ import requests
 import xml.etree.ElementTree as ET
 import store
 
-SEC_UA = os.environ.get("SEC_USER_AGENT", "Local AI Fiduciary admin@example.com")
+# NOTE the `or`, not a get() default (2026-08-08). docker-compose passes
+# `SEC_USER_AGENT=${SEC_USER_AGENT}`, so an unset or blank value in .env sets the variable to an
+# EMPTY STRING inside the container rather than leaving it absent -- and os.environ.get(k, default)
+# returns "" in that case, because the key exists. The app then sent `User-Agent: ""`, SEC replied
+# 403, and every EDGAR feature died silently. Confirmed live via /api/edgar-status.
+SEC_UA = (os.environ.get("SEC_USER_AGENT") or "").strip() or "Local AI Fiduciary admin@example.com"
+
+
+def ua_is_placeholder(ua=None):
+    """True when SEC_UA is blank or still an example/default string. SEC 403s generic agents, so
+    this is the single most likely cause of a dead EDGAR subsystem."""
+    s = (SEC_UA if ua is None else ua or "").strip()
+    if not s:
+        return True
+    low = s.lower()
+    return ("example.com" in low or "you@" in low or "admin@example" in low
+            or "@" not in s)          # SEC requires a contact address in the string
 EDGAR_TTL = int(os.environ.get("EDGAR_TTL", "86400"))   # cache fundamentals ~1 day
 
 # How long the DATA stays true once we can no longer refresh it -- distinct from EDGAR_TTL, which

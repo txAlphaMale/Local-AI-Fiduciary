@@ -26,6 +26,8 @@ import json
 import time
 import threading
 
+import market_calendar   # trading-day aging for cached_fetch's staleness window (2026-08-08)
+
 STORE_DB = os.environ.get("STORE_DB", "/data/store.db")
 
 _lock = threading.Lock()   # SQLite handles its own file locking, but this keeps init_db()
@@ -341,9 +343,14 @@ def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_
     real cadence -- they are different questions and conflating them is what produced the
     permanently-lit banner. Defaults to max(2*ttl, 1 day).
 
+    `stale_after` is measured in TRADING TIME, not wall-clock (2026-08-08, market_calendar):
+    weekend and NYSE-holiday seconds do not age the data, because no fresher value exists while
+    the market is shut. A Friday-evening pull read on Saturday morning is 6 hours old, not 15.
+
     Returns (value, meta), meta =
       {"fetched_at": epoch secs or None,   # when the returned value was actually retrieved
-       "age":        secs or None,         # how old the returned value is
+       "age":        secs or None,         # trading-time age -- what `stale` is judged on
+       "wall_age":   secs or None,         # plain elapsed time, for display
        "stale":      bool,                 # fell back to a copy older than `stale_after`
        "fallback":   bool,                 # fell back at all (stale or not) -- informational
        "empty":      bool,                 # a valid "nothing here" answer
@@ -355,9 +362,12 @@ def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_
         stale_after = max(2 * ttl, _STALE_AFTER_DEFAULT_FLOOR)
 
     def _meta(fetched_at, stale=False, fallback=False, empty=False, error=False):
-        return {"fetched_at": fetched_at, "stale": stale, "fallback": fallback,
-                "empty": empty, "error": error,
-                "age": (now - fetched_at) if fetched_at is not None else None}
+        m = {"fetched_at": fetched_at, "stale": stale, "fallback": fallback,
+             "empty": empty, "error": error, "age": None, "wall_age": None}
+        if fetched_at is not None:
+            m["wall_age"] = max(0.0, now - fetched_at)
+            m["age"] = market_calendar.trading_seconds_between(fetched_at, now)
+        return m
 
     hit = _MEM_CACHE.get((source, key))
     if hit and (now - hit[0] < ttl):
@@ -376,7 +386,8 @@ def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_
             hit = (disk[0], disk[1])
             _MEM_CACHE[(source, key)] = hit   # rehydrate so this process's later calls skip the disk hit
     if hit:
-        return hit[1], _meta(hit[0], stale=(now - hit[0]) > stale_after, fallback=True)
+        aged = market_calendar.trading_seconds_between(hit[0], now) > stale_after
+        return hit[1], _meta(hit[0], stale=aged, fallback=True)
     # nothing has ever succeeded for this (source, key), anywhere -- absent, not stale.
     return res, _meta(None, error=True)
 
