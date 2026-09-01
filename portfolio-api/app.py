@@ -63,6 +63,7 @@ import insider      # SEC Form 4 insider-transaction signal (G15) — context-on
 import inst13f      # SEC Form 13F institutional holdings (G15) — forward whale-tracking, context-only
 import auth         # LOCAL-HOSTING-HARDENING-PLAN.md §2/§3 (2026-07-23c) — session auth + TOTP MFA
 import audit        # SEC-1 (2026-07-24) — append-only, encrypted, hash-chained security event log
+import audit_anchor # SEC-9 (2026-09-01) — RFC 3161 + Merkle-batched external timestamp anchoring for audit.py's chain
 import detections   # SEC-4 (2026-07-25) — rules engine over the audit log (failed-login bursts, etc.)
 import demo_seed     # Demo harness (2026-07-25) — synthetic-data seeder + scheduled reset, DEMO_MODE-gated (no-op otherwise)
 import notifications  # Outbound awareness layer (2026-07-26) — VAPID web push + generic SMTP email, triggered from audit.emit()
@@ -382,6 +383,32 @@ CONFIG_SPECS = [
     {"key": "TRUST_PROXY_HEADERS",
      "label": "Trust X-Forwarded-For (ONLY if a reverse proxy you control sits in front of this app)",
      "group": "Network / reverse proxy", "default": "0", "options": ["0", "1"]},
+    # ---- Audit log external anchoring (2026-09-01, SEC-9) -- RFC 3161 trusted timestamping,
+    # Merkle-batched over audit.py's hash-chained event log. See audit_anchor.py's module
+    # docstring for the full design. Read LAZILY by audit_anchor.py (same ordering-hazard reason
+    # as TRUST_PROXY_HEADERS above), so these apply on the next container recreate, same as every
+    # other CONFIG_SPECS knob. freetsa.org is a FREE, unaudited TSA suitable for development only
+    # -- production should point at a QUALIFIED TSA on the eIDAS (EU) or UK trusted list: a
+    # qualified electronic timestamp carries a legal presumption of the accuracy and integrity of
+    # the date/time it indicates, under eIDAS Regulation (EU) No 910/2014 Article 41 -- an
+    # unqualified/free TSA's timestamp is still cryptographically meaningful evidence, just without
+    # that specific legal presumption attached.
+    {"key": "TSA_PRIMARY_URL", "label": "RFC 3161 timestamp authority -- primary URL (dev default: freetsa.org, a free/unaudited TSA)",
+     "group": "Audit log anchoring", "default": "https://freetsa.org/tsr"},
+    {"key": "TSA_FALLBACK_URL", "label": "RFC 3161 timestamp authority -- fallback URL (optional, tried if the primary fails)",
+     "group": "Audit log anchoring", "default": ""},
+    {"key": "TSA_PRIMARY_ROOT_CA_FILE", "label": "Pinned root CA PEM path for the primary TSA (blank = trust-on-first-use from its own response chain)",
+     "group": "Audit log anchoring", "default": ""},
+    {"key": "TSA_FALLBACK_ROOT_CA_FILE", "label": "Pinned root CA PEM path for the fallback TSA (blank = trust-on-first-use)",
+     "group": "Audit log anchoring", "default": ""},
+    {"key": "TSA_POLICY_OID", "label": "Expected TSA policy OID (optional -- blank skips this check)",
+     "group": "Audit log anchoring", "default": ""},
+    {"key": "ANCHOR_INTERVAL_HOURS", "label": "How often to anchor the audit log externally (hours; the fixed daily job)",
+     "group": "Audit log anchoring", "default": "24"},
+    {"key": "ANCHOR_VERIFY_INTERVAL_HOURS", "label": "How often to independently re-verify existing anchors (hours; the detection job)",
+     "group": "Audit log anchoring", "default": "6"},
+    {"key": "ANCHOR_RENEWAL_INTERVAL_DAYS", "label": "Re-anchor archived evidence with fresh crypto after this many days (long-term validation)",
+     "group": "Audit log anchoring", "default": "365"},
 ]
 
 
@@ -773,6 +800,9 @@ app.add_middleware(SessionMiddleware, secret_key=_session_secret(),
 auth.init_db()
 audit.init_db()  # SEC-1: security event log store (own DB, 0600) — safe if it fails (emit never raises)
 audit.start_retention_thread()  # SEC-2: daily automated purge_expired() — see audit.py
+audit_anchor.init_db()  # SEC-9: adds the anchors/anchor_renewals tables to the same DB file
+audit_anchor.start_anchor_thread()  # SEC-9: fixed-schedule (default daily) RFC 3161 anchor job — see audit_anchor.py
+audit_anchor.start_verify_thread()  # SEC-9: independent, more frequent offline re-verify/detection job
 detections.start_detections_thread()  # SEC-4: periodic rules sweep over the audit log — see detections.py
 demo_seed.seed_if_needed()  # Demo harness: no-op unless DEMO_MODE=1; refuses to touch a real account (see demo_seed.py)
 demo_seed.start_demo_reset_thread()  # Demo harness: no-op unless DEMO_MODE=1
@@ -1463,6 +1493,57 @@ def post_audit_purge(request: Request):
     retention/re-anchor behavior on demand, mirroring /api/tls/acme/renew's same "automatic +
     manual trigger" pattern."""
     return audit.purge_expired(actor_name=(request.session.get("uid") or "manual"))
+
+
+# ============================================================================
+# SEC-9 (2026-09-01) — external timestamp anchoring API. The internal HMAC chain above (SEC-2)
+# proves nothing was altered WITHOUT detection; it can't prove WHEN the chain existed, since an
+# actor with full write access to this app's data directory could regenerate it wholesale and have
+# it verify cleanly. These endpoints expose audit_anchor.py's RFC 3161 + Merkle-batched external
+# anchoring: independent, third-party-signed proof that a given state of the log existed at a
+# given time. See audit_anchor.py's module docstring for the full design.
+# ============================================================================
+@app.get("/api/audit/anchor-status")
+def get_audit_anchor_status():
+    """Summary for the SECURITY AUDIT LOG panel: the most recent successful external anchor, how
+    many batches are queued/retrying (a stuck TSA never drops a batch — see audit_anchor.py), and
+    which TSA endpoint(s) are configured."""
+    return audit_anchor.anchor_status()
+
+
+@app.get("/api/audit/anchors")
+def get_audit_anchors(limit: int = 50):
+    """Recent anchor batches, both completed and any still pending/retrying, most recent first."""
+    return {"anchors": audit_anchor.list_anchors(limit=max(1, min(int(limit or 50), 500)))}
+
+
+@app.get("/api/audit/verify-entry/{seq}")
+def get_audit_verify_entry(seq: int):
+    """Prove ONE audit-log entry's inclusion in an externally anchored batch: recomputes its
+    Merkle leaf, walks the inclusion proof to the batch's root, confirms that root matches what
+    was actually timestamped, and re-verifies the archived RFC 3161 token/cert chain offline.
+    Returns a structured result with a per-check breakdown and the TSA-asserted time."""
+    return audit_anchor.verify_entry(seq)
+
+
+@app.get("/api/audit/verify-range")
+def get_audit_verify_range(start: int, end: int):
+    """Same as verify-entry but over a whole seq range: the internal chain check plus every
+    covering anchor's token re-verified, with any not-yet-anchored sub-range called out
+    explicitly (informational, not itself a failure — the most recent entries may simply not have
+    reached the next scheduled anchor yet)."""
+    if end < start:
+        start, end = end, start
+    return audit_anchor.verify_range(start, end)
+
+
+@app.post("/api/audit/anchor-now")
+def post_audit_anchor_now(request: Request):
+    """Manual 'anchor now' — the background thread (audit_anchor.start_anchor_thread(), started
+    at app boot) already does this once a day automatically; this is for testing/demoing the
+    anchor pipeline on demand, mirroring /api/audit/purge-expired's same automatic+manual
+    pattern. Retries any already-queued pending batch first, exactly like the scheduled job."""
+    return audit_anchor.anchor_job()
 
 
 @app.get("/api/detections/rules")
@@ -7362,13 +7443,40 @@ def _ef_tier(a):
     return "cash"
 
 
+EF_STATES = ("unset", "yes", "no")
+
+
+def _ef_state(ent):
+    """Resolve one `ef_accounts` entry to its THREE-state designation (2026-08-08b, Jason).
+
+    A two-state flag could not distinguish "you haven't told me yet" from "you told me no", so the
+    panel nagged permanently about $8.5k of checking balances that are deliberately excluded —
+    every one of them committed to that month's bills, which is a decision, not an omission. The
+    third state makes an answered "no" durable while a genuinely NEW account still surfaces.
+
+    Storage stays backward-compatible with the two-state shape already on disk:
+      · absent / {}          -> "unset"  (never ruled on)
+      · {"on": true, ...}    -> "yes"    (counted; this is the pre-existing shape, read as-is)
+      · {"excluded": true}   -> "no"     (explicitly ruled out; stored with "on": false)
+    Anything else falls back to "unset", so a malformed or half-written entry degrades to "ask
+    again" rather than to a silent yes or a silent no."""
+    if not isinstance(ent, dict):
+        return "unset"
+    if ent.get("on"):
+        return "yes"
+    if ent.get("excluded"):
+        return "no"
+    return "unset"
+
+
 def _ef_source_rows(d, cfg):
     """The designated emergency-fund sources, in the shape cashdebt.ef_sources() consumes.
 
-    Designation lives in insurance.json's `ef_accounts` — {account name: {"on": bool, "cap":
-    float|None}} — keyed by account NAME, the same convention debt_rates / pay_in_full_overrides
-    already use, so one editor can write all of them and a renamed account fails visibly (its
-    designation stops matching) rather than silently attaching to the wrong balance.
+    Designation lives in insurance.json's `ef_accounts` — {account name: {"on": bool, "excluded":
+    bool, "cap": float|None}} — keyed by account NAME, the same convention debt_rates /
+    pay_in_full_overrides already use, so one editor can write all of them and a renamed account
+    fails visibly (its designation stops matching) rather than silently attaching to the wrong
+    balance. See _ef_state() for the three states.
 
     Ineligible tiers are still RETURNED rather than filtered out, carrying their tier: cashdebt
     counts them at $0 and raises an alert naming them. Dropping them here instead would make a
@@ -7381,7 +7489,7 @@ def _ef_source_rows(d, cfg):
     for a in d.get("accounts") or []:
         nm = a.get("name") or ""
         ent = ef_cfg.get(nm)
-        if not isinstance(ent, dict) or not ent.get("on"):
+        if _ef_state(ent) != "yes":
             continue
         tier = _ef_tier(a)
         if tier is None:
@@ -7393,6 +7501,29 @@ def _ef_source_rows(d, cfg):
         rows.append({"name": nm, "institution": a.get("institution"),
                      "balance": a.get("balance") or 0, "tier": tier, "cap": cap})
     return rows
+
+
+def _unreviewed_cash(d, cfg):
+    """Spendable cash sitting in accounts the household has NOT yet ruled on either way.
+
+    This, not "all undesignated cash", is what the panel should ask about. An account marked NO is
+    an answered question and must never be counted here again — that was the whole point of going
+    three-state. Mirrors _cash_total()'s definition of spendable (tax-advantaged wrappers excluded)
+    so the figure the panel nags about is the same money the panel calls cash."""
+    ef_cfg = cfg.get("ef_accounts") or {}
+    if not isinstance(ef_cfg, dict):
+        ef_cfg = {}
+    tot = 0.0
+    for a in d.get("accounts") or []:
+        if a.get("is_asset") is False:
+            continue
+        if _account_tax_status(a.get("name"), a.get("type")) != "na":
+            continue
+        if not _is_cash_account(a):
+            continue
+        if _ef_state(ef_cfg.get(a.get("name") or "")) == "unset":
+            tot += a.get("balance") or 0
+    return round(tot, 2)
 
 
 def _is_mortgage_account(a, overrides):
@@ -7455,6 +7586,9 @@ def get_cashdebt():
               # drives the idle-cash drag — a brokerage held AS the reserve isn't earning a deposit
               # yield, so it must never land in that figure. See cashdebt.ef_sources().
               "ef_sources": _ef_source_rows(d, cfg),
+              # Only cash the household hasn't ruled on either way — an account marked NO is an
+              # answered question, not an outstanding one. See _unreviewed_cash().
+              "unreviewed_cash": _unreviewed_cash(d, cfg),
               "debts": debts}
     sinfo = _state_of_residence_info(ret, d)
     inputs["state"] = sinfo["code"]
@@ -7681,18 +7815,30 @@ async def post_insurance_config(req: Request):
         # MERGE, same reasoning as the two override dicts above -- and load-bearing here for a
         # second reason: the EF editor and the CASH·DEBT panel can both post this key, and a
         # full-replace from either would silently drop designations the other one knows about.
-        # A value of None/false removes the entry outright rather than storing a dead {"on":false}
-        # row, so the cap doesn't linger invisibly and reappear if the box is re-checked later.
+        # Three states (2026-08-08b): a value of None removes the entry entirely (back to "never
+        # ruled on"); {"state":"no"} stores an explicit exclusion that must SURVIVE, because that
+        # is the answer the panel stops asking about; {"state":"yes"} / the legacy {"on":true}
+        # shape counts the account. An explicit "no" is deliberately NOT popped — popping it is
+        # what would resurrect the nag Jason asked us to silence.
         ea = dict(cfg.get("ef_accounts") or {})
         for nm, v in list(body["ef_accounts"].items())[:100]:
             key = str(nm)[:120]
-            if v in (None, False):
-                ea.pop(key, None)
+            if v is None:
+                ea.pop(key, None)          # explicit reset to unset
+                continue
+            if v is False:
+                ea[key] = {"on": False, "excluded": True}
                 continue
             if not isinstance(v, dict):
                 continue
-            if not v.get("on"):
+            state = v.get("state")
+            if state not in EF_STATES:
+                state = "yes" if v.get("on") else ("no" if v.get("excluded") else "unset")
+            if state == "unset":
                 ea.pop(key, None)
+                continue
+            if state == "no":
+                ea[key] = {"on": False, "excluded": True}
                 continue
             cap = v.get("cap")
             try:
@@ -9245,7 +9391,8 @@ def get_account_registry():
             if tier is not None:
                 r["applicable"] += ["ef", "ef_cap"]
                 ent = ef_cfg.get(nm) if isinstance(ef_cfg.get(nm), dict) else {}
-                r["ef"] = bool(ent.get("on"))
+                r["ef_state"] = _ef_state(ent)
+                r["ef"] = (r["ef_state"] == "yes")   # kept for any older consumer of the boolean
                 r["ef_cap"] = ent.get("cap")
                 r["ef_tier"] = tier
                 r["ef_tier_label"] = cashdebt.EF_TIERS[tier]["label"]
@@ -9317,12 +9464,21 @@ async def post_account_registry(req: Request):
         old_cfg = _read_insurance_cfg()
         cfg = _read_insurance_cfg()
         is_liab = acct.get("is_asset") is False
-        if "ef" in body or "ef_cap" in body:
+        if any(k in body for k in ("ef", "ef_state", "ef_cap")):
             tier = _ef_tier(acct)
+            # A tax-deferred account may still be marked NO — that's the household answering the
+            # question, and refusing it would leave the row permanently unanswered. Only YES is
+            # blocked. (The blocked rows are rendered non-interactive anyway, so this is belt and
+            # braces for a hand-rolled request.)
+            want = body.get("ef_state")
+            if want not in EF_STATES:
+                want = None
+            if want is None and "ef" in body:
+                want = "yes" if body["ef"] else "no"
             if tier is None:
                 rejected.append({"field": "ef", "reason": "This account can't serve as an emergency-"
                                                           "fund source."})
-            elif tier in cashdebt.EF_INELIGIBLE_TIERS:
+            elif tier in cashdebt.EF_INELIGIBLE_TIERS and want == "yes":
                 rejected.append({"field": "ef", "reason": "Tax-deferred accounts can't be designated "
                                                           "as emergency-fund sources — an early "
                                                           "withdrawal costs income tax plus a 10% "
@@ -9330,13 +9486,15 @@ async def post_account_registry(req: Request):
             else:
                 ea = dict(cfg.get("ef_accounts") or {})
                 prev = ea.get(nm) if isinstance(ea.get(nm), dict) else {}
-                on = bool(body["ef"]) if "ef" in body else bool(prev.get("on"))
-                # Typing a cap on an undesignated account IS a designation -- there is no other
-                # reason to say "count $25,000 of this one". Without this, the cap would be
-                # written and then immediately discarded by the `not on` branch below, and the
-                # user would watch the number they just entered disappear.
-                if "ef" not in body and "ef_cap" in body and body["ef_cap"] not in (None, ""):
-                    on = True
+                state = want if want is not None else _ef_state(prev)
+                # Typing a cap on an un-ruled account IS a designation -- there is no other reason
+                # to say "count $25,000 of this one". Without this, the cap would be written and
+                # then immediately discarded, and the user would watch the number they just
+                # entered disappear. A cap typed on an account marked NO does NOT flip it to yes:
+                # that would silently reverse an explicit decision.
+                if want is None and "ef_cap" in body and body["ef_cap"] not in (None, "") \
+                        and state == "unset":
+                    state = "yes"
                 if "ef_cap" in body:
                     try:
                         cap = None if body["ef_cap"] in (None, "") else max(0.0, float(body["ef_cap"]))
@@ -9344,12 +9502,14 @@ async def post_account_registry(req: Request):
                         cap = None
                 else:
                     cap = prev.get("cap")
-                if on:
+                if state == "yes":
                     ea[nm] = {"on": True, "cap": cap}
+                elif state == "no":
+                    ea[nm] = {"on": False, "excluded": True}   # an answered "no" must persist
                 else:
-                    ea.pop(nm, None)   # don't keep a dead row; see post_insurance_config
+                    ea.pop(nm, None)
                 cfg["ef_accounts"] = ea
-                touched += [k for k in ("ef", "ef_cap") if k in body]
+                touched += [k for k in ("ef", "ef_state", "ef_cap") if k in body]
         for key, store_key, caster in (("rate_pct", "debt_rates", float),
                                        ("min_payment", "debt_min_payments", float)):
             if key not in body:

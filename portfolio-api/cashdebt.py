@@ -232,7 +232,7 @@ def ef_sources(sources, stress_drawdown_pct=20.0):
 
 
 def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
-                   stress_drawdown_pct=20.0):
+                   stress_drawdown_pct=20.0, unreviewed_cash=None):
     """Months of ESSENTIAL spend covered by the emergency reserve.
 
     `sources` (optional) is ef_sources()' output — the household's explicitly designated EF
@@ -269,9 +269,18 @@ def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
     # with "what I guessed" is one nobody can interpret. Correct, but it has a sharp edge — the
     # household that designates only its brokerage watches its checking accounts silently drop OUT
     # of a number they were previously inside, which reads as the reserve shrinking. This surfaces
-    # the spendable cash that is NOT designated, so leaving it out is always a visible choice
-    # rather than an accident. (2026-08-08: hit immediately on the first real use.)
-    undesignated_cash = round(max(0.0, _f(cash_total, 0.0)), 2) if designated else 0.0
+    # spendable cash the household has NOT yet ruled on, so an omission is a visible choice rather
+    # than an accident. (2026-08-08: hit immediately on the first real use.)
+    #
+    # `unreviewed_cash` counts only accounts still in the UNSET state — not every undesignated
+    # account (2026-08-08b, Jason). Their checking accounts are each committed to that month's bills
+    # and are deliberately not reserve; with a two-state flag the app could not tell "you haven't
+    # told me yet" apart from "you told me no", so it nagged about a decision he had already made
+    # correctly, permanently. Marking an account NO now silences it for that account while a
+    # genuinely new account still gets flagged. Falls back to cash_total when the caller doesn't
+    # supply the figure, preserving the old behavior for any other consumer.
+    _unreviewed = _f(unreviewed_cash) if unreviewed_cash is not None else _f(cash_total, 0.0)
+    undesignated_cash = round(max(0.0, _unreviewed or 0.0), 2) if designated else 0.0
 
     note = ("Essential spend = annual expenses × the funded-ratio needs share. Cash beyond "
             "the target is strategic dry powder or investable — see idle-cash drag.")
@@ -281,8 +290,9 @@ def emergency_fund(cash_total, essential_monthly, target_months, sources=None,
                  f"{_f(stress_drawdown_pct, 20.0):.0f}% drawdown, because the emergencies that "
                  "drain a reserve tend to arrive with bad markets attached.")
         if undesignated_cash > 0:
-            note += (f" NOTE: ${undesignated_cash:,.0f} of spendable cash is NOT designated and so "
-                     "is not counted above — designate those accounts too if you'd draw on them.")
+            note += (f" NOTE: ${undesignated_cash:,.0f} of spendable cash hasn't been ruled on yet "
+                     "and so isn't counted above — mark each account YES to count it or NO if it's "
+                     "committed elsewhere, and this stops asking.")
     else:
         note += (" No accounts are designated as EF sources yet, so this figure is the app GUESSING "
                  "from account names — it counts checking/savings/money-market only and is blind to "
@@ -581,7 +591,8 @@ def run(inputs, knobs=None):
     efs = ef_sources(i.get("ef_sources"), k["ef_stress_drawdown_pct"])
     ef = emergency_fund(i.get("cash_total"), essential_mo, k["ef_target_months"],
                         sources=(efs if efs["rows"] else None),
-                        stress_drawdown_pct=k["ef_stress_drawdown_pct"])
+                        stress_drawdown_pct=k["ef_stress_drawdown_pct"],
+                        unreviewed_cash=i.get("unreviewed_cash"))
     ef["source_detail"] = efs
     ef_target = (ef["essential_monthly"] or 0) * k["ef_target_months"]
     dep = _f(i.get("deposit_yield_pct"), k["deposit_yield_pct"])
@@ -626,10 +637,10 @@ def run(inputs, knobs=None):
                               "is the environment that typically triggers the need."})
     if ef.get("undesignated_cash", 0) > 0:
         alerts.append({"level": "info",
-                       "msg": f"${ef['undesignated_cash']:,.0f} of spendable cash isn't designated "
-                              "as an emergency-fund source, so it isn't in the figure above. "
-                              "Designating one account switches off the name-based guess entirely "
-                              "— check your checking/savings accounts too if you'd draw on them."})
+                       "msg": f"${ef['undesignated_cash']:,.0f} of spendable cash hasn't been ruled "
+                              "on as an emergency-fund source, so it isn't in the figure above. Mark "
+                              "each account YES to count it, or NO if it's already committed "
+                              "elsewhere — this stops asking once every account has an answer."})
     for _s in efs["rows"]:
         if not _s["eligible"]:
             alerts.append({"level": "warn",

@@ -455,6 +455,7 @@ function runJob(url, btn, queuedLabel){
 let AUTH_STATUS=null;
 let TLS_STATUS=null;
 let AUDIT_LOG=null, AUDIT_VERIFY=null, AUDIT_UNMASKED=false, AUDIT_UNMASK_WANT=false;  // SEC-2 (2026-07-25) — security audit-log viewer panel; UNMASK_WANT/UNMASKED added 2026-07-27 (see _auditRefresh/_auditPanel)
+let AUDIT_ANCHOR=null;  // SEC-9 (2026-09-01) — external RFC 3161 anchor status (see _auditRefresh/_auditPanel)
 // Real client-side filtering for the audit log table (2026-07-27) — the panel's own alert-count
 // line used to just SAY "(filter by detection.alert)" with no actual control behind it (Jason
 // caught this from a screenshot). Filters recompute + swap only #audit-table-container's contents
@@ -1322,6 +1323,10 @@ W('audit-log-detections','Security & Compliance','Security Audit Log & automated
   'Every security-relevant event — logins, password/MFA changes, config edits, admin actions, denied requests — is written to an append-only, tamper-evident log (each entry is HMAC-chained to the one before it, so a "GET /api/audit/verify" check can prove nothing was altered or deleted after the fact). A background rules engine also sweeps this log every 5 minutes looking for specific attack patterns.',
   'The Security Audit Log panel supports free-text search, an outcome filter (success/denied/failure), and an "alerts only" toggle to see just what the detection rules flagged, without paging through routine logins. The 3 current detection rules: a failed-login burst (5+ failed logins for one username within 10 minutes), a first-seen source IP for an account with prior login history, and MFA-disabled-then-a-sensitive-change within 30 minutes (the classic account-takeover sequence). "RUN DETECTIONS NOW" triggers an immediate sweep instead of waiting for the next 5-minute cycle.',
   'If something looks wrong — a login you don\'t recognize, a change you didn\'t make — this is where to look first, and the chain-verify status line tells you whether to trust what you\'re seeing. There is no separate paging/email/Slack alert system today; an alert IS an entry in this log. See the "Incident Response" entry below for what to do next.\n\nIP addresses are masked to the last octet by default (203.0.113.x) — a privacy-preserving default, applied consistently to both the event\'s own source IP and any IPs bundled inside a detection alert (e.g. every offending IP in a failed-login burst). On this real (non-demo) instance, an admin can check "Show full IP addresses" above the log to see full precision — useful if you\'re building a firewall/WAF blocklist entry from what you see here. That toggle is unavailable on a public demo instance (masking there protects a visitor\'s IP and isn\'t negotiable) and unavailable to viewer-role accounts. There\'s also a non-UI path: `/data/audit.jsonl` on the host always holds the full unmasked source IP for every event, one JSON line each, readable without logging in — it just doesn\'t include the extra bundled IPs from a multi-IP alert, which stay encrypted and only surface through the unmask toggle.');
+W('audit-anchor-wiki','Security & Compliance','External timestamp anchoring (SETTINGS → SECURITY → SECURITY AUDIT LOG)',
+  'The audit log\'s HMAC hash chain (above) proves nothing was altered WITHOUT detection — but it can\'t prove WHEN the chain existed. Someone with full write access to this app\'s data (a stolen backup, a compromised host) could in principle regenerate the entire chain from scratch with different content, and it would verify perfectly cleanly. External anchoring closes that gap: batches of log entries are formed into a Merkle tree, and the tree\'s root is submitted to an independent RFC 3161 Time-Stamp Authority (TSA) — a third party who never had write access to this app at all — which returns a cryptographically signed proof that exactly that root existed at that time.',
+  'A fixed daily job anchors every entry written since the last anchor (or, if nothing changed, re-affirms the unchanged log head as its own positive evidence). A separate, more frequent job independently re-verifies every anchor purely from what\'s archived — no network call, no dependency on today\'s config — and raises an alert (a "detection.alert"-style entry in this same log) on any mismatch. A stuck or unreachable TSA never drops a batch; it just stays queued and keeps retrying automatically. "⚓ ANCHOR NOW" above the log triggers the same job on demand.',
+  'The development default TSA (freetsa.org) is free and unaudited — fine for testing, not for anything that needs to hold up as formal evidence. Production should point SETTINGS → ADVANCED KNOBS → "Audit log anchoring" at a QUALIFIED TSA on the eIDAS (EU) or UK trusted list: under eIDAS Regulation (EU) No 910/2014 Article 41, a qualified electronic timestamp carries a legal presumption of the accuracy and integrity of the date/time it indicates — a free/unqualified TSA\'s timestamp is still real cryptographic evidence, just without that specific legal presumption. Every anchor archives the TSA\'s full certificate chain and a revocation check captured at anchor time, precisely so it stays independently verifiable years later even after that cert has expired or the TSA\'s key has rotated.');
 W('backup-restore','Security & Compliance','Backup & restore (SETTINGS → SECURITY POSTURE)',
   'One-click encrypted backup of this container\'s entire data volume, and a staged (review-before-applying) restore, both from a panel in the app itself — no terminal needed. Uses the same AES-256-CBC encryption format (PBKDF2, 300,000 iterations) as the host-level `scripts/backup.sh`/`restore.sh` CLI pair and any scheduled backup (systemd timer locally, EventBridge on the AWS demo), so a backup made any of these three ways is restorable by any of the others.',
   'Set a backup passphrase once under SETTINGS → SECRETS ("Backup passphrase") — it\'s stored encrypted at rest, same as every other secret. Then "RUN BACKUP NOW" produces a timestamped, encrypted archive listed in a table below; "Stage restore" on any archive decrypts and extracts it into a separate staging area for you to inspect — it deliberately never overwrites your live data automatically. Completing an actual restore still means stopping the container, copying the staged files over `/data` yourself, and starting it back up — the same manual last step the CLI script always required, just with the decrypt/extract done for you.',
@@ -3113,7 +3118,7 @@ function saveAcct(name, field, val){
 const _REG_FIELD_META={
   drip:          {label:'DRIP', kind:'check', tip:'Dividends auto-reinvested into the SAME holding — raises concentration, and in a TAXABLE account each reinvestment is phantom income taxed yearly plus a new tax lot.'},
   fractional_ok: {label:'FRACTIONAL', kind:'check', tip:'Broker allows fractional-share buys — no cash drag on position sizing.'},
-  ef:            {label:'EF?', kind:'check', tip:'Designate this account as an emergency-fund resource. The EF gauge counts only designated accounts; without any designation it falls back to guessing from account names.'},
+  ef:            {label:'EF?', kind:'tri', tip:'Is this account an emergency-fund resource? YES counts it. NO records that you have ruled it out — money already committed elsewhere — and stops the panel asking about it. — means undecided, which is what the "not ruled on" prompt counts. The EF gauge counts only YES accounts; with none set at all it falls back to guessing from account names.'},
   ef_cap:        {label:'EF CAP $', kind:'num', step:500, width:86, tip:'Optional — count at most this much of the account as reserve. Blank counts the full balance.'},
   rate_pct:      {label:'APR %', kind:'num', step:0.1, width:56, tip:'Annual rate. Drives the avalanche ranking, the interest figure and the payment count.'},
   min_payment:   {label:'MIN PMT/mo', kind:'num', step:5, width:70, tip:'Minimum monthly payment. Required (with the APR) for the payoff simulator and the payments-left count.'},
@@ -3213,7 +3218,25 @@ function accountRegistryTable(opts){
         const td=el('td'); td.style.textAlign='center';
         if((a.applicable||[]).indexOf(f)<0){ td.className='muted'; td.textContent='—'; tr.appendChild(td); return; }
         const meta=_REG_FIELD_META[f];
-        if(meta.kind==='check'){
+        // EF is THREE-state, not a checkbox (2026-08-08b, Jason). A checkbox cannot express "I
+        // considered this account and the answer is no" — it only says "not ticked", which is
+        // indistinguishable from "not looked at yet". That ambiguity made the panel nag forever
+        // about checking balances Jason had deliberately excluded (they're committed to monthly
+        // bills). "—" means still unanswered and IS what the prompt counts; NO answers it for good.
+        if(f==='ef' && a.ef_eligible!==false){
+          const sel=document.createElement('select');
+          [['unset','—'],['yes','YES'],['no','NO']].forEach(([v,lbl])=>{
+            const o=document.createElement('option'); o.value=v; o.textContent=lbl; sel.appendChild(o); });
+          sel.value=a.ef_state||(a.ef?'yes':'unset');
+          sel.title='YES counts this account toward the emergency fund. NO records that you\'ve '
+            +'ruled it out (money already committed elsewhere) and stops the panel asking. '
+            +'— means you haven\'t decided yet, which is what the "not ruled on" prompt counts.';
+          sel.style.cssText='font-size:var(--font-size-sm);'
+            +(sel.value==='yes'?'color:var(--color-positive,#4caf50);'
+              :(sel.value==='no'?'color:var(--color-text-muted);':'color:var(--color-accent);'));
+          sel.onchange=()=>saveAcctRegistry(a.name,{ef_state:sel.value});
+          td.appendChild(sel);
+        } else if(meta.kind==='check'){
           const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!a[f];
           if(f==='ef' && a.ef_eligible===false){
             cb.disabled=true; cb.checked=false; cb.title=a.ef_blocked_reason||'Not eligible.';
@@ -3230,7 +3253,10 @@ function accountRegistryTable(opts){
           inp.style.width=(meta.width||70)+'px';
           inp.value=(a[f]!=null?a[f]:'');
           inp.title=(f==='ef_cap' && a.ef_cap_hint)?a.ef_cap_hint:meta.tip;
-          if(f==='ef_cap' && !a.ef) inp.placeholder='full';
+          // A cap is meaningless on an account ruled OUT — grey it rather than inviting a value
+          // that the server would (correctly) refuse to treat as a designation.
+          if(f==='ef_cap' && a.ef_state==='no'){ inp.disabled=true; inp.placeholder='n/a'; }
+          else if(f==='ef_cap' && !a.ef) inp.placeholder='full';
           // 'change' (not 'input') — one save when the field is committed, not per keystroke.
           inp.onchange=()=>{ const p={}; p[f]=(inp.value===''?null:parseFloat(inp.value));
             saveAcctRegistry(a.name,p); };
@@ -3257,7 +3283,9 @@ function accountRegistryContent(){
   sub.innerHTML='Everything the app lets you tell it about an individual account, in one place. Each group shows only the settings that mean something for that kind of account. '+
     'These are the same values edited in AUDITS→ACCOUNTS and PLAN→CASH·DEBT — one stored copy, so they can never disagree.<br/>'+
     '<b>There is no SAVE button</b> — every control commits on its own: a checkbox the moment you click it, a number field when you leave it or press Enter. A confirmation appears bottom-right on each save.<br/>'+
-    '<b>EF?</b> designates an account as an emergency-fund resource. Without at least one designation the emergency-fund gauge falls back to guessing from account names, which counts checking/savings/money-market only and is blind to a reserve you deliberately parked somewhere that earns a return. '+
+    '<b>EF?</b> asks whether an account is an emergency-fund resource, and has three answers: <b>YES</b> counts it, <b>NO</b> records that you\'ve ruled it out (money already committed elsewhere — a dedicated bill account, say), and <b>—</b> means you haven\'t decided. '+
+    'Only <b>—</b> accounts are counted by the "cash not ruled on yet" prompt on the CASH·DEBT panel, so answering NO silences it for that account permanently while a genuinely new account still gets raised. '+
+    'With no YES anywhere, the gauge falls back to guessing from account names, which counts checking/savings/money-market only and is blind to a reserve you deliberately parked somewhere that earns a return. '+
     'Tax-deferred accounts are blocked: an early withdrawal costs income tax plus a 10% penalty, so they aren\'t emergency money. A Roth is allowed but should carry a cap equal to your contribution basis — only contributions come out free.';
   wrap.appendChild(sub);
   if(ACCTREG && ACCTREG.ef_stress_drawdown_pct!=null){
@@ -4031,7 +4059,19 @@ function _auditRefresh(){
   return Promise.all([
     fetch('/api/audit/events'+qs).then(r=>r.json()).catch(()=>({events:[],unmasked:false})),
     fetch('/api/audit/verify').then(r=>r.json()).catch(()=>({ok:null})),
-  ]).then(([ev,ver])=>{ AUDIT_LOG=ev.events||[]; AUDIT_VERIFY=ver; AUDIT_UNMASKED=!!ev.unmasked; if(TAB==='settings') render(); });
+    fetch('/api/audit/anchor-status').then(r=>r.json()).catch(()=>({error:'unreachable'})),
+  ]).then(([ev,ver,anc])=>{ AUDIT_LOG=ev.events||[]; AUDIT_VERIFY=ver; AUDIT_UNMASKED=!!ev.unmasked; AUDIT_ANCHOR=anc; if(TAB==='settings') render(); });
+}
+// SEC-9 (2026-09-01) — manual "anchor now": the background thread (audit_anchor.start_anchor_thread(),
+// started at app boot) already does this once a day automatically; mirrors auditRunRetention's same
+// automatic+manual pattern. Retries any already-queued pending batch first, same as the scheduled job.
+function auditAnchorNow(){
+  const btn=document.getElementById('audit-anchor-btn');
+  if(btn){ btn.disabled=true; btn.textContent='anchoring…'; }
+  fetch('/api/audit/anchor-now',{method:'POST'}).then(r=>r.json()).then(d=>{
+    AUDIT_ANCHOR=null;
+    _auditRefresh();
+  }).catch(()=>{ if(btn){ btn.disabled=false; btn.textContent='⚓ ANCHOR NOW'; } });
 }
 function auditRunRetention(){
   const btn=document.getElementById('audit-retention-btn');
@@ -4084,6 +4124,35 @@ function _auditPanel(){
   }
   box.appendChild(chain);
 
+  // SEC-9 (2026-09-01) — external RFC 3161 timestamp anchoring status. The chain check above
+  // proves internal consistency; it can't prove WHEN the chain existed (an actor with full write
+  // access could regenerate the whole chain and have it verify cleanly). This is that missing
+  // piece: an independent, third-party-signed timestamp over Merkle-batched entries.
+  const anchorBox=el('div'); anchorBox.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-md);';
+  if(AUDIT_ANCHOR==null){
+    anchorBox.innerHTML='<span class="muted">Loading external timestamp anchor status…</span>';
+  } else if(AUDIT_ANCHOR.error){
+    anchorBox.innerHTML=`<span class="muted">External timestamp anchoring status unavailable (${AUDIT_ANCHOR.error}).</span>`;
+  } else {
+    const a=AUDIT_ANCHOR.latest_anchor;
+    let line;
+    if(!a){
+      line='<span class="muted">No external anchor yet — the first daily anchor job run (or "ANCHOR NOW" below) will create one.</span>';
+    } else {
+      const reaffirm = a.is_head_reaffirm ? ' (no new entries — re-affirms the unchanged log head)' : '';
+      const trust = a.root_trust_basis==='pinned' ? 'pinned root CA' : 'trust-on-first-use';
+      line=`<span class="pos">⚓ Externally timestamped</span> — batch #${a.anchor_id} (events ${a.batch_start_seq}–${a.batch_end_seq}, ${a.entry_count} entr${a.entry_count===1?'y':'ies'})${reaffirm} via <b>${a.tsa_url_used||'?'}</b> at <b>${a.tsa_time||'?'}</b> (${trust}). Revocation check: ${a.revocation_status||'unchecked'}.`;
+    }
+    const pending = AUDIT_ANCHOR.pending_count||0;
+    const pendingNote = pending
+      ? ` <span class="neg">${pending} batch(es) queued/retrying</span>` +
+        (AUDIT_ANCHOR.oldest_pending_error && AUDIT_ANCHOR.oldest_pending_error.last_error
+          ? ` — last error: ${AUDIT_ANCHOR.oldest_pending_error.last_error}` : ' (TSA not yet reachable, will retry automatically — no evidence is ever dropped).')
+      : '';
+    anchorBox.innerHTML = line + pendingNote;
+  }
+  box.appendChild(anchorBox);
+
   const btnRow=el('div'); btnRow.style.cssText='margin-bottom:var(--space-3);';
   const refreshBtn=el('button',null,'↻ REFRESH'); refreshBtn.style.marginRight='8px';
   refreshBtn.onclick=()=>{ AUDIT_LOG=null; AUDIT_VERIFY=null; render(); _auditRefresh(); };
@@ -4098,6 +4167,10 @@ function _auditPanel(){
   btnRow.appendChild(detBtn);
   const detStatus=el('span','muted'); detStatus.id='audit-detections-status'; detStatus.style.cssText='margin-left:10px;font-size:var(--font-size-sm);';
   btnRow.appendChild(detStatus);
+  const anchorBtn=el('button','mut-btn','⚓ ANCHOR NOW'); anchorBtn.id='audit-anchor-btn'; anchorBtn.style.marginLeft='8px';
+  anchorBtn.title='SEC-9 — manually runs the external RFC 3161 timestamp anchor job (retries any queued batch first, then anchors new entries or re-affirms the unchanged head). Runs automatically once a day otherwise.';
+  anchorBtn.onclick=auditAnchorNow;
+  btnRow.appendChild(anchorBtn);
   box.appendChild(btnRow);
 
   // Unmask toggle (2026-07-27) -- admin-only, and only has any effect on a real (non-demo)
@@ -5470,7 +5543,7 @@ function cashdebtContent(){
       // Designating one account switches the name-guess off entirely, so previously-counted cash
       // drops out. Say which cash is now excluded, right next to the sources it's excluded from.
       (ef.undesignated_cash>0
-        ? ` · <span class="" style="color:var(--color-accent);" title="Designating any account replaces the name-based guess completely, so cash you haven't designated is no longer counted. Designate those accounts too if you'd draw on them in an emergency.">${u(ef.undesignated_cash)} of cash NOT designated</span>`
+        ? ` · <span class="" style="color:var(--color-accent);" title="Cash in accounts you haven't answered YES or NO for yet, so it isn't counted. Answer NO on the ones that are already committed elsewhere and this stops appearing.">${u(ef.undesignated_cash)} of cash not ruled on</span>`
         : '')+
       ` &nbsp;<a href="#" id="cd-ef-edit" style="color:var(--color-accent);">edit designations</a>`;
     wrap.appendChild(src);

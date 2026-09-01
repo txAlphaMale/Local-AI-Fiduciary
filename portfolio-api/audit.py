@@ -163,6 +163,15 @@ EVENT_TYPES = (
     # "an X is a security event" reasoning as detection.alert above — a demo instance being wiped
     # and reseeded is itself a security-relevant state transition worth a durable record.
     "demo.seeded", "demo.reset",
+    # SEC-9 (2026-09-01, audit_anchor.py): RFC 3161 + Merkle-batched external timestamp anchoring.
+    # The internal HMAC chain above proves INTERNAL consistency (nothing was altered without
+    # breaking the chain) but not WHEN the chain existed -- a full-write-access actor could
+    # regenerate the whole chain with different content and have it verify cleanly. These events
+    # are the audit trail for that external control itself: successful anchors, the independent
+    # verify job's findings (its "alert" event, symmetric with detection.alert above), and the
+    # annual re-anchor-with-fresh-crypto renewal (RFC 4998/ETSI-inspired, see audit_anchor.py).
+    "audit.anchor.completed", "audit.anchor.verify.ok", "audit.anchor.verify.failed",
+    "audit.anchor.renewed",
 )
 
 
@@ -467,6 +476,42 @@ def query_core(event_type=None, resource_prefix=None, since_ts=None, limit=2000)
     except Exception as e:
         print(f"[audit] query_core failed: {e}", flush=True)
         return []
+
+
+def fetch_range(start_seq, end_seq):
+    """SEC-9 (2026-09-01, audit_anchor.py) -- public read helper: full-row read of every event
+    between start_seq and end_seq inclusive, ordered by seq. ALL columns except detail_enc (the
+    encrypted payload never needs to leave this module for anchoring/verification purposes -- a
+    row's own entry_hash already deterministically commits to it, since detail_json is folded into
+    entry_hash's computation in emit() above; audit_anchor.py's canonical Merkle-leaf serialization
+    binds to entry_hash directly instead of re-deriving that binding a second, riskier way). Used
+    by the external-anchoring Merkle batch builder and its verify APIs so they don't need to reach
+    into this module's private _conn()/table layout directly. Never raises -- returns [] on any
+    failure, same fail-safe contract as query_core() above."""
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT seq, ts, actor, actor_name, src_ip, event_type, resource, outcome, "
+                "corr_id, scheme, prev_hash, entry_hash, chain_anchor FROM events "
+                "WHERE seq >= ? AND seq <= ? ORDER BY seq ASC",
+                (int(start_seq), int(end_seq)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[audit] fetch_range failed: {e}", flush=True)
+        return []
+
+
+def head_seq():
+    """SEC-9 -- (highest, lowest) events.seq currently stored, or (None, None) if the table is
+    empty. Used by audit_anchor.py to decide what a new anchor batch should cover. Never raises."""
+    try:
+        with _conn() as c:
+            row = c.execute("SELECT MAX(seq) AS hi, MIN(seq) AS lo FROM events").fetchone()
+        return (row["hi"], row["lo"]) if row else (None, None)
+    except Exception as e:
+        print(f"[audit] head_seq failed: {e}", flush=True)
+        return (None, None)
 
 
 def verify_chain():

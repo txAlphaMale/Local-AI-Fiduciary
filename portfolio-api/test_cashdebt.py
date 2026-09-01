@@ -201,11 +201,32 @@ class TestEmergencyFund(unittest.TestCase):
         src = cd.ef_sources([{"name": "B", "balance": 17482, "tier": "taxable"}], 20.0)
         ef = cd.emergency_fund(11081, 6288, 6.0, sources=src)
         self.assertEqual(ef["undesignated_cash"], 11081.0)
-        self.assertIn("not designated", ef["note"].lower())
+        self.assertIn("hasn't been ruled on", ef["note"].lower())
 
     def test_no_undesignated_figure_while_still_on_the_guess(self):
         ef = cd.emergency_fund(11081, 6288, 6.0)
         self.assertEqual(ef["undesignated_cash"], 0.0)   # the guess already counts that cash
+
+    def test_ruled_out_cash_stops_being_reported(self):
+        # Jason's case: the checking balances are committed to monthly bills and were deliberately
+        # excluded. Once ruled on, the caller passes unreviewed_cash=0 and the prompt goes silent —
+        # a decided question must not keep being asked.
+        src = cd.ef_sources([{"name": "B", "balance": 19051, "tier": "taxable"}], 20.0)
+        ef = cd.emergency_fund(8470, 6288, 6.0, sources=src, unreviewed_cash=0)
+        self.assertEqual(ef["undesignated_cash"], 0.0)
+        self.assertNotIn("ruled on", ef["note"].lower())
+        self.assertEqual(ef["ef_total"], 19051.0)   # the reserve figure itself is unaffected
+
+    def test_partially_ruled_cash_reports_only_the_remainder(self):
+        src = cd.ef_sources([{"name": "B", "balance": 19051, "tier": "taxable"}], 20.0)
+        ef = cd.emergency_fund(8470, 6288, 6.0, sources=src, unreviewed_cash=632)
+        self.assertEqual(ef["undesignated_cash"], 632.0)
+
+    def test_unreviewed_cash_defaults_to_cash_total_when_not_supplied(self):
+        # Back-compat: a caller that doesn't know about the three-state model still gets the old
+        # behavior rather than a silent zero.
+        src = cd.ef_sources([{"name": "B", "balance": 19051, "tier": "taxable"}], 20.0)
+        self.assertEqual(cd.emergency_fund(8470, 6288, 6.0, sources=src)["undesignated_cash"], 8470.0)
 
     def test_no_essential_spend_yields_no_verdict_rather_than_a_crash(self):
         ef = cd.emergency_fund(11081, None, 6.0)
