@@ -72,29 +72,51 @@ def _default_base_url(dialect):
     return os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 
 
-DIALECT = os.environ.get("LLM_API_DIALECT", "ollama").strip().lower()
-BASE_URL = os.environ.get("LLM_BASE_URL", _default_base_url(DIALECT)).rstrip("/")
-API_KEY = os.environ.get("LLM_API_KEY", "")
+# ---- Config resolvers (LAZY -- read os.environ at CALL time, never at import) ---------------
+# app.py imports this module BEFORE its _boot_merge() runs (which fills os.environ gaps from the
+# SETTINGS-tab store: LLM_API_DIALECT/LLM_BASE_URL/EMBED_* from settings.json, LLM_API_KEY/
+# EMBED_API_KEY from the encrypted secrets store). Module-level constants computed at import
+# therefore froze the pre-merge values and UI-saved settings were silently ignored. Same pattern
+# as audit.py's TRUST_PROXY_HEADERS. `or` (not a get() default) so a BLANK value -- e.g. a
+# compose passthrough of an empty .env var -- falls back to the default instead of winning.
+# ANTHROPIC_VERSION / ANTHROPIC_MAX_TOKENS below are env-only (no SETTINGS-tab entry), so they
+# stay import-time constants.
 ANTHROPIC_VERSION = os.environ.get("ANTHROPIC_VERSION", "2023-06-01")
 # Output-token ceiling for the anthropic dialect only (Ollama/OpenAI-compatible servers are
 # bounded by LLM_TIMEOUT + the model's own context, not a separate max-tokens knob this app sets).
 ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "8192"))
 
-# ---- Embeddings dialect (independent axis -- see module docstring) --------------------------
-EMBED_DIALECT = os.environ.get(
-    "EMBED_API_DIALECT", DIALECT if DIALECT != "anthropic" else "ollama"
-).strip().lower()
-if EMBED_DIALECT == "anthropic":
-    raise RuntimeError(
-        "EMBED_API_DIALECT=anthropic is invalid -- Anthropic has no embeddings API. Set "
-        "EMBED_API_DIALECT to 'ollama' or 'openai' (the latter can point at any OpenAI-compatible "
-        "embeddings host, e.g. a Voyage AI or local vLLM/llama.cpp embeddings endpoint)."
-    )
-EMBED_BASE_URL = (
-    os.environ.get("EMBED_BASE_URL")
-    or (BASE_URL if EMBED_DIALECT == DIALECT else _default_base_url(EMBED_DIALECT))
-).rstrip("/")
-EMBED_API_KEY = os.environ.get("EMBED_API_KEY") or (API_KEY if EMBED_DIALECT == DIALECT else "")
+
+def _dialect():
+    return (os.environ.get("LLM_API_DIALECT") or "ollama").strip().lower()
+
+
+def _base_url():
+    return (os.environ.get("LLM_BASE_URL") or _default_base_url(_dialect())).rstrip("/")
+
+
+def _api_key():
+    return os.environ.get("LLM_API_KEY", "")
+
+
+# Embeddings dialect is an independent axis (see module docstring). Anthropic has no embeddings
+# API, so it is invalid here -- _llm_embed raises at CALL time (this used to raise at import,
+# which would now crash-loop the container on a bad UI-saved value with no way back to the UI).
+def _embed_dialect():
+    d = os.environ.get("EMBED_API_DIALECT")
+    if not d:
+        d = _dialect() if _dialect() != "anthropic" else "ollama"
+    return d.strip().lower()
+
+
+def _embed_base_url():
+    ed = _embed_dialect()
+    return (os.environ.get("EMBED_BASE_URL")
+            or (_base_url() if ed == _dialect() else _default_base_url(ed))).rstrip("/")
+
+
+def _embed_api_key():
+    return os.environ.get("EMBED_API_KEY") or (_api_key() if _embed_dialect() == _dialect() else "")
 
 
 class LLMResult:
@@ -113,18 +135,18 @@ class LLMResult:
 
 def _headers():
     h = {"Content-Type": "application/json"}
-    if DIALECT == "openai" and API_KEY:
-        h["Authorization"] = f"Bearer {API_KEY}"
-    elif DIALECT == "anthropic":
-        h["x-api-key"] = API_KEY
+    if _dialect() == "openai" and _api_key():
+        h["Authorization"] = f"Bearer {_api_key()}"
+    elif _dialect() == "anthropic":
+        h["x-api-key"] = _api_key()
         h["anthropic-version"] = ANTHROPIC_VERSION
     return h
 
 
 def _embed_headers():
     h = {"Content-Type": "application/json"}
-    if EMBED_DIALECT == "openai" and EMBED_API_KEY:
-        h["Authorization"] = f"Bearer {EMBED_API_KEY}"
+    if _embed_dialect() == "openai" and _embed_api_key():
+        h["Authorization"] = f"Bearer {_embed_api_key()}"
     return h
 
 
@@ -180,11 +202,12 @@ def _llm_chat(messages, model, tools=None, stream=False, temperature=0.3, num_ct
               keep_alive=None, format_json=False, think=None, timeout=60, images=None,
               cancel_check=None):
     msgs = _with_images(messages, images)
-    if DIALECT == "anthropic":
+    dialect = _dialect()
+    if dialect == "anthropic":
         if stream:
             return _anthropic_chat_stream(msgs, model, tools, temperature, format_json, timeout, cancel_check)
         return _anthropic_chat(msgs, model, tools, temperature, format_json, think, timeout)
-    if DIALECT == "openai":
+    if dialect == "openai":
         if stream:
             return _openai_chat_stream(msgs, model, tools, temperature, format_json, timeout, cancel_check)
         return _openai_chat(msgs, model, tools, temperature, format_json, timeout)
@@ -195,14 +218,21 @@ def _llm_chat(messages, model, tools=None, stream=False, temperature=0.3, num_ct
 
 def _llm_embed(text, model, timeout=120):
     """Dialect-switchable on EMBED_API_DIALECT (NOT the chat DIALECT -- see module docstring)."""
-    if EMBED_DIALECT == "openai":
-        r = requests.post(f"{EMBED_BASE_URL}/v1/embeddings", json={"model": model, "input": text},
+    dialect = _embed_dialect()
+    if dialect == "anthropic":
+        raise RuntimeError(
+            "EMBED_API_DIALECT=anthropic is invalid -- Anthropic has no embeddings API. Set "
+            "EMBED_API_DIALECT to 'ollama' or 'openai' (the latter can point at any OpenAI-compatible "
+            "embeddings host, e.g. a Voyage AI or local vLLM/llama.cpp embeddings endpoint)."
+        )
+    if dialect == "openai":
+        r = requests.post(f"{_embed_base_url()}/v1/embeddings", json={"model": model, "input": text},
                           headers=_embed_headers(), timeout=timeout)
         r.raise_for_status()
         items = (r.json() or {}).get("data") or []
         return (items[0].get("embedding") if items else None) or []
     body = json.dumps({"model": model, "prompt": text}).encode()
-    req = urllib.request.Request(EMBED_BASE_URL + "/api/embeddings", data=body,
+    req = urllib.request.Request(_embed_base_url() + "/api/embeddings", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode()).get("embedding") or []
@@ -229,7 +259,7 @@ def _ollama_chat(messages, model, tools, temperature, num_ctx, keep_alive, forma
     attempts = [dict(base, think=think), base] if think is not None else [base]
     last_err = "no response"
     for body in attempts:
-        r = requests.post(f"{BASE_URL}/api/chat", json=body, timeout=timeout)
+        r = requests.post(f"{_base_url()}/api/chat", json=body, timeout=timeout)
         if r.status_code >= 400:
             if "think" in r.text.lower() and body.get("think") is not None:
                 last_err = f"ollama {r.status_code}: {r.text[:300]}"
@@ -257,7 +287,7 @@ def _ollama_chat_stream(messages, model, tools, temperature, num_ctx, keep_alive
         body["tools"] = tools
     if keep_alive is not None:
         body["keep_alive"] = keep_alive
-    with requests.post(f"{BASE_URL}/api/chat", json=body, timeout=timeout, stream=True) as resp:
+    with requests.post(f"{_base_url()}/api/chat", json=body, timeout=timeout, stream=True) as resp:
         if resp.status_code >= 400:
             yield {"content": None, "thinking": None, "tool_calls": None, "done": True,
                    "error": f"ollama {resp.status_code}: {resp.text[:200]}", "cancelled": False}
@@ -297,7 +327,7 @@ def _openai_chat(messages, model, tools, temperature, format_json, timeout):
         body["tools"] = tools
     if format_json:
         body["response_format"] = {"type": "json_object"}
-    r = requests.post(f"{BASE_URL}/v1/chat/completions", json=body, headers=_headers(), timeout=timeout)
+    r = requests.post(f"{_base_url()}/v1/chat/completions", json=body, headers=_headers(), timeout=timeout)
     if r.status_code >= 400:
         return LLMResult(False, status_code=r.status_code, error=f"openai {r.status_code}: {r.text[:300]}")
     data = r.json()
@@ -327,7 +357,7 @@ def _openai_chat_stream(messages, model, tools, temperature, format_json, timeou
     if format_json:
         body["response_format"] = {"type": "json_object"}
     tool_acc = {}  # delta index -> {"name": str|None, "arguments": accumulated str}
-    with requests.post(f"{BASE_URL}/v1/chat/completions", json=body, headers=_headers(),
+    with requests.post(f"{_base_url()}/v1/chat/completions", json=body, headers=_headers(),
                        timeout=timeout, stream=True) as resp:
         if resp.status_code >= 400:
             yield {"content": None, "thinking": None, "tool_calls": None, "done": True,
@@ -497,7 +527,7 @@ def _anthropic_chat(messages, model, tools, temperature, format_json, think, tim
     # value -- thinking mode uses the API's own default rather than an explicit temperature=1.
     if think and not tools and not forcing_json:
         body["thinking"] = {"type": "enabled", "budget_tokens": min(4096, ANTHROPIC_MAX_TOKENS - 1024)}
-    r = requests.post(f"{BASE_URL}/v1/messages", json=body, headers=_headers(), timeout=timeout)
+    r = requests.post(f"{_base_url()}/v1/messages", json=body, headers=_headers(), timeout=timeout)
     if r.status_code >= 400:
         return LLMResult(False, status_code=r.status_code, error=f"anthropic {r.status_code}: {r.text[:300]}")
     data = r.json()
@@ -520,7 +550,7 @@ def _anthropic_chat(messages, model, tools, temperature, format_json, think, tim
 def _anthropic_chat_stream(messages, model, tools, temperature, format_json, timeout, cancel_check):
     body, forcing_json = _anthropic_body(messages, model, tools, temperature, format_json, stream=True)
     block_types, tool_meta, tool_json, tool_order = {}, {}, {}, []
-    with requests.post(f"{BASE_URL}/v1/messages", json=body, headers=_headers(),
+    with requests.post(f"{_base_url()}/v1/messages", json=body, headers=_headers(),
                        timeout=timeout, stream=True) as resp:
         if resp.status_code >= 400:
             yield {"content": None, "thinking": None, "tool_calls": None, "done": True,

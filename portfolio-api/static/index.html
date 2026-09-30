@@ -4880,13 +4880,15 @@ function settingsContent(){
         }
         inp.style.cssText='width:200px;';
         // 2026-07-24: no longer disabled when env_locked -- you can stage a replacement value
-        // here while .env still wins. Applying it needs `docker compose up -d`, NOT `restart` --
-        // restart reuses the container's existing (stale) environment and won't see an edited
-        // .env at all.
+        // here while .env still wins. Two different paths: (1) a value saved HERE with no .env entry
+        // is read from the DB by _boot_merge on every process start, so a plain `restart` applies it
+        // (and `up -d` would NOT -- with nothing changed in compose/.env it is a no-op); (2) an
+        // .env-locked key needs the .env line removed and `docker compose up -d`, because `restart`
+        // reuses the container's existing (stale) environment and won't see an edited .env.
         const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
         meta.textContent = it.env_locked
           ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + `docker compose up -d` to activate it'+(it.staged_behind_env?' (already staged)':''))
-          : ('· applies on next `docker compose up -d`'+(it.source==='settings'?' · customized':' · default '+it.default));
+          : ('· applies on next portfolio-api restart (`docker compose restart portfolio-api`)'+(it.source==='settings'?' · customized':' · default '+it.default));
         row.appendChild(lab); row.appendChild(inp); row.appendChild(meta); wrap.appendChild(row);
       });
     });

@@ -343,7 +343,8 @@ SETTING_SPECS = {
     "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 20,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker", "group": "Insider signal"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
-# applied on RESTART via _boot_merge). NOT read live — they set module constants at import.
+# applied on RESTART via _boot_merge). NOT read live. app.py reads them into module constants
+# AFTER _boot_merge runs; llm.py (imported BEFORE the merge) resolves its own keys lazily per call.
 CONFIG_SPECS = [
     {"key": "ANALYSIS_MODEL", "label": "Analysis / Strategist model (Ollama tag)", "group": "Model", "default": "qwen3.6:27b"},
     {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
@@ -461,15 +462,15 @@ DEFAULT_ACCOUNT_FLAGS = {"drip": False, "fractional_ok": True}
 # page-injection mechanism; the session auth gate is now the sole guard on every route. If a
 # deployment still has ANALYSIS_TOKEN set in its .env, it's simply ignored now (harmless).
 FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
-OLLAMA = llm.BASE_URL   # RESUME-TRACKER 2026-07-24: kept as an alias (used only in log/error text
-                        # below) -- the actual HTTP calls now all go through llm._llm_chat/_llm_embed.
+# (OLLAMA = llm.BASE_URL alias removed: llm.py now resolves its URL/dialect lazily per call so
+#  SETTINGS-tab values merged by _boot_merge take effect; error text calls llm._base_url().)
 ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "qwen3.6:27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
 ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "16384"))   # fit full fundamentals+valuation+news without truncation
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
 # ---- Claude (Anthropic) integration, 2026-07-24 -- two-tier model selection ------------------
-# Only consulted when llm.DIALECT == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
+# Only consulted when llm._dialect() == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
 # in .env). ANALYSIS_MODEL above is untouched and still governs every ollama/openai-dialect call
 # site exactly as before -- this is purely an additional branch for the anthropic dialect, not a
 # replacement. Two tiers, not one: the autonomous weekly Strategist run + the on-demand cash-
@@ -485,7 +486,7 @@ def _text_model(strategist=False):
     ANALYSIS_MODEL (no behavior change from before this function existed). Anthropic dialect:
     ANTHROPIC_STRATEGIST_MODEL for the weekly Strategist run + advice deployment planner,
     ANTHROPIC_MODEL for everything else (chat personas, narrative, single-shot JSON extraction)."""
-    if llm.DIALECT == "anthropic":
+    if llm._dialect() == "anthropic":
         return ANTHROPIC_STRATEGIST_MODEL if strategist else ANTHROPIC_MODEL
     return ANALYSIS_MODEL
 # Chat image input (RESUME-TRACKER 2026-07-18j): a SEPARATE small multimodal model, not a
@@ -6978,7 +6979,7 @@ def _do_narrative():
         err = (f"timed out after {NARR_LLM_TIMEOUT}s of generation{wait_note} — model may be "
                "cold-loading, GPU-starved, or the prompt/context too large")
     except requests.exceptions.ConnectionError as e:
-        err = f"could not reach the LLM backend at {OLLAMA}: {e}"[:300]
+        err = f"could not reach the LLM backend at {llm._base_url()}: {e}"[:300]
     except Exception as e:
         err = f"{type(e).__name__}: {e}"[:300]
     if err:
@@ -13867,8 +13868,8 @@ def chat_session_delete(sid: str):
 def health():
     return {"ok": True, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
             "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL,
-            "llm_dialect": llm.DIALECT, "llm_model": _text_model(),
-            "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm.EMBED_DIALECT}
+            "llm_dialect": llm._dialect(), "llm_model": _text_model(),
+            "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()}
 
 
 @app.get("/")
