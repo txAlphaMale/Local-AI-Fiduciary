@@ -8703,6 +8703,41 @@ CALC_RENDER.land_loan=(r,key)=>{
   w.appendChild(_cSchedule(key,'SCHEDULE',_CC_AMORT_Y.concat([['balloon','BALLOON',_c$]]),r.yearly,_CC_AMORT_P,r.schedule));
   w.appendChild(_cNotes(r)); return w;
 };
+// DRIP value-over-time chart (2026-10-19, Jason). Form: one $ axis; BARS = year-end value with
+// dividends reinvested (the headline series), a solid LINE = the same position taking dividends
+// as cash (the comparison), a DASHED line = cumulative money put in (reference). Mixed marks +
+// dash give identity beyond color, which matters on themes where accent and info are close
+// (validated: worst adjacent pair passes CVD ΔE ≥ 15 on the default theme). Colors resolve from
+// theme tokens at draw time, so a theme switch re-colors on the next paint. The PROJECTION table
+// below is the accessible table view of the same numbers.
+let CALC_CHARTS={};
+const _cCompact=v=>{ const a=Math.abs(v); const s=v<0?'−':''; return a>=1e9?s+'$'+(a/1e9).toFixed(1)+'B':a>=1e6?s+'$'+(a/1e6).toFixed(1)+'M':a>=1e3?s+'$'+(a/1e3).toFixed(0)+'k':s+'$'+a.toFixed(0); };
+function _dripChart(r,key){
+  const box=el('div'); box.style.cssText='position:relative;height:280px;margin:0 0 var(--space-3);';
+  const yrs=r.yearly||[]; if(yrs.length<2 || typeof Chart==='undefined') return box;
+  const cv=el('canvas'); cv.setAttribute('role','img');
+  cv.setAttribute('aria-label',`Year-by-year value: with dividends reinvested ending at ${_c$(r.final_value)}, taking dividends as cash ending at ${_c$((r.without_drip||{}).final_value)}.`);
+  box.appendChild(cv);
+  requestAnimationFrame(()=>{
+    if(!cv.isConnected) return;
+    if(CALC_CHARTS[key]){ try{ CALC_CHARTS[key].destroy(); }catch(_){} }
+    const acc=resolveColor('var(--color-accent)'), inf=resolveColor('var(--color-info)'), mut=resolveColor('var(--color-text-muted)'),
+          txt=resolveColor('var(--color-text)'), grid=resolveColor('var(--color-border)');
+    CALC_CHARTS[key]=new Chart(cv,{
+      data:{labels:yrs.map(y=>'Y'+y.year),
+        datasets:[
+          {type:'bar',label:'Dividends reinvested (DRIP)',data:yrs.map(y=>y.value),backgroundColor:acc,borderRadius:{topLeft:4,topRight:4},borderSkipped:'bottom',maxBarThickness:28,categoryPercentage:0.8,barPercentage:0.9,order:3,pointStyle:'rect'},
+          {type:'line',label:'Dividends taken as cash',data:yrs.map(y=>y.cash_path_value),borderColor:inf,backgroundColor:inf,borderWidth:2,pointRadius:0,pointHoverRadius:5,tension:0,order:1,pointStyle:'line'},
+          {type:'line',label:'Total put in',data:yrs.map(y=>y.invested_cum),borderColor:mut,backgroundColor:mut,borderWidth:2,borderDash:[5,4],pointRadius:0,pointHoverRadius:4,stepped:true,order:2,pointStyle:'line'}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{legend:{position:'top',align:'start',labels:{color:txt,usePointStyle:true,boxWidth:18,boxHeight:8,sort:(a,b)=>a.datasetIndex-b.datasetIndex,font:{family:'inherit',size:11}}},
+          tooltip:{callbacks:{title:it=>'Year '+yrs[it[0].dataIndex].year,label:c=>' '+c.dataset.label+': '+_c$(c.parsed.y)}}},
+        scales:{x:{grid:{display:false},ticks:{color:mut,autoSkip:true,maxRotation:0,font:{size:10}}},
+          y:{beginAtZero:true,grid:{color:grid},border:{display:false},ticks:{color:mut,font:{size:10},callback:v=>_cCompact(v)}}}}});
+  });
+  return box;
+}
 CALC_RENDER.drip=(r,key)=>{
   const w=el('div'), nd=r.without_drip||{};
   if((r.warnings||[]).length){ const wb=el('div'); wb.style.cssText='border:1px solid var(--color-negative);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);color:var(--color-negative);font-size:var(--font-size-base);line-height:1.45;';
@@ -8714,13 +8749,14 @@ CALC_RENDER.drip=(r,key)=>{
     ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested · yield then '+_cP(r.end_yield_pct,1)],
     r.final_value_real!=null&&['IN TODAY\'S DOLLARS',_c$(r.final_value_real),null,'inflation-adjusted'],
   ]));
+  w.appendChild(_dripChart(r,key));
   const cols=el('div'); cols.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-4);';
   cols.appendChild(_cKV([['Starting value',_c$(r.starting_value)+' ('+_cN(r.starting_shares,2)+' sh)'],['Contributions',_c$(r.total_contributions)],['Total invested',_c$(r.total_invested),1],
     ['Dividends (gross)',_c$(r.total_dividends_gross)],['Dividend tax',_c$(r.total_dividend_tax)],['Dividends reinvested (net)',_c$(r.total_dividends_net)],['Extra shares from DRIP',_cN(r.extra_shares_from_drip,2)]],'WITH DRIP'));
   cols.appendChild(_cKV([['Final value (shares + cash)',_c$(nd.final_value)],['Shares',_cN(nd.shares,2)],['Cash dividends collected',_c$(nd.cash_dividends_collected)],['Annual income at end',_c$(nd.annual_income_at_end)]],'DIVIDENDS AS CASH'));
   w.appendChild(cols);
   w.appendChild(_cSchedule(key,'PROJECTION',[['year','YEAR'],['contributions','CONTRIB',_c$],['dividends_net','DIVIDENDS',_c$],['shares','SHARES',x=>_cN(x,2)],['price','PRICE',_c$2],['value','VALUE',_c$],['annual_income','FWD INCOME/yr',_c$]],r.yearly,null,null));
-  w.appendChild(_cNotes(r)); return w;
+  w.appendChild(_cNotes(Object.assign({},r,{warnings:[]}))); return w;   // warnings already shown in the banner
 };
 CALC_RENDER.tvm=(r,key)=>{
   const w=el('div'); const v=r.values||{};

@@ -909,6 +909,13 @@ def drip(inp):
                 "yearly": yearly}
     d, c = sim(True), sim(False)
     total_in = invested0 + d["contrib"]
+    # Chart series (2026-10-19): per year, the dividends-as-cash path and cumulative money put in,
+    # alongside the DRIP value already on each row — one axis, all dollars.
+    cum = invested0
+    for i, row in enumerate(d["yearly"]):
+        cum += row["contributions"] or 0.0
+        row["invested_cum"] = _r2(cum)
+        row["cash_path_value"] = c["yearly"][i]["value"] if i < len(c["yearly"]) else None
     # Sanity guard (2026-10-19, found by Jason's MFA test): with dividend growth well above price
     # growth, the implied yield compounds without limit — a price falling 15%/yr against a
     # dividend falling 4%/yr reaches a 200%+ yield and DRIP "buys" billions of dollars. That is
