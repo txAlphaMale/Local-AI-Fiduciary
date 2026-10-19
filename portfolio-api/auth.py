@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 # ============================================================================
 # auth.py — local, single-database (SQLite) authentication: username/password (argon2) +
 # optional TOTP MFA (pyotp, RFC 6238 — works with any standard authenticator app: Google

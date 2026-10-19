@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 risk.py — tail & co-movement risk suite for the Fiduciary (Fable G4).
 

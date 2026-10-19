@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """NYSE trading-day calendar and trading-time arithmetic.
 
 2026-08-08. Added because wall-clock aging produces false "dated inputs" flags every weekend.

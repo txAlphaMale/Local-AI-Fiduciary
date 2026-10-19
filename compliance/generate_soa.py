@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 generate_soa.py -- SEC-6: single source of truth for Fiduciary's ISO/IEC 27001:2022 Annex A
 Statement of Applicability. Generates BOTH compliance/STATEMENT-OF-APPLICABILITY.md (human-

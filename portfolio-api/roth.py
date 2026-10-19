@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 roth.py — unified marginal-rate curve + multi-year Roth conversion ladder (Fable G8).
 

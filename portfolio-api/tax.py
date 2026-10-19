@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 tax.py — a small bracket-aware federal income-tax engine for the Fiduciary.
 

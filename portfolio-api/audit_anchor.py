@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 audit_anchor.py -- SEC-9: RFC 3161 trusted timestamping with Merkle-batched external anchoring for
 the hash-chained audit log (audit.py).

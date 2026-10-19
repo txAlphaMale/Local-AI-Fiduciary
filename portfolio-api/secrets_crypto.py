@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 secrets_crypto.py -- the app's ONE shared Fernet encryption primitive, used everywhere sensitive
 data lands in SQLite at rest. Originally built (2026-07-24) just for SECRETS_FILE (app.py's

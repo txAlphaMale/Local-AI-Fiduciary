@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """test_identity.py -- the brief must describe the SEC registrant for a ticker, not whatever the
 holdings source labelled it (VOYG: Monarch said 'Voyager Digital Ltd ...', SEC says Voyager Technologies)."""
 import glob, os, re, sys, tempfile, unittest

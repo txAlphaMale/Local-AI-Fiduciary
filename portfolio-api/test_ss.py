@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_ss.py — unit tests for the Social Security engine (ss.py, Fable G2).
 

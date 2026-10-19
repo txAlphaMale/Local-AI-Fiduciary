@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 detections.py -- SEC-4: a small rules engine over the SEC-1/SEC-2 audit log, the "detect" stage of
 the log-source -> normalize -> detect -> alert pipeline DEMO-SITE-BUILD-PLAN.md's SIEM framing (§6)

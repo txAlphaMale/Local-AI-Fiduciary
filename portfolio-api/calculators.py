@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 calculators.py — CALCULATORS tab (2026-10-19, Jason): the household-fiduciary calculator bench.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 inst13f.py — SEC Form 13F institutional-holdings signal (Fable G15, forward whale-tracking). Context-only.
 

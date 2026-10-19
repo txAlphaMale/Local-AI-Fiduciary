@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 insurance.py — P0-3: the protection desk (insurance & risk-transfer gap analysis).
 

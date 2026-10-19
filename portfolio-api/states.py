@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 states.py — 50-state + DC residency-aware facts registry (Fable RESUME-TRACKER item 3).
 

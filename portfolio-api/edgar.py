@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 SEC EDGAR / GAAP fundamentals for the Fiduciary.
 
