@@ -101,6 +101,23 @@ variable "container_insights_enabled" {
   default     = true
 }
 
+variable "flow_log_traffic_type" {
+  description = <<-EOT
+    VPC flow log traffic type: ALL (default) or REJECT. Volume, and so cost, is driven by accepted
+    flows, chiefly the task's egress through the NAT gateway (ECR pulls, LLM/market-data APIs,
+    CloudWatch, SSM) plus ALB health checks. At this demo's traffic that is still estimated at well
+    under $1/month, and ALL is the only setting that records egress, which is where data
+    exfiltration would show. Switch to REJECT if traffic grows and cost matters more than egress
+    visibility; REJECT records only security-group/NACL denials.
+  EOT
+  type        = string
+  default     = "ALL"
+  validation {
+    condition     = contains(["ALL", "REJECT"], var.flow_log_traffic_type)
+    error_message = "flow_log_traffic_type must be ALL or REJECT."
+  }
+}
+
 variable "log_retention_days" {
   type    = number
   default = 30

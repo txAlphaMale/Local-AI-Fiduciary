@@ -7735,6 +7735,84 @@ def _whatif_liabilities():
     return out
 
 
+# DRIP ticker lookup (2026-10-19, Jason): type a symbol, get the DRIP inputs (price, trailing
+# yield, payment frequency, trailing dividend + price growth) instead of hunting them down by hand.
+# Source: the same KEYLESS Yahoo chart API _fetch_yahoo() already falls back to — 10y of monthly
+# closes plus split-adjusted dividend events in one call, and it covers ETFs/funds (Finnhub's free
+# tier generally doesn't). Finnhub (price + indicated yield, no history) is the fallback.
+# In-memory cache: dividend history changes quarterly at most, and the panel re-asks on every
+# holding pick.
+_DIV_LOOKUP_CACHE = {}
+_DIV_LOOKUP_TTL = 6 * 3600
+
+
+def _yahoo_dividend_history(sym):
+    ysym = sym.replace(".", "-")          # BRK.B -> BRK-B (Yahoo's class-share spelling)
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        try:
+            r = requests.get(f"https://{host}/v8/finance/chart/{ysym}",
+                             params={"range": "10y", "interval": "1mo", "events": "div"},
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+            if r.status_code >= 400:
+                continue
+            res = (((r.json() or {}).get("chart") or {}).get("result") or [None])[0]
+            if not res:
+                continue
+            meta = res.get("meta") or {}
+            ts = res.get("timestamp") or []
+            closes = ((((res.get("indicators") or {}).get("quote") or [{}])[0]) or {}).get("close") or []
+            divs = [(v.get("date"), v.get("amount"))
+                    for v in ((res.get("events") or {}).get("dividends") or {}).values()
+                    if v.get("date") and v.get("amount")]
+            price = meta.get("regularMarketPrice")
+            if not price:
+                continue
+            return {"price": float(price), "dividends": divs,
+                    "closes": [(t, c) for t, c in zip(ts, closes) if c],
+                    "name": meta.get("longName") or meta.get("shortName"),
+                    "type": meta.get("instrumentType"), "currency": meta.get("currency")}
+        except Exception:
+            continue
+    return None
+
+
+@app.get("/api/calc/dividend-lookup")
+def get_dividend_lookup(ticker: str = ""):
+    sym = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()[:12]
+    if not sym:
+        return {"error": "Enter a ticker symbol."}
+    hit = _DIV_LOOKUP_CACHE.get(sym)
+    if hit and time.time() - hit[0] < _DIV_LOOKUP_TTL:
+        return hit[1]
+    raw = _yahoo_dividend_history(sym)
+    if raw:
+        out = calculators.dividend_profile(raw["price"], raw["dividends"], raw["closes"])
+        out.update({"ticker": sym, "name": raw.get("name"), "type": raw.get("type"),
+                    "currency": raw.get("currency"), "source": "Yahoo Finance (chart API)"})
+        if raw.get("currency") and raw["currency"] != "USD":
+            out["notes"].append(f"Prices and dividends are in {raw['currency']}, not USD.")
+    else:
+        price = None
+        try:
+            price = _price(sym)
+        except Exception:
+            price = None
+        if not price:
+            return {"error": f"Couldn't find price data for {sym}. Check the symbol, or enter the "
+                             "share price and yield by hand."}
+        v = _valuation(sym) or {}
+        y = v.get("dividend_yield_pct")
+        out = {"ticker": sym, "price": round(float(price), 2), "dividend_yield_pct": y,
+               "pays_dividend": bool(y), "frequency": None, "source": "Finnhub (no history)",
+               "notes": ["Dividend history unavailable — yield only; enter frequency and growth "
+                         "assumptions yourself."]}
+    out["as_of"] = int(time.time())
+    _DIV_LOOKUP_CACHE[sym] = (time.time(), out)
+    if len(_DIV_LOOKUP_CACHE) > 500:
+        _DIV_LOOKUP_CACHE.pop(next(iter(_DIV_LOOKUP_CACHE)))
+    return out
+
+
 @app.get("/api/calc/liabilities")
 def get_calc_liabilities():
     try:

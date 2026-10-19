@@ -5,6 +5,11 @@
 #   - each container gets its own image tag variable
 #   - "latest" is rejected for both tags (ECR repos are IMMUTABLE)
 #   - Container Insights follows container_insights_enabled
+# and the logging contract (CKV2_AWS_31 / CKV2_AWS_11):
+#   - WAF logs go to the persistent aws-waf-logs-* group, credential headers are redacted, and only
+#     BLOCK/COUNT are kept
+#   - flow logs go to the log bucket's vpc-flow/ prefix; traffic type is ALL by default and only
+#     ALL/REJECT are accepted
 #
 # Limits of mocking (deliberate, not gaps to "fix" here):
 #   - command = plan only. Mock providers invent random strings for computed attributes, and
@@ -27,6 +32,15 @@ mock_provider "aws" {
   }
   mock_data "aws_ecr_repository" {
     defaults = { repository_url = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mock" }
+  }
+  mock_data "aws_cloudwatch_log_group" {
+    defaults = { arn = "arn:aws:logs:us-east-1:123456789012:log-group:aws-waf-logs-fiduciary-demo" }
+  }
+  mock_data "aws_s3_bucket" {
+    defaults = {
+      id  = "fiduciary-demo-logs-123456789012"
+      arn = "arn:aws:s3:::fiduciary-demo-logs-123456789012"
+    }
   }
   mock_data "aws_route53_zone" {
     defaults = { zone_id = "Z0000000000MOCK" }
@@ -112,4 +126,68 @@ run "invalid_tag_rejected" {
   }
 
   expect_failures = [var.image_tag]
+}
+
+run "waf_logging_contract" {
+  command = plan
+
+  assert {
+    condition     = aws_wafv2_web_acl_logging_configuration.main.log_destination_configs == toset(["arn:aws:logs:us-east-1:123456789012:log-group:aws-waf-logs-fiduciary-demo"])
+    error_message = "WAF logs must go to the persistent aws-waf-logs-fiduciary-demo log group"
+  }
+  assert {
+    condition = alltrue([
+      for h in ["authorization", "cookie"] :
+      contains([for r in aws_wafv2_web_acl_logging_configuration.main.redacted_fields : r.single_header[0].name], h)
+    ])
+    error_message = "Authorization and Cookie headers must be redacted"
+  }
+  assert {
+    condition     = aws_wafv2_web_acl_logging_configuration.main.logging_filter[0].default_behavior == "DROP"
+    error_message = "ALLOW traffic must be dropped by default"
+  }
+  assert {
+    condition = toset(flatten([
+      for f in aws_wafv2_web_acl_logging_configuration.main.logging_filter[0].filter : [
+        for c in f.condition : c.action_condition[0].action if f.behavior == "KEEP"
+      ]
+    ])) == toset(["BLOCK", "COUNT"])
+    error_message = "Exactly BLOCK and COUNT must be kept"
+  }
+}
+
+run "flow_log_defaults" {
+  command = plan
+
+  assert {
+    condition     = aws_flow_log.vpc.traffic_type == "ALL"
+    error_message = "flow logs must default to ALL"
+  }
+  assert {
+    condition     = aws_flow_log.vpc.log_destination == "arn:aws:s3:::fiduciary-demo-logs-123456789012/vpc-flow/"
+    error_message = "flow logs must land under the log bucket's vpc-flow/ prefix (matches the bucket policy)"
+  }
+}
+
+run "flow_log_reject_allowed" {
+  command = plan
+
+  variables {
+    flow_log_traffic_type = "REJECT"
+  }
+
+  assert {
+    condition     = aws_flow_log.vpc.traffic_type == "REJECT"
+    error_message = "REJECT must be accepted"
+  }
+}
+
+run "flow_log_invalid_type_rejected" {
+  command = plan
+
+  variables {
+    flow_log_traffic_type = "ACCEPT"
+  }
+
+  expect_failures = [var.flow_log_traffic_type]
 }

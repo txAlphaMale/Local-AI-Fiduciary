@@ -151,7 +151,8 @@ resource "aws_ecr_lifecycle_policy" "repo" {
 }
 
 # ---------------------------------------------------------------------- access-log bucket
-# Destination for ALB access logs (demo-env) and S3 server access logs (tfstate + backups buckets).
+# Destination for ALB access logs and VPC flow logs (demo-env) and S3 server access logs (tfstate +
+# backups buckets). WAF logs can't land here: their destination name must start with aws-waf-logs-.
 # Lives in persistent/ so logs survive every pause/resume (demo-env is destroyed on each pause).
 #
 # Constraints taken from the AWS docs (checked 2026-10-19):
@@ -271,6 +272,40 @@ resource "aws_s3_bucket_policy" "logs" {
         }
       ],
       [
+        # VPC flow logs (demo-env aws_flow_log -> s3://<log bucket>/vpc-flow/). Same two statements
+        # AWS documents for flow-log delivery to S3, narrowed from "bucket/*" to this account's path
+        # under vpc-flow/. delivery.logs.amazonaws.com is the CloudWatch Logs vended-log delivery
+        # service; SourceAccount + SourceArn (logs:<region>:<account>:*) are the documented
+        # confused-deputy guards. The x-amz-acl condition is AWS's own requirement; it is compatible
+        # with BucketOwnerEnforced (bucket-owner-full-control is the one ACL that setting accepts).
+        # https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-permissions.html
+        {
+          Sid       = "AllowVPCFlowLogDeliveryWrite"
+          Effect    = "Allow"
+          Principal = { Service = "delivery.logs.amazonaws.com" }
+          Action    = "s3:PutObject"
+          Resource  = "${aws_s3_bucket.logs.arn}/vpc-flow/AWSLogs/${local.account_id}/*"
+          Condition = {
+            StringEquals = {
+              "aws:SourceAccount" = local.account_id
+              "s3:x-amz-acl"      = "bucket-owner-full-control"
+            }
+            ArnLike = { "aws:SourceArn" = "arn:aws:logs:${var.region}:${local.account_id}:*" }
+          }
+        },
+        {
+          Sid       = "AllowVPCFlowLogDeliveryAclCheck"
+          Effect    = "Allow"
+          Principal = { Service = "delivery.logs.amazonaws.com" }
+          Action    = "s3:GetBucketAcl"
+          Resource  = aws_s3_bucket.logs.arn
+          Condition = {
+            StringEquals = { "aws:SourceAccount" = local.account_id }
+            ArnLike      = { "aws:SourceArn" = "arn:aws:logs:${var.region}:${local.account_id}:*" }
+          }
+        }
+      ],
+      [
         {
           Sid       = "DenyInsecureTransport"
           Effect    = "Deny"
@@ -285,6 +320,51 @@ resource "aws_s3_bucket_policy" "logs" {
 
   # Ownership controls first: a policy-only delivery model needs ACLs disabled.
   depends_on = [aws_s3_bucket_ownership_controls.logs, aws_s3_bucket_public_access_block.logs]
+}
+
+# ------------------------------------------------------------------- WAF log destination
+# CloudWatch Logs, not S3 (rationale and cost in README "Logging"). AWS WAF requires the name to
+# start with "aws-waf-logs-" and the group to be in the same account and region as the web ACL:
+# https://docs.aws.amazon.com/waf/latest/developerguide/logging-cw-logs.html
+# Lives in persistent/ so WAF history survives pause/resume; demo-env attaches to it by name.
+
+locals {
+  waf_log_group = "aws-waf-logs-fiduciary-demo"
+}
+
+resource "aws_cloudwatch_log_group" "waf" {
+  # KMS: AWS-owned-key encryption at rest (CloudWatch Logs default). A customer-managed key would add
+  # a key, a key policy that admits logs.<region>.amazonaws.com, and ~$1/month, for a demo whose WAF
+  # logs carry no credentials (Authorization/Cookie are redacted at source in demo-env).
+  #checkov:skip=CKV_AWS_158:Encrypted at rest with the CloudWatch Logs default key; CMK cost/complexity not justified for redacted demo WAF logs.
+  #checkov:skip=CKV_AWS_338:Retention is a deliberate variable (waf_log_retention_days, default 90) matching the access-log bucket, not 1 year.
+  name              = local.waf_log_group
+  retention_in_days = var.waf_log_retention_days
+  lifecycle { prevent_destroy = true } # logs must outlive the web ACLs they describe
+}
+
+# Account-level CloudWatch Logs resource policy letting the vended-log delivery service write WAF
+# logs into THIS log group only. Mirrors the policy AWS auto-creates for vended delivery
+# (AWSLogDeliveryWrite20150319), managed here so it is explicit and scoped, and so the deploying
+# role doesn't need logs:PutResourcePolicy at apply time of demo-env:
+# https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AWS-logs-infrastructure-CWL.html
+# Note: account-level resource policies are a small per-region quota (10) and size-capped.
+resource "aws_cloudwatch_log_resource_policy" "waf" {
+  policy_name = "fiduciary-demo-waf-log-delivery"
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AWSLogDeliveryWriteWAF"
+      Effect    = "Allow"
+      Principal = { Service = "delivery.logs.amazonaws.com" }
+      Action    = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource  = "${aws_cloudwatch_log_group.waf.arn}:*"
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:logs:${var.region}:${local.account_id}:*" }
+      }
+    }]
+  })
 }
 
 # --------------------------------------------------- S3 server access logging (sources)
@@ -313,6 +393,7 @@ resource "aws_s3_bucket_logging" "sources" {
 
 output "backup_bucket" { value = aws_s3_bucket.backups.id }
 output "log_bucket" { value = aws_s3_bucket.logs.id }
+output "waf_log_group" { value = aws_cloudwatch_log_group.waf.name }
 output "backup_role_arn" { value = aws_iam_role.backup.arn }
 output "zone_id" { value = aws_route53_zone.demo.zone_id }
 output "zone_name_servers" {

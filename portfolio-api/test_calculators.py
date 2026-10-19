@@ -270,6 +270,55 @@ class TestDrip(unittest.TestCase):
         self.assertGreater(d["final_value"], a["final_value"])
 
 
+class TestDripInputs(unittest.TestCase):
+    def test_price_derived_from_value_and_shares(self):
+        r = c.drip({"initial_investment": 34185, "shares": 1000, "dividend_yield_pct": 3, "years": 5})
+        self.assertNotIn("error", r)
+        self.assertAlmostEqual(r["share_price_used"], 34.19, places=2)
+
+    def test_missing_lists_everything(self):
+        r = c.drip({"years": 5})
+        self.assertEqual(sorted(r["missing"]), ["dividend_yield_pct", "initial_investment", "share_price"])
+
+    def test_dps_instead_of_yield(self):
+        r = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "years": 1, "frequency": 1})
+        self.assertAlmostEqual(r["dividend_yield_used_pct"], 4.0, places=6)
+
+
+class TestDividendProfile(unittest.TestCase):
+    @staticmethod
+    def _ts(y, m, d=15):
+        import datetime as dt
+        return int(dt.datetime(y, m, d, tzinfo=dt.timezone.utc).timestamp())
+
+    def test_quarterly_growth_and_yield(self):
+        now = self._ts(2026, 10, 19)
+        divs = []
+        for y in range(2015, 2027):
+            for m in (3, 6, 9, 12):
+                if (y, m) <= (2026, 9):
+                    divs.append((self._ts(y, m), 0.20 * 1.05 ** (y - 2015)))
+        closes = [(self._ts(2016, 10, 1), 20.0), (self._ts(2021, 10, 1), 30.0)]
+        p = c.dividend_profile(40.0, divs, closes, now=now)
+        self.assertEqual(p["frequency"], 4)
+        self.assertAlmostEqual(p["dividend_growth_5y_pct"], 5.0, places=2)
+        ttm = 0.20 * 1.05 ** 10 + 3 * 0.20 * 1.05 ** 11      # Dec-25 + Mar/Jun/Sep-26
+        self.assertAlmostEqual(p["dividend_yield_pct"], round(100 * ttm / 40, 3), places=3)
+        self.assertAlmostEqual(p["price_cagr_5y_pct"], round(((40 / 30) ** 0.2 - 1) * 100, 2), places=2)
+        self.assertAlmostEqual(p["price_cagr_10y_pct"], round(((40 / 20) ** 0.1 - 1) * 100, 2), places=2)
+
+    def test_slipped_payment_does_not_fake_growth(self):
+        now = self._ts(2026, 10, 19)
+        divs = [(self._ts(y, m), 0.25) for y in range(2019, 2027) for m in (3, 6, 9, 12) if (y, m) <= (2026, 9)]
+        divs = [d for d in divs if d[0] != self._ts(2024, 12)] + [(self._ts(2025, 1, 2), 0.25)]
+        p = c.dividend_profile(30.0, divs, now=now)
+        self.assertAlmostEqual(p["dividend_growth_5y_pct"], 0.0, places=6)
+
+    def test_non_payer(self):
+        p = c.dividend_profile(100.0, [], now=self._ts(2026, 10, 19))
+        self.assertFalse(p["pays_dividend"])
+
+
 class TestOthers(unittest.TestCase):
     def test_points(self):
         r = c.points({"loan_amount": 320000, "apr_base": 6.5, "apr_points": 6.25, "points": 1})

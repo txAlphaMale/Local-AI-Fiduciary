@@ -21,6 +21,7 @@ Conventions (shared by every calculator):
 Not advice: these are arithmetic models. Notes on each result say what the model ignores.
 """
 
+import datetime
 import math
 
 FREQS = {"weekly": 52, "biweekly": 26, "semimonthly": 24, "monthly": 12,
@@ -810,13 +811,35 @@ def drip(inp):
       · monthly_contribution buys shares at that month's price; it can grow yearly
     The same path is re-run with dividends taken as cash (not reinvested, held uninvested) so
     the DRIP advantage is apples-to-apples."""
+    pre_notes = []
     try:
-        price0 = _num(inp, "share_price", required=True, lo=0.0001)
+        price0 = _num(inp, "share_price", None, lo=0.0001)
         init = _num(inp, "initial_investment", None, lo=0)
         sh0 = _num(inp, "shares", None, lo=0)
+        y0 = _num(inp, "dividend_yield_pct", None, lo=0, hi=50, label="dividend yield")
+        dps_in = _num(inp, "dividend_per_share", None, lo=0, label="annual dividend per share")
+        # Any two of (starting value, shares, price) pin down the third — a user who knows "1,000
+        # shares worth $34,185" shouldn't also have to type the price (2026-10-19, Jason).
+        missing = []
+        if price0 is None:
+            if init and sh0:
+                price0 = init / sh0
+                pre_notes.append(f"Share price derived from starting investment ÷ shares = ${price0:,.2f}.")
+            else:
+                missing.append("share_price")
         if init is None and sh0 is None:
-            raise _Missing("initial_investment")
-        y0 = _num(inp, "dividend_yield_pct", required=True, lo=0, hi=50, label="dividend yield")
+            missing.append("initial_investment")
+        if y0 is None:
+            if dps_in is not None and price0:
+                y0 = 100.0 * dps_in / price0
+            else:
+                missing.append("dividend_yield_pct")
+        if missing:
+            return {"error": "Missing required input: " + ", ".join(missing), "missing": missing}
+        if sh0 is not None and init is not None and inp.get("share_price") not in (None, "") \
+                and abs(sh0 * price0 - init) > max(1.0, 0.01 * init):
+            pre_notes.append(f"Shares × price = ${sh0 * price0:,.0f}, not the ${init:,.0f} starting "
+                             "investment entered — the share count was used.")
         gp = _num(inp, "price_growth_pct", 0.0, lo=-50, hi=50)
         gd = _num(inp, "dividend_growth_pct", 0.0, lo=-50, hi=50)
         years = _num(inp, "years", required=True, lo=1, hi=80)
@@ -893,9 +916,10 @@ def drip(inp):
            "drip_advantage": _r2(d["value"] - c["value"]),
            "extra_shares_from_drip": round(d["shares"] - c["shares"], 4),
            "yearly": d["yearly"],
+           "share_price_used": _r2(price0), "dividend_yield_used_pct": round(y0, 4),
            "assumptions": {"price_growth_pct": gp, "dividend_growth_pct": gd, "frequency": fq,
                            "tax_rate_pct": tax, "drip_discount_pct": disc},
-           "notes": ["Steady growth rates are a simplification — real dividends get cut and prices "
+           "notes": pre_notes + ["Steady growth rates are a simplification — real dividends get cut and prices "
                      "swing; a falling price actually buys MORE shares per reinvested dollar.",
                      "Without DRIP, cash dividends are assumed held as uninvested cash (no interest)."]}
     if total_in and years:
@@ -904,6 +928,74 @@ def drip(inp):
     if infl is not None:
         out["final_value_real"] = _r2(d["value"] / (1 + infl / 100.0) ** years)
         out["annual_income_at_end_real"] = _r2(income_end / (1 + infl / 100.0) ** years)
+    return out
+
+
+def dividend_profile(price, dividends, closes=None, now=None):
+    """Summarize a ticker's dividend history into DRIP-calculator inputs. Pure: the app fetches
+    the raw series (Yahoo chart API: split-adjusted dividend events + monthly closes) and hands
+    them here, so the arithmetic is unit-tested offline.
+
+    price      current share price
+    dividends  [(epoch_seconds, amount_per_share), ...]
+    closes     [(epoch_seconds, close), ...] monthly, for trailing price CAGRs (optional)
+
+    frequency          payments in the last 24 months ÷ 2, snapped to 12/4/2/1
+    ttm_dividend       sum of payments in the last 365 days
+    dividend_yield_pct TTM ÷ price (what the market quotes as trailing yield)
+    forward_yield_pct  latest payment × frequency ÷ price (catches a recent raise/cut)
+    dividend_growth_Ny CAGR of CALENDAR-YEAR totals, last full year vs N years earlier, each
+                       year normalized to `frequency` payments so a December payment that slips
+                       into January can't fake a jump or a cut.
+    price_cagr_Ny      trailing price-only CAGR (dividends excluded — the DRIP model adds them)"""
+    now = now or datetime.datetime.now(datetime.timezone.utc).timestamp()
+    yr = 365.25 * 86400
+    divs = sorted((int(t), float(a)) for t, a in (dividends or []) if a and float(a) > 0)
+    out = {"price": _r2(price), "payments_on_record": len(divs), "notes": []}
+    if not price or price <= 0:
+        out["error"] = "No current price."
+        return out
+    n24 = sum(1 for t, _ in divs if now - t <= 2 * yr)
+    ttm = [a for t, a in divs if now - t <= yr]
+    if not ttm:
+        out.update({"pays_dividend": False, "dividend_yield_pct": 0.0, "ttm_dividend": 0.0,
+                    "frequency": None})
+        out["notes"].append("No dividend paid in the last 12 months.")
+    else:
+        per = n24 / 2.0 if n24 >= len(ttm) else float(len(ttm))
+        freq = min((12, 4, 2, 1), key=lambda f: abs(f - per))
+        ttm_sum = sum(ttm)
+        out.update({"pays_dividend": True, "frequency": freq, "ttm_dividend": round(ttm_sum, 4),
+                    "last_payment": round(divs[-1][1], 4),
+                    "last_payment_date": datetime.datetime.fromtimestamp(divs[-1][0], datetime.timezone.utc).strftime("%Y-%m-%d"),
+                    "dividend_yield_pct": round(100.0 * ttm_sum / price, 3),
+                    "forward_yield_pct": round(100.0 * divs[-1][1] * freq / price, 3)})
+        by_year = {}
+        for t, a in divs:
+            y = datetime.datetime.fromtimestamp(t, datetime.timezone.utc).year
+            tot = by_year.setdefault(y, [0.0, 0])
+            tot[0] += a
+            tot[1] += 1
+        last_full = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).year - 1
+
+        def norm(y):
+            v = by_year.get(y)
+            if not v or v[1] < max(1, freq - 1):     # partial year (fund launched mid-year): skip
+                return None
+            return v[0] * freq / v[1]
+        for n in (3, 5, 10):
+            a, b = norm(last_full), norm(last_full - n)
+            if a and b:
+                out[f"dividend_growth_{n}y_pct"] = round(((a / b) ** (1.0 / n) - 1) * 100.0, 2)
+    cl = sorted((int(t), float(c)) for t, c in (closes or []) if c)
+    for n in (5, 10):
+        target = now - n * yr
+        if cl and cl[0][0] <= target + 45 * 86400:
+            past = min(cl, key=lambda tc: abs(tc[0] - target))[1]
+            if past > 0:
+                out[f"price_cagr_{n}y_pct"] = round(((price / past) ** (1.0 / n) - 1) * 100.0, 2)
+    out["notes"].append("Trailing figures, split-adjusted. Past dividend and price growth are a "
+                        "starting point for the assumptions, not a forecast.")
     return out
 
 

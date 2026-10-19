@@ -232,3 +232,49 @@ resource "aws_wafv2_web_acl_association" "alb" {
   resource_arn = time_sleep.waf_propagation.triggers["alb_arn"]
   web_acl_arn  = time_sleep.waf_propagation.triggers["web_acl_arn"]
 }
+
+# CKV2_AWS_31. WAF logs -> CloudWatch Logs group in persistent/ (survives pause/resume).
+resource "aws_wafv2_web_acl_logging_configuration" "main" {
+  resource_arn            = aws_wafv2_web_acl.main.arn
+  log_destination_configs = [data.aws_cloudwatch_log_group.waf.arn] # ARN without the ":*" suffix, as WAF requires
+
+  # Credential-bearing request headers are replaced with "REDACTED" in the log records. WAF can only
+  # redact single headers, the URI path, the query string and the method (no "all cookies" field), so
+  # the Cookie header (which carries the app's session cookie) is redacted as a whole. The query
+  # string and URI path are deliberately NOT redacted: the app keeps no secrets in URLs, and they
+  # are exactly where scanner/exploit payloads (e.g. Log4Shell ${jndi:...}) show up.
+  dynamic "redacted_fields" {
+    for_each = ["authorization", "proxy-authorization", "cookie", "x-api-key"]
+    content {
+      single_header {
+        name = redacted_fields.value
+      }
+    }
+  }
+
+  # Keep only requests WAF acted on. ALLOW is dropped, not sampled: WAF logging filters can only
+  # keep or drop (there is no sampling option), and every allowed request is already in the ALB
+  # access logs. Rule-level COUNT is kept so a rule switched to count mode while tuning is visible.
+  logging_filter {
+    default_behavior = "DROP"
+    filter {
+      behavior    = "KEEP"
+      requirement = "MEETS_ANY"
+      condition {
+        action_condition {
+          action = "BLOCK"
+        }
+      }
+      condition {
+        action_condition {
+          action = "COUNT"
+        }
+      }
+    }
+  }
+
+  # Created after the association's propagation wait: a just-created web ACL can briefly be
+  # "unavailable" to other WAF APIs (the WAFUnavailableEntityException seen on association), and
+  # logging is not needed before the ACL is attached. Destroy order is the reverse, automatically.
+  depends_on = [time_sleep.waf_propagation]
+}

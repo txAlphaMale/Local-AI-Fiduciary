@@ -7,6 +7,25 @@ resource "aws_vpc" "main" {
   tags                 = { Name = local.name }
 }
 
+# CKV2_AWS_11. VPC flow logs -> persistent log bucket under vpc-flow/ (survives pause/resume).
+# Path: vpc-flow/AWSLogs/<account>/vpcflowlogs/<region>/YYYY/MM/DD/. The delivery permission is the
+# AllowVPCFlowLogDelivery* statements in persistent/'s log-bucket policy.
+resource "aws_flow_log" "vpc" {
+  vpc_id                   = aws_vpc.main.id
+  traffic_type             = var.flow_log_traffic_type
+  log_destination_type     = "s3"
+  log_destination          = "${data.aws_s3_bucket.logs.arn}/vpc-flow/"
+  max_aggregation_interval = 600 # 10 min (default); 60 s costs the same per GB but writes more records
+
+  destination_options {
+    file_format                = "plain-text"
+    hive_compatible_partitions = false
+    per_hour_partition         = false
+  }
+
+  tags = { Name = "${local.name}-flow-log" }
+}
+
 # Strip the default SG's allow-all rules (CIS AWS 5.4). Nothing in this design uses it.
 resource "aws_default_security_group" "default" {
   vpc_id = aws_vpc.main.id

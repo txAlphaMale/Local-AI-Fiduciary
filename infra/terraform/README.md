@@ -144,41 +144,97 @@ the cluster setting changes in place.
 
 ## Logging
 
-All access logs go to one bucket in `persistent/`, `fiduciary-demo-logs-<account>`, so they survive
-`down.sh`. It is versioned, SSE-S3 (the only encryption both log types support), blocks all public
-access, denies non-TLS requests, and accepts writes only from the two AWS log-delivery services, each
-restricted to its own prefix and to this account.
+Two destinations, both in `persistent/`, so logs survive `down.sh`:
 
-| Log | Source | Lands under | Delay |
-|---|---|---|---|
-| ALB access logs | `aws_lb.main` (demo-env) | `alb/AWSLogs/<account>/elasticloadbalancing/us-east-1/YYYY/MM/DD/` | Every 5 minutes, while the ALB exists |
-| S3 server access logs | tfstate bucket | `s3/tfstate/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours |
-| S3 server access logs | backups bucket | `s3/backups/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours |
+- **Log bucket `fiduciary-demo-logs-<account>`**: ALB access logs, S3 server access logs and VPC
+  flow logs. It is versioned and SSE-S3 (the only encryption ALB and S3 access logs support), blocks
+  all public access, and denies non-TLS requests. It accepts writes only from the three AWS
+  log-delivery services, each restricted to its own prefix and to this account.
+- **CloudWatch log group `aws-waf-logs-fiduciary-demo`**: WAF logs. AWS WAF requires a destination
+  name that starts with `aws-waf-logs-`, so these can't share the log bucket.
 
-- **Retention:** `log_retention_days` in `persistent/`, default 90. The noncurrent copy that
-  versioning keeps is removed 7 days later. Incomplete uploads are aborted after 7 days.
-- **Not logged:** the log bucket itself. This is deliberate, to avoid a delivery loop
-  (CKV_AWS_18 is skipped for it, with a justification). WAF logs and VPC flow logs are a later step.
-- **Ordering:** `bootstrap`, then `persistent`, then `demo-env`.
-  - The tfstate bucket's logging is configured from `persistent/`, so `bootstrap` is unchanged.
-    Accesses to the tfstate bucket before the first `persistent` apply are not logged.
-  - `demo-env` reads the log bucket with a data source, so its plan fails early if `persistent`
-    hasn't been applied.
-  - The ALB writes a test file at creation and fails with Access Denied if the bucket policy is missing.
-- **Check that logs are arriving:**
+| Log | Source | Lands in | Delay | Retention |
+|---|---|---|---|---|
+| ALB access logs | `aws_lb.main` (demo-env) | bucket `alb/AWSLogs/<account>/elasticloadbalancing/us-east-1/YYYY/MM/DD/` | Every 5 min, while the ALB exists | `log_retention_days` (90) |
+| S3 server access logs | tfstate bucket | bucket `s3/tfstate/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours | `log_retention_days` (90) |
+| S3 server access logs | backups bucket | bucket `s3/backups/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours | `log_retention_days` (90) |
+| VPC flow logs | `aws_flow_log.vpc` (demo-env) | bucket `vpc-flow/AWSLogs/<account>/vpcflowlogs/us-east-1/YYYY/MM/DD/` | 10-min aggregation, then delivery (allow ~10–20 min) | `log_retention_days` (90) |
+| WAF logs (BLOCK and COUNT only) | `aws_wafv2_web_acl.main` (demo-env) | log group `aws-waf-logs-fiduciary-demo`, stream `us-east-1_fiduciary-demo-acl_0` | Typically a few minutes | `waf_log_retention_days` (90) |
 
-  ```bash
-  B=fiduciary-demo-logs-$(aws sts get-caller-identity --query Account --output text)
-  aws s3 ls s3://$B/alb/ --recursive | tail -5   # ELBAccessLogTestFile right after apply; .log.gz within ~5 min of traffic
-  aws s3 ls s3://$B/s3/ --recursive | tail -5    # S3 server access logs: allow a few hours
-  aws elbv2 describe-load-balancer-attributes --load-balancer-arn \
-    $(aws elbv2 describe-load-balancers --names fiduciary-demo-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text) \
-    --query "Attributes[?starts_with(Key,'access_logs')]"
-  ```
+**WAF destination: why CloudWatch Logs, not an `aws-waf-logs-*` S3 bucket**
 
-- **Cost:** neither the ALB nor S3 charges for delivering these logs. You pay only S3 storage for
-  the log files (S3 Standard, about $0.023/GB-month in us-east-1), plus your own reads. For a
-  low-traffic demo that is typically cents a month. The 90-day expiry caps the growth.
+- **Query-ability.** CloudWatch Logs Insights answers "who got blocked, by which rule" in seconds,
+  with no setup. Logs in S3 need Athena (a table, partition projection and a results bucket) before
+  they can be queried.
+- **Cost.** AWS WAF includes 500 MB of CloudWatch Logs per 1 million WAF requests at no extra
+  charge (per AWS WAF pricing). Beyond that, CloudWatch vended-log delivery is $0.50/GB, and storage
+  is $0.03/GB-month (us-east-1).
+  - S3 delivery is roughly half the per-GB price. That only matters at volumes this demo won't
+    reach, especially since ALLOW is filtered out.
+  - The trade-off flips at high volume or long retention. At that point an `aws-waf-logs-` S3
+    bucket (or Firehose) wins.
+- **Redaction.** The `Authorization`, `Proxy-Authorization`, `Cookie` and `X-Api-Key` header values
+  are logged as `REDACTED`. WAF can only redact individual headers, the URI path, the query string
+  and the method. The query string and path are kept on purpose, since that is where exploit
+  payloads appear.
+- **Filter.** Only BLOCK and COUNT are kept. WAF log filters can keep or drop, but can't sample, and
+  every allowed request is already in the ALB access logs.
+
+**VPC flow logs: `flow_log_traffic_type`** is `ALL` (default) or `REJECT`.
+
+- Accepted flows drive the volume, mainly the task's egress through the NAT gateway (ECR, SSM,
+  CloudWatch, LLM and market-data APIs) plus ALB health checks.
+- At demo traffic, `ALL` should still be well under $1/month. That's an estimate, not a measurement.
+- `ALL` is the only setting that records egress, which is where exfiltration would show.
+- Switch to `REJECT` if traffic grows and cost matters more than egress visibility.
+
+**Not logged:**
+
+- The log bucket itself. This is deliberate, to avoid a delivery loop; CKV_AWS_18 is skipped for it,
+  with a justification.
+- Container stdout/stderr already goes to `/ecs/fiduciary-demo` (30 days), which is destroyed with
+  `demo-env` on each pause. It isn't part of this persistent set.
+
+**Ordering:** `bootstrap`, then `persistent`, then `demo-env`.
+
+- The tfstate bucket's logging is configured from `persistent/`, so `bootstrap` is unchanged.
+  Accesses to the tfstate bucket before the first `persistent` apply are not logged.
+- `demo-env` reads the log bucket and the WAF log group with data sources, so its plan fails early
+  if `persistent` hasn't been applied.
+- The ALB writes a test file at creation, and fails with Access Denied if the bucket policy is missing.
+- The flow log is rejected if its bucket-policy statements are missing.
+- WAF logging is configured after the web ACL's propagation wait.
+
+**Check that logs are arriving**
+
+```bash
+A=$(aws sts get-caller-identity --query Account --output text); B=fiduciary-demo-logs-$A
+aws s3 ls s3://$B/alb/ --recursive | tail -5        # ELBAccessLogTestFile right after apply; .log.gz within ~5 min of traffic
+aws s3 ls s3://$B/vpc-flow/ --recursive | tail -5   # flow-log .log.gz files within ~10-20 min
+aws s3 ls s3://$B/s3/ --recursive | tail -5         # S3 server access logs: allow a few hours
+aws ec2 describe-flow-logs --filter Name=resource-id,Values=$(aws ec2 describe-vpcs \
+  --filters Name=tag:Name,Values=fiduciary-demo --query 'Vpcs[0].VpcId' --output text) \
+  --query 'FlowLogs[].[FlowLogStatus,DeliverLogsStatus,DeliverLogsErrorMessage]'
+aws wafv2 get-logging-configuration --resource-arn $(aws wafv2 list-web-acls --scope REGIONAL \
+  --query "WebACLs[?Name=='fiduciary-demo-acl'].ARN | [0]" --output text)
+aws logs tail aws-waf-logs-fiduciary-demo --since 1h   # after something has been blocked
+# Logs Insights: blocks by rule over the last day
+aws logs start-query --log-group-name aws-waf-logs-fiduciary-demo \
+  --start-time $(date -d '-1 day' +%s) --end-time $(date +%s) \
+  --query-string 'stats count(*) by terminatingRuleId, httpRequest.country | sort count(*) desc'
+```
+
+The quickest way to produce a WAF log entry is a request from outside the US (for example through
+a non-US VPN exit), which the geo rule blocks.
+
+**Cost**
+
+- ALB access and S3 server access logs: delivery is free; you pay S3 storage (about
+  $0.023/GB-month).
+- VPC flow logs to S3: billed as CloudWatch vended-log delivery per GB, plus storage.
+- WAF logs: covered by WAF's included 500 MB per 1M requests, then $0.50/GB plus $0.03/GB-month.
+- For this demo, all of it together should be cents to low single-digit dollars a month.
+- Logs Insights queries are billed per GB scanned, which is negligible at this size.
 
 ## Not managed (yet)
 
@@ -187,8 +243,6 @@ restricted to its own prefix and to this account.
 - The GitHub OIDC push role. Its shape is captured in the snapshot (`iam-role-github*`) and can be
   imported into `persistent/` later.
 - The `mcpo-demo` image build. Still manual (guide §7).
-- WAF logging and VPC flow logs. Neither was configured in the CLI build; both are candidates for
-  the security-portfolio track.
 
 ## Suggested CI follow-up
 

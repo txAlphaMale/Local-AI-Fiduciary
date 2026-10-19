@@ -212,6 +212,7 @@
   input{background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);
     padding:var(--space-1) var(--space-1);font-family:inherit;font-size:var(--font-size-md);}
   input:focus{outline:none;border-color:var(--color-accent);}
+  input.calc-in::placeholder{font-style:italic;opacity:0.45;}
   .grid{display:grid;gap:var(--space-3);}
   .cols{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
   .panel{background:var(--color-panel);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-3);}
@@ -8231,9 +8232,9 @@ CALC_SPECS.drip={title:'DIVIDEND REINVESTMENT (DRIP)',
   intro:'Projects a dividend position month by month: price growth, a dividend that steps up once a year, reinvestment at an optional plan discount, tax withheld from each dividend (reinvested dividends are still taxable in a brokerage account), and ongoing contributions. The same path with dividends taken as cash runs alongside, so the DRIP advantage is apples-to-apples.',
   groups:[
     {g:'POSITION',f:[
-      {k:'initial_investment',l:'Starting investment',u:'$',ph:'10000',h:'Or enter a share count instead.'},
-      {k:'shares',l:'…or shares owned',u:'sh',ph:''},
-      {k:'share_price',l:'Share price',u:'$',ph:'50',req:1},
+      {k:'initial_investment',l:'Market value / starting $',u:'$',ph:'10000',h:'Enter any TWO of market value, shares, and share price — the third is derived. LOOK UP fills the price.'},
+      {k:'shares',l:'…or shares owned',u:'sh',ph:'200'},
+      {k:'share_price',l:'Share price',u:'$',ph:'50',req:1,h:'Filled by LOOK UP, or derived from market value ÷ shares.'},
       {k:'dividend_yield_pct',l:'Dividend yield',u:'%',ph:'3.5',req:1},
       {k:'frequency',l:'Dividends paid',t:'sel',d:'4',o:[['12','Monthly'],['4','Quarterly'],['2','Semi-annually'],['1','Annually']]}]},
     {g:'GROWTH & CONTRIBUTIONS',f:[
@@ -8359,6 +8360,80 @@ CALC_SPECS.npv_irr={title:'NPV / IRR',
     {k:'initial_investment',l:'Cost today',u:'$',ph:'10000',req:1},
     {k:'cash_flows',l:'Cash flow each year after (comma-separated)',t:'txt',ph:'3000, 3000, 3000, 3500',wide:1,req:1},
     {k:'discount_rate_pct',l:'Discount rate / hurdle',u:'%',ph:'7'}]}]};
+// ---- DRIP: holding picker (dividend payers only) + ticker lookup (2026-10-19, Jason) ----------
+// Nothing here is required: the DRIP form calculates from typed inputs alone. These are shortcuts
+// that FILL the form — a holding gives market value; a lookup gives price, trailing yield, payment
+// frequency and trailing growth rates (GET /api/calc/dividend-lookup → Yahoo chart API).
+let CALC_DRIP_LU=null;
+function _dripPayers(){
+  // Known dividend yields per ticker: the tax audit's consolidated dividend-income rows first,
+  // then any research brief's valuation. Both only cover tickers with a daily brief.
+  const m={};
+  (((TAXAUDIT||{}).dividend_income||{}).by_ticker||[]).forEach(r=>{ if(r.ticker && r.dividend_yield_pct>0) m[r.ticker]=r.dividend_yield_pct; });
+  const br=(ANALYSIS&&ANALYSIS.briefs)||{};
+  Object.keys(br).forEach(t=>{ const y=(((br[t]||{}).valuation)||{}).dividend_yield_pct; if(y>0 && m[t]==null) m[t]=y; });
+  return m;
+}
+async function _dripLookup(key, t, repaint){
+  t=String(t||'').trim().toUpperCase(); if(!t) return;
+  const st=document.getElementById('calc-drip-lu-status'); if(st) st.textContent='looking up '+t+'…';
+  let j;
+  try{ const r=await fetch('/api/calc/dividend-lookup?ticker='+encodeURIComponent(t)); j=await r.json(); if(!r.ok&&!j.error) j={error:'HTTP '+r.status}; }
+  catch(e){ j={error:'Lookup failed: '+e}; }
+  if(j.error){ CALC_DRIP_LU={ticker:t,error:j.error}; return repaint(); }
+  const o=CALC_IN[key]; o.ticker=t;
+  if(j.price) o.share_price=String(j.price);
+  if(j.dividend_yield_pct!=null) o.dividend_yield_pct=String(j.dividend_yield_pct);
+  if(j.frequency) o.frequency=String(j.frequency);
+  // Growth rates are ASSUMPTIONS: history only fills a blank field, never overwrites one you typed.
+  const dg=j.dividend_growth_5y_pct!=null?j.dividend_growth_5y_pct:j.dividend_growth_3y_pct;
+  const pg=j.price_cagr_10y_pct!=null?j.price_cagr_10y_pct:j.price_cagr_5y_pct;
+  if(dg!=null && (o.dividend_growth_pct==null||o.dividend_growth_pct==='')) o.dividend_growth_pct=String(dg);
+  if(pg!=null && (o.price_growth_pct==null||o.price_growth_pct==='')) o.price_growth_pct=String(pg);
+  CALC_DRIP_LU=j; _calcSave(); repaint();
+}
+function _dripToolbar(key, bar, repaint, wrap){
+  const sel='background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1);font-family:inherit;font-size:var(--font-size-sm);';
+  const payers=_dripPayers(), known=Object.keys(payers).length>0;
+  const hold=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && (c.value||0)>0 && (!known || payers[c.ticker]>0))
+    .sort((a,b)=>(b.value||0)-(a.value||0)).slice(0,60);
+  if(hold.length){
+    const s=el('select'); s.style.cssText=sel;
+    s.appendChild(el('option',null,known?'↳ start from a dividend holding…':'↳ start from a holding… (dividend data not loaded)'));
+    hold.forEach(c=>{ const y=payers[c.ticker]; const o=el('option',null,_cE(c.ticker+' · '+_c$(c.value)+(y?(' · '+(+y).toFixed(2)+'%'):''))); o.value=c.ticker; s.appendChild(o); });
+    s.onchange=()=>{ const c=hold.find(x=>x.ticker===s.value); if(!c) return;
+      const o=CALC_IN[key]; o.ticker=c.ticker; o.initial_investment=String(Math.round(c.value)); o.shares='';
+      if(payers[c.ticker]) o.dividend_yield_pct=String(Math.round(payers[c.ticker]*100)/100);
+      if(c.price!=null) o.share_price=String(Math.round(c.price*100)/100);
+      _calcSave(); _dripLookup(key, c.ticker, repaint); };
+    s.title='Fills your position\'s market value, then looks the ticker up for price, yield, frequency and trailing growth.';
+    bar.appendChild(s);
+  }
+  const ti=el('input'); ti.className='calc-in'; ti.placeholder='any ticker, e.g. SCHD'; ti.value=CALC_IN[key].ticker||'';
+  ti.style.cssText='width:150px;font-size:var(--font-size-sm);text-transform:uppercase;';
+  ti.oninput=()=>{ CALC_IN[key].ticker=ti.value.trim().toUpperCase(); _calcSave(); };
+  ti.onkeydown=e=>{ if(e.key==='Enter') _dripLookup(key, ti.value, repaint); };
+  const lb=el('button',null,'LOOK UP'); lb.style.fontSize='var(--font-size-sm)'; lb.onclick=()=>_dripLookup(key, ti.value, repaint);
+  lb.title='Fetches current price, trailing dividend yield, payment frequency and trailing dividend/price growth. Then enter your shares OR market value.';
+  bar.appendChild(ti); bar.appendChild(lb);
+  const stt=el('span','muted'); stt.id='calc-drip-lu-status'; stt.style.fontSize='var(--font-size-sm)'; bar.appendChild(stt);
+  // info line for the last lookup of the ticker currently in the box
+  const j=CALC_DRIP_LU;
+  if(j && j.ticker===(CALC_IN[key].ticker||'')){
+    const info=el('div'); info.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin:-2px 0 var(--space-2);max-width:1100px;';
+    if(j.error){ info.style.color='var(--color-negative)'; info.textContent=j.error; }
+    else{
+      const g=(a,b,c)=>[a!=null?'3y '+a+'%':null,b!=null?'5y '+b+'%':null,c!=null?'10y '+c+'%':null].filter(Boolean).join(' / ')||'n/a';
+      const fq={12:'monthly',4:'quarterly',2:'semi-annual',1:'annual'}[j.frequency]||'frequency unknown';
+      info.innerHTML=`<span style="color:var(--color-accent)">${_cE(j.ticker)}</span>${j.name?' · '+_cE(j.name):''} · price ${_c$2(j.price)}`+
+        (j.pays_dividend===false?' · <b>pays no dividend</b> (last 12 months)':
+          ` · TTM dividend ${j.ttm_dividend!=null?'$'+(+j.ttm_dividend).toFixed(3)+'/sh':'—'} (${_cP(j.dividend_yield_pct,2)} trailing${j.forward_yield_pct!=null?', '+_cP(j.forward_yield_pct,2)+' at the latest rate':''}) · ${fq}`+
+          ` · dividend growth ${g(j.dividend_growth_3y_pct,j.dividend_growth_5y_pct,j.dividend_growth_10y_pct)} · price CAGR ${g(null,j.price_cagr_5y_pct,j.price_cagr_10y_pct)}`)+
+        `<br><span class="muted">Source: ${_cE(j.source||'—')}. Price, yield and frequency were filled in; growth fields are filled only when blank (5y dividend / 10y price trailing rates) — they're your assumptions to edit. Now enter your shares <i>or</i> market value.${(j.notes||[]).length?' '+_cE(j.notes.join(' ')):''}</span>`;
+    }
+    wrap.appendChild(info);
+  }
+}
 // ---- generic form + run machinery -------------------------------------------------------------
 function _calcSeed(key, force){
   const spec=CALC_SPECS[key]; if(!spec) return;
@@ -8415,7 +8490,9 @@ function _calcInputEl(key,f){
     inp.onchange=()=>{ CALC_IN[key][f.k]=inp.checked; _calcSave(); if(key!=='whatif') _calcQueue(key,0); };
   } else {
     inp=el('input'); inp.type='text'; inp.inputMode=(f.t==='txt')?'text':'decimal';
-    inp.value=(v==null?'':v); inp.placeholder=f.ph||'';
+    inp.value=(v==null?'':v); inp.className='calc-in';
+    // "e.g." on numeric examples so a grey example can't be mistaken for an entered value
+    inp.placeholder=f.ph?(/^[-−]?\d/.test(f.ph)?'e.g. '+f.ph:f.ph):'';
     inp.style.cssText='width:100%;box-sizing:border-box;';
     inp.oninput=()=>{ CALC_IN[key][f.k]=inp.value.trim(); _calcSave(); if(key!=='whatif') _calcQueue(key); };
     inp.onkeydown=e=>{ if(e.key==='Enter'){ if(key==='whatif') calcRun('whatif'); else _calcQueue(key,0); } };
@@ -8470,23 +8547,11 @@ function calcPanel(key){
     b.onclick=()=>{ const v=spec.prefill(); if(!v){ b.textContent='— not available yet (fill in PLAN first)'; return; } Object.assign(CALC_IN[key],v); _calcSave(); repaint(); };
     bar.appendChild(b);
   }
-  if(spec.holdingPicker && DATA && (DATA.consolidated||[]).length){
-    const s=el('select'); s.style.cssText='background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1);font-family:inherit;font-size:var(--font-size-sm);';
-    s.appendChild(el('option',null,'↳ start from a holding…'));
-    DATA.consolidated.filter(c=>c.ticker && (c.value||0)>0).sort((a,b)=>(b.value||0)-(a.value||0)).slice(0,60).forEach(c=>{
-      const o=el('option',null,_cE(c.ticker+' · '+_c$(c.value))); o.value=c.ticker; s.appendChild(o); });
-    s.onchange=()=>{ const c=DATA.consolidated.find(x=>x.ticker===s.value); if(!c) return;
-      const px=c.price!=null?c.price:((c.shares||c.quantity)?c.value/(c.shares||c.quantity):null);
-      CALC_IN[key].initial_investment=String(Math.round(c.value)); CALC_IN[key].shares='';
-      if(px) CALC_IN[key].share_price=String(Math.round(px*100)/100);
-      _calcSave(); repaint(); };
-    s.title='Fills the starting value and price from your real position — the dividend yield and growth rates are still yours to enter.';
-    bar.appendChild(s);
-  }
   const rs=el('button',null,'RESET'); rs.style.cssText='font-size:var(--font-size-sm);margin-left:auto;';
   rs.onclick=()=>{ _calcSeed(key,true); CALC_OUT[key]=null; repaint(); };
   bar.appendChild(rs);
   wrap.appendChild(bar);
+  if(spec.holdingPicker){ rs.remove(); _dripToolbar(key, bar, repaint, wrap); bar.appendChild(rs); }
   spec.groups.forEach(g=>{
     wrap.appendChild(_calcGroupHead(g.g));
     const grid=_calcGrid(); g.f.forEach(f=>grid.appendChild(_calcFieldNode(key,f))); wrap.appendChild(grid);

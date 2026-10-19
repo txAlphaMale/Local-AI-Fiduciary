@@ -42,6 +42,12 @@ data "aws_s3_bucket" "logs" {
   bucket = "fiduciary-demo-logs-${data.aws_caller_identity.current.account_id}"
 }
 
+# WAF log group from persistent/ (name must start with aws-waf-logs-). Like the log bucket, a
+# missing persistent/ apply fails the plan here rather than mid-apply.
+data "aws_cloudwatch_log_group" "waf" {
+  name = "aws-waf-logs-fiduciary-demo"
+}
+
 data "aws_ecr_repository" "portfolio_api" {
   name = "fiduciary/portfolio-api-demo"
 }
