@@ -10219,13 +10219,13 @@ SECRET_SPECS = [
     # configurability (each self-hosted deployment brings its own mailbox). For Gmail specifically:
     # smtp.gmail.com / 587 / your address / a 16-character App Password (not your real password —
     # Google requires 2-Step Verification enabled first to generate one). See notifications.py.
-    {"key": "SMTP_HOST",         "label": "SMTP server (e.g. smtp.gmail.com)",         "group": "Notifications (Email)", "scope": "app"},
-    {"key": "SMTP_PORT",         "label": "SMTP port (587 = STARTTLS, blank defaults to 587)", "group": "Notifications (Email)", "scope": "app"},
-    {"key": "SMTP_USERNAME",     "label": "SMTP username (usually your full email address)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_HOST",         "label": "SMTP server (e.g. smtp.gmail.com)",         "group": "Notifications (Email)", "scope": "app", "plain": True},
+    {"key": "SMTP_PORT",         "label": "SMTP port (587 = STARTTLS, blank defaults to 587)", "group": "Notifications (Email)", "scope": "app", "plain": True},
+    {"key": "SMTP_USERNAME",     "label": "SMTP username (usually your full email address)", "group": "Notifications (Email)", "scope": "app", "plain": True},
     {"key": "SMTP_PASSWORD",     "label": "SMTP password (Gmail: an App Password, not your login password)", "group": "Notifications (Email)", "scope": "app"},
-    {"key": "SMTP_FROM_ADDRESS", "label": "From address (blank = same as SMTP username)", "group": "Notifications (Email)", "scope": "app"},
-    {"key": "SMTP_TO_ADDRESS",   "label": "Send alert emails to this address",         "group": "Notifications (Email)", "scope": "app"},
-    {"key": "SMTP_USE_TLS",      "label": "Use STARTTLS (1 = yes, 0 = no; blank defaults to yes)", "group": "Notifications (Email)", "scope": "app"},
+    {"key": "SMTP_FROM_ADDRESS", "label": "From address (blank = same as SMTP username)", "group": "Notifications (Email)", "scope": "app", "plain": True},
+    {"key": "SMTP_TO_ADDRESS",   "label": "Send alert emails to this address",         "group": "Notifications (Email)", "scope": "app", "plain": True},
+    {"key": "SMTP_USE_TLS",      "label": "Use STARTTLS (1 = yes, 0 = no; blank defaults to yes)", "group": "Notifications (Email)", "scope": "app", "plain": True},
     # 2026-07-27 (SEC-7a, UI-triggered backup): scope="app" like SMTP above -- read live via
     # _read_secrets() at the moment a backup actually runs, no container restart needed after
     # saving it. Deliberately the SAME passphrase concept scripts/backup.sh's BACKUP_PASSPHRASE
@@ -10321,7 +10321,7 @@ _write_mcpo_secrets_file()   # regenerate on every portfolio-api boot too, not j
 
 @app.get("/api/secrets")
 def get_secrets(request: Request):
-    """Status ONLY — never returns secret VALUES. Per secret: whether it's set and from where
+    """Status ONLY — never returns secret VALUES (except the few spec-marked "plain" non-credential settings, to an admin). Per secret: whether it's set and from where
     (env / saved / unset), whether it's env-locked (real .env wins), and whether it's editable
     here. 2026-07-24: editable no longer requires NOT env_locked -- you can stage a replacement
     value into the DB while the old .env value is still active, so migrating off .env only takes
@@ -10346,12 +10346,18 @@ def get_secrets(request: Request):
         _u = auth.get_user_by_id(_uid) if _uid else None
         audit.emit("secret.read", request=request, actor=_uid,
                    actor_name=(_u or {}).get("username"), resource="/api/secrets",
-                   detail={"scope": "inventory_metadata_only_no_values",
+                   detail={"scope": "inventory_metadata_only_no_secret_values",
+                           "plain_settings_returned_to_admin": sorted(sp["key"] for sp in SECRET_SPECS if sp.get("plain")) if _require_admin(request) else [],
                            "keys_configured": sorted(k for k in stored if stored.get(k)),
                            "spec_count": len(SECRET_SPECS)})
     except Exception:
         pass   # audit.emit is already fail-safe; this guard covers the session/user lookup too
     out = []
+    # Non-credential settings (SMTP host/port/username/from/to/STARTTLS -- spec "plain": True) are
+    # echoed back to an ADMIN so the panel can show them as ordinary text fields (Jason, 2026-10-19).
+    # Everything else, including SMTP_PASSWORD, stays write-only. The global gate lets viewers do
+    # every GET, so the value is gated on the caller's role HERE.
+    is_admin = bool(_require_admin(request))
     for spec in SECRET_SPECS:
         k = spec["key"]
         env_locked = k in _ENV_SECRETS_AT_BOOT
@@ -10359,10 +10365,12 @@ def get_secrets(request: Request):
         source = "env" if env_locked else ("saved" if in_file else "unset")
         out.append({"key": k, "label": spec["label"], "group": spec["group"], "scope": spec["scope"],
                     "set": bool(env_locked or in_file), "source": source, "env_locked": env_locked,
+                    **({"plain": True, "value": (stored.get(k) if (is_admin and not env_locked) else None)}
+                       if spec.get("plain") else {}),
                     "staged_behind_env": bool(env_locked and in_file),
                     "editable": spec["scope"] in ("app", "mcpo-file")})
     return {"secrets": out,
-            "note": "Write-only — values are never shown, and encrypted at rest (secrets_crypto.py). "
+            "note": "Write-only — credential values are never shown (the SMTP server/port/username/addresses are plain text, the password is not), and everything is encrypted at rest (secrets_crypto.py). "
                     "'app' secrets you set here save to the DB and apply the next time portfolio-api's "
                     "container is recreated (`docker compose up -d`); Monarch/Tavily secrets save the "
                     "same way but apply on mcpo's next `docker compose up -d` instead — used by that "

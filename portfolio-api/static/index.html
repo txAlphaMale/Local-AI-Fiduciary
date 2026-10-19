@@ -4957,8 +4957,8 @@ function settingsContent(){
 }
 function saveSecrets(){
   const body={};
-  document.querySelectorAll('.sec-inp').forEach(i=>{ if(i.disabled) return; if(i.value!=='') body[i.dataset.key]=i.value; });
-  if(!Object.keys(body).length){ alert('No new secret values entered.'); return; }
+  document.querySelectorAll('.sec-inp').forEach(i=>{ if(i.disabled) return; if(i.dataset.plain){ if(i.value!==i.dataset.orig) body[i.dataset.key]=i.value; return; } if(i.value!=='') body[i.dataset.key]=i.value; });
+  if(!Object.keys(body).length){ alert('Nothing changed.'); return; }
   fetch('/api/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       const specByKey={}; (SECRETS_CFG&&SECRETS_CFG.secrets||[]).forEach(it=>specByKey[it.key]=it);
@@ -5229,6 +5229,9 @@ function secretsContent(){
       if(it.editable){
         const inp=document.createElement('input'); inp.type='password'; inp.className='sec-inp'; inp.dataset.key=it.key;
         inp.autocomplete='new-password'; inp.placeholder=(it.source==='saved'?'enter to replace · blank keeps':'enter value');
+        // Non-credential settings (SMTP host/port/username/addresses): shown as ordinary prefilled
+        // text, editable in place; clearing the field and saving clears the setting.
+        if(it.plain){ inp.type='text'; inp.autocomplete='off'; inp.value=it.value||''; inp.dataset.plain='1'; inp.dataset.orig=it.value||''; inp.placeholder='enter value'; }
         inp.style.cssText='width:210px;'; row.appendChild(inp);
         // 2026-07-24: a key can be SAVED (staged) here even while env_locked -- it just has no
         // effect until the .env line is removed AND the relevant service is RECREATED (`docker
