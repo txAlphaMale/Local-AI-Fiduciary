@@ -7696,7 +7696,10 @@ def _whatif_liabilities():
     balance" has no answer. An account whose balance is UNKNOWN (no figure at all) is kept, with
     "balance" in `missing`, since it may well be owed. The single-mortgage fallback below counts
     only mortgages that still carry a balance, so a paid-off old mortgage left in the feed no
-    longer blocks the household mortgage facts from attaching to the live one."""
+    longer blocks the household mortgage facts from attaching to the live one.
+
+    Also left out: accounts with a KNOWN 0% APR and no payment on file — nothing to save or shorten
+    (2026-10-19, Jason). A 0% APR with a payment is kept (payoff time still matters)."""
     d = _data()
     cfg = _read_insurance_cfg()
     rates = cfg.get("debt_rates") or {}
@@ -7726,6 +7729,16 @@ def _whatif_liabilities():
         missing = [k for k, v in (("balance", bal), ("apr", rate), ("payment", pay)) if v in (None, "")]
         if pay == 0:
             missing.append("payment")
+        # A 0% APR with no payment on file (a zeroed promo card, an Apple Card statement balance)
+        # has nothing to optimise — no interest to save and no schedule to shorten (2026-10-19,
+        # Jason). A 0% debt WITH a payment stays: payoff-time is still a valid question. An
+        # UNKNOWN apr (None) stays too — blank is not zero.
+        try:
+            zero_apr = rate is not None and rate != "" and float(rate) == 0.0
+        except (TypeError, ValueError):
+            zero_apr = False
+        if zero_apr and not pay:
+            continue
         out.append({"name": nm, "institution": a.get("institution"), "type": a.get("type"),
                     "balance": round(bal, 2) if bal is not None else None, "apr": rate, "apr_source": rate_src if rate is not None else None,
                     "payment": pay, "payment_source": pay_src if pay else None,
@@ -13483,7 +13496,8 @@ FIDUCIARY_TOOLS = [
                        "term_years, extra, origination_fee\n"
                        "land_loan: price, down_pct, apr, amort_years, balloon_years, io_years, land_type "
                        "(raw|unimproved|improved), property_tax_annual\n"
-                       "drip: initial_investment, share_price, dividend_yield_pct, price_growth_pct, "
+                       "drip: initial_investment, share_price, dividend_per_share (annual $/share; preferred over "
+                       "dividend_yield_pct, which is only a fallback), price_growth_pct, "
                        "dividend_growth_pct, years, monthly_contribution, frequency, tax_rate_pct\n"
                        "tvm: give 4 of n, rate, pv, pmt, fv (omit the one to solve; signs: received +, "
                        "paid −), periods_per_year, timing (end|begin)\n"

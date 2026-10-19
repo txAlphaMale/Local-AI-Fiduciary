@@ -802,8 +802,13 @@ def drip(inp):
 
     Model (each step explicit, since DRIP calculators online mostly don't say):
       · price grows continuously at price_growth_pct/yr (monthly compounding of the annual rate)
-      · dividend PER SHARE steps up once a year by dividend_growth_pct (how companies actually
-        raise payouts) from today's  yield × price
+      · the ANCHOR is the annual dividend PER SHARE (a stated dollar amount, far steadier than a
+        yield that moves with the share price). It steps up once a year by dividend_growth_pct
+        (default 0% = flat). Yield is only DERIVED: DPS ÷ price. If you give just a yield, the
+        starting DPS is price × yield and everything after that is DPS-driven.
+      · a dividend can't exceed what the stock can pay: if DPS ÷ price would pass the yield
+        ceiling (max_yield_pct, default max(1.25 × today's yield, 8%)) the dividend is CUT to the
+        ceiling and growth resumes from the cut level (a ratchet — it never snaps back)
       · dividends pay `frequency` times a year (12/4/2/1); each payment = shares × DPS/frequency
       · tax_rate_pct comes out of each dividend BEFORE reinvesting — in a taxable account,
         reinvested dividends are still taxed the year they're paid. Use 0 inside an IRA/401(k).
@@ -829,11 +834,14 @@ def drip(inp):
                 missing.append("share_price")
         if init is None and sh0 is None:
             missing.append("initial_investment")
-        if y0 is None:
-            if dps_in is not None and price0:
-                y0 = 100.0 * dps_in / price0
-            else:
-                missing.append("dividend_yield_pct")
+        if dps_in is not None and price0:
+            # DPS wins over a yield typed alongside it: dollars per share are the stable figure.
+            if y0 is not None and abs(y0 - 100.0 * dps_in / price0) > 0.5:
+                pre_notes.append("Yield was recomputed from the dividend per share ÷ price "
+                                 f"({100.0 * dps_in / price0:.2f}%); the dividend per share was used.")
+            y0 = 100.0 * dps_in / price0
+        elif y0 is None:
+            missing.append("dividend_per_share")
         if missing:
             return {"error": "Missing required input: " + ", ".join(missing), "missing": missing}
         if sh0 is not None and init is not None and inp.get("share_price") not in (None, "") \
@@ -847,7 +855,7 @@ def drip(inp):
         gc = _num(inp, "contribution_growth_pct", 0.0, lo=0, hi=50)
         fq = int(_num(inp, "frequency", 4, lo=1, hi=12))
         tax = _num(inp, "tax_rate_pct", 0.0, lo=0, hi=60)
-        hold_yield = str(inp.get("hold_yield", False)).lower() in ("true", "1", "yes", "on")
+        cap_in = _num(inp, "max_yield_pct", None, lo=1, hi=100, label="yield ceiling")
         disc = _num(inp, "drip_discount_pct", 0.0, lo=0, hi=20)
         infl = _num(inp, "inflation_pct", None, lo=-5, hi=30)
     except _Missing as m:
@@ -856,23 +864,18 @@ def drip(inp):
         return {"error": str(e)}
     if 12 % fq:
         return {"error": "Dividend frequency must be 12, 4, 2 or 1 payments per year."}
-    if hold_yield:
-        # Dividend tracks the price, so the yield stays where it is today. The realistic case
-        # for high-yield payers (mortgage REITs, BDCs, covered-call funds) whose payout is set
-        # as a % of book/NAV: when the price falls, the dividend gets cut with it.
-        gd = gp
-        pre_notes.append("Yield held constant: dividend growth set equal to price growth "
-                         f"({gp:g}%/yr).")
     shares0 = sh0 if sh0 is not None else init / price0
     invested0 = shares0 * price0
     months = int(round(years * 12))
     step = 12 // fq
-    dps0 = price0 * y0 / 100.0           # annual dividend per share today
+    dps0 = dps_in if dps_in is not None else price0 * y0 / 100.0   # annual dividend per share today
+    ycap = cap_in if cap_in is not None else max(1.25 * y0, 8.0)
 
     def sim(reinvest):
         sh, cash = shares0, 0.0
         tot_gross = tot_tax = tot_contrib = 0.0
         yearly = []
+        dps_cur, cut_year, cut_total = dps0, None, 0.0
         for m in range(1, months + 1):
             yi = (m - 1) // 12
             price = price0 * (1 + gp / 100.0) ** (m / 12.0)
@@ -880,7 +883,15 @@ def drip(inp):
             if c:
                 sh += c / price
                 tot_contrib += c
-            dps = dps0 * (1 + gd / 100.0) ** yi
+            if m > 1 and (m - 1) % 12 == 0:
+                dps_cur *= 1 + gd / 100.0            # the annual raise (or trim) lands in month 1
+            lim = ycap / 100.0 * price               # most the market lets this stock pay
+            if dps_cur > lim:
+                cut_total += dps_cur - lim
+                dps_cur = lim
+                if cut_year is None:
+                    cut_year = yi + 1
+            dps = dps_cur
             div_g = div_n = 0.0
             if m % step == 0:
                 div_g = sh * dps / fq
@@ -898,14 +909,14 @@ def drip(inp):
             if m % 12 == 0 or m == months:
                 yearly[-1].update({"shares": round(sh, 4), "price": _r2(price),
                                    "value": _r2(sh * price + cash), "cash": _r2(cash),
-                                   "annual_income": _r2(sh * dps0 * (1 + gd / 100.0) ** (m // 12 if m % 12 == 0 else yi))})
+                                   "dps": round(dps_cur, 4), "annual_income": _r2(sh * dps_cur)})
         price_end = price0 * (1 + gp / 100.0) ** (months / 12.0)
-        dps_end = dps0 * (1 + gd / 100.0) ** (months // 12)
+        dps_end = dps_cur
         for y in yearly:
             y["contributions"] = _r2(y["contributions"])
             y["dividends_net"] = _r2(y["dividends_net"])
         return {"shares": sh, "cash": cash, "value": sh * price_end + cash, "price_end": price_end,
-                "dps_end": dps_end, "gross": tot_gross, "tax": tot_tax, "contrib": tot_contrib,
+                "dps_end": dps_end, "cut_year": cut_year, "gross": tot_gross, "tax": tot_tax, "contrib": tot_contrib,
                 "yearly": yearly}
     d, c = sim(True), sim(False)
     total_in = invested0 + d["contrib"]
@@ -922,16 +933,41 @@ def drip(inp):
     # arithmetic, not a forecast: in reality the dividend gets cut. Say so loudly.
     warnings = []
     end_yield = 100.0 * d["dps_end"] / d["price_end"] if d["price_end"] else None
-    if end_yield is not None and y0 > 0 and end_yield > max(2.0 * y0, y0 + 10.0):
-        warnings.append(f"Implausible projection: the dividend outgrows the price by {gd - gp:.1f} "
-                        f"pts/yr, so the yield climbs from {y0:.1f}% today to {end_yield:.0f}% by the "
-                        "end, and every reinvested dividend buys ever-cheaper shares. Real payers cut "
-                        "the dividend long before that. Tick 'hold yield constant' (dividend tracks "
-                        "the price) or narrow the gap between the two growth rates.")
-    elif y0 >= 10:
+    if d["cut_year"]:
+        warnings.append(f"Dividend cut applied in year {d['cut_year']}: with the share price falling, "
+                        f"the fixed ${dps0:,.2f}/share would have pushed the yield past the "
+                        f"{ycap:.1f}% ceiling, which real payers don't sustain. The dividend was "
+                        "reduced to the ceiling and grows from there. Raise the ceiling only if you "
+                        "have a reason to believe the payout is covered.")
+    if y0 >= 10:
         warnings.append(f"A {y0:.1f}% yield usually means the market expects a cut or the payout "
-                        "includes return of capital. Check the payout's coverage before trusting a "
-                        "steady-dividend projection; 'hold yield constant' is the conservative case.")
+                        "includes return of capital. Check the payout's coverage (earnings or "
+                        "distributable income vs. the dividend) before trusting a steady-dividend "
+                        "projection.")
+    # Implied annual return (money-weighted) — the reality check on the whole projection. A
+    # DRIP path that compounds far above what any market has delivered is the inputs talking,
+    # not a forecast, whatever the arithmetic says.
+    def _npv(rate):
+        mr = (1 + rate) ** (1 / 12.0)
+        v = -invested0 * mr ** months
+        for k in range(1, months + 1):
+            v -= contrib * (1 + gc / 100.0) ** ((k - 1) // 12) * mr ** (months - k)
+        return v + d["value"]
+    lo_r, hi_r = -0.95, 5.0
+    implied = None
+    if _npv(lo_r) > 0 > _npv(hi_r):
+        for _ in range(80):
+            mid = (lo_r + hi_r) / 2
+            lo_r, hi_r = (mid, hi_r) if _npv(mid) > 0 else (lo_r, mid)
+        implied = 100.0 * (lo_r + hi_r) / 2
+    if implied is not None and implied > 12.0:
+        tag = "Implausible" if implied > 20.0 else "Optimistic"
+        warnings.append(f"{tag} projection: these inputs imply about {implied:.0f}%/yr growth for "
+                        f"{years:g} years (the broad US stock market has returned roughly 10%/yr "
+                        "nominal over the long run). A very high yield normally comes with a falling "
+                        "price or cuts to the dividend — enter a negative price growth and/or "
+                        "dividend growth from the stock's own history, and treat this result as a "
+                        "ceiling, not an expectation.")
     income_end = d["shares"] * d["dps_end"]
     out = {"calculator": "drip", "starting_shares": round(shares0, 4), "starting_value": _r2(invested0),
            "final_value": _r2(d["value"]), "final_shares": round(d["shares"], 4),
@@ -948,6 +984,9 @@ def drip(inp):
            "extra_shares_from_drip": round(d["shares"] - c["shares"], 4),
            "yearly": d["yearly"],
            "share_price_used": _r2(price0), "dividend_yield_used_pct": round(y0, 4),
+           "dividend_per_share_used": round(dps0, 4), "dividend_per_share_end": round(d["dps_end"], 4),
+           "max_yield_pct_used": round(ycap, 2), "dividend_cut_year": d["cut_year"],
+           "implied_return_pct": round(implied, 2) if implied is not None else None,
            "end_yield_pct": round(end_yield, 2) if end_yield is not None else None,
            "warnings": warnings,
            "assumptions": {"price_growth_pct": gp, "dividend_growth_pct": gd, "frequency": fq,

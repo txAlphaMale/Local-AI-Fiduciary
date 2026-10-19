@@ -605,6 +605,8 @@ function buildTourSteps(){
     {tab:'dashboard', title:'Welcome to the terminal', desc:'A quick tour of what\'s where, and which fields unlock more of the app. Close any time with the ✕ or Esc — nothing here is required.'},
     {tab:'dashboard', element:'#cockpit-panel', title:'Cockpit', desc:'Always-visible "what needs attention" strip. Click any chip to jump straight to the tab with the full detail.'},
     {tab:'dashboard', element:'#main-tabbar', title:'Tabs', desc:'Everything is organized into these top-level tabs, each with its own sub-tabs. Drag a tab to reorder it.'},
+    {tab:'calculators', element:'#tab-calculators', title:'Calculators',
+     desc:'Planning calculators that run on your own numbers: WHAT-IF · MY DEBTS (pick one of your real debts and see how much sooner and cheaper an extra payment gets it paid off), MORTGAGE true cost, LOAN, LAND LOAN, DRIP (dividend reinvestment, with ticker lookup), a TVM solver, RENT vs BUY and more. Nothing here changes your data; the Fiduciary chat uses the same engine.'},
     // 2026-07-24: nothing else in this tour (or the checklist it's driven from) ever explained
     // WHERE holdings actually come from — a real gap for anyone not already on Monarch, since
     // that choice has to happen before most of the rest of the app has real data to show.
@@ -1377,6 +1379,7 @@ W('glossary-estate-benefits','Glossary','Estate, insurance & benefits — step-u
 W('calculators','Planning','CALCULATORS tab (what-if payoff, mortgage true cost, loans, DRIP, TVM, …)',
   'A bench of household-finance calculators in one top-level tab. WHAT-IF · MY DEBTS works on your real liabilities; the rest are general-purpose: MORTGAGE (true cost of ownership — principal, interest, property tax, insurance, PMI, HOA and upkeep, escalating yearly, plus the net cost after an eventual sale), LOAN (auto/personal/student, including trade-in, sales tax and the effective APR of an origination fee), LAND LOAN (balloon and interest-only terms, land-type down-payment guidance), TVM SOLVER (N, I/Y, PV, PMT, FV — leave one blank and it is solved), DRIP (dividend-reinvestment projection vs taking cash), RENT vs BUY, AFFORDABILITY (28/36), POINTS break-even, YIELDS (after-tax and taxable-equivalent yield across CDs, Treasuries and munis, plus APR↔APY), INFLATION and real return, LUMP SUM vs ANNUITY, and NPV/IRR. All math runs server-side in calculators.py — the same engine the Fiduciary chat calls (run_calculator), so the chat and this tab always agree.',
   'Results update as you type (WHAT-IF waits for the RUN button). Inputs marked * are required; ⓘ explains a field. Growth-rate assumptions are pre-filled and editable — they are assumptions, not forecasts. Nothing is guessed silently: a missing APR is never treated as 0%, and a >80% LTV mortgage without a PMI rate is flagged rather than estimated. TVM signs follow financial-calculator convention: money you receive is +, money you pay out is −; if you enter PV and PMT with the same sign while solving N or I/Y, it flips PMT for you and says so. In WHAT-IF, an account missing its APR or payment shows just those fields; SAVE TO ACCOUNT writes them to the same per-account settings PLAN → CASH·DEBT and SETTINGS → ACCOUNTS use, so the three never disagree. Your inputs are remembered in this browser only.',
+  'DRIP details: the projection is anchored on the ANNUAL DIVIDEND PER SHARE in dollars, not the yield — payouts are far steadier than a yield that moves with the share price. LOOK UP (any ticker) fills price, trailing-12-month dividend per share and payment frequency; dividend growth defaults to 0% (flat) and is independent of price growth; the yield is derived (dividend ÷ price). If the price falls while a flat dividend continues, the yield would balloon, so the dividend is cut to a yield ceiling (default the larger of 8% or 1.25× today\'s yield — editable) and the result says so. The result shows both incomes side by side (DRIP shares vs the original shares with dividends taken as cash), the implied annual return of the whole projection, and warns when it is far above the roughly 10%/yr long-run stock market return — a 20%+ yield plus reinvestment compounding is usually a sign the inputs, not the math, are optimistic. WHAT-IF lists only debts with a balance, and skips 0% debts that have no payment on file.',
   'Use WHAT-IF before deciding where an extra dollar goes: compare its interest saved (a guaranteed return equal to the APR) with the payoff-vs-invest hurdle on PLAN → CASH·DEBT. Use MORTGAGE before buying to see the full lifetime cash out, not just the payment. Use TVM for any "how long / how much / what rate" question. These are arithmetic models — each result lists what it ignores (taxes, deductions, rate changes); confirm big decisions with a professional.');
 function wikiLink(id){
   const a=el('span',null,'?');
@@ -8229,17 +8232,18 @@ CALC_SPECS.land_loan={title:'LAND LOAN',
       {k:'insurance_annual',l:'Liability insurance',u:'$/yr',ph:'0'},
       {k:'closing_costs',l:'Closing costs',u:'$',ph:'0'}]}]};
 CALC_SPECS.drip={title:'DIVIDEND REINVESTMENT (DRIP)',
-  intro:'Projects a dividend position month by month: price growth, a dividend that steps up once a year, reinvestment at an optional plan discount, tax withheld from each dividend (reinvested dividends are still taxable in a brokerage account), and ongoing contributions. The same path with dividends taken as cash runs alongside, so the DRIP advantage is apples-to-apples.',
+  intro:'Projects a dividend position month by month: price growth, a dollar dividend per share (the stable anchor — yield is derived) that steps up once a year, reinvestment at an optional plan discount, tax withheld from each dividend (reinvested dividends are still taxable in a brokerage account), and ongoing contributions. The same path with dividends taken as cash runs alongside, so the DRIP advantage is apples-to-apples.',
   groups:[
     {g:'POSITION',f:[
       {k:'initial_investment',l:'Market value / starting $',u:'$',ph:'10000',h:'Enter any TWO of market value, shares, and share price — the third is derived. LOOK UP fills the price.'},
       {k:'shares',l:'…or shares owned',u:'sh',ph:'200'},
       {k:'share_price',l:'Share price',u:'$',ph:'50',req:1,h:'Filled by LOOK UP, or derived from market value ÷ shares.'},
-      {k:'dividend_yield_pct',l:'Dividend yield',u:'%',ph:'3.5',req:1},
+      {k:'dividend_per_share',l:'Dividend per share',u:'$/yr',ph:'2.00',req:1,h:'ANNUAL dividend per share in dollars — the anchor of the projection. Dollar payouts are far steadier than the yield, which swings with the share price. Filled by LOOK UP (trailing 12 months). Yield is derived: dividend ÷ price.'},
+      {k:'dividend_yield_pct',l:'…or yield (only if no $/share)',u:'%',ph:'3.5',h:'Used only when Dividend per share is blank: starting dividend = price × yield, then the dollar amount drives everything.'},
       {k:'frequency',l:'Dividends paid',t:'sel',d:'4',o:[['12','Monthly'],['4','Quarterly'],['2','Semi-annually'],['1','Annually']]}]},
     {g:'GROWTH & CONTRIBUTIONS',f:[
       {k:'price_growth_pct',l:'Share price growth',u:'%/yr',ph:'6'},
-      {k:'dividend_growth_pct',l:'Dividend growth',u:'%/yr',ph:'5'},
+      {k:'dividend_growth_pct',l:'Dividend/share growth',u:'%/yr',d:'0',h:'Yearly raise (or cut, if negative) of the dollar dividend per share. 0 = flat, the cautious default. Independent of the share price.'},
       {k:'years',l:'Years',u:'yrs',d:'20',req:1},
       {k:'monthly_contribution',l:'Monthly contribution',u:'$',ph:'0'},
       {k:'contribution_growth_pct',l:'Contribution raise',u:'%/yr',ph:'0'}]},
@@ -8247,7 +8251,7 @@ CALC_SPECS.drip={title:'DIVIDEND REINVESTMENT (DRIP)',
       {k:'tax_rate_pct',l:'Dividend tax rate',u:'%',ph:'0 in IRA · ~15 taxable',h:'Qualified dividends: 0/15/20% federal (+3.8% NIIT at high income) + state. 0 inside tax-advantaged accounts.'},
       {k:'drip_discount_pct',l:'DRIP purchase discount',u:'%',ph:'0',h:'Some company-run plans buy reinvested shares at a 1–5% discount.'},
       {k:'inflation_pct',l:'Inflation (for real value)',u:'%/yr',ph:'2.5'},
-      {k:'hold_yield',l:'Hold yield constant (dividend tracks price)',t:'chk',d:false,wide:1,h:'Ignores Dividend growth and moves the dividend with the share price, so today\'s yield stays put. The realistic case for high-yield payers (mortgage REITs, BDCs, covered-call funds) that cut when the price falls.'}]}]};
+      {k:'max_yield_pct',l:'Yield ceiling',u:'%',ph:'auto',h:'If dividend ÷ price would exceed this (e.g. the price falls while a flat $/share dividend continues), the dividend is cut to the ceiling instead of letting the yield explode. Blank = the larger of 8% or 1.25 × today\'s yield.'}]}]};
 CALC_SPECS.drip.holdingPicker=true;
 CALC_SPECS.tvm={title:'TVM SOLVER · N · I/Y · PV · PMT · FV',
   intro:'One formula, every "all but one is known" problem. Fill in four of the five, leave the one you want BLANK, and it is solved. Signs follow the financial-calculator convention: money you RECEIVE is positive, money you PAY OUT is negative (a loan: PV +, PMT −; a savings plan: PV −, PMT −, FV +).',
@@ -8384,7 +8388,8 @@ async function _dripLookup(key, t, repaint){
   if(j.error){ CALC_DRIP_LU={ticker:t,error:j.error}; return repaint(); }
   const o=CALC_IN[key]; o.ticker=t;
   if(j.price) o.share_price=String(j.price);
-  if(j.dividend_yield_pct!=null) o.dividend_yield_pct=String(j.dividend_yield_pct);
+  if(j.ttm_dividend!=null){ o.dividend_per_share=String(j.ttm_dividend); o.dividend_yield_pct=''; }
+  else if(j.dividend_yield_pct!=null) o.dividend_yield_pct=String(j.dividend_yield_pct);
   if(j.frequency) o.frequency=String(j.frequency);
   // Growth rates are ASSUMPTIONS: history only fills a blank field, never overwrites one you typed.
   const dg=j.dividend_growth_5y_pct!=null?j.dividend_growth_5y_pct:j.dividend_growth_3y_pct;
@@ -8405,6 +8410,7 @@ function _dripToolbar(key, bar, repaint, wrap){
     s.onchange=()=>{ const c=hold.find(x=>x.ticker===s.value); if(!c) return;
       const o=CALC_IN[key]; o.ticker=c.ticker; o.initial_investment=String(Math.round(c.value)); o.shares='';
       if(payers[c.ticker]) o.dividend_yield_pct=String(Math.round(payers[c.ticker]*100)/100);
+      o.dividend_per_share='';
       if(c.price!=null) o.share_price=String(Math.round(c.price*100)/100);
       _calcSave(); _dripLookup(key, c.ticker, repaint); };
     s.title='Fills your position\'s market value, then looks the ticker up for price, yield, frequency and trailing growth.';
@@ -8430,7 +8436,7 @@ function _dripToolbar(key, bar, repaint, wrap){
         (j.pays_dividend===false?' · <b>pays no dividend</b> (last 12 months)':
           ` · TTM dividend ${j.ttm_dividend!=null?'$'+(+j.ttm_dividend).toFixed(3)+'/sh':'—'} (${_cP(j.dividend_yield_pct,2)} trailing${j.forward_yield_pct!=null?', '+_cP(j.forward_yield_pct,2)+' at the latest rate':''}) · ${fq}`+
           ` · dividend growth ${g(j.dividend_growth_3y_pct,j.dividend_growth_5y_pct,j.dividend_growth_10y_pct)} · price CAGR ${g(null,j.price_cagr_5y_pct,j.price_cagr_10y_pct)}`)+
-        `<br><span class="muted">Source: ${_cE(j.source||'—')}. Price, yield and frequency were filled in; growth fields are filled only when blank (5y dividend / 10y price trailing rates) — they're your assumptions to edit. Now enter your shares <i>or</i> market value.${(j.notes||[]).length?' '+_cE(j.notes.join(' ')):''}</span>`;
+        `<br><span class="muted">Source: ${_cE(j.source||'—')}. Price, dividend per share (trailing 12 months) and frequency were filled in; growth fields are filled only when blank (5y dividend / 10y price trailing rates) — they're your assumptions to edit. Now enter your shares <i>or</i> market value.${(j.notes||[]).length?' '+_cE(j.notes.join(' ')):''}</span>`;
     }
     wrap.appendChild(info);
   }
@@ -8745,15 +8751,15 @@ CALC_RENDER.drip=(r,key)=>{
   w.appendChild(_cTiles([
     ['FINAL VALUE',_c$(r.final_value),null,_cN(r.final_shares,2)+' shares @ '+_c$2(r.final_price)],
     ['DRIP ADVANTAGE',_c$(r.drip_advantage),r.drip_advantage>0?'pos':null,'vs taking dividends as cash'],
-    ['ANNUAL INCOME AT END',_c$(r.annual_income_at_end),'pos',_c$(r.monthly_income_at_end)+'/mo'],
-    ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested · yield then '+_cP(r.end_yield_pct,1)],
+    ['ANNUAL INCOME AT END · DRIP',_c$(r.annual_income_at_end),'pos',_cN(r.final_shares,0)+' sh × '+_c$2(r.dividend_per_share_end)+'/sh · '+_c$(r.monthly_income_at_end)+'/mo'],
+    ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested · yield on price then '+_cP(r.end_yield_pct,1)+(r.implied_return_pct!=null?' · implied return '+_cP(r.implied_return_pct,1)+'/yr':'')],
     r.final_value_real!=null&&['IN TODAY\'S DOLLARS',_c$(r.final_value_real),null,'inflation-adjusted'],
   ]));
   w.appendChild(_dripChart(r,key));
   const cols=el('div'); cols.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-4);';
   cols.appendChild(_cKV([['Starting value',_c$(r.starting_value)+' ('+_cN(r.starting_shares,2)+' sh)'],['Contributions',_c$(r.total_contributions)],['Total invested',_c$(r.total_invested),1],
-    ['Dividends (gross)',_c$(r.total_dividends_gross)],['Dividend tax',_c$(r.total_dividend_tax)],['Dividends reinvested (net)',_c$(r.total_dividends_net)],['Extra shares from DRIP',_cN(r.extra_shares_from_drip,2)]],'WITH DRIP'));
-  cols.appendChild(_cKV([['Final value (shares + cash)',_c$(nd.final_value)],['Shares',_cN(nd.shares,2)],['Cash dividends collected',_c$(nd.cash_dividends_collected)],['Annual income at end',_c$(nd.annual_income_at_end)]],'DIVIDENDS AS CASH'));
+    ['Dividends (gross)',_c$(r.total_dividends_gross)],['Dividend tax',_c$(r.total_dividend_tax)],['Dividends reinvested (net)',_c$(r.total_dividends_net)],['Extra shares from DRIP',_cN(r.extra_shares_from_drip,2)],['Annual income at end (all shares)',_c$(r.annual_income_at_end)]],'WITH DRIP'));
+  cols.appendChild(_cKV([['Final value (shares + cash)',_c$(nd.final_value)],['Shares',_cN(nd.shares,2)],['Cash dividends collected',_c$(nd.cash_dividends_collected)],['Annual income at end (original shares only)',_c$(nd.annual_income_at_end)]],'DIVIDENDS AS CASH'));
   w.appendChild(cols);
   w.appendChild(_cSchedule(key,'PROJECTION',[['year','YEAR'],['contributions','CONTRIB',_c$],['dividends_net','DIVIDENDS',_c$],['shares','SHARES',x=>_cN(x,2)],['price','PRICE',_c$2],['value','VALUE',_c$],['annual_income','FWD INCOME/yr',_c$]],r.yearly,null,null));
   w.appendChild(_cNotes(Object.assign({},r,{warnings:[]}))); return w;   // warnings already shown in the banner
@@ -8855,7 +8861,7 @@ CALC_RENDER.npv_irr=(r,key)=>{
 };
 // ---- WHAT-IF · pick a real liability, then "what if I paid more?" ---------------------------
 CALC_SPECS.whatif={title:'WHAT-IF · PAY A DEBT OFF FASTER',
-  intro:'Pick one of your debts, then try a one-time payment, a bigger regular payment, or both. Press RUN to see how many payments (and how much interest) it saves. Balances come from your accounts; APR and payment come from the same per-account settings PLAN → CASH·DEBT uses — anything missing is asked for right here.',
+  intro:'Pick one of your debts, then try a one-time payment, a bigger regular payment, or both. Press RUN to see how many payments (and how much interest) it saves. Balances come from your accounts; APR and payment come from the same per-account settings PLAN → CASH·DEBT uses — anything missing is asked for right here. Paid-off ($0) debts, and 0% debts with no payment on file, are not listed — there is nothing to save or shorten.',
   groups:[
     {g:'THE DEBT',f:[
       {k:'balance',l:'Balance owed',u:'$',ph:'16000',req:1},

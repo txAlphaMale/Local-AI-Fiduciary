@@ -32,8 +32,18 @@ been retired in favor of a built-in scheduler.)*
 
 The **dashboard** (`http://localhost:8097`) has tabs for Positions, Research (B/S/H
 briefs), Insights (drift), Plan (FIRE + Monte Carlo + Tax/ACA/Social-Security editor),
-Ideas (opportunity scan), Strategist (paper trading), Audits (Tax/TLH/liquidity), and
-Chat.
+Ideas (opportunity scan), Strategist (paper trading), Audits (Tax/TLH/liquidity),
+Calculators, and Chat.
+
+**Calculators tab:** WHAT-IF · MY DEBTS (extra/one-time payment against your real liabilities —
+payoff time and interest saved), true-cost MORTGAGE, LOAN, LAND LOAN, DRIP (anchored on annual
+dividend per share, with keyless ticker lookup, tax, contributions and a value-over-time chart),
+a TVM solver (leave one of N / I/Y / PV / PMT / FV blank), RENT vs BUY, AFFORDABILITY, POINTS,
+YIELDS, INFLATION, LUMP vs ANNUITY and NPV/IRR. All arithmetic lives in
+`portfolio-api/calculators.py` (pure functions, `python3 -m unittest test_calculators`), served at
+`POST /api/calc` and shared with the chat's `run_calculator` tool. Read-only roles may use it
+(it stores nothing). The DRIP ticker lookup (`GET /api/calc/dividend-lookup`) uses the keyless
+Yahoo chart API with Finnhub as a fallback.
 
 > **Why Ollama is on the host, not in the stack:** the analysis model is multiple GB and
 > GPU pinning is host-specific. Keeping Ollama on the host avoids duplicating the model

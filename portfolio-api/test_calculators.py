@@ -278,7 +278,7 @@ class TestDripInputs(unittest.TestCase):
 
     def test_missing_lists_everything(self):
         r = c.drip({"years": 5})
-        self.assertEqual(sorted(r["missing"]), ["dividend_yield_pct", "initial_investment", "share_price"])
+        self.assertEqual(sorted(r["missing"]), ["dividend_per_share", "initial_investment", "share_price"])
 
     def test_dps_instead_of_yield(self):
         r = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "years": 1, "frequency": 1})
@@ -286,16 +286,34 @@ class TestDripInputs(unittest.TestCase):
 
 
 class TestDripSanity(unittest.TestCase):
-    def test_divergent_growth_warns(self):
-        r = c.drip({"initial_investment": 10000, "share_price": 6.43, "dividend_yield_pct": 22.4,
-                    "dividend_growth_pct": -3.64, "price_growth_pct": -14.63, "years": 20})
-        self.assertTrue(any("Implausible" in w for w in r["warnings"]))
+    MFA = {"initial_investment": 10000, "share_price": 6.43, "dividend_per_share": 1.44,
+           "price_growth_pct": -3.64, "years": 20}
 
-    def test_hold_yield_keeps_yield(self):
-        r = c.drip({"initial_investment": 10000, "share_price": 6.43, "dividend_yield_pct": 22.4,
-                    "price_growth_pct": -14.63, "dividend_growth_pct": 5, "years": 20, "hold_yield": True})
-        self.assertFalse(any("Implausible" in w for w in r["warnings"]))
-        self.assertLess(abs(r["end_yield_pct"] - 22.4), 3.0)   # annual DPS step vs monthly price drift
+    def test_flat_dps_with_falling_price_gets_cut_not_exploded(self):
+        r = c.drip(dict(self.MFA))
+        self.assertTrue(any("Dividend cut applied" in w for w in r["warnings"]))
+        self.assertLessEqual(r["end_yield_pct"], r["max_yield_pct_used"] + 0.01)
+        self.assertLess(r["dividend_per_share_end"], 1.44)
+
+    def test_dps_is_anchor_not_yield(self):
+        # Price triples, DPS flat: yield falls to a third, income per original share unchanged.
+        r = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "price_growth_pct": 0,
+                    "years": 1, "frequency": 1})
+        r2 = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "price_growth_pct": 20,
+                     "years": 1, "frequency": 1})
+        self.assertAlmostEqual(r["without_drip"]["cash_dividends_collected"], 200.0, places=2)
+        self.assertAlmostEqual(r2["without_drip"]["cash_dividends_collected"], 200.0, places=2)
+        self.assertLess(r2["end_yield_pct"], r["end_yield_pct"])
+
+    def test_dps_beats_conflicting_yield(self):
+        r = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "dividend_yield_pct": 9,
+                    "years": 1, "frequency": 1})
+        self.assertAlmostEqual(r["dividend_yield_used_pct"], 4.0, places=6)
+
+    def test_income_tile_matches_final_shares_times_end_dps(self):
+        r = c.drip({"shares": 100, "share_price": 50, "dividend_per_share": 2, "years": 3})
+        self.assertAlmostEqual(r["annual_income_at_end"], r["final_shares"] * r["dividend_per_share_end"], delta=0.05)
+        self.assertLess(r["without_drip"]["annual_income_at_end"], r["annual_income_at_end"])
 
 
 class TestDividendProfile(unittest.TestCase):
