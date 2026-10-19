@@ -18,6 +18,7 @@ word: they operate the server, hold the encryption keys, and are responsible for
 | Household financial data | holdings, account balances, retirement assumptions, insurance/estate documents, budget/scenario config | This is the core purpose of the app — financial planning and analysis for the household |
 | Chat transcripts | conversations with the in-app AI assistant | So you can review past advice and so the assistant has conversational context |
 | Knowledge/reference documents | anything you drop into the Knowledge folder (e.g. your own Investment Policy Statement) | So the AI assistant can answer questions grounded in documents you chose to provide |
+| Vault documents & emergency access | files you upload to the document vault (stored encrypted), your choice of who may see each one, and — if you turn on emergency access — who the designated contact is and the history of any request | So important papers live in one place and the right person can reach them if the account owner cannot act. Nothing here is ever sent off this server or given to the AI assistant |
 
 Full technical detail, including exactly which files/tables hold what and for how long, is in
 `compliance/ROPA.md` (Records of Processing Activities) and `compliance/DATA-RETENTION-SCHEDULE.md`.

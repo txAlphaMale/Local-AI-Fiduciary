@@ -35,6 +35,7 @@ credentials the household supplies. Full detail: `compliance/ROPA.md`.
 | A viewer-role household member seeing more than intended | Low | Low | Mitigated — viewers get read access to shared dashboards by design (that's the intended use case: a spouse reviewing the household's finances), not a data-minimization failure; the risk that matters is a viewer gaining WRITE/admin capability, which is denied by RBAC (SEC-5) |
 | Chat transcripts persisting indefinitely with no automatic expiry | Medium | Medium | **Real, disclosed gap** — see `compliance/DATA-RETENTION-SCHEDULE.md`'s flagged-gaps section; not yet remediated |
 | Host compromise exposing everything at once | Low | High | Explicitly out of scope for application-layer controls to fully prevent — disclosed in `compliance/RISK-REGISTER.md` R-7 and `compliance/IR-RUNBOOK.md`'s chain-integrity caveat, not hidden behind a false sense of completeness |
+| Document vault / emergency access: an unintended disclosure of estate and identity documents, or a designated contact obtaining access the owner did not intend | Low | High | Mitigated by per-item visibility enforced on every read, encryption at rest, a mandatory minimum 24-hour wait with always-on notification and deny/revoke, MFA for takeover, audit and detections — residual: depends on the owner being reachable (see risk register "Admin reachability") and a compromised host defeats server-side encryption |
 
 ## 4. Measures to address the risks
 

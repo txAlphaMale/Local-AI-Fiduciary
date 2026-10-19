@@ -57,6 +57,16 @@ Yahoo chart API with Finnhub as a fallback.
 
 ---
 
+### Document vault, emergency access and the Emergency Kit
+
+PLAN → VAULT keeps estate and identity documents encrypted on this server (AES-256-GCM per file; the per-file key is wrapped by the app's versioned key; deleting a document destroys its key). **Honest threat model:** this is server-side encryption at rest — it protects stolen disks and backups, not a compromised host (root plus the key file can decrypt). Each document is `private` (admin only), `household` (admin + view-only accounts) or `emergency`. Documents are never given to the AI assistant.
+
+**Emergency access (off by default):** SETTINGS → IAM → EMERGENCY ACCESS lets you name one view-only household member as the emergency contact. They can *request* access; you are notified immediately on every channel (always-on, cannot be muted) and can deny it during the wait (minimum 24 hours, default 7 days). If you do nothing, they get read access to `emergency` documents for a limited time (or, if you choose TAKEOVER and they have MFA, they become the admin). Settings that widen access wait 24 hours before taking effect. See `compliance/IR-RUNBOOK.md` §7.
+
+**Emergency Kit:** PLAN → VAULT → GENERATE EMERGENCY KIT produces a passphrase-encrypted file with all `emergency` documents plus your contacts and instructions, readable without this server (`kit_decrypt.py` needs only Python and `cryptography`). The passphrase is shown once; store it apart from the file.
+
+*Testing only:* `EMERGENCY_ALLOW_SHORT_WAIT=1` (see `.env.example`) bypasses the wait floor, cool-down and notification gate — never set it on a real deployment.
+
 ## Prerequisites
 
 - **Docker** with Compose v2 (Docker Desktop + WSL2 on Windows, or Docker Engine on Linux).

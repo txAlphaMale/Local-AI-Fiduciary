@@ -23,6 +23,9 @@ Controls: ISO/IEC 27001:2022 **A.8.10** (Information deletion); NIST SP 800-53 *
 | On-demand research cache | Capped by ticker COUNT (last 20), not by time | Oldest ticker's cache entry dropped once the cap is exceeded | Pure performance cache, no retention-sensitive content |
 | Knowledge/RAG documents (`knowledge/` folder + vector index) | Indefinite until the user removes the source file | Manual only — incremental reindex drops a document's chunks/vectors once its source file is deleted | User-curated reference material (e.g. an IPS); the user IS the retention decision-maker for their own uploaded documents |
 | TLS certificates & private keys | Indefinite until explicitly rotated or cleared | Manual (`/api/tls/clear`, cert regeneration/import, ACME renewal) | Standard operational lifecycle, not a data-privacy retention question |
+| Document vault files (`/data/vault`, `vault_items`) | Until the household deletes the item | Delete = crypto-shred (wrapped key dropped, ciphertext blob removed, row tombstoned) | Estate/identity documents are kept on purpose; disposal is the owner's decision |
+| Emergency-access requests (`emergency_requests`) | Indefinite | None built (small rows; audit value outweighs minimisation) | Evidence of who asked for emergency access and what was decided; the matching audit events follow the audit retention above |
+| Emergency Kit temp file (`/data/tmp/kit-*.zip`) | Until downloaded once, 10 minutes, or the next restart — whichever is first | Deleted after the single permitted download; token expiry; startup sweep | A decrypted-content-adjacent artifact should not linger on the server; the admin-held copy is outside this app's control |
 
 ## Flagged gaps (honest, not yet remediated)
 

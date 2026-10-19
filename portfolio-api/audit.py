@@ -176,6 +176,11 @@ EVENT_TYPES = (
     "vault.upload", "vault.download", "vault.update", "vault.delete",
     # TASK-001b: a session cookie was rejected (deleted account, or superseded by a password/MFA change).
     "session.invalidated",
+    # TASK-002: emergency access (break-glass) + Emergency Kit.
+    "emergency.config_changed", "emergency.requested", "emergency.cancelled", "emergency.denied",
+    "emergency.granted", "emergency.revoked", "emergency.expired", "emergency.reminder",
+    "emergency.auto_disabled", "emergency.takeover_failed", "emergency.test_mode_active",
+    "vault.kit_generated", "vault.kit_downloaded",
 )
 
 

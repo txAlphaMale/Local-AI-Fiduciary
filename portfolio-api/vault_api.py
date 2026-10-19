@@ -30,8 +30,10 @@ def _err(e):
 
 
 def _emergency_granted(user):
-    """Phase 2 hook: True when `user` is the designee of a granted emergency request."""
-    return False
+    """True when `user` is the designee of a granted, unexpired emergency VIEW grant (re-evaluated
+    against SQLite on every call -- deny/revoke/expiry take effect on the next request)."""
+    import emergency
+    return emergency.emergency_granted(user)
 
 
 def _actor(user):
@@ -94,7 +96,11 @@ def register(app):
         except vault.VaultError as e:
             return _err(e)
         item = vault.public_item(row)
-        audit.emit("vault.download", request=request, resource=f"/api/vault/items/{item_id}",
+        # emergency-visibility reads get their own resource prefix so detections.py can count a
+        # designee's bulk downloads from plaintext audit columns without decrypting event detail.
+        res = (f"/api/vault/emergency-items/{item_id}" if row["visibility"] == "emergency"
+               else f"/api/vault/items/{item_id}")
+        audit.emit("vault.download", request=request, resource=res,
                    detail={"item": item_id, "inline": bool(inline), "visibility": row["visibility"]},
                    **_actor(user))
         # Inline only for PDF/PNG/JPEG; everything else (text, DOCX, HEIC ...) is attachment-only.

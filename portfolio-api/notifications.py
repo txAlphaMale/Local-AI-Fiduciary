@@ -338,6 +338,8 @@ def _format_message(category, event_type, outcome, actor_name, resource, detail)
             "failed_login_burst": "Repeated failed logins detected",
             "first_seen_ip": "Login from a new location",
             "mfa_disable_then_change": "MFA disabled, then a sensitive change — possible account takeover",
+            "emergency_request_pending_no_admin_activity": "Emergency access request pending and you haven't signed in",
+            "emergency_bulk_download": "Many emergency documents downloaded in a short time",
         }
         title = labels.get(rule, f"Security detection: {rule or event_type}")
         body = f"Account: {detail.get('username') or actor_name or 'unknown'}."
@@ -419,3 +421,68 @@ def send_test(uid, is_admin):
         results["email_sent"] = _send_email("Test notification",
                                              "If you received this, email notifications are working.")
     return results
+
+
+# ---------------------------------------------------------------------------
+# TASK-002: the always-on 'emergency' category. Deliberately NOT in CATEGORIES (so it can't be
+# muted from SETTINGS -> NOTIFICATIONS) and NOT routed through _classify/_dispatch (which fan out
+# to every subscriber and honor prefs). Delivered to EVERY push subscription of the admin, plus the
+# shared SMTP address, regardless of any preference -- if the admin can't be reached, the time delay
+# protects nothing. `to_uid` (the designee) additionally gets a push acknowledgement of their own
+# request's progress; `extra_uids` lets a takeover notify the OUTGOING admin too.
+# ---------------------------------------------------------------------------
+def _fmt_when(ts):
+    try:
+        import datetime as _dt
+        return _dt.datetime.fromtimestamp(float(ts)).strftime("%a %b %d %Y %H:%M")
+    except Exception:
+        return "the scheduled time"
+
+
+def _format_emergency(event, d):
+    who = d.get("designee") or "the designee"
+    t = {
+        "emergency.requested": (f"Emergency access requested by {who} — it will be granted on "
+                                f"{_fmt_when(d.get('grants_at'))} unless you deny it",
+                                "Open SETTINGS → IAM → EMERGENCY ACCESS and press DENY if this is not expected."),
+        "emergency.reminder": (f"Emergency access request from {who} is {d.get('percent', '?')}% of the way to "
+                               f"being granted ({_fmt_when(d.get('grants_at'))})",
+                               "Open SETTINGS → IAM → EMERGENCY ACCESS to deny it, or approve it early."),
+        "emergency.denied": (f"Emergency access request from {who} was DENIED", "No access was granted."),
+        "emergency.granted": (f"Emergency access GRANTED to {who} ({d.get('grant_type', 'view')})",
+                              d.get("summary") or "They can now open the emergency-visibility vault documents."),
+        "emergency.revoked": (f"Emergency access for {who} was REVOKED", "Their access ended immediately."),
+        "emergency.expired": (f"Emergency view access for {who} expired", "They can request again if needed."),
+        "emergency.cancelled": (f"Emergency access request from {who} was cancelled", "No access was granted."),
+        "emergency.config_changed": ("Emergency-access settings changed",
+                                     d.get("summary") or "Review SETTINGS → IAM → EMERGENCY ACCESS."),
+        "emergency.auto_disabled": ("Emergency access was automatically DISABLED",
+                                    f"Reason: {d.get('reason', 'the designee is no longer valid')}. "
+                                    "Review SETTINGS → IAM → EMERGENCY ACCESS."),
+    }
+    return t.get(event, (event, json.dumps({k: v for k, v in d.items() if k != "passphrase"})[:200]))
+
+
+def dispatch_emergency(event, detail, to_uid=None, extra_uids=None):
+    """Synchronous (so state-machine tests are deterministic). Returns
+    {"push_sent": n, "email_sent": bool}. Never raises."""
+    out = {"push_sent": 0, "email_sent": False}
+    try:
+        title, body = _format_emergency(event, detail or {})
+        subs = _read_subs()
+        targets = set(extra_uids or [])
+        admin_uid = _admin_uid()
+        if admin_uid:
+            targets.add(admin_uid)
+        for uid in targets:                              # prefs are IGNORED on purpose
+            for sub in subs.get(uid, []):
+                if _send_push(sub, title, body):
+                    out["push_sent"] += 1
+        if to_uid and to_uid not in targets:
+            for sub in subs.get(to_uid, []):             # acknowledgement to the requester
+                _send_push(sub, title, body)
+        if smtp_configured():
+            out["email_sent"] = bool(_send_email(title, body))
+    except Exception as e:
+        print(f"[notifications] emergency dispatch failed: {e}", flush=True)
+    return out

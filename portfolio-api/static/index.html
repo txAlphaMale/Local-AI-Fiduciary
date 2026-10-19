@@ -1507,6 +1507,7 @@ function render(){
   charts.forEach(c=>c.destroy()); charts=[];
 
   if(TAB!=='chat' && TAB!=='wiki'){   // CHAT and WIKI use the full panel; skip the cockpit strip above them
+    body.appendChild(emergencyBannerNode());   // TASK-002: red banner while an emergency request is pending (admin)
     body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip + tile router
   }
   // NOTE: the Dashboard visuals (allocation donuts · accounts · gainers/losers/day-movers ·
@@ -3889,6 +3890,7 @@ function iamContent(){
     if(!HOUSEHOLD_ACCOUNTS){ acctsWrap.appendChild(el('div','muted','Loading accounts…')); _accountsRefresh(); }
     else { acctsWrap.appendChild(_accountsPanel()); }
     wrap.appendChild(acctsWrap);
+    wrap.appendChild(emergencyPanel());   // TASK-002 break-glass
   }
 
   // Reset account / auth.db (2026-07-24 backlog — Jason: "reset the auth.db from within the
@@ -5843,6 +5845,146 @@ function continuityContent(){
   return wrap;
 }
 
+// ---------------- EMERGENCY ACCESS (TASK-002): SETTINGS -> IAM panel, cockpit banner, VAULT-tab bits ----------------
+// All server text goes in via textContent (el()'s 3rd arg is innerHTML -- never pass names/titles through it).
+const _emTs=ts=>ts?new Date(ts*1000).toLocaleString():'—';
+const _emDur=s=>{ s=Math.max(0,Math.round(s)); if(s>=86400) return (s/86400).toFixed(s%86400?1:0)+' days'; if(s>=3600) return (s/3600).toFixed(s%3600?1:0)+' hours'; if(s>=60) return Math.round(s/60)+' min'; return s+' s'; };
+async function _emPost(path,body){
+  try{ const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); const j=await r.json().catch(()=>({})); return {ok:r.ok,status:r.status,j}; }
+  catch(e){ return {ok:false,status:0,j:{error:String(e)}}; }
+}
+function emergencyPanel(){
+  const wrap=el('div'); wrap.style.cssText='margin-bottom:var(--space-4);';
+  wrap.appendChild(el('div','ph','EMERGENCY ACCESS · BREAK-GLASS'));
+  const body=el('div'); wrap.appendChild(body);
+  const note=t=>{ const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-2);'; n.textContent=t; return n; };
+  async function refresh(){
+    body.textContent='Loading…';
+    let st; try{ st=await (await fetch('/api/emergency/status')).json(); }catch(e){ body.textContent='Unavailable: '+e; return; }
+    if(st.error||st.role!=='admin'){ body.textContent=st.error||'Admin only.'; return; }
+    body.textContent='';
+    const cfg=st.config||{}, ch=st.channels||{};
+    if(st.test_mode){ const t=el('div'); t.style.cssText='border:2px solid var(--color-negative);color:var(--color-negative);padding:var(--space-2);margin-bottom:var(--space-2);font-weight:600;';
+      t.textContent='⚠ TEST MODE (EMERGENCY_ALLOW_SHORT_WAIT=1): the 24-hour wait floor, the 24-hour cool-down and the notification gate are bypassed. Never run a real deployment like this.'; body.appendChild(t); }
+    body.appendChild(note('A designated household member (a view-only account) can ask for emergency access. After the wait period below — during which you are notified on every channel and can DENY — they get read access to documents marked EMERGENCY (or, if you choose TAKEOVER, become the admin). Disabled by default.'));
+    // ---- open request ----
+    const rq=st.open_request;
+    if(rq){
+      const b=el('div'); b.style.cssText='border:1px solid var(--color-negative);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);';
+      const t=el('div'); t.style.fontWeight='600';
+      t.textContent=rq.status==='pending'?('Request from '+rq.designee+' · pending · will be granted '+_emTs(rq.grants_at)+' ('+_emDur(rq.grants_at-Date.now()/1000)+' left)')
+        :('Request from '+rq.designee+' · '+rq.status.toUpperCase()+(rq.grant_expires_at?' · expires '+_emTs(rq.grant_expires_at):'')+' · '+rq.grant_type);
+      b.appendChild(t);
+      const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);margin-top:var(--space-2);';
+      const act=(label,path)=>{ const x=el('button'); x.textContent=label; x.onclick=async()=>{ const r=await _emPost(path); if(!r.ok) alert(r.j.error||'failed'); refresh(); _emBannerRefresh(); }; row.appendChild(x); };
+      if(rq.status==='pending'){ act('DENY','/api/emergency/deny'); act('APPROVE EARLY','/api/emergency/approve'); }
+      if(rq.status==='granted'&&rq.grant_type==='view') act('REVOKE','/api/emergency/revoke');
+      b.appendChild(row); body.appendChild(b);
+    }
+    // ---- config form ----
+    const f=el('div'); f.style.cssText='display:grid;grid-template-columns:max-content 1fr;gap:var(--space-2) var(--space-3);align-items:center;max-width:44rem;margin-bottom:var(--space-3);';
+    const mk=(tag,props)=>Object.assign(document.createElement(tag),props||{});
+    const lab=(t,node)=>{ f.appendChild(mk('span',{textContent:t})); f.appendChild(node); };
+    const en=mk('input',{type:'checkbox',checked:!!cfg.enabled}); lab('Enabled',en);
+    const des=mk('select'); des.appendChild(mk('option',{value:'',textContent:'— choose a viewer account —'}));
+    (st.viewers||[]).forEach(v=>{ des.appendChild(mk('option',{value:v.id,textContent:v.username+(v.mfa_enabled?' · MFA':' · no MFA')+(v.recovery_key_set?' · recovery key':''),selected:v.id===cfg.designee_uid})); });
+    lab('Designee',des);
+    const gt=mk('select'); [['view','VIEW — read EMERGENCY documents'],['takeover','TAKEOVER — becomes admin (needs MFA)']].forEach(([v,l])=>gt.appendChild(mk('option',{value:v,textContent:l,selected:v===cfg.grant_type}))); lab('Grant type',gt);
+    const wh=mk('input',{type:'number',min:'24',step:'1',value:String(Math.round((cfg.wait_seconds||604800)/3600))}); lab('Wait (hours, min 24)',wh);
+    let ws=null; if(st.test_mode){ ws=mk('input',{type:'number',min:'5',step:'1',value:String(cfg.wait_seconds||60),title:'test mode only'}); lab('Wait (SECONDS, test mode)',ws); }
+    const vd=mk('input',{type:'number',min:'1',max:'365',step:'1',value:String(cfg.view_grant_days||30)}); lab('View-grant lifetime (days)',vd);
+    body.appendChild(f);
+    const msg=el('div','muted'); msg.style.cssText='font-size:var(--font-size-sm);margin:var(--space-2) 0;';
+    const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;';
+    const save=mk('button',{textContent:'SAVE'}); const test=mk('button',{textContent:'SEND TEST NOTIFICATION'});
+    save.onclick=async()=>{ const b={enabled:en.checked,designee_uid:des.value||null,grant_type:gt.value,view_grant_days:parseInt(vd.value)||30};
+      if(ws) b.wait_seconds=parseInt(ws.value)||60; else b.wait_hours=parseFloat(wh.value)||168;
+      const r=await _emPost('/api/emergency/config',b); if(!r.ok){ msg.textContent='Not saved: '+(r.j.error||r.status); return; }
+      msg.textContent=r.j.scheduled?('Saved — this WIDENS access, so it takes effect '+_emTs(r.j.scheduled.effective_at)+' (24-hour cool-down). You were notified.'):'Saved.'; refresh(); };
+    test.onclick=async()=>{ const r=await _emPost('/api/emergency/test-notification'); msg.textContent=r.j.ok?'Test notification delivered.':(r.j.note||r.j.error||'Test failed.'); refresh(); };
+    row.appendChild(save); row.appendChild(test); body.appendChild(row); body.appendChild(msg);
+    body.appendChild(note('Reachability: push '+(ch.push?'✓ device subscribed':'✗ none')+' · email '+(ch.smtp?'✓ SMTP configured':'✗ not configured')+' · last successful test '+_emTs(ch.last_test_ok)+'. Enabling requires a working channel and a test within 24 h. A change that widens access (enable, new designee, shorter wait, view→takeover) waits 24 h before taking effect.'));
+    if(st.pending_change){ const p=el('div'); p.style.cssText='color:var(--color-accent);margin-bottom:var(--space-2);'; p.textContent='⏳ A change is waiting out its cool-down until '+_emTs(st.pending_change.effective_at)+'.'; body.appendChild(p); }
+    // ---- history ----
+    if((st.history||[]).length){
+      body.appendChild(el('div','ph','REQUEST HISTORY'));
+      const tb=el('table'); tb.style.cssText='border-collapse:collapse;width:100%;font-size:var(--font-size-sm);';
+      const hr=el('tr'); ['Requested','By','Type','Status','Decided'].forEach(h=>{ const th=el('th'); th.textContent=h; th.style.cssText='text-align:left;padding:2px 8px;'; hr.appendChild(th); }); tb.appendChild(hr);
+      st.history.forEach(h=>{ const tr=el('tr'); [_emTs(h.requested_at),h.designee,h.grant_type||'',h.status,_emTs(h.decided_at)].forEach(v=>{ const td=el('td'); td.textContent=v; td.style.cssText='padding:2px 8px;'; tr.appendChild(td); }); tb.appendChild(tr); });
+      body.appendChild(tb);
+    }
+  }
+  refresh();
+  return wrap;
+}
+
+// Persistent admin banner while a request is pending (cockpit area, visible from every tab that shows it).
+let _emBannerEl=null;
+function emergencyBannerNode(){
+  const d=el('div'); d.id='emergency-banner'; _emBannerEl=d; _emBannerRefresh(); return d;
+}
+async function _emBannerRefresh(){
+  const d=document.getElementById('emergency-banner')||_emBannerEl; if(!d) return;
+  const u=(typeof AUTH_STATUS!=='undefined'&&AUTH_STATUS&&AUTH_STATUS.user)||null;
+  if(!u||u.role!=='admin'){ d.textContent=''; return; }
+  let st; try{ st=await (await fetch('/api/emergency/status')).json(); }catch(_){ return; }
+  d.textContent=''; d.style.cssText='';
+  const rq=st&&st.open_request;
+  if(!rq||rq.status!=='pending') return;
+  d.style.cssText='background:var(--color-negative);color:#fff;padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);border-radius:var(--radius-md);display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;font-weight:600;';
+  const t=el('span'); t.textContent='⚠ EMERGENCY ACCESS REQUESTED by '+rq.designee+' — will be granted '+_emTs(rq.grants_at)+' ('+_emDur(rq.grants_at-Date.now()/1000)+' left) unless you deny it';
+  const b=el('button'); b.textContent='DENY'; b.style.cssText='background:#fff;color:#900;border:none;font-weight:700;padding:4px 14px;cursor:pointer;';
+  b.onclick=async()=>{ const r=await _emPost('/api/emergency/deny'); if(!r.ok) alert(r.j.error||'failed'); _emBannerRefresh(); };
+  d.appendChild(t); d.appendChild(b);
+}
+
+// VAULT tab extras: designee REQUEST button + status, admin GENERATE EMERGENCY KIT + staleness.
+function emergencyVaultBar(){
+  const bar=el('div'); bar.style.cssText='margin-bottom:var(--space-3);';
+  const u=(typeof AUTH_STATUS!=='undefined'&&AUTH_STATUS&&AUTH_STATUS.user)||null;
+  if(!u) return bar;
+  let tick=null;
+  async function paint(){
+    bar.textContent=''; if(tick){ clearInterval(tick); tick=null; }
+    if(u.role==='admin'){
+      let ks; try{ ks=await (await fetch('/api/vault/kit/status')).json(); }catch(_){ return; }
+      const box=el('div'); box.style.cssText='border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);';
+      const t=el('div'); t.textContent='EMERGENCY KIT · an offline, passphrase-encrypted copy of every EMERGENCY document plus your contacts, usable even if this server is gone.'; box.appendChild(t);
+      const s=el('div','muted'); s.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;';
+      s.textContent=ks.never_generated?('Never generated · '+ks.current_count+' emergency document(s) on file'):('Last generated '+_emTs(ks.generated_at)+' · '+ks.item_count+' document(s)'); box.appendChild(s);
+      if(ks.stale){ const w=el('div'); w.style.cssText='color:var(--color-accent);font-weight:600;'; w.textContent='⚠ KIT IS STALE — emergency documents changed since it was generated'; box.appendChild(w); }
+      const out=el('div'); out.style.cssText='margin-top:var(--space-2);';
+      const g=el('button'); g.textContent='GENERATE EMERGENCY KIT';
+      g.onclick=async()=>{ g.disabled=true; out.textContent='Building…';
+        const r=await _emPost('/api/vault/kit',{}); g.disabled=false;
+        if(!r.ok){ out.textContent='Failed: '+(r.j.error||r.status); return; }
+        out.textContent='';
+        const pw=el('div'); pw.style.cssText='border:2px solid var(--color-accent);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);';
+        const l=el('div'); l.textContent='KIT PASSPHRASE — shown ONCE, not stored anywhere. Write it down and keep it apart from the file:'; pw.appendChild(l);
+        const code=el('div'); code.textContent=r.j.passphrase; code.style.cssText='font:700 1.25rem/1.6 monospace;letter-spacing:1px;user-select:all;'; pw.appendChild(code);
+        out.appendChild(pw);
+        const a=el('a'); a.textContent='⬇ DOWNLOAD KIT ('+r.j.item_count+' documents, '+Math.round(r.j.size/1024)+' KB) — link works once, for 10 minutes'; a.href='/api/vault/kit/'+encodeURIComponent(r.j.download_token); out.appendChild(a); };
+      box.appendChild(g); box.appendChild(out); bar.appendChild(box);
+    } else {
+      let st; try{ st=await (await fetch('/api/emergency/status')).json(); }catch(_){ return; }
+      if(!st||!st.is_designee||!st.enabled&&!st.status) return;
+      const box=el('div'); box.style.cssText='border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);';
+      const t=el('div'); box.appendChild(t);
+      const pend=st.status==='pending';
+      if(pend){ const upd=()=>{ t.textContent='Emergency access requested — it will be granted '+_emTs(st.grants_at)+' ('+_emDur(st.grants_at-Date.now()/1000)+' left) unless the account owner denies it.'; }; upd(); tick=setInterval(upd,30000); }
+      else if(st.granted_now) t.textContent='Emergency access is ACTIVE until '+_emTs(st.grant_expires_at)+'. Emergency documents now appear below.';
+      else if(st.status==='denied') t.textContent='Your last emergency request was denied.';
+      else t.textContent='You are the designated emergency contact. If the account owner can no longer be reached you can request emergency access to the documents marked EMERGENCY; the owner is notified immediately and can deny it during the wait ('+_emDur(st.wait_seconds)+').';
+      const row=el('div'); row.style.marginTop='var(--space-2)';
+      if(pend){ const c=el('button'); c.textContent='CANCEL MY REQUEST'; c.onclick=async()=>{ await _emPost('/api/emergency/cancel'); paint(); }; row.appendChild(c); }
+      else if(st.enabled&&!st.granted_now){ const r=el('button'); r.textContent='REQUEST EMERGENCY ACCESS'; r.onclick=async()=>{ if(!confirm('Request emergency access? The account owner will be notified immediately.')) return; const x=await _emPost('/api/emergency/request'); if(!x.ok) alert(x.j.error||'failed'); paint(); }; row.appendChild(r); }
+      box.appendChild(row); bar.appendChild(box);
+    }
+  }
+  paint();
+  return bar;
+}
+
 // ---------------- VAULT (TASK-001 P1): encrypted document vault, PLAN -> VAULT ----------------
 // Self-fetching (does not ride the main load()). Every user-supplied string (title, filename) goes
 // in via textContent -- el()'s 3rd arg is innerHTML, so never pass document metadata through it.
@@ -5853,6 +5995,7 @@ function vaultContent(){
   const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
   note.textContent='Files are encrypted on this server (AES-256-GCM, per-file keys wrapped by the app key). This protects stolen disks and backups, not a compromised host. Visibility: PRIVATE = admin only · HOUSEHOLD = admin + viewers · EMERGENCY = admin now; the designated contact only after an emergency request is granted (coming in Phase 2).';
   wrap.appendChild(note);
+  wrap.appendChild(emergencyVaultBar());   // TASK-002: designee request button / admin emergency kit
   const body=el('div'); wrap.appendChild(body);
   const fmtSize=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
   const daysTo=d=>{ if(!d) return null; const t=Date.parse(d+'T00:00:00'); return isNaN(t)?null:Math.round((t-Date.now())/86400000); };

@@ -75,11 +75,18 @@ import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed
 import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
 import vault          # TASK-001 — encrypted document vault
 import vault_api      # TASK-001 — /api/vault/* handlers
+import emergency      # TASK-002 — break-glass emergency access
+import kit            # TASK-002 — offline Emergency Kit
+import emergency_api  # TASK-002 — /api/emergency/* + /api/vault/kit*
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
 # _boot_merge two lines down) — store.py itself does no work at import time, so this is the
 # single earliest safe point to call it.
 store.init_db()
+# TASK-001/002 tables, created BEFORE any background thread (detections, emergency) can query them
+vault.init_db()
+emergency.init_db()
+kit.init_db()
 
 # ---- Secrets bootstrap (N6 Phase 2) --------------------------------------------
 # Merge the gitignored secrets.json into the process env BEFORE the config constants
@@ -697,6 +704,10 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # read in every sense that matters; a viewer can already see every figure these use. The
     # What-If panel's optional "save to account" uses /api/account-registry, which stays denied.
     "/api/calc",
+    # TASK-002 emergency access: the designee is a VIEWER, so these two (and ONLY these two) are
+    # reachable by viewers. Each handler re-checks "is the configured designee" itself
+    # (emergency.request_access / cancel); every other emergency write is admin-only.
+    "/api/emergency/request", "/api/emergency/cancel",
 }
 
 
@@ -1066,6 +1077,7 @@ async def auth_mfa_disable(request: Request):
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
+    emergency.revalidate("designee MFA disabled")
     request.session["ep"] = auth.session_epoch(uid)
     audit.emit("auth.mfa.disabled", request=request, actor=uid, resource="/api/auth/mfa/disable")
     return {"ok": True}
@@ -1145,6 +1157,7 @@ async def auth_reset_account(request: Request):
     audit.emit("auth.account.reset", outcome="success", request=request, actor=uid,
                actor_name=user["username"], resource="/api/auth/reset-account")
     auth.delete_user(uid)
+    emergency.revalidate("account reset")
     request.session.clear()
     return {"ok": True}
 
@@ -1197,6 +1210,7 @@ def auth_delete_user(uid: str, request: Request):
         return JSONResponse({"error": "no such account"}, status_code=404)
     try:
         auth.admin_delete_viewer(uid)
+        emergency.revalidate("household account deleted")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     audit.emit("auth.user.deleted", request=request, actor=admin["id"], actor_name=admin["username"],
@@ -1228,6 +1242,7 @@ async def auth_transfer_admin(uid: str, request: Request):
                              status_code=400)
     try:
         auth.transfer_admin_role(admin["id"], uid)
+        emergency.revalidate("admin role transferred", force=True)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     audit.emit("auth.user.role_changed", request=request, actor=admin["id"], actor_name=admin["username"],
@@ -1824,6 +1839,59 @@ _RISK_REGISTER_SEED = [
                    "designed; residual is the inherent reality of any public-internet-facing "
                    "instance being scanned/probed continuously, which DEMO_MODE isolation bounds "
                    "the impact of rather than eliminates", owner="Jason"),
+    dict(id="R-15", asset="Document vault contents (wills, trusts, IDs, insurance)",
+         threat="Disclosure of stored documents via stolen disk/backup, a viewer reading beyond their "
+                "visibility, or a compromised host",
+         likelihood="Low", impact="High", inherent="Medium",
+         treatment="TASK-001: per-file AES-256-GCM envelope encryption (DEK wrapped by the versioned "
+                    "keyring; delete = crypto-shred), encrypted titles/filenames, magic-byte upload "
+                    "allowlist, per-item visibility enforced in every vault GET (the global gate lets "
+                    "viewers read all GETs) with regression tests, audit events on every upload/"
+                    "download/delete, vault inside the encrypted backup set",
+         residual="Medium — server-side encryption only: root on the host plus the key file can "
+                   "decrypt (disclosed; same residual as R-7)", owner="Jason"),
+    dict(id="R-16", asset="Emergency access (break-glass) feature",
+         threat="Abuse of the time-delayed grant: a designee or an attacker with the designee's "
+                "session obtains access to emergency documents, or the admin role via TAKEOVER, "
+                "without the owner's consent",
+         likelihood="Low", impact="High", inherent="Medium",
+         treatment="TASK-002: ships disabled; designee must be an existing viewer; takeover needs "
+                    "designee MFA; 24 h minimum wait with every-channel always-on admin notification "
+                    "(push + email, not mutable), admin can deny/revoke at any time; widening changes "
+                    "cool down 24 h; atomic once-only takeover; detections for a silent admin and for "
+                    "bulk downloads; full audit trail",
+         residual="Medium — the control depends on the admin actually being reachable during the wait "
+                   "(see the 'Admin reachability' risk)", owner="Jason"),
+    dict(id="R-17", asset="Designee account",
+         threat="The designated emergency contact's own login is compromised (password reuse, "
+                "phished), giving an attacker a path to request access",
+         likelihood="Low-Medium", impact="High", inherent="Medium",
+         treatment="Designee must be a view-only account; MFA is mandatory for a takeover designee "
+                    "and is re-checked on every request and by the scheduled tick (disabling MFA or "
+                    "deleting the account auto-disables the feature and cancels the request); "
+                    "session-epoch invalidation on password change (TASK-001b); the owner is told of "
+                    "every request and can deny it",
+         residual="Low-Medium", owner="Jason"),
+    dict(id="R-18", asset="Offline Emergency Kit",
+         threat="Loss or theft of the kit file or its passphrase, or a stale kit that misses "
+                "recently-added documents",
+         likelihood="Medium", impact="High", inherent="Medium-High",
+         treatment="TASK-002: scrypt + AES-256-GCM chunked container; passphrase generated (>=128 "
+                    "bits), shown once and never stored; kit and passphrase are meant to be kept "
+                    "apart; single-use 10-minute download link; stale-kit badge and alert after 7 "
+                    "days; only `emergency` items are included",
+         residual="Medium — physical custody of the passphrase is the household's responsibility "
+                   "(Shamir split is a deferred enhancement)", owner="Jason"),
+    dict(id="R-19", asset="Admin reachability during the emergency wait",
+         threat="The owner is travelling, offline, or has muted/lost their notification channel, so a "
+                "request is granted automatically before they can deny it (or, conversely, a real "
+                "emergency waits the full delay)",
+         likelihood="Medium", impact="Medium", inherent="Medium",
+         treatment="TASK-002: enabling requires a working channel (push device or SMTP) and a "
+                    "successful test within 24 h; reminders at 50 % and 90 % of the wait; a "
+                    "detection alerts when the admin has not signed in 24 h into a request; the wait "
+                    "length is the owner's choice (>= 24 h)",
+         residual="Medium — accepted trade-off of a time-delay design", owner="Jason"),
 ]
 
 
@@ -1833,13 +1901,31 @@ def _read_risk_register():
     try:
         reg = store.read_json_strict(RISK_REGISTER_FILE)
         if reg and reg.get("rows"):
+            # Additive migration (TASK-002): append any seeded risk whose ASSET this register has never
+            # had (the vault/emergency rows arrived after existing installs were seeded). Matches on
+            # asset text and takes the next free R-number, so a row the user added by hand can never be
+            # collided with or overwritten; existing rows and closures are never touched.
+            have = {r.get("asset") for r in reg["rows"]}
+            nxt = max(int(reg.get("next_number") or 0),
+                      max(int(str(r.get("id", "R-0")).split("-")[1]) for r in reg["rows"]) + 1)
+            add = []
+            for r in _RISK_REGISTER_SEED:
+                if r["asset"] in have:
+                    continue
+                add.append(dict(r, id=f"R-{nxt}", status="open", closed_reason=None, closed_date=None,
+                                created="2026-10-19", updated="2026-10-19"))
+                nxt += 1
+            if add:
+                reg["rows"].extend(add)
+                reg["next_number"] = nxt
+                store.write_json(RISK_REGISTER_FILE, reg)
             return reg
     except Exception:
         pass
     seeded = {"rows": [dict(r, status="open", closed_reason=None, closed_date=None,
                              created="2026-06-23", updated="2026-07-27")
                        for r in _RISK_REGISTER_SEED],
-              "next_number": 15}
+              "next_number": 20}
     store.write_json(RISK_REGISTER_FILE, seeded)
     return seeded
 
@@ -4795,6 +4881,20 @@ def _alerts_digest():
                     f"{label}: last reviewed {row['last_reviewed']} ({row['years_since']}y ago, "
                     f"cadence is {row['cadence_years']}y) — due for a look, sooner if a life "
                     "event happened since (marriage, divorce, birth, death, move).", "PLAN → CONTINUITY")
+    except Exception:
+        pass
+
+    # TASK-002: emergency kit staleness + an open emergency request (visible from the cockpit)
+    try:
+        _ks = kit.stale_alert()
+        if _ks:
+            add("warn", "Emergency kit", _ks + " — generate a fresh kit", "PLAN → VAULT")
+        _er = emergency.open_request()
+        if _er and _er["status"] == "pending":
+            add("action", "Emergency access",
+                f"An emergency-access request is pending and will be granted automatically unless you deny it "
+                f"(by {time.strftime('%Y-%m-%d %H:%M', time.localtime(_er['requested_at'] + _er['wait_seconds']))})",
+                "SETTINGS → IAM → EMERGENCY ACCESS")
     except Exception:
         pass
 
@@ -10272,8 +10372,32 @@ def get_secrets_key_status(request: Request):
 
 
 # TASK-001: encrypted document vault. Tables live in store.db; blobs under VAULT_DIR.
-vault.init_db()
-vault_api.register(app)
+vault_api.register(app)       # (vault/emergency/kit tables are created right after store.init_db() above)
+
+
+def _kit_binder():
+    """Binder export for the Emergency Kit: contacts/executor/will location/estate-doc currency plus
+    the continuity account map. Never includes secrets or vault content."""
+    icfg = _read_insurance_cfg()
+    out = {"contacts": icfg.get("contacts") or [], "executor_name": icfg.get("executor_name"),
+           "will_location": icfg.get("will_location"), "estate_docs": icfg.get("estate_docs") or []}
+    try:
+        c = get_continuity()
+        if isinstance(c, dict):
+            out["accounts"] = c.get("account_map") or c.get("accounts") or []
+            out["checklist"] = c.get("checklist") or []
+    except Exception:
+        pass
+    return out
+
+
+emergency_api.register(app, _kit_binder)
+emergency.start_emergency_thread()   # TASK-002: 15-min state-machine tick (grant/expire/remind); inert unless enabled
+if emergency.is_test_mode():
+    print("[emergency] *** EMERGENCY_ALLOW_SHORT_WAIT=1 — TEST MODE: wait floor, cool-down and notification "
+          "gate are BYPASSED. Never run a real deployment like this. ***", flush=True)
+    audit.emit("emergency.test_mode_active", outcome="denied", resource="startup",
+               detail={"warning": "EMERGENCY_ALLOW_SHORT_WAIT=1"})
 
 
 @app.post("/api/secrets/rotate-key")

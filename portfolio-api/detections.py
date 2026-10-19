@@ -48,6 +48,9 @@ FAILED_LOGIN_BURST_THRESHOLD = int(os.environ.get("FAILED_LOGIN_BURST_THRESHOLD"
 FAILED_LOGIN_BURST_WINDOW_MIN = int(os.environ.get("FAILED_LOGIN_BURST_WINDOW_MIN", "10"))
 MFA_DISABLE_ALERT_WINDOW_MIN = int(os.environ.get("MFA_DISABLE_ALERT_WINDOW_MIN", "30"))
 DETECTIONS_INTERVAL_S = int(os.environ.get("DETECTIONS_INTERVAL_S", "300"))
+EMERGENCY_BULK_THRESHOLD = int(os.environ.get("EMERGENCY_BULK_THRESHOLD", "5"))
+EMERGENCY_BULK_WINDOW_MIN = int(os.environ.get("EMERGENCY_BULK_WINDOW_MIN", "10"))
+EMERGENCY_SILENT_AFTER_H = float(os.environ.get("EMERGENCY_SILENT_AFTER_H", "24"))
 
 # Event types rule 3 treats as "a sensitive change" following an MFA disable.
 _SENSITIVE_CHANGE_TYPES = {
@@ -66,6 +69,12 @@ RULES = (
     {"id": "mfa_disable_then_change", "label": "MFA disabled, then a sensitive change",
      "desc": f"MFA disabled, followed within {MFA_DISABLE_ALERT_WINDOW_MIN} minutes by a secret/"
              f"config/account change from the same actor -- the classic account-takeover sequence."},
+    {"id": "emergency_request_pending_no_admin_activity", "label": "Emergency request open, admin silent",
+     "desc": "An emergency-access request has been open for 24+ hours and the admin has not signed in since "
+             "it was made (the admin may be unreachable -- the request will be granted automatically)."},
+    {"id": "emergency_bulk_download", "label": "Bulk download of emergency documents",
+     "desc": f"A non-admin downloaded more than {EMERGENCY_BULK_THRESHOLD} emergency-visibility documents "
+             f"within {EMERGENCY_BULK_WINDOW_MIN} minutes."},
 )
 
 
@@ -165,12 +174,67 @@ def _check_mfa_disable_then_change():
     return alerts
 
 
+def _iso_from_epoch(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _check_emergency_request_pending_no_admin_activity():
+    """TASK-002: a request has been open >= EMERGENCY_SILENT_AFTER_H hours and no admin login has
+    happened since it was made -- tells reviewers the admin has been silent while a grant approaches."""
+    import emergency, auth
+    req = emergency.open_request()
+    if not req or req["status"] != "pending":
+        return []
+    if emergency._now() < req["requested_at"] + EMERGENCY_SILENT_AFTER_H * 3600:
+        return []
+    admin = next((u for u in auth.list_users() if u.get("role") == "admin"), None)
+    if not admin:
+        return []
+    since = _iso_from_epoch(req["requested_at"])
+    if any(e["actor"] == admin["id"] for e in
+           audit.query_core(event_type="auth.login.success", since_ts=since, limit=2000)):
+        return []
+    key = f"detection:emergency_request_pending_no_admin_activity:{req['id']}"
+    if _already_alerted(key, "0000-01-01T00:00:00.000000Z"):
+        return []
+    audit.emit("detection.alert", outcome="denied", resource=key,
+               detail={"rule": "emergency_request_pending_no_admin_activity", "request_id": req["id"],
+                       "requested_at": req["requested_at"], "grants_at": req["requested_at"] + req["wait_seconds"],
+                       "hours_open": round((emergency._now() - req["requested_at"]) / 3600, 1)})
+    return [key]
+
+
+def _check_emergency_bulk_download():
+    import auth
+    window_ts = _minutes_ago_iso(EMERGENCY_BULK_WINDOW_MIN)
+    rows = audit.query_core(event_type="vault.download", resource_prefix="/api/vault/emergency-items/",
+                            since_ts=window_ts, limit=5000)
+    admins = {u["id"] for u in auth.list_users() if u.get("role") == "admin"}
+    by_actor = {}
+    for r in rows:
+        if r["actor"] and r["actor"] not in admins:
+            by_actor.setdefault(r["actor"], []).append(r)
+    alerts = []
+    for actor, hits in by_actor.items():
+        if len(hits) <= EMERGENCY_BULK_THRESHOLD:
+            continue
+        key = f"detection:emergency_bulk_download:{actor}"
+        if _already_alerted(key, window_ts):
+            continue
+        audit.emit("detection.alert", outcome="denied", actor=actor, actor_name=hits[0]["actor_name"],
+                   resource=key, detail={"rule": "emergency_bulk_download", "username": hits[0]["actor_name"],
+                                         "count": len(hits), "window_minutes": EMERGENCY_BULK_WINDOW_MIN})
+        alerts.append(key)
+    return alerts
+
+
 def run_detections():
     """Runs all rules once. Returns {"alerts_fired": [...resource_keys...], "rules_checked": n}.
     Never raises -- each rule is individually try/excepted so one broken rule can't block the
     others (mirrors audit.emit's own fail-safe contract)."""
     fired = []
-    for fn in (_check_failed_login_burst, _check_first_seen_ip, _check_mfa_disable_then_change):
+    for fn in (_check_failed_login_burst, _check_first_seen_ip, _check_mfa_disable_then_change,
+               _check_emergency_request_pending_no_admin_activity, _check_emergency_bulk_download):
         try:
             fired.extend(fn())
         except Exception as e:

@@ -125,3 +125,13 @@ Available containment actions, in the order they should typically be reached for
 *Companion controls: SEC-1/SEC-2 (audit log + tamper-evident chain), SEC-3 (key rotation), SEC-4
 (detections engine, this runbook's detect stage), SEC-5 (RBAC). See `RESUME-TRACKER.md` for build
 history and `SECURITY-CONTROLS-GAP-ANALYSIS.md` for the full control-mapping rationale.*
+
+## 7. Playbook: emergency access request (TASK-002)
+
+Applies when the notification "Emergency access requested by <name>" arrives, or the red banner shows in the dashboard.
+
+1. **Is it expected?** If you are unwell/absent and the designee is acting on your behalf, do nothing — it is granted automatically when the wait ends (or press APPROVE EARLY).
+2. **If it is NOT expected:** SETTINGS → IAM → EMERGENCY ACCESS → **DENY** immediately (it takes effect on the next request). Then treat the designee's account as possibly compromised: ask them to change their password, review SETTINGS → SECURITY → SECURITY AUDIT LOG for `auth.login.*` and `emergency.*` events, and consider disabling emergency access until resolved.
+3. **If a grant already happened** (`emergency.granted`): press **REVOKE** (view grants end on the next request). Review `vault.download` events for the emergency-items resource to see what was opened. A TAKEOVER grant cannot be revoked — the admin role has moved; use the new admin account to transfer it back, rotate the encryption key (SETTINGS → SECURITY), and change any secrets stored in SETTINGS → SECRETS.
+4. **Detections:** `emergency_request_pending_no_admin_activity` means you have been silent 24 h+ into a request; `emergency_bulk_download` means the designee pulled many emergency documents quickly.
+5. **Lost/stolen Emergency Kit or passphrase:** regenerate the kit (a new passphrase and file; the old file stays decryptable by whoever has the old passphrase, so also move sensitive documents out of the `emergency` visibility if the leak is serious).
