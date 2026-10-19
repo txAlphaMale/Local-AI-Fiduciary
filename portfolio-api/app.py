@@ -5418,9 +5418,10 @@ def get_research(ticker: str):
         g = _grounded(t)
         val = _valuation(t) or {}
         fund = edgar.fundamentals(t)
-        news, news_meta = _news(t, t, with_meta=True)
-        llm = _llm(t, t, None, None, g, news, fund, val)
-        llm = _verify_and_apply(t, t, llm, g, news, fund, val, force=True)   # on-demand → always verify
+        nm, _ = _company_identity(t, t, fund)
+        news, news_meta = _news(t, nm, with_meta=True)
+        llm = _llm(t, nm, None, None, g, news, fund, val)
+        llm = _verify_and_apply(t, nm, llm, g, news, fund, val, force=True)   # on-demand → always verify
         ins = inst = None
         try:
             ins = _insider_signal(t)   # G15 context-only insider read (cached ~6h)
@@ -6185,7 +6186,47 @@ def _reverse_dcf(valuation, fundamentals):
                     "compare implied vs actual growth to judge how demanding the price is. Not advice."}
 
 
+_NAME_JUNK_RE = re.compile(r"\s+(isin|sedol|cusip|figi)\b.*$", re.I)
+_NAME_STOP = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "plc", "llc",
+              "lp", "the", "de", "nv", "sa", "ag", "holdings", "holding", "group", "new"}
+
+
+def _clean_name(n):
+    """Strip brokerage/aggregator identifier junk (' Isin CA92... Sedol BL9...') and SEC state
+    suffixes ('/DE', '/NEW/') so a company name reads as a name."""
+    n = _NAME_JUNK_RE.sub("", (n or "").strip())
+    return re.sub(r"\s*/[A-Za-z]{1,5}/?$", "", n).strip()
+
+
+def _name_tokens(n):
+    return {w for w in re.findall(r"[a-z0-9]+", (n or "").lower()) if w not in _NAME_STOP}
+
+
+def _company_identity(sym, name, fund):
+    """(display_name, note) for the LLM prompt/news query. The holdings source's security name can
+    be WRONG for a reused ticker (Monarch listed VOYG as 'Voyager Digital Ltd' -- the old Canadian
+    crypto broker -- while the SEC registrant for VOYG is Voyager Technologies, a space company),
+    and the on-demand path used to pass the bare ticker, leaving the model to guess from memory.
+    The SEC entity name is keyed by the ticker->CIK lookup the fundamentals already use, so it is
+    authoritative when present; the holdings name is only a fallback, and a disagreement is flagged
+    to the model instead of silently picking a side."""
+    held = _clean_name(name)
+    if held.upper() == (sym or "").upper():
+        held = ""
+    sec = _clean_name((fund or {}).get("entity")) if (fund or {}).get("available") else ""
+    if not sec:
+        return (held or sym), ""
+    a, b = _name_tokens(sec), _name_tokens(held)
+    if held and a and b and not (a <= b or b <= a):
+        return sec, (f"IDENTITY: {sym} is {sec} (the SEC registrant for this ticker). The holdings record "
+                     f"labels it '{held}', which is a DIFFERENT company that may have shared or reused "
+                     f"this symbol -- do NOT use that company's business, news or history; describe "
+                     f"{sec} only, using the data below.\n")
+    return sec, ""
+
+
 def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuation=None):
+    name, _identity_note = _company_identity(sym, name, fundamentals)
     fund_avail = bool(fundamentals and fundamentals.get("available"))
     fund_txt = "not available (foreign listing, fund/ETF, or not SEC-registered)"
     if fund_avail:
@@ -6231,6 +6272,7 @@ def _llm(sym, name, weight, gain_pct, grounded, news, fundamentals=None, valuati
         "foreign listings), or the signals CONFLICT so sharply that no call is well-supported.\n"
         "Do NOT default to low when the data is actually rich — EARN 'high' when the evidence lines up, 'med' is "
         "the normal case for a well-covered stock with mixed signals. Reserve 'low' for genuinely thin/conflicting data.\n"
+        f"{_identity_note}"
         f"{calib_block}"
         "Analyze fundamentals with a GAAP lens: liquidity (current/quick), profitability (gross/operating/net "
         "margins, ROE/ROA, revenue growth and the multi-year trend), solvency (debt-to-equity/assets, interest "
@@ -6470,11 +6512,12 @@ def _do_analysis(limit, tickers=None):
                 store.write_json(ANALYSIS_FILE, out)
                 continue
             g, g_meta = _grounded(c["ticker"], with_meta=True)
-            news, news_meta = _news(c["ticker"], c["name"], with_meta=True)
             fund = edgar.fundamentals(c["ticker"])
+            nm, _ = _company_identity(c["ticker"], c["name"], fund)   # SEC registrant beats a wrong holdings label
+            news, news_meta = _news(c["ticker"], nm, with_meta=True)
             val, val_meta = _valuation(c["ticker"], with_meta=True)
             llm = _llm(c["ticker"], c["name"], c.get("weight_pct"), c.get("gain_pct"), g, news, fund, val)
-            llm = _verify_and_apply(c["ticker"], c["name"], llm, g, news, fund, val)  # Buy/Sell only (not Holds)
+            llm = _verify_and_apply(c["ticker"], nm, llm, g, news, fund, val)  # Buy/Sell only (not Holds)
             # 2026-08-06: carry the same "data as of" provenance the on-demand /api/research path
             # has always recorded (see get_research) onto the DAILY briefs too. Until now
             # _do_analysis called _news() WITHOUT with_meta, so a stored brief had no way to say
@@ -6511,7 +6554,7 @@ def _do_analysis(limit, tickers=None):
                 _inst = _inst_for(c["ticker"])
             except Exception:
                 _inst = None      # never let a cache-shape surprise kill the whole nightly run
-            briefs[c["ticker"]] = {"name": c["name"], "grounded": g, "fundamentals": fund,
+            briefs[c["ticker"]] = {"name": nm, "grounded": g, "fundamentals": fund,
                                    "institutional": _inst,
                                    "cache_fetched_at": min(_times) if _times else None,
                                    "cache_stale": bool(_dated),
