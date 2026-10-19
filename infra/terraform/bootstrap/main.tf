@@ -23,6 +23,11 @@ variable "region" {
 data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket" "tfstate" {
+  # Server access logging for this bucket IS enabled -- by persistent/ (aws_s3_bucket_logging.sources,
+  # target fiduciary-demo-logs-<account>/s3/tfstate/), because the log bucket lives there and this
+  # stack is applied first on local state. Checkov scans each stack's resources separately and
+  # can't see that cross-stack link, hence the skip.
+  #checkov:skip=CKV_AWS_18:Access logging is configured from persistent/ (aws_s3_bucket_logging.sources); cross-stack, not visible to Checkov.
   bucket = "fiduciary-demo-tfstate-${data.aws_caller_identity.current.account_id}"
   lifecycle { prevent_destroy = true }
 }

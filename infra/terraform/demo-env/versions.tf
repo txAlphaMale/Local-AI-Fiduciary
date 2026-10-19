@@ -36,6 +36,12 @@ data "aws_iam_role" "backup" {
   name = "fiduciary-demo-backup-role"
 }
 
+# Log bucket from persistent/. Reading it here also fails the plan early, with a clear error, if
+# persistent/ hasn't been applied yet (rather than failing mid-apply on the ALB).
+data "aws_s3_bucket" "logs" {
+  bucket = "fiduciary-demo-logs-${data.aws_caller_identity.current.account_id}"
+}
+
 data "aws_ecr_repository" "portfolio_api" {
   name = "fiduciary/portfolio-api-demo"
 }

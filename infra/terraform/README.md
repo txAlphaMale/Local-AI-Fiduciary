@@ -9,7 +9,7 @@ exists. Terraform now owns how each piece is built.
 | Stack | State | Lifecycle | Contents |
 |---|---|---|---|
 | `bootstrap/` | local | once per account | S3 bucket for remote state (versioned, encrypted, TLS-only) |
-| `persistent/` | S3 `persistent/` | never destroyed in normal use | backup bucket, backup IAM role (trust only), Route 53 zone, both ECR repos |
+| `persistent/` | S3 `persistent/` | never destroyed in normal use | access-log bucket, backup bucket, backup IAM role (trust only), Route 53 zone, both ECR repos |
 | `demo-env/` | S3 `demo-env/` | `apply` on resume, `destroy` on pause | VPC/NAT/SGs, EFS, IAM, ACM, ALB, DNS record, WAF, ECS cluster/task defs/service, all 3 schedules |
 
 **Wrappers.** These handle the steps Terraform is not suited to. They are in `scripts/aws-demo/`:
@@ -140,6 +140,45 @@ image. Use it only to restart (for example, to pick up a rotated SSM secret).
 cluster exists. For this one-service, one-task cluster I'd estimate a few dollars a month. That is
 an estimate, not a quote: confirm against CloudWatch pricing. Set it to `false` to remove the cost;
 the cluster setting changes in place.
+
+
+## Logging
+
+All access logs go to one bucket in `persistent/`, `fiduciary-demo-logs-<account>`, so they survive
+`down.sh`. It is versioned, SSE-S3 (the only encryption both log types support), blocks all public
+access, denies non-TLS requests, and accepts writes only from the two AWS log-delivery services, each
+restricted to its own prefix and to this account.
+
+| Log | Source | Lands under | Delay |
+|---|---|---|---|
+| ALB access logs | `aws_lb.main` (demo-env) | `alb/AWSLogs/<account>/elasticloadbalancing/us-east-1/YYYY/MM/DD/` | Every 5 minutes, while the ALB exists |
+| S3 server access logs | tfstate bucket | `s3/tfstate/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours |
+| S3 server access logs | backups bucket | `s3/backups/<account>/us-east-1/<bucket>/YYYY/MM/DD/` | Best effort, usually within a few hours |
+
+- **Retention:** `log_retention_days` in `persistent/`, default 90. The noncurrent copy that
+  versioning keeps is removed 7 days later. Incomplete uploads are aborted after 7 days.
+- **Not logged:** the log bucket itself. This is deliberate, to avoid a delivery loop
+  (CKV_AWS_18 is skipped for it, with a justification). WAF logs and VPC flow logs are a later step.
+- **Ordering:** `bootstrap`, then `persistent`, then `demo-env`.
+  - The tfstate bucket's logging is configured from `persistent/`, so `bootstrap` is unchanged.
+    Accesses to the tfstate bucket before the first `persistent` apply are not logged.
+  - `demo-env` reads the log bucket with a data source, so its plan fails early if `persistent`
+    hasn't been applied.
+  - The ALB writes a test file at creation and fails with Access Denied if the bucket policy is missing.
+- **Check that logs are arriving:**
+
+  ```bash
+  B=fiduciary-demo-logs-$(aws sts get-caller-identity --query Account --output text)
+  aws s3 ls s3://$B/alb/ --recursive | tail -5   # ELBAccessLogTestFile right after apply; .log.gz within ~5 min of traffic
+  aws s3 ls s3://$B/s3/ --recursive | tail -5    # S3 server access logs: allow a few hours
+  aws elbv2 describe-load-balancer-attributes --load-balancer-arn \
+    $(aws elbv2 describe-load-balancers --names fiduciary-demo-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text) \
+    --query "Attributes[?starts_with(Key,'access_logs')]"
+  ```
+
+- **Cost:** neither the ALB nor S3 charges for delivering these logs. You pay only S3 storage for
+  the log files (S3 Standard, about $0.023/GB-month in us-east-1), plus your own reads. For a
+  low-traffic demo that is typically cents a month. The 90-day expiry caps the growth.
 
 ## Not managed (yet)
 

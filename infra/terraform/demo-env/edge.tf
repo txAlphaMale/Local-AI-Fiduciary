@@ -64,6 +64,18 @@ resource "aws_lb" "main" {
   # step that matters more here than usual, since the app trusts X-Forwarded-For (TRUST_PROXY_HEADERS=1).
   drop_invalid_header_fields = true
   enable_deletion_protection = false # torn down on purpose every pause cycle
+
+  # CKV_AWS_91. Lands in s3://fiduciary-demo-logs-<account>/alb/AWSLogs/<account>/elasticloadbalancing/...
+  # ORDERING: the log bucket's policy (persistent/) must already grant
+  # logdelivery.elasticloadbalancing.amazonaws.com, because enabling logs makes ELB write an
+  # ELBAccessLogTestFile and the create/modify call fails with Access Denied if it can't.
+  # persistent/ is always applied before demo-env, so this holds; the data source above only proves
+  # the bucket exists, not the policy.
+  access_logs {
+    bucket  = data.aws_s3_bucket.logs.id
+    prefix  = "alb"
+    enabled = true
+  }
 }
 
 resource "aws_lb_listener" "https" {

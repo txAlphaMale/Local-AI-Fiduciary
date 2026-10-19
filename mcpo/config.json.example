@@ -7,7 +7,7 @@
     },
     "tavily": {
       "command": "uvx",
-      "args": ["--from", "mcp-tavily", "python", "-m", "mcp_server_tavily"]
+      "args": ["--from", "mcp-tavily", "--with", "mcp<2", "python", "-m", "mcp_server_tavily"]
     },
     "monarch": {
       "command": "uvx",

@@ -14,6 +14,16 @@ variable "scheduled_backup_retention_days" {
   default     = 30
 }
 
+variable "log_retention_days" {
+  description = "Days to keep ALB and S3 server access logs in the log bucket."
+  type        = number
+  default     = 90
+  validation {
+    condition     = var.log_retention_days >= 1
+    error_message = "log_retention_days must be at least 1."
+  }
+}
+
 variable "ecr_keep_images" {
   type    = number
   default = 10
