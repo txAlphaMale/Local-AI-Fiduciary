@@ -7934,8 +7934,11 @@ def _whatif_liabilities():
     only mortgages that still carry a balance, so a paid-off old mortgage left in the feed no
     longer blocks the household mortgage facts from attaching to the live one.
 
-    Also left out: accounts with a KNOWN 0% APR and no payment on file — nothing to save or shorten
-    (2026-10-19, Jason). A 0% APR with a payment is kept (payoff time still matters)."""
+    Also left out (2026-10-19, Jason): ANY account with a KNOWN 0% APR — there is no interest to
+    save, and the tool exists to price paying a debt off faster (an earlier cut kept a 0% debt
+    that had a payment; Jason wanted those gone too) — and any account flagged PAID IN FULL (a
+    transactor card cleared every statement; its balance isn't real revolving debt). An UNKNOWN
+    APR stays: blank is not zero."""
     d = _data()
     cfg = _read_insurance_cfg()
     rates = cfg.get("debt_rates") or {}
@@ -7965,15 +7968,13 @@ def _whatif_liabilities():
         missing = [k for k, v in (("balance", bal), ("apr", rate), ("payment", pay)) if v in (None, "")]
         if pay == 0:
             missing.append("payment")
-        # A 0% APR with no payment on file (a zeroed promo card, an Apple Card statement balance)
-        # has nothing to optimise — no interest to save and no schedule to shorten (2026-10-19,
-        # Jason). A 0% debt WITH a payment stays: payoff-time is still a valid question. An
-        # UNKNOWN apr (None) stays too — blank is not zero.
+        # Known 0% APR (with or without a payment) and PAID-IN-FULL accounts have nothing to
+        # optimise here. An UNKNOWN apr (None/"") stays — blank is not zero.
         try:
             zero_apr = rate is not None and rate != "" and float(rate) == 0.0
         except (TypeError, ValueError):
             zero_apr = False
-        if zero_apr and not pay:
+        if zero_apr or pif.get(nm):
             continue
         out.append({"name": nm, "institution": a.get("institution"), "type": a.get("type"),
                     "balance": round(bal, 2) if bal is not None else None, "apr": rate, "apr_source": rate_src if rate is not None else None,

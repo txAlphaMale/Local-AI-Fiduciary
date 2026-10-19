@@ -9155,7 +9155,7 @@ CALC_RENDER.npv_irr=(r,key)=>{
 };
 // ---- WHAT-IF · pick a real liability, then "what if I paid more?" ---------------------------
 CALC_SPECS.whatif={title:'WHAT-IF · PAY A DEBT OFF FASTER',
-  intro:'Pick one of your debts, then try a one-time payment, a bigger regular payment, or both. Press RUN to see how many payments (and how much interest) it saves. Balances come from your accounts; APR and payment come from the same per-account settings PLAN → CASH·DEBT uses — anything missing is asked for right here. Paid-off ($0) debts, and 0% debts with no payment on file, are not listed — there is nothing to save or shorten.',
+  intro:'Pick one of your debts, then try a one-time payment, a bigger regular payment, or both. Press RUN to see how many payments (and how much interest) it saves. Balances come from your accounts; APR and payment come from the same per-account settings PLAN → CASH·DEBT uses — anything missing is asked for right here. Paid-off ($0) debts, 0% APR debts, and accounts flagged PAID IN FULL are not listed — there is nothing to save or shorten.',
   groups:[
     {g:'THE DEBT',f:[
       {k:'balance',l:'Balance owed',u:'$',ph:'16000',req:1},
@@ -9220,7 +9220,7 @@ function whatifPanel(){
   row.appendChild(sel);
   const rl=el('span',null,'↻'); rl.title='Reload liabilities'; rl.style.cssText='cursor:pointer;color:var(--color-text-muted);';
   rl.onclick=()=>{ CALC_LIABS=null; _wiRepaint(); }; row.appendChild(rl);
-  if(!CALC_LIABS.length) row.appendChild(el('span','muted','No debts with a balance on file — use "Enter a debt by hand", or add them under HOLDINGS → LIABILITIES. (Paid-off $0 accounts are hidden.)'));
+  if(!CALC_LIABS.length) row.appendChild(el('span','muted','No debts with a balance on file — use "Enter a debt by hand", or add them under HOLDINGS → LIABILITIES. (Paid-off $0, 0% APR and PAID IN FULL accounts are hidden.)'));
   wrap.appendChild(row);
   let L=_wiSelected();
   if(CALC_WI_SEL && CALC_WI_SEL!=='__custom' && !L){ CALC_WI_SEL=''; _calcSave(); sel.value=''; }   // account renamed/removed
