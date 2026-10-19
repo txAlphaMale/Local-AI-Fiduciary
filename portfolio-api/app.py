@@ -57,6 +57,7 @@ import washsale    # GAP-4 (P1) — share-event ledger → wash-sale verdicts + 
 import benefits    # GAP-5 (P1) — 401k match/headroom, HSA, Roth IRA, mega-backdoor capacity (2026-grounded)
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
+import calculators  # CALCULATORS tab (2026-10-19) — mortgage TCO, loans, land, DRIP, TVM, what-if, …
 import bizacq       # small-business acquisition underwriter (G11) — SDE mult/DSCR/CoC/QSBS/after-tax IRR
 import mcblock      # block-bootstrap MC draw mode (Part-4) — real historical return sequences
 import insider      # SEC Form 4 insider-transaction signal (G15) — context-only net open-market buy/sell
@@ -689,6 +690,11 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # delete the ADMIN's chat history too, a materially bigger permission than "use chat". Revisit
     # if/when chat sessions ever get a per-account owner column.
     "/api/chat", "/api/chat/cancel",
+    # CALCULATORS (2026-10-19): POST only because the inputs are a JSON body. The handler is pure
+    # arithmetic (calculators.run) — it reads no household data and writes nothing — so it is a
+    # read in every sense that matters; a viewer can already see every figure these use. The
+    # What-If panel's optional "save to account" uses /api/account-registry, which stays denied.
+    "/api/calc",
 }
 
 
@@ -7602,6 +7608,82 @@ def get_cashdebt():
     return res
 
 
+# ============ CALCULATORS tab (2026-10-19, Jason) — calculators.py ============
+# The math lives in calculators.py (pure, unit-tested in test_calculators.py). These two routes are
+# the only app-side glue: one generic compute endpoint, and the liability list the WHAT-IF panel
+# prefills from. Nothing here writes; saving a missing APR/payment back goes through the existing
+# /api/account-registry so the CASH·DEBT desk, SETTINGS→ACCOUNTS and WHAT-IF can never disagree.
+@app.post("/api/calc")
+async def post_calc(req: Request):
+    """Body: {"calculator": name, "inputs": {...}, "schedule": bool (default true)}.
+    Always 200 with either the result or {"error", "missing"?} — a half-filled form is normal
+    while someone is typing, not a server error."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Body must be JSON."}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Body must be a JSON object."}, status_code=400)
+    return calculators.run(body.get("calculator"), body.get("inputs") or {},
+                           include_schedule=body.get("schedule", True) is not False)
+
+
+@app.get("/api/calc/catalog")
+def get_calc_catalog():
+    return {"calculators": [{"key": k, "title": t} for k, (_f, t) in calculators.CALCULATORS.items()]}
+
+
+def _whatif_liabilities():
+    """Every liability the household has (feed-synced AND manual), with the three facts the
+    WHAT-IF needs — balance, APR, payment — and where each one came from. Mortgages are included
+    here (unlike the avalanche): "what if I paid $200 more on the mortgage" is the single most
+    common version of the question.
+
+    APR/payment resolve per account first (debt_rates / debt_min_payments, the same keys the
+    registry edits); a mortgage falls back to the household mortgage_rate_pct /
+    mortgage_payment_monthly from PLAN→CASH·DEBT only when exactly ONE mortgage exists — with two,
+    there's no way to know which one those facts describe, so they're reported missing instead of
+    attached to the wrong loan. Nothing is guessed: a blank stays blank and is listed in `missing`."""
+    d = _data()
+    cfg = _read_insurance_cfg()
+    rates = cfg.get("debt_rates") or {}
+    mins = cfg.get("debt_min_payments") or {}
+    pif = cfg.get("pay_in_full_overrides") or {}
+    mort_ov = cfg.get("is_mortgage_overrides") or {}
+    accts = [a for a in (d.get("accounts") or []) if a.get("is_asset") is False]
+    n_mort = sum(1 for a in accts if _is_mortgage_account(a, mort_ov))
+    out = []
+    for a in accts:
+        nm = a.get("name") or "?"
+        is_m = _is_mortgage_account(a, mort_ov)
+        rate, rate_src = rates.get(nm), "account"
+        pay, pay_src = mins.get(nm), "account"
+        if is_m and n_mort == 1:
+            if rate is None and cfg.get("mortgage_rate_pct") is not None:
+                rate, rate_src = cfg.get("mortgage_rate_pct"), "plan_cashdebt_mortgage"
+            if pay in (None, 0) and cfg.get("mortgage_payment_monthly"):
+                pay, pay_src = cfg.get("mortgage_payment_monthly"), "plan_cashdebt_mortgage"
+        bal = abs(a.get("balance") or 0)
+        missing = [k for k, v in (("apr", rate), ("payment", pay)) if v in (None, "")]
+        if pay == 0:
+            missing.append("payment")
+        out.append({"name": nm, "institution": a.get("institution"), "type": a.get("type"),
+                    "balance": round(bal, 2), "apr": rate, "apr_source": rate_src if rate is not None else None,
+                    "payment": pay, "payment_source": pay_src if pay else None,
+                    "is_mortgage": is_m, "pay_in_full": bool(pif.get(nm)),
+                    "manual": bool(a.get("manual")), "missing": sorted(set(missing))})
+    out.sort(key=lambda x: (not x["is_mortgage"], -(x["balance"] or 0)))
+    return out
+
+
+@app.get("/api/calc/liabilities")
+def get_calc_liabilities():
+    try:
+        return {"liabilities": _whatif_liabilities()}
+    except Exception as e:
+        return {"liabilities": [], "error": f"Couldn't load liabilities: {e}"}
+
+
 # ============ P0-3: insurance & risk-transfer (insurance.py) ============
 # Household facts the feeds can't see (incomes, children, in-force policies) live in a
 # local JSON register; the balance-sheet side (net worth, liabilities, home, mortgage)
@@ -13087,6 +13169,11 @@ FIDUCIARY_PROMPT = (
     "list_compliance_docs / get_compliance_doc (the Risk Register, Statement of Applicability, IR "
     "Runbook, Privacy Notice, Retention Schedule, ROPA, DPIA), NOT search_knowledge (that's external "
     "tax/investing/estate reference material, a different corpus entirely). Cite the specific document.\n"
+    "ARITHMETIC: never compute loan payments, payoff timelines, interest saved, mortgage total cost, "
+    "future/present values, implied rates, DRIP projections, rent-vs-buy, or NPV/IRR in your head — call "
+    "run_calculator and quote its figures (it is the same engine as the CALCULATORS tab, so you can point "
+    "{user} there to explore further). For 'what if I paid $X extra on <my debt>', call get_liabilities "
+    "first for the real balance/APR/payment; if a fact is missing, ask for it rather than assuming one.\n"
     "Think in terms of the whole plan: tax location, IPS drift, concentration risk, retirement funding, "
     "the ACA cliff. Prefer trailing-twelve-month figures over a single fiscal year. DRIP: accounts carry "
     "a per-account DRIP flag; get_tax_audit shows the reinvested/cash dividend split and the TAXABLE "
@@ -13209,6 +13296,44 @@ FIDUCIARY_TOOLS = [
             "name": {"type": "string", "description": "Exact filename from list_compliance_docs, "
                                                         "e.g. \"RISK-REGISTER.md\"."}},
             "required": ["name"]}}},
+    # CALCULATORS (2026-10-19): deterministic financial math, so the model never does
+    # amortization/TVM arithmetic in its head. Same engine as the CALCULATORS tab.
+    {"type": "function", "function": {"name": "run_calculator",
+        "description": "Run one of the app's deterministic financial calculators and get exact "
+                       "figures — ALWAYS use this instead of doing loan/mortgage/savings/return math "
+                       "yourself. Rates are annual % (6.5 = 6.5%). calculator + its main inputs:\n"
+                       "mortgage: price, down_payment|down_pct, apr, term_years, property_tax_pct|"
+                       "property_tax_annual, insurance_annual, pmi_pct, hoa_monthly, maintenance_pct, "
+                       "closing_costs, extra, appreciation_pct, horizon_years (true total cost of ownership)\n"
+                       "loan: amount (or price/down_payment/trade_in/sales_tax_pct), apr, term_months|"
+                       "term_years, extra, origination_fee\n"
+                       "land_loan: price, down_pct, apr, amort_years, balloon_years, io_years, land_type "
+                       "(raw|unimproved|improved), property_tax_annual\n"
+                       "drip: initial_investment, share_price, dividend_yield_pct, price_growth_pct, "
+                       "dividend_growth_pct, years, monthly_contribution, frequency, tax_rate_pct\n"
+                       "tvm: give 4 of n, rate, pv, pmt, fv (omit the one to solve; signs: received +, "
+                       "paid −), periods_per_year, timing (end|begin)\n"
+                       "whatif: balance, apr, payment, extra, lump_sum, target_months\n"
+                       "rent_vs_buy: price, apr, rent_monthly, horizon_years, appreciation_pct, "
+                       "invest_return_pct\n"
+                       "affordability: annual_income, monthly_debts, down_payment, apr, property_tax_pct, "
+                       "insurance_annual\n"
+                       "points: loan_amount, apr_base, apr_points, points, hold_years\n"
+                       "yields: fed_rate_pct, state_rate_pct, taxable_yield, treasury_yield, "
+                       "muni_instate_yield, muni_outstate_yield, apr_pct|apy_pct\n"
+                       "inflation: amount, years, inflation_pct, nominal_return_pct\n"
+                       "lump_vs_annuity: lump_sum, payment, years, cola_pct, discount_rate_pct\n"
+                       "npv_irr: initial_investment, cash_flows (comma list), discount_rate_pct",
+        "parameters": {"type": "object", "properties": {
+            "calculator": {"type": "string", "enum": list(calculators.CALCULATORS)},
+            "inputs": {"type": "object", "description": "Field: value pairs for that calculator."}},
+            "required": ["calculator", "inputs"]}}},
+    {"type": "function", "function": {"name": "get_liabilities",
+        "description": "The user's REAL debts (including mortgages) with balance, APR and payment, and "
+                       "which of those facts are missing. Call this before a what-if payoff question "
+                       "about one of their actual debts, then pass the figures to run_calculator "
+                       "(calculator='whatif').",
+        "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
@@ -13256,6 +13381,11 @@ def _fiduciary_dispatch(name, args):
                                                max_results=int(args.get("max_results") or 5))}
         if name == "list_compliance_docs":     return list_compliance_docs()
         if name == "get_compliance_doc":       return _compliance_doc_data(str(args.get("name") or ""))
+        if name == "run_calculator":
+            # Schedules can be hundreds of rows; the model needs the summary, not every period.
+            return calculators.run(args.get("calculator"), args.get("inputs") or {},
+                                   include_schedule=False)
+        if name == "get_liabilities":          return {"liabilities": _whatif_liabilities()}
         return {"error": f"unknown tool {name}"}
     except Exception as e:
         return {"error": f"{name} failed: {e}"}

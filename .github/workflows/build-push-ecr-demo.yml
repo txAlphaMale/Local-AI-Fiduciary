@@ -20,6 +20,13 @@ name: Build & push demo image to ECR (manual, public demo path)
 #   - One ECR repository already created: fiduciary/portfolio-api-demo
 #     (aws ecr create-repository --repository-name fiduciary/portfolio-api-demo)
 #
+# IMMUTABLE TAGS (2026-10-16, CKV_AWS_51): fiduciary/portfolio-api-demo is now image_tag_mutability
+# IMMUTABLE (infra/terraform/persistent). Every run pushes exactly ONE unique tag (short SHA by
+# default) and never ":latest" -- re-pushing an existing tag is rejected by ECR. Consequence:
+# re-running this workflow on the same commit without a new image_tag input fails at the push step
+# (ImageTagAlreadyExistsException); that image already exists, so just deploy that tag.
+# Deploy = terraform -chdir=infra/terraform/demo-env apply -var image_tag=<tag> -var mcpo_image_tag=<current>
+#
 # Deliberately uses OIDC role assumption, not long-lived AWS access-key secrets — same reasoning as
 # build-push-ecr.yml.
 
@@ -27,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Tag to push (e.g. demo-2026-07-26). Defaults to the short commit SHA."
+        description: "Unique tag to push (e.g. demo-20261016). Defaults to the short commit SHA. Never 'latest'."
         required: false
         default: ""
 
@@ -47,12 +54,16 @@ jobs:
 
       - name: Resolve image tag
         id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
         run: |
-          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          TAG="$INPUT_TAG"
+          [ -n "$TAG" ] || TAG="$(git rev-parse --short HEAD)"
+          if [ "$TAG" = "latest" ] || ! echo "$TAG" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::image tag '$TAG' is invalid or 'latest' -- the ECR repo is immutable, use a unique tag"
+            exit 1
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -71,12 +82,11 @@ jobs:
         run: |
           # Built from the REPO ROOT (not ./portfolio-api), same as the guide's manual command --
           # Dockerfile.demo needs to reach both portfolio-api/ and compliance/.
+          # One unique tag only -- no :latest (repo is IMMUTABLE).
           docker build -f Dockerfile.demo \
                        -t "$REGISTRY/fiduciary/portfolio-api-demo:$TAG" \
-                       -t "$REGISTRY/fiduciary/portfolio-api-demo:latest" \
                        .
           docker push "$REGISTRY/fiduciary/portfolio-api-demo:$TAG"
-          docker push "$REGISTRY/fiduciary/portfolio-api-demo:latest"
 
       - name: Summary
         env:
@@ -87,4 +97,4 @@ jobs:
           echo "- $REGISTRY/fiduciary/portfolio-api-demo:$TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "mcpo-demo is NOT built by this workflow -- no committed Dockerfile for it yet, see AWS-DEMO-HOSTING-GUIDE.md section 7 for its manual build command." >> "$GITHUB_STEP_SUMMARY"
-          echo "This did NOT update the running ECS demo service. See AWS-DEMO-HOSTING-GUIDE.md's deploy step to roll it out." >> "$GITHUB_STEP_SUMMARY"
+          echo "This did NOT update the running ECS demo service. To roll it out: terraform -chdir=infra/terraform/demo-env apply -var image_tag=$TAG -var mcpo_image_tag=\$(terraform -chdir=infra/terraform/demo-env output -raw mcpo_image_tag)" >> "$GITHUB_STEP_SUMMARY"

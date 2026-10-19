@@ -11,6 +11,12 @@
 #   ./scripts/aws-demo/teardown.sh          # prompts for confirmation
 #   ./scripts/aws-demo/teardown.sh -y        # skips confirmation (for scripting/automation)
 #
+# LEGACY (2026-10-16): Terraform-managed environments use ./down.sh instead (backup + terraform
+# destroy of infra/terraform/demo-env). This script remains for the ONE-TIME migration teardown of
+# the CLI-built environment, run as:  KEEP_ECR=1 KEEP_SSM=1 ./teardown.sh
+#   KEEP_ECR=1  keep both ECR repos + images (adopted by infra/terraform/persistent via import)
+#   KEEP_SSM=1  keep the /fiduciary-demo/* secrets (now managed out-of-band by set-secrets.sh)
+#
 # Safe-ish to re-run: most deletions are guarded with existence checks first, so a second run
 # after a partial failure will just skip whatever's already gone rather than erroring out.
 
@@ -42,6 +48,9 @@ fi
 log "=== Step 2/3: deleting EventBridge schedules ==="
 aws scheduler delete-schedule --name fiduciary-demo-scale-up 2>/dev/null || log "  (scale-up schedule already gone)"
 aws scheduler delete-schedule --name fiduciary-demo-scale-down 2>/dev/null || log "  (scale-down schedule already gone)"
+# 2026-10-16 fix: the daily backup schedule (schedule-backup.sh, §14c) was never deleted here, so it
+# kept firing against a deleted cluster and blocked re-creating a schedule with the same name.
+aws scheduler delete-schedule --name fiduciary-demo-backup-daily 2>/dev/null || log "  (backup-daily schedule already gone)"
 
 log "=== Step 3/3: full resource teardown ==="
 
@@ -165,15 +174,24 @@ else
   log "  (VPC already gone)"
 fi
 
-log "Deleting CloudWatch log group + ECR repos..."
+log "Deleting CloudWatch log group..."
 aws logs delete-log-group --log-group-name /ecs/fiduciary-demo 2>/dev/null || true
-aws ecr delete-repository --repository-name fiduciary/portfolio-api-demo --force 2>/dev/null || true
-aws ecr delete-repository --repository-name fiduciary/mcpo-demo --force 2>/dev/null || true
+if [ "${KEEP_ECR:-0}" = "1" ]; then
+  log "KEEP_ECR=1 -- keeping both ECR repos and their images."
+else
+  log "Deleting ECR repos..."
+  aws ecr delete-repository --repository-name fiduciary/portfolio-api-demo --force 2>/dev/null || true
+  aws ecr delete-repository --repository-name fiduciary/mcpo-demo --force 2>/dev/null || true
+fi
 
-log "Deleting SSM parameters..."
-for p in MCPO_API_KEY SESSION_SECRET ANTHROPIC_API_KEY DEMO_ADMIN_PASSWORD FINNHUB_API_KEY TAVILY_API_KEY; do
-  aws ssm delete-parameter --name "/fiduciary-demo/$p" 2>/dev/null || true
-done
+if [ "${KEEP_SSM:-0}" = "1" ]; then
+  log "KEEP_SSM=1 -- keeping /fiduciary-demo/* SSM parameters."
+else
+  log "Deleting SSM parameters..."
+  for p in MCPO_API_KEY SESSION_SECRET ANTHROPIC_API_KEY DEMO_ADMIN_PASSWORD FINNHUB_API_KEY TAVILY_API_KEY; do
+    aws ssm delete-parameter --name "/fiduciary-demo/$p" 2>/dev/null || true
+  done
+fi
 
 log "Deleting IAM roles (exec/task/scheduler -- backup role is KEPT for next time)..."
 aws iam delete-role-policy --role-name fiduciary-demo-exec-role --policy-name ssm-read 2>/dev/null || true
@@ -184,6 +202,9 @@ aws iam delete-role --role-name fiduciary-demo-exec-role 2>/dev/null || true
 aws iam delete-role-policy --role-name fiduciary-demo-task-role --policy-name efs-access 2>/dev/null || true
 aws iam delete-role --role-name fiduciary-demo-task-role 2>/dev/null || true
 aws iam delete-role-policy --role-name fiduciary-demo-scheduler --policy-name scale-portfolio-api 2>/dev/null || true
+# 2026-10-16 fix: schedule-backup.sh adds a second inline policy; without removing it, delete-role
+# below failed silently (DeleteConflict) and the role lingered.
+aws iam delete-role-policy --role-name fiduciary-demo-scheduler --policy-name run-backup-task 2>/dev/null || true
 aws iam delete-role --role-name fiduciary-demo-scheduler 2>/dev/null || true
 
 log "=== Teardown complete ==="

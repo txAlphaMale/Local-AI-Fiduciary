@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# LEGACY (2026-10-16): superseded by infra/terraform/demo-env for Terraform-managed environments.
+# Kept for reference only -- running it against a Terraform-built stack creates drift.
 # schedule-backup.sh -- SEC-7a (Backup & Disaster Recovery), AWS demo deployment.
 #
 # WHAT THIS FIXES: backup.sh (this directory) is fully built and idempotent -- it creates the S3

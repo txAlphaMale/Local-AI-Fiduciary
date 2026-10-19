@@ -129,3 +129,18 @@ venv/
 Thumbs.db
 .idea/
 .vscode/
+
+# ---- Terraform (infra/terraform, 2026-10-16) ----
+# State can hold ARNs/IDs and anything sensitive that slips in; remote state lives in S3.
+# .terraform.lock.hcl IS committed (pins provider checksums).
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+infra/terraform/backend.hcl
+# Read-only live-config dumps from scripts/aws-demo/export-live-config.sh (account IDs, ARNs, IPs)
+infra/terraform/.live-snapshot/
+# NOTE: demo-env/waf.auto.tfvars.json is intentionally NOT ignored -- public scanner CIDRs + the
+# geo allow-list are the WAF's source of truth and need to be in the repo for plan/CI.

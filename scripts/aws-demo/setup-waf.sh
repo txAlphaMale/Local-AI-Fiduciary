@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# LEGACY (2026-10-16): superseded by infra/terraform/demo-env for Terraform-managed environments.
+# Kept for reference only -- running it against a Terraform-built stack creates drift.
 # setup-waf.sh -- AWS WAFv2 in front of the fiduciary-demo ALB: blocks known-malicious/scanner
 # traffic (e.g. Shodan) at the network edge, before it ever reaches the Fargate task.
 #

@@ -976,7 +976,7 @@ W('setup-guide','Getting started','First-time setup checklist',
   'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist. **The live checklist tracking your actual saved config is right below this entry** (2026-07-23 — moved here from a Dashboard card, per a user request to keep the Dashboard itself uncluttered) — a ✓/○ per field, a running "X of N done", and a GO → link that jumps straight to the panel that has it. A small "First-time setup: X of N done" chip + a 🎯 tour button also show on the Dashboard while anything is still outstanding. **Prefer a guided walkthrough instead?** Click 🎯 next to COCKPIT on any tab (or the button below) for a step-by-step tour that highlights each unfilled field directly, one panel at a time.');
 W('overview','Getting started','What this terminal is',
   'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
-  'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
+  'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Calculators, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
   'Start on the Dashboard for the at-a-glance picture, then follow a cockpit chip or a tab into the detail. Nothing here is advice — it is decision-support you verify with a professional.');
 W('not-advice','Getting started','Not advice — how to trust the numbers',
   'Every figure is computed locally from your data plus free/public APIs (SEC EDGAR, Finnhub, Tavily). The LLM-written briefs are opinions grounded in that data, not facts, and the tax/estate figures are educational models of current law.',
@@ -1373,6 +1373,10 @@ W('glossary-estate-benefits','Glossary','Estate, insurance & benefits — step-u
   'Use these before entering your own policy/plan facts, so a term like "ISR" or "DIME" doesn\'t block you from filling in the panel correctly. For the trust/POA/probate terms, treat this as prep for an attorney conversation, not a substitute for one — CHAT and this glossary explain the mechanics, they don\'t draft or replace the documents.');
 
 // A small clickable "?" that deep-links into a WIKI entry. Drop wikiLink('id') into any header.
+W('calculators','Planning','CALCULATORS tab (what-if payoff, mortgage true cost, loans, DRIP, TVM, …)',
+  'A bench of household-finance calculators in one top-level tab. WHAT-IF · MY DEBTS works on your real liabilities; the rest are general-purpose: MORTGAGE (true cost of ownership — principal, interest, property tax, insurance, PMI, HOA and upkeep, escalating yearly, plus the net cost after an eventual sale), LOAN (auto/personal/student, including trade-in, sales tax and the effective APR of an origination fee), LAND LOAN (balloon and interest-only terms, land-type down-payment guidance), TVM SOLVER (N, I/Y, PV, PMT, FV — leave one blank and it is solved), DRIP (dividend-reinvestment projection vs taking cash), RENT vs BUY, AFFORDABILITY (28/36), POINTS break-even, YIELDS (after-tax and taxable-equivalent yield across CDs, Treasuries and munis, plus APR↔APY), INFLATION and real return, LUMP SUM vs ANNUITY, and NPV/IRR. All math runs server-side in calculators.py — the same engine the Fiduciary chat calls (run_calculator), so the chat and this tab always agree.',
+  'Results update as you type (WHAT-IF waits for the RUN button). Inputs marked * are required; ⓘ explains a field. Growth-rate assumptions are pre-filled and editable — they are assumptions, not forecasts. Nothing is guessed silently: a missing APR is never treated as 0%, and a >80% LTV mortgage without a PMI rate is flagged rather than estimated. TVM signs follow financial-calculator convention: money you receive is +, money you pay out is −; if you enter PV and PMT with the same sign while solving N or I/Y, it flips PMT for you and says so. In WHAT-IF, an account missing its APR or payment shows just those fields; SAVE TO ACCOUNT writes them to the same per-account settings PLAN → CASH·DEBT and SETTINGS → ACCOUNTS use, so the three never disagree. Your inputs are remembered in this browser only.',
+  'Use WHAT-IF before deciding where an extra dollar goes: compare its interest saved (a guaranteed return equal to the APR) with the payoff-vs-invest hurdle on PLAN → CASH·DEBT. Use MORTGAGE before buying to see the full lifetime cash out, not just the payment. Use TVM for any "how long / how much / what rate" question. These are arithmetic models — each result lists what it ignores (taxes, deductions, rate changes); confirm big decisions with a professional.');
 function wikiLink(id){
   const a=el('span',null,'?');
   a.title='What is this? (opens the Wiki)';
@@ -1539,6 +1543,7 @@ function render(){
   // Always available, independent of DATA/provider health (2026-07-24) — this is the escape
   // hatch when Monarch/mcpo/SnapTrade is down, and the only in-app path for a no-brokerage-
   // account CSV user, so it must never be gated behind a successful portfolio load.
+  tabSpecsRaw.push(['calculators','CALCULATORS']);   // 2026-10-19 — pure math + the household's own liabilities; never gated on data health
   tabSpecsRaw.push(['holdings', HOLDCSV && HOLDCSV.active_provider==='csv' ? 'HOLDINGS' : 'HOLDINGS (csv)']);
   tabSpecsRaw.push(['chat','CHAT']);   // Fiduciary / Strategist chat — always available (Phase 4, replaces OWUI)
   tabSpecsRaw.push(['wiki','WIKI']);   // in-app help — always available (rightmost)
@@ -1620,6 +1625,7 @@ function render(){
   else if(TAB==='plan' && havePlan){ tc.appendChild(planContent(RETIRE)); }
   else if(TAB==='strategist' && haveStrat){ tc.appendChild(stratContent(STRAT)); }
   else if(TAB==='holdings'){ tc.appendChild(holdingsContent()); }
+  else if(TAB==='calculators'){ tc.appendChild(calculatorsContent()); }
   else if(TAB==='chat'){ tc.appendChild(chatContent()); }
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
@@ -8107,6 +8113,801 @@ function chatContent(){
   wrap.appendChild(main);
   setTimeout(chatScroll,0);
   return wrap;
+}
+
+// ============================================================================
+// CALCULATORS tab (2026-10-19, Jason) — a household-fiduciary calculator bench.
+// All math is server-side in calculators.py (unit-tested, and the SAME engine the Fiduciary chat
+// calls through its run_calculator tool), reached through one endpoint: POST /api/calc
+// {calculator, inputs}. This block is only forms + result rendering.
+//
+// State: CALC_IN[key] holds each calculator's raw field strings, mirrored to localStorage
+// (per-browser convenience — inputs survive a reload; nothing here is household data of record).
+// CALC_OUT[key] is the last result. Typing recalculates after a short debounce and repaints ONLY
+// that calculator's result box (never a full render(), which would steal focus mid-keystroke).
+// The 5-min background poll already skips while an input is focused (userBusy()), and every
+// form is rebuilt from CALC_IN, so a later full render() loses nothing.
+//
+// WHAT-IF is the exception to auto-recalc: Jason's spec is "click a button to see the delta",
+// and a debt's payoff picture shouldn't flicker while someone is still typing an amount.
+// ============================================================================
+let CALC_IN={}, CALC_OUT={}, CALC_SEQ={}, CALC_TIMERS={}, CALC_SCHED={};
+let CALC_LIABS=null, CALC_LIABS_ERR=null, CALC_LIABS_LOADING=false, CALC_WI_SEL='', CALC_WI_EDIT=false, CALC_WI_MSG=null;
+try{ CALC_IN=JSON.parse(localStorage.getItem('fidCalcIn')||'{}')||{}; }catch(_){ CALC_IN={}; }
+try{ CALC_WI_SEL=localStorage.getItem('fidCalcWiSel')||''; }catch(_){ CALC_WI_SEL=''; }
+function _calcSave(){ try{ localStorage.setItem('fidCalcIn', JSON.stringify(CALC_IN)); localStorage.setItem('fidCalcWiSel', CALC_WI_SEL||''); }catch(_){} }
+const _cE=s=>(s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// d must be a number: these are also handed to _cTable as column formatters, which call fmt(value, row).
+const _c$=(n,d)=>{ if(n==null||n===''||isNaN(n)) return '—'; const dd=(typeof d==='number'&&d>=0&&d<=6)?d:0;
+  return ((+n)<-0.004?'−':'')+'$'+Math.abs(+n).toLocaleString(undefined,{minimumFractionDigits:dd,maximumFractionDigits:dd}); };
+const _c$2=n=>_c$(n,2);
+const _cP=(n,d)=>(n==null||n===''||isNaN(n))?'—':(+n).toFixed((typeof d==='number'&&d>=0&&d<=6)?d:2)+'%';
+const _cN=(n,d)=>(n==null||n===''||isNaN(n))?'—':(+n).toLocaleString(undefined,{maximumFractionDigits:(typeof d==='number'&&d>=0&&d<=6)?d:2});
+function _cMonthsFromNow(m){
+  if(m==null||isNaN(m)) return '—';
+  const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+Math.round(m));
+  return d.toLocaleString(undefined,{month:'short',year:'numeric'});
+}
+const _CFREQ=[['monthly','Monthly'],['biweekly','Bi-weekly (26/yr)'],['semimonthly','Semi-monthly (24/yr)'],['weekly','Weekly'],['quarterly','Quarterly'],['annual','Annual']];
+
+// ---- field specs ------------------------------------------------------------------------------
+// f: {k:key, l:label, u:unit suffix, ph:placeholder, d:default seeded on first use,
+// t:'num'(default)|'sel'|'chk'|'txt', o:[[value,label]] for selects, h:hover hint,
+// wide:1 spans two grid columns, req:1 marks it required}
+const CALC_SPECS={};
+CALC_SPECS.mortgage={title:'MORTGAGE · TRUE COST OF OWNERSHIP',
+  intro:'What the house actually costs over the life of the loan — not just principal and interest, but property tax, insurance, PMI, HOA and upkeep, escalating over time. Add an appreciation rate to also see the net cost after selling at the horizon (the honest "what did living here cost" figure).',
+  groups:[
+    {g:'PURCHASE & LOAN',f:[
+      {k:'price',l:'Home price',u:'$',ph:'400000',req:1},
+      {k:'down_payment',l:'Down payment',u:'$',ph:'or use %',h:'Dollar amount wins if both are filled.'},
+      {k:'down_pct',l:'…or down payment',u:'%',ph:'20'},
+      {k:'apr',l:'Interest rate',u:'%',ph:'6.5',req:1},
+      {k:'term_years',l:'Term',u:'yrs',d:'30'},
+      {k:'points',l:'Discount points',u:'pts',ph:'0',h:'1 point = 1% of the loan, paid at closing.'},
+      {k:'closing_costs',l:'Closing costs',u:'$',ph:'typ. 2–5% of price'}]},
+    {g:'CARRYING COSTS',f:[
+      {k:'property_tax_pct',l:'Property tax',u:'%/yr',ph:'1.1',h:'Effective rate on value. Or enter $/yr instead.'},
+      {k:'property_tax_annual',l:'…or property tax',u:'$/yr',ph:'(wins if set)'},
+      {k:'insurance_annual',l:'Homeowners insurance',u:'$/yr',ph:'2400'},
+      {k:'pmi_pct',l:'PMI rate (if < 20% down)',u:'%/yr',ph:'0.3–1.5',h:'Annual premium as % of the original loan. Left blank on a >80% LTV loan, PMI is flagged, not guessed.'},
+      {k:'pmi_rule',l:'PMI removal',t:'sel',d:'auto78',o:[['auto78','Automatic at 78% (original schedule)'],['request80','I\'ll request at 80% (actual balance)']]},
+      {k:'hoa_monthly',l:'HOA dues',u:'$/mo',ph:'0'},
+      {k:'maintenance_pct',l:'Maintenance',u:'%/yr',ph:'1',h:'Rule of thumb ~1% of home value per year; more for older homes.'}]},
+    {g:'ASSUMPTIONS & EXTRAS',f:[
+      {k:'tax_growth_pct',l:'Property tax growth',u:'%/yr',d:'2'},
+      {k:'insurance_growth_pct',l:'Insurance growth',u:'%/yr',d:'2'},
+      {k:'hoa_growth_pct',l:'HOA growth',u:'%/yr',d:'2'},
+      {k:'extra',l:'Extra principal',u:'$/mo',ph:'0'},
+      {k:'appreciation_pct',l:'Home appreciation',u:'%/yr',ph:'e.g. 3 → net cost'},
+      {k:'selling_cost_pct',l:'Selling costs',u:'%',d:'6'},
+      {k:'horizon_years',l:'Horizon (sell / stop)',u:'yrs',ph:'= term'}]}]};
+CALC_SPECS.loan={title:'LOAN · AUTO, PERSONAL, STUDENT, BOAT…',
+  intro:'Any fixed-rate amortizing loan. Enter the amount directly, or fill the purchase details and the amount financed is built for you (sales tax, trade-in, negative equity rolled in). An origination fee shows the effective APR you actually pay.',
+  groups:[
+    {g:'LOAN',f:[
+      {k:'amount',l:'Amount financed',u:'$',ph:'or build it below'},
+      {k:'apr',l:'Interest rate (APR)',u:'%',ph:'7.0',req:1},
+      {k:'term_months',l:'Term',u:'mo',d:'60',req:1},
+      {k:'frequency',l:'Payment frequency',t:'sel',d:'monthly',o:_CFREQ},
+      {k:'extra',l:'Extra per payment',u:'$',ph:'0'},
+      {k:'origination_fee',l:'Origination fee',u:'$',ph:'0',h:'Withheld up front; raises the effective APR.'},
+      {k:'origination_fee_pct',l:'…or fee',u:'%',ph:'0'}]},
+    {g:'PURCHASE DETAILS (OPTIONAL — USED WHEN AMOUNT IS BLANK)',f:[
+      {k:'price',l:'Purchase price',u:'$',ph:'35000'},
+      {k:'down_payment',l:'Cash down',u:'$',ph:'0'},
+      {k:'trade_in',l:'Trade-in value',u:'$',ph:'0'},
+      {k:'trade_in_owed',l:'Owed on trade-in',u:'$',ph:'0',h:'Anything owed beyond the trade-in value is negative equity rolled into the new loan.'},
+      {k:'sales_tax_pct',l:'Sales tax',u:'%',ph:'6.25'},
+      {k:'fees',l:'Title / doc / reg fees',u:'$',ph:'0'},
+      {k:'fees_financed',l:'Fees financed into loan',t:'chk',d:true},
+      {k:'tax_after_trade',l:'Tax on price after trade-in (most states)',t:'chk',d:true}]}]};
+CALC_SPECS.land_loan={title:'LAND LOAN',
+  intro:'Land loans differ from mortgages in ways that matter: much larger down payments, shorter terms ending in a BALLOON (the remaining balance comes due long before it\'s paid down), frequent interest-only periods, and no dwelling to insure. This models all of that and warns when the down payment is below what lenders typically require for the land type.',
+  groups:[
+    {g:'LAND & LOAN',f:[
+      {k:'price',l:'Land price',u:'$',ph:'100000',req:1},
+      {k:'land_type',l:'Land type',t:'sel',d:'',o:[['','—'],['improved','Improved (road + utilities) · ≥15% down typ.'],['unimproved','Unimproved (partial utilities) · ≥25%'],['raw','Raw (no access/utilities) · ≥35%']]},
+      {k:'down_payment',l:'Down payment',u:'$',ph:'or use %'},
+      {k:'down_pct',l:'…or down payment',u:'%',ph:'30'},
+      {k:'apr',l:'Interest rate',u:'%',ph:'8.5',req:1},
+      {k:'amort_years',l:'Amortization',u:'yrs',d:'20',req:1,h:'The schedule payments are calculated on.'},
+      {k:'balloon_years',l:'Balloon due after',u:'yrs',ph:'e.g. 5 (blank = none)'},
+      {k:'io_years',l:'Interest-only period',u:'yrs',ph:'0'},
+      {k:'extra',l:'Extra principal',u:'$/mo',ph:'0'}]},
+    {g:'CARRYING COSTS',f:[
+      {k:'property_tax_annual',l:'Property tax',u:'$/yr',ph:'800'},
+      {k:'insurance_annual',l:'Liability insurance',u:'$/yr',ph:'0'},
+      {k:'closing_costs',l:'Closing costs',u:'$',ph:'0'}]}]};
+CALC_SPECS.drip={title:'DIVIDEND REINVESTMENT (DRIP)',
+  intro:'Projects a dividend position month by month: price growth, a dividend that steps up once a year, reinvestment at an optional plan discount, tax withheld from each dividend (reinvested dividends are still taxable in a brokerage account), and ongoing contributions. The same path with dividends taken as cash runs alongside, so the DRIP advantage is apples-to-apples.',
+  groups:[
+    {g:'POSITION',f:[
+      {k:'initial_investment',l:'Starting investment',u:'$',ph:'10000',h:'Or enter a share count instead.'},
+      {k:'shares',l:'…or shares owned',u:'sh',ph:''},
+      {k:'share_price',l:'Share price',u:'$',ph:'50',req:1},
+      {k:'dividend_yield_pct',l:'Dividend yield',u:'%',ph:'3.5',req:1},
+      {k:'frequency',l:'Dividends paid',t:'sel',d:'4',o:[['12','Monthly'],['4','Quarterly'],['2','Semi-annually'],['1','Annually']]}]},
+    {g:'GROWTH & CONTRIBUTIONS',f:[
+      {k:'price_growth_pct',l:'Share price growth',u:'%/yr',ph:'6'},
+      {k:'dividend_growth_pct',l:'Dividend growth',u:'%/yr',ph:'5'},
+      {k:'years',l:'Years',u:'yrs',d:'20',req:1},
+      {k:'monthly_contribution',l:'Monthly contribution',u:'$',ph:'0'},
+      {k:'contribution_growth_pct',l:'Contribution raise',u:'%/yr',ph:'0'}]},
+    {g:'TAX & EXTRAS',f:[
+      {k:'tax_rate_pct',l:'Dividend tax rate',u:'%',ph:'0 in IRA · ~15 taxable',h:'Qualified dividends: 0/15/20% federal (+3.8% NIIT at high income) + state. 0 inside tax-advantaged accounts.'},
+      {k:'drip_discount_pct',l:'DRIP purchase discount',u:'%',ph:'0',h:'Some company-run plans buy reinvested shares at a 1–5% discount.'},
+      {k:'inflation_pct',l:'Inflation (for real value)',u:'%/yr',ph:'2.5'}]}]};
+CALC_SPECS.drip.holdingPicker=true;
+CALC_SPECS.tvm={title:'TVM SOLVER · N · I/Y · PV · PMT · FV',
+  intro:'One formula, every "all but one is known" problem. Fill in four of the five, leave the one you want BLANK, and it is solved. Signs follow the financial-calculator convention: money you RECEIVE is positive, money you PAY OUT is negative (a loan: PV +, PMT −; a savings plan: PV −, PMT −, FV +).',
+  groups:[
+    {g:'THE FIVE VALUES — LEAVE EXACTLY ONE BLANK',f:[
+      {k:'n',l:'N · number of payments',u:'#',ph:'360'},
+      {k:'rate',l:'I/Y · annual rate',u:'%',ph:'6.5'},
+      {k:'pv',l:'PV · present value',u:'$',ph:'300000'},
+      {k:'pmt',l:'PMT · payment each period',u:'$',ph:'-1896.20'},
+      {k:'fv',l:'FV · future value',u:'$',ph:'0'}]},
+    {g:'TIMING',f:[
+      {k:'periods_per_year',l:'Payments per year',t:'sel',d:'12',o:[['12','12 (monthly)'],['26','26 (bi-weekly)'],['24','24 (semi-monthly)'],['52','52 (weekly)'],['4','4 (quarterly)'],['2','2 (semi-annual)'],['1','1 (annual)']]},
+      {k:'compounds_per_year',l:'Compounding / yr',u:'#',ph:'= payments/yr',h:'Only if compounding differs from payment frequency (e.g. 2 for Canadian mortgages, 365 for daily).'},
+      {k:'timing',l:'Payments at',t:'sel',d:'end',o:[['end','End of period (loans)'],['begin','Beginning (rent, annuity due)']]}]}],
+  presets:[
+    ['Loan payment',{n:'360',rate:'6.5',pv:'300000',pmt:'',fv:'0'}],
+    ['How much can I borrow?',{n:'60',rate:'7',pv:'',pmt:'-600',fv:'0'}],
+    ['Months to a savings goal',{n:'',rate:'7',pv:'-10000',pmt:'-500',fv:'250000'}],
+    ['Future value of savings',{n:'240',rate:'7',pv:'-10000',pmt:'-500',fv:''}],
+    ['Monthly savings needed',{n:'180',rate:'7',pv:'0',pmt:'',fv:'500000'}],
+    ['Retirement withdrawal',{n:'360',rate:'5',pv:'-1000000',pmt:'',fv:'0'}],
+    ['Implied return of a deal',{n:'10',rate:'',pv:'-100000',pmt:'0',fv:'200000',periods_per_year:'1'}]]};
+CALC_SPECS.rent_vs_buy={title:'RENT vs BUY',
+  intro:'Net worth at the horizon under each choice. The buyer\'s up-front cash — and, in any month where owning costs more than renting, the difference — is invested by the renter instead (and vice versa), so both sides spend the same money. The sale at the horizon nets out selling costs.',
+  groups:[
+    {g:'BUYING',f:[
+      {k:'price',l:'Home price',u:'$',ph:'400000',req:1},
+      {k:'down_pct',l:'Down payment',u:'%',d:'20'},
+      {k:'apr',l:'Mortgage rate',u:'%',ph:'6.5',req:1},
+      {k:'term_years',l:'Term',u:'yrs',d:'30'},
+      {k:'property_tax_pct',l:'Property tax',u:'%/yr',d:'1'},
+      {k:'insurance_annual',l:'Insurance',u:'$/yr',ph:'2400'},
+      {k:'hoa_monthly',l:'HOA',u:'$/mo',ph:'0'},
+      {k:'maintenance_pct',l:'Maintenance',u:'%/yr',d:'1'},
+      {k:'pmi_pct',l:'PMI (if < 20% down)',u:'%/yr',ph:'0'},
+      {k:'closing_cost_pct',l:'Closing costs',u:'%',d:'3'},
+      {k:'selling_cost_pct',l:'Selling costs',u:'%',d:'6'},
+      {k:'appreciation_pct',l:'Home appreciation',u:'%/yr',d:'3'}]},
+    {g:'RENTING & INVESTING',f:[
+      {k:'rent_monthly',l:'Rent',u:'$/mo',ph:'2200',req:1},
+      {k:'rent_growth_pct',l:'Rent growth',u:'%/yr',d:'3'},
+      {k:'renters_insurance_annual',l:'Renter\'s insurance',u:'$/yr',ph:'200'},
+      {k:'invest_return_pct',l:'Investment return',u:'%/yr',d:'6'},
+      {k:'horizon_years',l:'Horizon',u:'yrs',d:'10'}]}]};
+CALC_SPECS.affordability={title:'HOME AFFORDABILITY · 28/36',
+  intro:'The most house the classic debt-to-income guideline supports: housing (PITI + PMI + HOA) within 28% of gross income, and housing plus other debt payments within 36%. The ratios are editable — lenders often approve more than is comfortable.',
+  prefill:()=>{ const h=(INS&&INS.household)||{}; const inc=(+h.income_self||0)+(+h.income_spouse||0); return inc?{annual_income:String(inc)}:null; },
+  prefillLabel:'use my household income',
+  groups:[
+    {g:'INCOME & DEBT',f:[
+      {k:'annual_income',l:'Gross household income',u:'$/yr',ph:'120000',req:1},
+      {k:'monthly_debts',l:'Other debt payments',u:'$/mo',ph:'car, student, card mins'},
+      {k:'front_pct',l:'Housing ratio',u:'%',d:'28'},
+      {k:'back_pct',l:'Total debt ratio',u:'%',d:'36'}]},
+    {g:'LOAN & COSTS',f:[
+      {k:'down_payment',l:'Down payment',u:'$',ph:'60000',req:1},
+      {k:'apr',l:'Mortgage rate',u:'%',ph:'6.5',req:1},
+      {k:'term_years',l:'Term',u:'yrs',d:'30'},
+      {k:'property_tax_pct',l:'Property tax',u:'%/yr',ph:'1.1'},
+      {k:'insurance_annual',l:'Insurance',u:'$/yr',ph:'2400'},
+      {k:'hoa_monthly',l:'HOA',u:'$/mo',ph:'0'},
+      {k:'pmi_pct',l:'PMI (if < 20% down)',u:'%/yr',ph:'0.5'}]}]};
+CALC_SPECS.points={title:'MORTGAGE POINTS · BREAK-EVEN',
+  intro:'Paying points buys a lower rate; the question is whether you keep the loan long enough to earn the cost back. The true break-even also credits the faster principal paydown at the lower rate, so it lands earlier than the simple cost ÷ monthly-savings figure.',
+  groups:[{g:'THE TWO OFFERS',f:[
+    {k:'loan_amount',l:'Loan amount',u:'$',ph:'320000',req:1},
+    {k:'term_years',l:'Term',u:'yrs',d:'30'},
+    {k:'apr_base',l:'Rate with NO points',u:'%',ph:'6.5',req:1},
+    {k:'apr_points',l:'Rate WITH points',u:'%',ph:'6.25',req:1},
+    {k:'points',l:'Points',u:'pts',ph:'1'},
+    {k:'points_cost',l:'…or points cost',u:'$',ph:''},
+    {k:'hold_years',l:'Expect to keep the loan',u:'yrs',ph:'7',h:'Until you sell or refinance.'}]}]};
+CALC_SPECS.yields={title:'AFTER-TAX YIELD · TAX-EQUIVALENT · APR↔APY',
+  intro:'Compare a CD or savings yield, a Treasury (no state tax), and in-/out-of-state munis on what you actually keep. Each shows its taxable-equivalent yield — what a fully taxable bond would have to pay to match it.',
+  prefill:()=>{ if(!TAX||TAX.error) return null; const o={}; if(TAX.marginal_ordinary_rate_pct!=null) o.fed_rate_pct=String(TAX.marginal_ordinary_rate_pct); const st=TAX.state_tax||{}; if(st.rate_pct!=null) o.state_rate_pct=String(st.rate_pct); return Object.keys(o).length?o:null; },
+  prefillLabel:'use my tax brackets',
+  groups:[
+    {g:'YOUR TAX RATES',f:[
+      {k:'fed_rate_pct',l:'Federal marginal rate',u:'%',ph:'22'},
+      {k:'state_rate_pct',l:'State marginal rate',u:'%',ph:'0'},
+      {k:'niit',l:'Subject to 3.8% NIIT',t:'chk',d:false,h:'Net investment income tax: MAGI over $200k single / $250k MFJ.'}]},
+    {g:'YIELDS TO COMPARE (ANY)',f:[
+      {k:'taxable_yield',l:'CD / savings / corporate',u:'%',ph:'4.5'},
+      {k:'treasury_yield',l:'Treasury / T-bill',u:'%',ph:'4.2'},
+      {k:'muni_instate_yield',l:'In-state muni',u:'%',ph:'3.2'},
+      {k:'muni_outstate_yield',l:'Out-of-state muni',u:'%',ph:'3.4'}]},
+    {g:'APR ↔ APY CONVERTER',f:[
+      {k:'apr_pct',l:'APR → APY',u:'%',ph:'5.0'},
+      {k:'apy_pct',l:'APY → APR',u:'%',ph:'5.12'},
+      {k:'compounds_per_year',l:'Compounding / yr',u:'#',d:'12'}]}]};
+CALC_SPECS.inflation={title:'INFLATION & REAL RETURN',
+  intro:'What today\'s dollars will cost later, what a fixed sum will be worth, and the real (after-inflation) return on an investment — computed with the exact Fisher relation, not the subtract-inflation shortcut.',
+  groups:[{g:'INPUTS',f:[
+    {k:'amount',l:'Amount (today\'s $)',u:'$',ph:'100000',req:1},
+    {k:'years',l:'Years',u:'yrs',ph:'20',req:1},
+    {k:'inflation_pct',l:'Inflation',u:'%/yr',d:'2.5',req:1},
+    {k:'nominal_return_pct',l:'Nominal return (optional)',u:'%/yr',ph:'7'}]}]};
+CALC_SPECS.lump_vs_annuity={title:'LUMP SUM vs ANNUITY',
+  intro:'Pension buyout, lottery, structured settlement: a sum today vs a stream of payments. The implied return is the rate at which the two are worth the same — if you can\'t reliably beat it investing the lump sum, the annuity wins on math. Longevity is the swing factor: try your life expectancy and +10 years.',
+  groups:[{g:'THE OFFER',f:[
+    {k:'lump_sum',l:'Lump sum offered',u:'$',ph:'300000',req:1},
+    {k:'payment',l:'Annuity payment',u:'$',ph:'1800',req:1},
+    {k:'frequency',l:'Paid',t:'sel',d:'monthly',o:[['monthly','Monthly'],['quarterly','Quarterly'],['annual','Annually']]},
+    {k:'years',l:'Years of payments',u:'yrs',ph:'25',req:1,h:'Your life expectancy for a life annuity — and try +10.'},
+    {k:'cola_pct',l:'Annual COLA',u:'%',ph:'0'},
+    {k:'start_delay_years',l:'Payments start in',u:'yrs',ph:'0'},
+    {k:'discount_rate_pct',l:'Your expected return',u:'%/yr',ph:'5',h:'What you\'d expect to earn investing the lump sum.'}]}]};
+CALC_SPECS.npv_irr={title:'NPV / IRR',
+  intro:'For anything that costs money now and pays back later — solar panels, a rental, a renovation, buying into a business. Enter the cost and one cash flow per year (negative for a year that costs money).',
+  groups:[{g:'CASH FLOWS',f:[
+    {k:'initial_investment',l:'Cost today',u:'$',ph:'10000',req:1},
+    {k:'cash_flows',l:'Cash flow each year after (comma-separated)',t:'txt',ph:'3000, 3000, 3000, 3500',wide:1,req:1},
+    {k:'discount_rate_pct',l:'Discount rate / hurdle',u:'%',ph:'7'}]}]};
+// ---- generic form + run machinery -------------------------------------------------------------
+function _calcSeed(key, force){
+  const spec=CALC_SPECS[key]; if(!spec) return;
+  if(CALC_IN[key] && !force) return;
+  const o={};
+  spec.groups.forEach(g=>g.f.forEach(f=>{ if(f.d!==undefined) o[f.k]=f.d; }));
+  CALC_IN[key]=o; _calcSave();
+}
+function _calcFieldLabel(key,k){
+  const spec=CALC_SPECS[key]; let lab=k;
+  (spec?spec.groups:[]).forEach(g=>g.f.forEach(f=>{ if(f.k===k) lab=f.l.replace(/^…or /,''); }));
+  return lab;
+}
+function _calcQueue(key, ms){
+  clearTimeout(CALC_TIMERS[key]);
+  CALC_TIMERS[key]=setTimeout(()=>calcRun(key), ms==null?350:ms);
+}
+function _calcInputs(key){
+  // send only non-blank values; checkboxes go as booleans
+  const src=CALC_IN[key]||{}, o={};
+  Object.keys(src).forEach(k=>{ const v=src[k]; if(v===''||v==null) return; o[k]=v; });
+  return o;
+}
+async function calcRun(key){
+  const spec=CALC_SPECS[key]; if(!spec) return;
+  const seq=(CALC_SEQ[key]=(CALC_SEQ[key]||0)+1);
+  let res;
+  try{
+    const r=await fetch('/api/calc',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({calculator:spec.calc||key, inputs:spec.mapInputs?spec.mapInputs(_calcInputs(key)):_calcInputs(key)})});
+    res=await r.json();
+    if(!r.ok && !res.error) res={error:'HTTP '+r.status};
+  }catch(e){ res={error:'Request failed: '+e}; }
+  if(seq!==CALC_SEQ[key]) return;          // a newer keystroke's request superseded this one
+  CALC_OUT[key]=res;
+  _calcPaint(key);
+}
+function _calcPaint(key){
+  const box=document.getElementById('calc-out-'+key); if(!box) return;
+  box.innerHTML='';
+  try{ box.appendChild(calcResult(key)); }
+  catch(e){ const er=el('div','err'); er.textContent='render error: '+e; box.appendChild(er); }
+}
+function _calcInputEl(key,f){
+  const v=(CALC_IN[key]||{})[f.k];
+  let inp;
+  if(f.t==='sel'){
+    inp=el('select');
+    f.o.forEach(([val,lab])=>{ const op=el('option',null,_cE(lab)); op.value=val; if(String(v==null?'':v)===String(val)) op.selected=true; inp.appendChild(op); });
+    inp.style.cssText='width:100%;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1);font-family:inherit;';
+    inp.onchange=()=>{ CALC_IN[key][f.k]=inp.value; _calcSave(); if(key!=='whatif') _calcQueue(key,0); };
+  } else if(f.t==='chk'){
+    inp=el('input'); inp.type='checkbox'; inp.checked=(v===true||v==='true');
+    inp.onchange=()=>{ CALC_IN[key][f.k]=inp.checked; _calcSave(); if(key!=='whatif') _calcQueue(key,0); };
+  } else {
+    inp=el('input'); inp.type='text'; inp.inputMode=(f.t==='txt')?'text':'decimal';
+    inp.value=(v==null?'':v); inp.placeholder=f.ph||'';
+    inp.style.cssText='width:100%;box-sizing:border-box;';
+    inp.oninput=()=>{ CALC_IN[key][f.k]=inp.value.trim(); _calcSave(); if(key!=='whatif') _calcQueue(key); };
+    inp.onkeydown=e=>{ if(e.key==='Enter'){ if(key==='whatif') calcRun('whatif'); else _calcQueue(key,0); } };
+  }
+  inp.id='calc-'+key+'-'+f.k;
+  return inp;
+}
+function _calcFieldNode(key,f,opts){
+  opts=opts||{};
+  const box=el('div');
+  box.style.cssText='display:flex;flex-direction:column;gap:3px;'+(f.wide?'grid-column:span 2;':'')+
+    (opts.highlight?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-md);padding:4px;':'');
+  const lab=el('label','muted');
+  lab.style.cssText='font-size:var(--font-size-sm);letter-spacing:0.5px;';
+  lab.innerHTML=_cE(f.l)+(f.req?' <span style="color:var(--color-accent)">*</span>':'')+(f.h?' <span title="'+_cE(f.h)+'" style="cursor:help;opacity:0.8;">ⓘ</span>':'');
+  const inp=_calcInputEl(key,f);
+  lab.htmlFor=inp.id;
+  if(f.t==='chk'){
+    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-2);min-height:28px;';
+    row.appendChild(inp); const t=el('span',null,_cE(f.l)); t.style.fontSize='var(--font-size-sm)'; row.appendChild(t);
+    if(f.h) row.title=f.h;
+    box.appendChild(el('label','muted','&nbsp;')); box.appendChild(row); return box;
+  }
+  box.appendChild(lab);
+  if(f.u){
+    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-1);';
+    row.appendChild(inp);
+    const u=el('span','muted',_cE(f.u)); u.style.cssText='font-size:var(--font-size-sm);white-space:nowrap;min-width:26px;';
+    row.appendChild(u); box.appendChild(row);
+  } else box.appendChild(inp);
+  return box;
+}
+function _calcGrid(){ const g=el('div'); g.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--space-2) var(--space-3);margin-bottom:var(--space-3);'; return g; }
+function _calcGroupHead(t){ const h=el('div'); h.style.cssText='font-size:var(--font-size-sm);letter-spacing:1.5px;color:var(--color-text-muted);margin:var(--space-2) 0 var(--space-1);border-bottom:1px dashed var(--color-border);padding-bottom:2px;'; h.textContent=t; return h; }
+function calcPanel(key){
+  const spec=CALC_SPECS[key]; _calcSeed(key);
+  const wrap=el('div');
+  const head=el('div','ph'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);';
+  head.innerHTML='<span>'+_cE(spec.title)+'</span>'; head.appendChild(wikiLink('calculators'));
+  wrap.appendChild(head);
+  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-2);max-width:980px;'; intro.textContent=spec.intro; wrap.appendChild(intro);
+  // toolbar: presets / prefill-from-household / holding picker / reset
+  const bar=el('div'); bar.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2);';
+  const repaint=()=>{ const n=document.getElementById('calc-panel-'+key); if(n){ n.replaceWith(calcPanel(key)); } _calcQueue(key,0); };
+  (spec.presets||[]).forEach(([lab,vals])=>{
+    const b=el('button',null,_cE(lab)); b.style.fontSize='var(--font-size-sm)';
+    b.onclick=()=>{ CALC_IN[key]=Object.assign({},CALC_IN[key],{periods_per_year:'12',compounds_per_year:'',timing:'end'},vals); _calcSave(); repaint(); };
+    bar.appendChild(b);
+  });
+  if(spec.prefill){
+    const b=el('button',null,'↺ '+_cE(spec.prefillLabel||'use my numbers')); b.style.fontSize='var(--font-size-sm)';
+    b.onclick=()=>{ const v=spec.prefill(); if(!v){ b.textContent='— not available yet (fill in PLAN first)'; return; } Object.assign(CALC_IN[key],v); _calcSave(); repaint(); };
+    bar.appendChild(b);
+  }
+  if(spec.holdingPicker && DATA && (DATA.consolidated||[]).length){
+    const s=el('select'); s.style.cssText='background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1);font-family:inherit;font-size:var(--font-size-sm);';
+    s.appendChild(el('option',null,'↳ start from a holding…'));
+    DATA.consolidated.filter(c=>c.ticker && (c.value||0)>0).sort((a,b)=>(b.value||0)-(a.value||0)).slice(0,60).forEach(c=>{
+      const o=el('option',null,_cE(c.ticker+' · '+_c$(c.value))); o.value=c.ticker; s.appendChild(o); });
+    s.onchange=()=>{ const c=DATA.consolidated.find(x=>x.ticker===s.value); if(!c) return;
+      const px=c.price!=null?c.price:((c.shares||c.quantity)?c.value/(c.shares||c.quantity):null);
+      CALC_IN[key].initial_investment=String(Math.round(c.value)); CALC_IN[key].shares='';
+      if(px) CALC_IN[key].share_price=String(Math.round(px*100)/100);
+      _calcSave(); repaint(); };
+    s.title='Fills the starting value and price from your real position — the dividend yield and growth rates are still yours to enter.';
+    bar.appendChild(s);
+  }
+  const rs=el('button',null,'RESET'); rs.style.cssText='font-size:var(--font-size-sm);margin-left:auto;';
+  rs.onclick=()=>{ _calcSeed(key,true); CALC_OUT[key]=null; repaint(); };
+  bar.appendChild(rs);
+  wrap.appendChild(bar);
+  spec.groups.forEach(g=>{
+    wrap.appendChild(_calcGroupHead(g.g));
+    const grid=_calcGrid(); g.f.forEach(f=>grid.appendChild(_calcFieldNode(key,f))); wrap.appendChild(grid);
+  });
+  const out=el('div'); out.id='calc-out-'+key; out.style.cssText='border-top:1px solid var(--color-border);padding-top:var(--space-3);margin-top:var(--space-1);';
+  wrap.appendChild(out);
+  wrap.id='calc-panel-'+key;
+  setTimeout(()=>{ if(CALC_OUT[key]) _calcPaint(key); else _calcQueue(key,0); },0);
+  return wrap;
+}
+// ---- shared result widgets ---------------------------------------------------------------------
+function _cTiles(items){
+  const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-3);margin-bottom:var(--space-3);';
+  items.filter(Boolean).forEach(([lab,val,klass,sub])=>{
+    const t=el('div'); t.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);min-width:150px;flex:0 1 auto;';
+    t.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);letter-spacing:1px;">${_cE(lab)}</div>`+
+      `<div class="${klass||''}" style="font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;${klass?'':'color:var(--color-accent);'}">${val}</div>`+
+      (sub?`<div class="muted" style="font-size:var(--font-size-sm);">${sub}</div>`:'');
+    row.appendChild(t);
+  });
+  return row;
+}
+function _cKV(rows, title){
+  const w=el('div'); w.style.cssText='margin-bottom:var(--space-3);max-width:620px;';
+  if(title) w.appendChild(_calcGroupHead(title));
+  const t=el('table'); t.className='tbl-compact';
+  rows.filter(Boolean).forEach(([k,v,strong])=>{ const tr=el('tr'); tr.innerHTML=`<td class="l">${strong?'<b>':''}${_cE(k)}${strong?'</b>':''}</td><td>${strong?'<b>':''}${v}${strong?'</b>':''}</td>`; t.appendChild(tr); });
+  w.appendChild(t); return w;
+}
+function _cNotes(r){
+  const w=el('div'); w.style.cssText='margin-top:var(--space-2);line-height:1.45;font-size:var(--font-size-sm);max-width:980px;';
+  (r.warnings||[]).forEach(x=>{ const d=el('div'); d.style.cssText='color:var(--color-accent);margin-bottom:4px;'; d.textContent='⚠ '+x; w.appendChild(d); });
+  (r.notes||[]).forEach(x=>{ const d=el('div','muted'); d.style.marginBottom='3px'; d.textContent='· '+x; w.appendChild(d); });
+  return w;
+}
+function _cTable(cols, rows){
+  // cols: [[key,label,fmt]]
+  const t=el('table'); t.className='tbl-compact';
+  const hr=el('tr'); hr.innerHTML=cols.map((c,i)=>`<th class="${i?'':'l'}">${_cE(c[1])}</th>`).join(''); t.appendChild(hr);
+  rows.forEach(r=>{ const tr=el('tr'); tr.innerHTML=cols.map((c,i)=>`<td class="${i?'':'l'}">${(c[2]||(x=>x==null?'—':x))(r[c[0]],r)}</td>`).join(''); t.appendChild(tr); });
+  return t;
+}
+function _cSchedule(key, label, yearlyCols, yearly, periodCols, periods){
+  const w=el('div'); w.style.marginTop='var(--space-2)';
+  const st=CALC_SCHED[key]||'hide';
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-1);';
+  const mk=(v,lab)=>{ const b=el('span',null,lab); b.style.cssText='cursor:pointer;font-size:var(--font-size-sm);letter-spacing:1px;'+(st===v?'color:var(--color-accent);':'color:var(--color-text-muted);');
+    b.onclick=()=>{ CALC_SCHED[key]=(st===v&&v!=='hide')?'hide':v; _calcPaint(key); }; return b; };
+  bar.appendChild(el('span','muted',_cE(label)+':'));
+  if(yearly&&yearly.length) bar.appendChild(mk('year','BY YEAR'));
+  if(periods&&periods.length) bar.appendChild(mk('period','EVERY PAYMENT'));
+  if(st!=='hide') bar.appendChild(mk('hide','HIDE'));
+  w.appendChild(bar);
+  if(st==='year' && yearly) { const s=el('div'); s.style.cssText='max-height:420px;overflow:auto;'; s.appendChild(_cTable(yearlyCols,yearly)); w.appendChild(s); }
+  if(st==='period' && periods){ const s=el('div'); s.style.cssText='max-height:420px;overflow:auto;'; s.appendChild(_cTable(periodCols,periods)); w.appendChild(s); }
+  return w;
+}
+const _CC_AMORT_Y=[['year','YEAR'],['payment','PAID',_c$],['principal','PRINCIPAL',_c$],['extra','EXTRA',_c$],['interest','INTEREST',_c$],['balance','BALANCE',_c$]];
+const _CC_AMORT_P=[['period','#'],['payment','PAYMENT',_c$2],['principal','PRINCIPAL',_c$2],['extra','EXTRA',_c$2],['interest','INTEREST',_c$2],['balance','BALANCE',_c$2]];
+// ---- result renderers --------------------------------------------------------------------------
+function calcResult(key){
+  const r=CALC_OUT[key];
+  const w=el('div');
+  if(!r){ w.appendChild(el('div','muted','Calculating…')); return w; }
+  if(r.error){
+    const d=el('div'); d.style.cssText='font-size:var(--font-size-base);line-height:1.5;';
+    if(r.missing&&r.missing.length&&!r.max_housing_payment){
+      d.className='muted'; d.textContent='Fill in '+r.missing.map(k=>_calcFieldLabel(key,k)).join(', ')+' to see results.';
+    } else { d.style.color='var(--color-negative)'; d.textContent=r.error; }
+    w.appendChild(d);
+    if(r.warnings) w.appendChild(_cNotes(r));
+    return w;
+  }
+  const fn=CALC_RENDER[key];
+  w.appendChild(fn?fn(r,key):el('pre',null,_cE(JSON.stringify(r,null,1))));
+  return w;
+}
+// Stacked composition bar (mortgage lifetime cost). Theme tokens first, fixed accents after.
+function _cStack(parts){
+  const tot=parts.reduce((s,p)=>s+(p[1]>0?p[1]:0),0); const w=el('div'); if(!tot) return w;
+  const cols=['var(--color-accent)','var(--color-negative)','var(--color-info)','#a07bff','#ff7ab8','#5fd0c4','#888780','#e0623a','#9bb0c8'];
+  const bar=el('div'); bar.style.cssText='display:flex;height:16px;border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--color-border);margin:var(--space-1) 0;';
+  const leg=el('div','legend');
+  parts.forEach((p,i)=>{ if(!(p[1]>0)) return; const pc=100*p[1]/tot;
+    const s=el('div'); s.style.cssText=`width:${pc}%;background:${cols[i%cols.length]};`; s.title=`${p[0]}: ${_c$(p[1])} (${pc.toFixed(1)}%)`; bar.appendChild(s);
+    const l=el('span'); l.innerHTML=`<i class="sw" style="background:${cols[i%cols.length]}"></i>${_cE(p[0])} ${_c$(p[1])} <span style="opacity:.7">(${pc.toFixed(0)}%)</span>`; leg.appendChild(l); });
+  w.appendChild(bar); w.appendChild(leg); return w;
+}
+const CALC_RENDER={};
+CALC_RENDER.mortgage=(r,key)=>{
+  const w=el('div'), m=r.monthly_first||{}, t=r.totals||{}, u=r.upfront||{};
+  const yrs=(r.horizon_months/12);
+  w.appendChild(_cTiles([
+    ['MONTHLY P&I',_c$2(m.principal_interest)],
+    ['ALL-IN MONTH 1',_c$2(m.total),null,'P&I + tax + ins + PMI + HOA + upkeep'],
+    ['TOTAL COST · '+_cN(yrs,1)+' YRS',_c$(r.total_cost),'neg',_cN(r.cost_multiple_of_price,2)+'× the purchase price'],
+    ['COST BEYOND THE PRICE',_c$(r.interest_plus_carry),null,'interest + carrying + closing'],
+    r.at_horizon&&['NET COST AFTER SALE',_c$(r.at_horizon.net_cost_of_ownership),r.at_horizon.net_cost_of_ownership>0?'neg':'pos',_c$(r.at_horizon.net_cost_per_month)+'/mo of ownership'],
+  ]));
+  w.appendChild(_calcGroupHead('WHERE THE MONEY GOES'));
+  w.appendChild(_cStack([['Down payment',u.down_payment],['Principal (loan)',t.principal],['Interest',t.interest],['Property tax',t.property_tax],['Insurance',t.insurance],['PMI',t.pmi],['HOA',t.hoa],['Maintenance',t.maintenance],['Closing + points',(u.closing_costs||0)+(u.points||0)]]));
+  const cols=el('div'); cols.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-4);';
+  cols.appendChild(_cKV([['Loan amount',_c$(r.loan_amount)],['Down payment',_c$(r.down_payment)+' ('+_cP(r.down_pct,1)+')'],['Loan-to-value',_cP(r.ltv_pct,1)],
+    ['Paid off in',r.payoff_label||'—'],['PMI charged for',r.pmi_months?(r.pmi_months+' months ('+(r.pmi_rule==='request80'?'request at 80%':'auto at 78%')+')'):'—'],
+    r.months_saved_by_extra!=null&&['Extra principal saves',r.months_saved_by_extra+' months · '+_c$(r.interest_saved_by_extra)+' interest']],'LOAN'));
+  cols.appendChild(_cKV([['Principal',_c$(t.principal)],['Interest',_c$(t.interest)],['Property tax',_c$(t.property_tax)],['Insurance',_c$(t.insurance)],['PMI',_c$(t.pmi)],['HOA',_c$(t.hoa)],['Maintenance',_c$(t.maintenance)],
+    ['Down + closing + points',_c$((u.down_payment||0)+(u.closing_costs||0)+(u.points||0))],['TOTAL CASH OUT',_c$(r.total_cost),1]],'LIFETIME CASH OUT · '+_cN(yrs,1)+' YEARS'));
+  if(r.at_horizon){ const h=r.at_horizon;
+    cols.appendChild(_cKV([['Home value',_c$(h.home_value)],['− Loan balance',_c$(h.loan_balance)],['− Selling costs',_c$(h.selling_costs)],['= Net sale proceeds',_c$(h.net_proceeds)],
+      ['Total cash out',_c$(r.total_cost)],['NET COST OF OWNERSHIP',_c$(h.net_cost_of_ownership),1]],'IF SOLD AT THE HORIZON'));
+  }
+  w.appendChild(cols);
+  const ycols=[['year','YEAR'],['principal','PRINCIPAL',_c$],['interest','INTEREST',_c$],['property_tax','TAX',_c$],['insurance','INS',_c$],['pmi','PMI',_c$],['hoa','HOA',_c$],['maintenance','UPKEEP',_c$],['balance','BALANCE',_c$]];
+  if(r.at_horizon) ycols.push(['home_value','HOME VALUE',_c$]);
+  w.appendChild(_cSchedule(key,'SCHEDULE',ycols,r.yearly,_CC_AMORT_P,r.schedule));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.loan=(r,key)=>{
+  const w=el('div'); const ppyLab={12:'month',26:'bi-weekly payment',24:'payment',52:'week',4:'quarter',1:'year'}[r.periods_per_year]||'payment';
+  w.appendChild(_cTiles([
+    ['PAYMENT',_c$2(r.payment),null,'per '+ppyLab],
+    ['TOTAL INTEREST',_c$(r.total_interest),'neg',_cP(r.interest_pct_of_principal,1)+' of the amount financed'],
+    ['TOTAL PAID',_c$(r.total_paid),null,r.payoff_label],
+    r.effective_apr!=null&&['EFFECTIVE APR',_cP(r.effective_apr,2),'neg','with the '+_c$(r.origination_fee)+' fee'],
+    r.interest_saved!=null&&['EXTRA SAVES',_c$(r.interest_saved),'pos',r.periods_saved+' payments ('+r.time_saved_label+') sooner'],
+  ]));
+  if(r.purchase){ const p=r.purchase;
+    w.appendChild(_cKV([['Price',_c$2(p.price)],['− Cash down',_c$2(p.down_payment)],['− Trade-in',_c$2(p.trade_in)],['+ Owed on trade-in',_c$2(p.trade_in_owed)],['+ Sales tax',_c$2(p.sales_tax)],['+ Fees financed',_c$2(p.fees_financed)],
+      ['= AMOUNT FINANCED',_c$2(r.amount_financed),1], p.negative_equity_rolled_in>0&&['⚠ Negative equity rolled in',_c$2(p.negative_equity_rolled_in)], p.fees_upfront>0&&['Fees paid up front (not financed)',_c$2(p.fees_upfront)]],'AMOUNT FINANCED'));
+  }
+  w.appendChild(_cSchedule(key,'AMORTIZATION',_CC_AMORT_Y,r.yearly,_CC_AMORT_P,r.schedule));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.land_loan=(r,key)=>{
+  const w=el('div');
+  w.appendChild(_cTiles([
+    r.io_payment!=null&&['INTEREST-ONLY PMT',_c$2(r.io_payment),null,'during the IO period'],
+    ['MONTHLY P&I',_c$2(r.payment),null,r.io_payment!=null?'after interest-only ends':'amortizing'],
+    ['MONTHLY CARRY',_c$2(r.monthly_carry_first),null,'payment + tax + insurance (+ extra)'],
+    r.balloon&&['BALLOON DUE',_c$(r.balloon),'neg','month '+r.balloon_month+' · '+_cMonthsFromNow(r.balloon_month)],
+    ['TOTAL INTEREST',_c$(r.total_interest),'neg'],
+    ['TOTAL COST',_c$(r.total_cost),null,'down + closing + loan + carry'],
+  ]));
+  w.appendChild(_cKV([['Loan amount',_c$(r.loan_amount)],['Down payment',_c$(r.down_payment)+' ('+_cP(r.down_pct,1)+')'],['Land type',r.land_type||'—'],
+    ['Loan ends',r.balloon?('balloon at month '+r.balloon_month):(r.payoff_label||'—')],
+    ['Property tax over the loan',_c$(r.total_property_tax)],['Insurance over the loan',_c$(r.total_insurance)],
+    r.interest_saved!=null&&['Extra principal saves',_c$(r.interest_saved)+(r.balloon_reduction!=null?(' · balloon '+_c$(r.balloon_reduction)+' smaller'):'')]],'DETAIL'));
+  w.appendChild(_cSchedule(key,'SCHEDULE',_CC_AMORT_Y.concat([['balloon','BALLOON',_c$]]),r.yearly,_CC_AMORT_P,r.schedule));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.drip=(r,key)=>{
+  const w=el('div'), nd=r.without_drip||{};
+  w.appendChild(_cTiles([
+    ['FINAL VALUE',_c$(r.final_value),null,_cN(r.final_shares,2)+' shares @ '+_c$2(r.final_price)],
+    ['DRIP ADVANTAGE',_c$(r.drip_advantage),r.drip_advantage>0?'pos':null,'vs taking dividends as cash'],
+    ['ANNUAL INCOME AT END',_c$(r.annual_income_at_end),'pos',_c$(r.monthly_income_at_end)+'/mo'],
+    ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested'],
+    r.final_value_real!=null&&['IN TODAY\'S DOLLARS',_c$(r.final_value_real),null,'inflation-adjusted'],
+  ]));
+  const cols=el('div'); cols.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-4);';
+  cols.appendChild(_cKV([['Starting value',_c$(r.starting_value)+' ('+_cN(r.starting_shares,2)+' sh)'],['Contributions',_c$(r.total_contributions)],['Total invested',_c$(r.total_invested),1],
+    ['Dividends (gross)',_c$(r.total_dividends_gross)],['Dividend tax',_c$(r.total_dividend_tax)],['Dividends reinvested (net)',_c$(r.total_dividends_net)],['Extra shares from DRIP',_cN(r.extra_shares_from_drip,2)]],'WITH DRIP'));
+  cols.appendChild(_cKV([['Final value (shares + cash)',_c$(nd.final_value)],['Shares',_cN(nd.shares,2)],['Cash dividends collected',_c$(nd.cash_dividends_collected)],['Annual income at end',_c$(nd.annual_income_at_end)]],'DIVIDENDS AS CASH'));
+  w.appendChild(cols);
+  w.appendChild(_cSchedule(key,'PROJECTION',[['year','YEAR'],['contributions','CONTRIB',_c$],['dividends_net','DIVIDENDS',_c$],['shares','SHARES',x=>_cN(x,2)],['price','PRICE',_c$2],['value','VALUE',_c$],['annual_income','FWD INCOME/yr',_c$]],r.yearly,null,null));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.tvm=(r,key)=>{
+  const w=el('div'); const v=r.values||{};
+  const fmt={n:x=>_cN(x,2),rate:x=>_cP(x,4),pv:_c$2,pmt:_c$2,fv:_c$2};
+  w.appendChild(_cTiles([
+    ['SOLVED · '+r.solved_label.toUpperCase(),fmt[r.solved_for](r.value),null,r.solved_for==='n'?(_cN(r.years,2)+' years'):''],
+    ['TOTAL OF PAYMENTS',_c$(Math.abs(r.total_payments)),null,_cN(v.n,2)+' × '+_c$2(Math.abs(v.pmt))],
+    ['NET INTEREST',_c$(Math.abs(r.net_interest)),r.net_interest>0?'pos':(r.net_interest<0?'neg':null),r.net_interest_meaning],
+    ['EFFECTIVE ANNUAL RATE',_cP(r.effective_annual_rate_pct,3),null,'periodic '+_cP(r.periodic_rate_pct,4)],
+  ]));
+  const t=el('table'); t.className='tbl-compact'; t.style.maxWidth='520px';
+  ['n','rate','pv','pmt','fv'].forEach(k=>{ const tr=el('tr'); const on=k===r.solved_for;
+    tr.innerHTML=`<td class="l" style="${on?'color:var(--color-accent);':''}">${_cE(({n:'N',rate:'I/Y',pv:'PV',pmt:'PMT',fv:'FV'})[k])}${on?' ◂ solved':''}</td><td style="${on?'color:var(--color-accent);font-weight:700;':''}">${fmt[k](v[k])}</td>`; t.appendChild(tr); });
+  w.appendChild(_calcGroupHead('ALL FIVE VALUES')); w.appendChild(t);
+  const ex=el('div','muted'); ex.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;'; ex.textContent=`${r.periods_per_year} payments/yr · compounding ${r.compounds_per_year}/yr · payments at ${r.timing==='begin'?'beginning':'end'} of period · identity: PV·(1+i)^N + PMT·(1+i·t)·((1+i)^N−1)/i + FV = 0`; w.appendChild(ex);
+  if((r.schedule||[]).length) w.appendChild(_cSchedule(key,'BALANCE PATH ('+(r.balance_meaning||'balance')+')',[['year','YEAR'],['period','PMT #'],['payments','PAYMENTS',_c$],['interest','INTEREST',_c$],['balance',(r.balance_meaning||'balance').toUpperCase(),_c$]],r.schedule,null,null));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.rent_vs_buy=(r,key)=>{
+  const w=el('div'); const buy=r.buy_advantage>0;
+  w.appendChild(_cTiles([
+    ['VERDICT',buy?'BUY':'RENT',buy?'pos':'neg',r.verdict],
+    ['OWNER NET WORTH',_c$(r.owner_wealth),null,'equity after sale + invested savings'],
+    ['RENTER NET WORTH',_c$(r.renter_wealth),null,'invested down payment + savings'],
+    ['BUYING BREAKS EVEN',r.breakeven_year!=null?('year '+_cN(r.breakeven_year,1)):'not within horizon',null,'first year owning comes out ahead'],
+    ['OWNER COST · MONTH 1',_c$(r.first_month_owner_cost),null,'P&I '+_c$(r.monthly_pi)+' + carry'],
+  ]));
+  w.appendChild(_cSchedule(key,'YEAR BY YEAR',[['year','YEAR'],['owner_cost_cum','OWN COST (CUM)',_c$],['renter_cost_cum','RENT COST (CUM)',_c$],['home_value','HOME VALUE',_c$],['loan_balance','LOAN BAL',_c$],['owner_wealth','OWNER NW',_c$],['renter_wealth','RENTER NW',_c$],['buy_advantage','BUY ADV.',x=>`<span class="${x>0?'pos':'neg'}">${_c$(x)}</span>`]],r.yearly,null,null));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_SCHED.rent_vs_buy='year';
+CALC_RENDER.affordability=(r,key)=>{
+  const w=el('div'), p=r.payment||{};
+  w.appendChild(_cTiles([
+    ['MAX HOME PRICE',_c$(r.max_price),null,_c$(r.loan_amount)+' loan · '+_cP(r.down_pct,1)+' down'],
+    ['MAX HOUSING PAYMENT',_c$2(r.max_housing_payment),null,'limited by the '+r.binding_constraint+' ratio'],
+    ['DTI AT THAT PRICE',_cP((r.dti||{}).front_pct,1)+' / '+_cP((r.dti||{}).back_pct,1),null,'housing / total debt'],
+  ]));
+  w.appendChild(_cKV([['Principal & interest',_c$2(p.principal_interest)],['Property tax',_c$2(p.property_tax)],['Insurance',_c$2(p.insurance)],['HOA',_c$2(p.hoa)],['PMI',_c$2(p.pmi)],['TOTAL HOUSING / MO',_c$2(p.total),1],
+    ['Cap from housing ratio',_c$2((r.caps||{}).front_end)],['Cap from total-debt ratio (after other debts)',_c$2((r.caps||{}).back_end_less_debts)]],'PAYMENT AT THE MAX PRICE'));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.points=(r,key)=>{
+  const w=el('div'); const h=r.at_hold;
+  w.appendChild(_cTiles([
+    ['POINTS COST',_c$(r.points_cost)],
+    ['MONTHLY SAVINGS',_c$2(r.monthly_savings),'pos',_c$2(r.payment_without)+' → '+_c$2(r.payment_with)],
+    ['TRUE BREAK-EVEN',r.true_breakeven_months!=null?(r.true_breakeven_months+' mo'):'never',null,_cN(r.true_breakeven_months/12,1)+' yrs · simple: '+_cN(r.simple_breakeven_months,1)+' mo'],
+    h&&['AT '+_cN(h.months/12,1)+' YRS',_c$(h.net_benefit),h.net_benefit>=0?'pos':'neg',h.net_benefit>=0?'points pay off':'points lose money'],
+    ['FULL-TERM NET',_c$(r.net_saved_full_term),r.net_saved_full_term>=0?'pos':'neg','interest saved − cost, if never refinanced'],
+  ]));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.yields=(r,key)=>{
+  const w=el('div');
+  if((r.rows||[]).length){
+    w.appendChild(_cTiles([['BEST AFTER TAX',_cE(r.best||'—'),null,'combined rate on fully taxable interest: '+_cP(r.combined_rate_pct,1)]]));
+    w.appendChild(_cTable([['label','INSTRUMENT'],['yield_pct','YIELD',x=>_cP(x,3)],['tax_rate_pct','TAX RATE',x=>_cP(x,1)],['after_tax_pct','AFTER-TAX',x=>`<b>${_cP(x,3)}</b>`],['taxable_equivalent_pct','TAXABLE-EQUIV.',x=>_cP(x,3)]],r.rows));
+  }
+  if(r.apy_from_apr!=null||r.apr_from_apy!=null){
+    w.appendChild(_cKV([r.apy_from_apr!=null&&['APR → APY',_cP(r.apy_from_apr,4)],r.apr_from_apy!=null&&['APY → APR',_cP(r.apr_from_apy,4)],['Compounding',r.compounds_per_year+'× per year']],'APR ↔ APY'));
+  }
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.inflation=(r,key)=>{
+  const w=el('div');
+  w.appendChild(_cTiles([
+    ['FUTURE COST',_c$(r.future_cost),'neg','of today\'s amount'],
+    ['PURCHASING POWER',_c$(r.purchasing_power_of_amount),null,'of the same nominal sum'],
+    ['CUMULATIVE INFLATION',_cP(r.cumulative_inflation_pct,1),null,r.halving_years?('money halves in '+r.halving_years+' yrs'):''],
+    r.real_return_pct!=null&&['REAL RETURN',_cP(r.real_return_pct,3),r.real_return_pct>=0?'pos':'neg','nominal '+_c$(r.nominal_future_value)+' → real '+_c$(r.real_future_value)],
+  ]));
+  w.appendChild(_cSchedule(key,'BY YEAR',[['year','YEAR'],['future_cost','FUTURE COST',_c$],['purchasing_power','PURCHASING POWER',_c$]],r.yearly,null,null));
+  return w;
+};
+CALC_RENDER.lump_vs_annuity=(r,key)=>{
+  const w=el('div');
+  w.appendChild(_cTiles([
+    ['IMPLIED RETURN',_cP(r.implied_return_pct,2),null,'beat this investing the lump sum, or take the annuity'],
+    r.better&&['BETTER AT '+_cP(r.discount_rate_pct,1),r.better.toUpperCase(),r.better==='annuity'?'pos':null,'by '+_c$(r.advantage)+' in today\'s $'],
+    r.annuity_present_value!=null&&['ANNUITY PRESENT VALUE',_c$(r.annuity_present_value)],
+    ['TOTAL PAYMENTS',_c$(r.total_payments),null,r.payments+' payments'],
+    ['NOMINAL BREAK-EVEN',r.nominal_breakeven_years!=null?(_cN(r.nominal_breakeven_years,1)+' yrs'):'never',null,'payments received ≥ lump sum'],
+  ]));
+  w.appendChild(_cNotes(r)); return w;
+};
+CALC_RENDER.npv_irr=(r,key)=>{
+  const w=el('div');
+  w.appendChild(_cTiles([
+    r.npv!=null&&['NPV @ '+_cP(r.discount_rate_pct,1),_c$(r.npv),r.npv>=0?'pos':'neg',r.verdict],
+    ['IRR',r.irr_pct!=null?_cP(r.irr_pct,2):'n/a',null,r.multiple_irr_possible?'⚠ cash flows change sign more than once — several IRRs may exist':''],
+    ['PAYBACK',r.payback_periods!=null?(_cN(r.payback_periods,2)+' yrs'):'never',null,r.discounted_payback_periods!=null?('discounted: '+_cN(r.discounted_payback_periods,2)+' yrs'):''],
+    ['TOTAL NET CASH',_c$(r.total_return),r.total_return>=0?'pos':'neg','undiscounted'],
+  ]));
+  w.appendChild(_cNotes(r)); return w;
+};
+// ---- WHAT-IF · pick a real liability, then "what if I paid more?" ---------------------------
+CALC_SPECS.whatif={title:'WHAT-IF · PAY A DEBT OFF FASTER',
+  intro:'Pick one of your debts, then try a one-time payment, a bigger regular payment, or both. Press RUN to see how many payments (and how much interest) it saves. Balances come from your accounts; APR and payment come from the same per-account settings PLAN → CASH·DEBT uses — anything missing is asked for right here.',
+  groups:[
+    {g:'THE DEBT',f:[
+      {k:'balance',l:'Balance owed',u:'$',ph:'16000',req:1},
+      {k:'apr',l:'APR',u:'%',ph:'7.7',req:1},
+      {k:'payment',l:'Current payment',u:'$',ph:'561',req:1,h:'Principal + interest only — escrowed tax/insurance on a mortgage does not reduce the balance.'}]},
+    {g:'THE WHAT-IF',f:[
+      {k:'extra',l:'Extra every payment',u:'$',ph:'50'},
+      {k:'lump_sum',l:'One-time payment',u:'$',ph:'2000'},
+      {k:'lump_at_period',l:'…applied with payment #',u:'#',d:'1',h:'1 = with the next payment.'},
+      {k:'frequency',l:'Payment frequency',t:'sel',d:'monthly',o:_CFREQ,h:'Change only if you also enter the payment at that frequency.'},
+      {k:'target_months',l:'Or: debt-free in',u:'months',ph:'optional',h:'Also solves the payment needed to be done in this many months.'}]}]};
+CALC_SCHED.whatif='year';
+async function _calcLoadLiabs(){
+  if(CALC_LIABS_LOADING) return; CALC_LIABS_LOADING=true;
+  try{ const r=await fetch('/api/calc/liabilities'); const j=await r.json(); CALC_LIABS=j.liabilities||[]; CALC_LIABS_ERR=j.error||null; }
+  catch(e){ CALC_LIABS=[]; CALC_LIABS_ERR='Couldn\'t load liabilities: '+e; }
+  CALC_LIABS_LOADING=false;
+  const n=document.getElementById('calc-panel-whatif'); if(n) n.replaceWith(whatifPanel());
+}
+function _wiSelected(){ return (CALC_LIABS||[]).find(l=>l.name===CALC_WI_SEL)||null; }
+function _wiSeedFrom(l){
+  const o=CALC_IN.whatif||{};
+  o.balance=l?String(l.balance):''; o.apr=(l&&l.apr!=null)?String(l.apr):''; o.payment=(l&&l.payment)?String(l.payment):'';
+  CALC_IN.whatif=o; CALC_OUT.whatif=null; _calcSave();
+}
+async function _wiSaveToAccount(l, btn){
+  const body={account:l.name}; const v=CALC_IN.whatif||{};
+  if(l.missing.includes('apr') && v.apr!=='' && v.apr!=null) body.rate_pct=parseFloat(v.apr);
+  if(l.missing.includes('payment') && v.payment!=='' && v.payment!=null) body.min_payment=parseFloat(v.payment);
+  if(Object.keys(body).length<2){ CALC_WI_MSG={err:true,t:'Enter the missing value(s) first.'}; return _wiRepaint(); }
+  btn.disabled=true; btn.textContent='saving…';
+  try{
+    const r=await fetch('/api/account-registry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error){ CALC_WI_MSG={err:true,t:j.error||('Save failed (HTTP '+r.status+')')}; }
+    else{
+      if('rate_pct' in body){ l.apr=body.rate_pct; l.apr_source='account'; }
+      if('min_payment' in body){ l.payment=body.min_payment; l.payment_source='account'; }
+      l.missing=l.missing.filter(k=>!((k==='apr'&&'rate_pct' in body)||(k==='payment'&&'min_payment' in body)));
+      CALC_WI_MSG={err:false,t:'Saved to '+l.name+' — PLAN → CASH·DEBT and SETTINGS → ACCOUNTS use the same value.'};
+    }
+  }catch(e){ CALC_WI_MSG={err:true,t:'Save failed: '+e}; }
+  _wiRepaint();
+}
+function _wiRepaint(){ const n=document.getElementById('calc-panel-whatif'); if(n) n.replaceWith(whatifPanel()); }
+function whatifPanel(){
+  const key='whatif', spec=CALC_SPECS.whatif; _calcSeed(key);
+  const wrap=el('div'); wrap.id='calc-panel-whatif';
+  const head=el('div','ph'); head.style.cssText='display:flex;align-items:center;gap:var(--space-2);';
+  head.innerHTML='<span>'+_cE(spec.title)+'</span>'; head.appendChild(wikiLink('calculators')); wrap.appendChild(head);
+  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-2);max-width:980px;'; intro.textContent=spec.intro; wrap.appendChild(intro);
+  if(CALC_LIABS===null){ _calcLoadLiabs(); wrap.appendChild(el('div','muted','Loading your liabilities…')); return wrap; }
+  if(CALC_LIABS_ERR){ const e=el('div'); e.style.color='var(--color-negative)'; e.textContent=CALC_LIABS_ERR; wrap.appendChild(e); }
+  // picker
+  const row=el('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2);';
+  const sel=el('select'); sel.style.cssText='min-width:320px;max-width:100%;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-1);font-family:inherit;';
+  const opt=(v,t)=>{ const o=el('option',null,_cE(t)); o.value=v; if(v===CALC_WI_SEL) o.selected=true; sel.appendChild(o); };
+  opt('','— choose a debt —');
+  CALC_LIABS.forEach(l=>opt(l.name, `${l.is_mortgage?'⌂ ':''}${l.name} · ${_c$(l.balance)}${l.apr!=null?' · '+l.apr+'%':''}${l.payment?' · '+_c$(l.payment)+'/mo':''}${l.missing.length?'  ⚠ needs '+l.missing.join(' + '):''}`));
+  opt('__custom','✎ Enter a debt by hand');
+  sel.onchange=()=>{ CALC_WI_SEL=sel.value; CALC_WI_EDIT=false; CALC_WI_MSG=null; _wiSeedFrom(_wiSelected()); _wiRepaint(); };
+  row.appendChild(sel);
+  const rl=el('span',null,'↻'); rl.title='Reload liabilities'; rl.style.cssText='cursor:pointer;color:var(--color-text-muted);';
+  rl.onclick=()=>{ CALC_LIABS=null; _wiRepaint(); }; row.appendChild(rl);
+  if(!CALC_LIABS.length) row.appendChild(el('span','muted','No liabilities on file — use "Enter a debt by hand", or add them under HOLDINGS → LIABILITIES.'));
+  wrap.appendChild(row);
+  let L=_wiSelected();
+  if(CALC_WI_SEL && CALC_WI_SEL!=='__custom' && !L){ CALC_WI_SEL=''; _calcSave(); sel.value=''; }   // account renamed/removed
+  if(!CALC_WI_SEL){ return wrap; }
+  if(L && !CALC_WI_EDIT){   // account values are the source of truth — refresh any stale saved copy
+    const o=CALC_IN.whatif; o.balance=String(L.balance);
+    if(L.apr!=null) o.apr=String(L.apr);
+    if(L.payment) o.payment=String(L.payment);
+  }
+  // facts
+  const facts=spec.groups[0].f;
+  if(L && !CALC_WI_EDIT){
+    const src=s=>s==='plan_cashdebt_mortgage'?' <span class="muted" title="From PLAN → CASH·DEBT mortgage facts">(plan)</span>':'';
+    const line=el('div'); line.style.cssText='font-size:var(--font-size-md);margin:var(--space-1) 0 var(--space-2);';
+    line.innerHTML=`<b>${_cE(L.name)}</b>${L.institution?' <span class="muted">· '+_cE(L.institution)+'</span>':''} &nbsp; balance <b>${_c$2(L.balance)}</b>`+
+      ` · APR <b>${L.apr!=null?_cE(L.apr)+'%':'<span style="color:var(--color-accent)">missing</span>'}</b>${src(L.apr_source)}`+
+      ` · payment <b>${L.payment?_c$2(L.payment)+'/mo':'<span style="color:var(--color-accent)">missing</span>'}</b>${src(L.payment_source)} `;
+    const ed=el('span',null,'✎ adjust'); ed.style.cssText='cursor:pointer;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-left:var(--space-2);';
+    ed.title='Override the balance/APR/payment for this what-if only (nothing is saved).';
+    ed.onclick=()=>{ CALC_WI_EDIT=true; _wiRepaint(); }; line.appendChild(ed);
+    wrap.appendChild(line);
+    if(L.pay_in_full){ wrap.appendChild(el('div','muted','This card is marked "paid in full every month" — there is no revolving balance to pay down early.')); }
+    if(L.missing.length){
+      const msg=el('div'); msg.style.cssText='color:var(--color-accent);font-size:var(--font-size-sm);margin-bottom:var(--space-1);';
+      msg.textContent='Not on file for this account: '+L.missing.map(k=>k==='apr'?'APR':'payment').join(' and ')+'. Enter it below to run the what-if — and optionally save it to the account.';
+      wrap.appendChild(msg);
+      const g=_calcGrid(); facts.filter(f=>L.missing.includes(f.k)).forEach(f=>g.appendChild(_calcFieldNode(key,f,{highlight:true})));
+      const sb=el('button',null,'SAVE TO ACCOUNT'); sb.style.cssText='align-self:end;font-size:var(--font-size-sm);';
+      sb.title='Writes the value(s) to this account\'s settings — the same store PLAN → CASH·DEBT and SETTINGS → ACCOUNTS edit.';
+      sb.onclick=()=>_wiSaveToAccount(L,sb); g.appendChild(sb);
+      wrap.appendChild(g);
+    }
+    if(L.is_mortgage){ const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; n.textContent='Mortgage: use the principal & interest payment only — escrowed taxes and insurance don\'t reduce the balance.'; wrap.appendChild(n); }
+  } else {
+    wrap.appendChild(_calcGroupHead(L?'THE DEBT (OVERRIDES FOR THIS WHAT-IF — NOT SAVED)':'THE DEBT'));
+    const g=_calcGrid(); facts.forEach(f=>g.appendChild(_calcFieldNode(key,f))); wrap.appendChild(g);
+    if(L){ const b=el('span',null,'↺ back to account values'); b.style.cssText='cursor:pointer;color:var(--color-text-muted);font-size:var(--font-size-sm);';
+      b.onclick=()=>{ CALC_WI_EDIT=false; _wiSeedFrom(L); _wiRepaint(); }; wrap.appendChild(b); }
+  }
+  if(CALC_WI_MSG){ const m=el('div'); m.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;color:'+(CALC_WI_MSG.err?'var(--color-negative)':'var(--color-positive)'); m.textContent=CALC_WI_MSG.t; wrap.appendChild(m); }
+  wrap.appendChild(_calcGroupHead(spec.groups[1].g));
+  const g2=_calcGrid(); spec.groups[1].f.forEach(f=>g2.appendChild(_calcFieldNode(key,f))); wrap.appendChild(g2);
+  const run=el('button',null,'▸ RUN WHAT-IF'); run.onclick=()=>calcRun('whatif'); wrap.appendChild(run);
+  const out=el('div'); out.id='calc-out-whatif'; out.style.cssText='border-top:1px solid var(--color-border);padding-top:var(--space-3);margin-top:var(--space-3);';
+  wrap.appendChild(out);
+  if(CALC_OUT.whatif) setTimeout(()=>_calcPaint('whatif'),0);
+  return wrap;
+}
+CALC_RENDER.whatif=(r,key)=>{
+  const w=el('div'); const b=r.baseline||{}, s=r.scenario||{}, ppy=r.periods_per_year||12;
+  const toM=p=>p==null?null:p*12/ppy;
+  if(r.status==='paid'){ w.appendChild(el('div','muted',_cE(r.note))); return w; }
+  w.appendChild(_cTiles([
+    r.periods_saved!=null&&['PAID OFF SOONER BY',r.periods_saved+' payment'+(r.periods_saved===1?'':'s'),r.periods_saved>0?'pos':null,(r.time_saved_label||'0 mo')+' · '+_cN(r.months_saved,1)+' months'],
+    r.interest_saved!=null&&['INTEREST SAVED',_c$2(r.interest_saved),r.interest_saved>0?'pos':null,'over the life of the debt'],
+    !b.resolved&&['CURRENT PATH','NEVER PAYS OFF','neg','payment ≤ interest ('+_c$2(r.first_period_interest)+' first period)'],
+    s.resolved&&['NEW PAYOFF',_cMonthsFromNow(toM(s.periods)),null,b.resolved?('was '+_cMonthsFromNow(toM(b.periods))):''],
+    !s.resolved&&['WITH THE CHANGE','STILL NEVER','neg','raise the payment above the interest'],
+  ]));
+  // money rows use the engine's own unrounded saving, so the table agrees with the tile to the cent
+  const diff=(a,c,f)=>(a==null||c==null)?'—':(f===_c$2&&r.interest_saved!=null?f(r.interest_saved):f(a-c));
+  const t=el('table'); t.className='tbl-compact'; t.style.maxWidth='720px';
+  t.innerHTML='<tr><th class="l"></th><th>CURRENT</th><th>WITH THE CHANGE</th><th>DIFFERENCE</th></tr>'+
+    [['Payments left',b.periods,s.periods,x=>_cN(x,0)],
+     ['Time to payoff',b.label,s.label,null],
+     ['Payoff date',b.resolved?_cMonthsFromNow(toM(b.periods)):'never',s.resolved?_cMonthsFromNow(toM(s.periods)):'never',null],
+     ['Total interest',b.total_interest,s.total_interest,_c$2],
+     ['Total paid',b.total_paid,s.total_paid,_c$2]].map(([lab,a,c,f])=>
+      `<tr><td class="l">${lab}</td><td>${f?(a==null?'never':f(a)):_cE(a||'—')}</td><td>${f?(c==null?'never':f(c)):_cE(c||'—')}</td><td class="pos">${f?diff(a,c,f):''}</td></tr>`).join('');
+  w.appendChild(t);
+  const si=r.scenario_inputs||{};
+  const what=[si.extra>0?(_c$2(si.extra)+' extra every payment'):null, si.lump_sum>0?(_c$2(si.lump_sum)+' one-time with payment #'+si.lump_at_period):null].filter(Boolean);
+  const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;'; cap.textContent='Change tested: '+(what.length?what.join(' + '):'none — enter an extra payment or a one-time payment above.')+` · ${_c$2(r.payment)} current payment at ${r.apr}% APR on ${_c$2(r.balance)}.`; w.appendChild(cap);
+  if(r.target){ const tg=el('div'); tg.style.cssText='margin:var(--space-2) 0;font-size:var(--font-size-md);';
+    tg.innerHTML=`To be debt-free in <b>${_cN(r.target.months,0)} months</b>: pay <b>${_c$2(r.target.required_payment)}</b> per payment`+(r.target.extra_needed>0?` — <b class="neg">${_c$2(r.target.extra_needed)}</b> more than now.`:' — your current payment already gets there.'); w.appendChild(tg); }
+  if(r.return_on_extra_note){ const rn=el('div'); rn.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);margin:var(--space-1) 0;'; rn.textContent='⚑ '+r.return_on_extra_note+' Compare with PLAN → CASH·DEBT\'s payoff-vs-invest hurdle before prioritizing it over investing.'; w.appendChild(rn); }
+  // year-by-year balances, side by side
+  const yb=r.yearly_baseline||[], ys=r.yearly_scenario||[]; const n=Math.max(yb.length, ys.length);
+  if(n){ const rows=[]; for(let i=0;i<n;i++){ const a=yb[i]||{}, c=ys[i]||{}; rows.push({year:i+1, bb:yb[i]?a.balance:(b.resolved?0:null), sb:ys[i]?c.balance:(s.resolved?0:null), bi:a.interest, si:c.interest}); }
+    w.appendChild(_cSchedule(key,'BALANCE BY YEAR',[['year','YEAR'],['bb','CURRENT BAL',_c$],['sb','WITH CHANGE',_c$],['bi','CURRENT INT',_c$],['si','CHANGE INT',_c$]],rows,null,null)); }
+  w.appendChild(_cNotes(r)); return w;
+};
+// ---- the tab ----------------------------------------------------------------------------------
+function calculatorsContent(){
+  return panelSubtabs('calculators',[
+    {key:'whatif',label:'WHAT-IF · MY DEBTS',build:()=>whatifPanel()},
+    {key:'mortgage',label:'MORTGAGE',build:()=>calcPanel('mortgage')},
+    {key:'loan',label:'LOAN',build:()=>calcPanel('loan')},
+    {key:'land_loan',label:'LAND LOAN',build:()=>calcPanel('land_loan')},
+    {key:'tvm',label:'TVM SOLVER',build:()=>calcPanel('tvm')},
+    {key:'drip',label:'DRIP',build:()=>calcPanel('drip')},
+    {key:'rent_vs_buy',label:'RENT vs BUY',build:()=>calcPanel('rent_vs_buy')},
+    {key:'affordability',label:'AFFORDABILITY',build:()=>calcPanel('affordability')},
+    {key:'points',label:'POINTS',build:()=>calcPanel('points')},
+    {key:'yields',label:'YIELDS · TAX-EQUIV',build:()=>calcPanel('yields')},
+    {key:'inflation',label:'INFLATION',build:()=>calcPanel('inflation')},
+    {key:'lump_vs_annuity',label:'LUMP vs ANNUITY',build:()=>calcPanel('lump_vs_annuity')},
+    {key:'npv_irr',label:'NPV · IRR',build:()=>calcPanel('npv_irr')},
+  ]);
 }
 
 // The 5-min background poll calls load()->render(), which rebuilds the whole page.
