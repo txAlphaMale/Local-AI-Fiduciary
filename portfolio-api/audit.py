@@ -185,6 +185,7 @@ EVENT_TYPES = (
     "emergency.granted", "emergency.revoked", "emergency.expired", "emergency.reminder",
     "emergency.auto_disabled", "emergency.takeover_failed", "emergency.test_mode_active",
     "vault.kit_generated", "vault.kit_downloaded",
+    "notification.test_email",
 )
 
 

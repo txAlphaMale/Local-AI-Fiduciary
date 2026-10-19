@@ -226,18 +226,26 @@ def smtp_configured():
                 and s.get("SMTP_TO_ADDRESS"))
 
 
-def _send_email(subject, body):
+def send_email_checked(subject, body):
+    """(ok, error). Like _send_email but says WHY it failed, in words safe to show an admin (never
+    echoes the password). Used by the SMTP test button; _send_email() wraps it for normal alerts."""
     s = _read_app_secrets()
     host = s.get("SMTP_HOST")
     user = s.get("SMTP_USERNAME")
     pw = s.get("SMTP_PASSWORD")
     to_addr = s.get("SMTP_TO_ADDRESS")
-    if not (host and user and pw and to_addr):
-        return False
-    port = int(s.get("SMTP_PORT") or "587")
+    missing = [n for n, v in (("SMTP server", host), ("SMTP username", user), ("SMTP password", pw),
+                              ("Send-alerts-to address", to_addr)) if not v]
+    if missing:
+        return False, "Not configured yet — missing: " + ", ".join(missing) + ". Save them first."
+    try:
+        port = int(s.get("SMTP_PORT") or "587")
+    except ValueError:
+        return False, "SMTP port must be a number (587 for Gmail)."
     from_addr = s.get("SMTP_FROM_ADDRESS") or user
     use_tls = (s.get("SMTP_USE_TLS") or "1") != "0"
     import smtplib
+    import socket
     from email.mime.text import MIMEText
     msg = MIMEText(body)
     msg["Subject"] = f"[Fiduciary] {subject}"
@@ -249,10 +257,32 @@ def _send_email(subject, body):
                 server.starttls()
             server.login(user, pw)
             server.sendmail(from_addr, [to_addr], msg.as_string())
-        return True
+        return True, None
+    except smtplib.SMTPAuthenticationError as e:
+        hint = (" For Gmail this means the username or App Password is wrong (use a 16-character App Password, "
+                "not your login password; 2-Step Verification must be on).") if "gmail" in (host or "").lower() else ""
+        return False, f"The mail server rejected the username/password ({e.smtp_code}).{hint}"
+    except smtplib.SMTPRecipientsRefused:
+        return False, "The server refused the 'send alerts to' address — check it for typos."
+    except smtplib.SMTPSenderRefused:
+        return False, "The server refused the From address — leave it blank to use the username."
+    except smtplib.SMTPNotSupportedError as e:
+        return False, f"The server doesn't support what was asked ({e}). Try the STARTTLS setting 1 on port 587."
+    except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, ConnectionError) as e:
+        return False, f"Could not hold a connection to {host}:{port} ({type(e).__name__}). Check the server, port and STARTTLS setting."
+    except socket.gaierror:
+        return False, f"Could not find the server '{host}' — check the spelling (Gmail: smtp.gmail.com)."
+    except (socket.timeout, TimeoutError):
+        return False, f"Timed out reaching {host}:{port} — a firewall or wrong port is likely."
     except Exception as e:
-        print(f"[notifications] email send failed: {e}", flush=True)
-        return False
+        return False, f"Send failed: {type(e).__name__}: {str(e)[:160]}"
+
+
+def _send_email(subject, body):
+    ok, err = send_email_checked(subject, body)
+    if not ok and err and not err.startswith("Not configured"):
+        print(f"[notifications] email send failed: {err}", flush=True)
+    return ok
 
 
 def _send_push(subscription, title, body):

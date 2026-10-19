@@ -69,5 +69,83 @@ class TestPlainSecrets(unittest.TestCase):
         self.A.post("/api/secrets", json={"SMTP_FROM_ADDRESS": PLAIN["SMTP_FROM_ADDRESS"]})
 
 
+import json, smtplib, socket  # noqa: E402
+from unittest import mock  # noqa: E402
+import emergency, notifications, store  # noqa: E402
+
+
+class FakeSMTP:
+    """Stands in for smtplib.SMTP; behaviour set per test via FakeSMTP.mode."""
+    mode, sent, calls = "ok", [], []
+
+    def __init__(self, host, port, timeout=0):
+        FakeSMTP.calls.append(("connect", host, port))
+        if FakeSMTP.mode == "dns":
+            raise socket.gaierror(-2, "Name or service not known")
+        if FakeSMTP.mode == "timeout":
+            raise socket.timeout()
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def starttls(self): FakeSMTP.calls.append(("starttls",))
+
+    def login(self, u, p):
+        FakeSMTP.calls.append(("login", u))
+        if FakeSMTP.mode == "auth":
+            raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+
+    def sendmail(self, f, to, msg):
+        if FakeSMTP.mode == "rcpt":
+            raise smtplib.SMTPRecipientsRefused({to[0]: (550, b"no")})
+        FakeSMTP.sent.append((f, to, msg))
+
+
+class TestSmtpTestButton(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestPlainSecrets.setUpClass()
+        cls.A, cls.V = TestPlainSecrets.A, TestPlainSecrets.V
+
+    def run_test(self, mode="ok", client=None):
+        FakeSMTP.mode, FakeSMTP.sent, FakeSMTP.calls = mode, [], []
+        appmod._LAST_TEST_EMAIL[0] = 0
+        with mock.patch.object(smtplib, "SMTP", FakeSMTP):
+            return (client or self.A).post("/api/notifications/test-email")
+
+    def test_success_sends_through_saved_settings_and_marks_emergency_test_ok(self):
+        with store._conn() as c:
+            c.execute("UPDATE emergency_config SET last_test_ok=NULL WHERE id=1")
+        r = self.run_test("ok")
+        j = r.json()
+        self.assertTrue(j["ok"], j); self.assertEqual(j["to"], PLAIN["SMTP_TO_ADDRESS"])
+        f, to, msg = FakeSMTP.sent[0]
+        self.assertEqual(to, [PLAIN["SMTP_TO_ADDRESS"]]); self.assertIn("SMTP test", msg)
+        self.assertIn(("starttls",), FakeSMTP.calls); self.assertIn(("login", PLAIN["SMTP_USERNAME"]), FakeSMTP.calls)
+        with store._conn() as c:
+            self.assertIsNotNone(c.execute("SELECT last_test_ok FROM emergency_config").fetchone()[0])
+
+    def test_failures_explain_why_and_never_leak_the_password(self):
+        for mode, needle in (("auth", "App Password"), ("dns", "Could not find the server"),
+                             ("timeout", "Timed out"), ("rcpt", "refused the 'send alerts to'")):
+            r = self.run_test(mode)
+            j = r.json()
+            self.assertFalse(j["ok"], mode); self.assertIn(needle, j["error"], mode)
+            self.assertNotIn("super-secret-app-password", r.text)
+        ev = audit.read_recent(limit=50)
+        self.assertNotIn("super-secret-app-password", json.dumps(ev, default=str))
+
+    def test_not_configured_message(self):
+        with mock.patch.object(notifications, "_read_app_secrets", lambda: {}):
+            r = self.run_test("ok")
+        self.assertFalse(r.json()["ok"]); self.assertIn("missing", r.json()["error"])
+
+    def test_admin_only_and_throttled(self):
+        self.assertEqual(self.run_test("ok", self.V).status_code, 403)
+        self.assertEqual(TestClient(appmod.app).post("/api/notifications/test-email").status_code, 401)
+        self.run_test("ok")
+        r = self.A.post("/api/notifications/test-email")          # immediately again, no reset
+        self.assertEqual(r.status_code, 429)
+
+
 if __name__ == "__main__":
     unittest.main()

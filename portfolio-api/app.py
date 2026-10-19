@@ -10493,6 +10493,35 @@ def notifications_test(request: Request):
     return {"ok": True, **result}
 
 
+_LAST_TEST_EMAIL = [0.0]
+
+
+@app.post("/api/notifications/test-email")
+def notifications_test_email(request: Request):
+    """Admin-only: send a test message through the SAVED SMTP settings (ignores the email
+    preference checkbox) and say exactly why it failed if it did. A success also counts as the
+    'successful test notification' the emergency-access enable gate asks for."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    if time.time() - _LAST_TEST_EMAIL[0] < 10:
+        return JSONResponse({"ok": False, "error": "Wait a few seconds between tests."}, status_code=429)
+    _LAST_TEST_EMAIL[0] = time.time()
+    ok, err = notifications.send_email_checked(
+        "SMTP test", "If you are reading this, Fiduciary can send email through your SMTP settings. "
+                     f"Sent {time.strftime('%Y-%m-%d %H:%M:%S')}.")
+    audit.emit("notification.test_email", outcome="success" if ok else "failure", request=request,
+               actor=admin["id"], actor_name=admin.get("username"), resource="/api/notifications/test-email",
+               detail={"ok": ok, "error": err})
+    if ok:
+        try:
+            emergency.mark_test_ok()
+        except Exception:
+            pass
+    return {"ok": ok, "error": err,
+            "to": (_read_secrets().get("SMTP_TO_ADDRESS") if ok else None)}
+
+
 @app.get("/api/secrets/key-status")
 def get_secrets_key_status(request: Request):
     """SEC-3 (2026-07-25) — admin-only encryption-key-version status for the SETTINGS → SECRETS
