@@ -140,6 +140,8 @@ EVENT_TYPES = (
     "session.created", "session.expired",
     "secret.read", "secret.changed", "secret.rotated",
     "config.changed",
+    # TASK-003: optional/unofficial Monarch integration opt-in (acknowledged risk) and opt-out.
+    "integration.monarch.enabled", "integration.monarch.disabled",
     "data.exported", "data.shared",
     # TLS/certificate security-state transitions (2026-07-25 broadening) -- distinct from generic
     # config.changed because these change the app's TRANSPORT security posture (what the Strict-

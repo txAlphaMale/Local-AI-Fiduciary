@@ -371,7 +371,7 @@ CONFIG_SPECS = [
     # in-app way to even pick "csv" without editing .env by hand. See /api/holdings-csv for the
     # matching in-app editor that goes with this.
     {"key": "PORTFOLIO_PROVIDER", "label": "Portfolio data source", "group": "Portfolio provider",
-     "default": "monarch", "options": ["monarch", "csv", "snaptrade"]},
+     "default": "csv", "options": ["csv", "snaptrade", "monarch"]},
     # ---- Notifications (2026-07-26) -- VAPID requires *a* contact address in its claim (the push
     # service, e.g. Chrome's/Mozilla's, may use it to reach you about a misbehaving sender); it
     # does not need to be monitored or even real-looking, so this is not in SECRET_SPECS.
@@ -2429,14 +2429,63 @@ async def post_schedule(req: Request):
 
 
 # ---------------- mcpo / Monarch ----------------
+# ---- Monarch is OPTIONAL, UNOFFICIAL and OFF by default (TASK-003, 2026-10-19) ----
+# Monarch has no public API; mcpo talks to its private GraphQL endpoint, and Monarch's terms
+# restrict automated access. So every Monarch call goes through _post(), which refuses unless
+# (a) PORTFOLIO_PROVIDER=monarch AND (b) an admin recorded the risk acknowledgment below. The
+# ack lives in settings.json under MONARCH_RISK_ACK ({at, by, version}); enabling/disabling is
+# audited (integration.monarch.enabled / .disabled). After any upstream failure we back off for
+# _MONARCH_COOLDOWN_S instead of retrying, to avoid load on their service.
+MONARCH_LABEL = "Monarch (unofficial, at your own risk)"
+MONARCH_ACK_VERSION = 1
+MONARCH_ACK_TEXT = (
+    "Monarch has no official public API. This integration uses an unofficial, private API, and "
+    "Monarch's terms restrict automated access. I accept the risk: it may break without notice, "
+    "and my Monarch account may be restricted or closed."
+)
+_MONARCH_COOLDOWN_S = 300
+_monarch_state = {"fail_ts": 0.0, "err": ""}
+
+
+class MonarchDisabled(RuntimeError):
+    """Monarch not enabled (not selected, or the risk acknowledgment is missing/cooling down)."""
+
+
+def _monarch_ack():
+    a = _read_settings().get("MONARCH_RISK_ACK")
+    return a if isinstance(a, dict) and a.get("at") else None
+
+
+def _monarch_enabled():
+    return os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() == "monarch" and _monarch_ack() is not None
+
+
+def _monarch_guard():
+    if os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() != "monarch":
+        raise MonarchDisabled("Monarch is not the selected portfolio data source.")
+    if _monarch_ack() is None:
+        raise MonarchDisabled(MONARCH_LABEL + " is selected but not enabled: an admin must accept the "
+                              "risk acknowledgment in SETTINGS -> ACCOUNTS first.")
+    wait = _MONARCH_COOLDOWN_S - (time.time() - _monarch_state["fail_ts"])
+    if wait > 0:
+        raise MonarchDisabled(f"Monarch failed recently ({_monarch_state['err']}); not retrying for "
+                              f"{int(wait)}s to avoid load on their service.")
+
+
 def _post(op, payload):
+    _monarch_guard()
     url = f"{MCPO}/{ROUTE}/{op}"
     headers = {"Content-Type": "application/json"}
     if KEY:
         headers["Authorization"] = f"Bearer {KEY}"
-    r = requests.post(url, headers=headers, json=payload, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        _monarch_state["fail_ts"] = time.time()
+        _monarch_state["err"] = f"{type(e).__name__}"
+        raise
 
 
 def _accounts(data):
@@ -2893,14 +2942,17 @@ def build():
     integration_outage detection.alert (notifications.py), which only ever fires for the provider
     actually selected here, so a household that's never touched SnapTrade never generates a
     SnapTrade alert in the first place."""
-    p = os.environ.get("PORTFOLIO_PROVIDER", "monarch").lower()
+    p = os.environ.get("PORTFOLIO_PROVIDER", "csv").lower()
+    if p == "monarch" and _monarch_ack() is None:
+        _monarch_guard()   # raises a clear "not enabled" error; not an outage, so no notification
     try:
-        if p == "csv":
-            d = _build_csv()
-        elif p == "snaptrade":
+        if p == "snaptrade":
             d = _build_snaptrade()
-        else:
+        elif p == "monarch":
             d = _build_monarch()
+        else:
+            p = "csv"
+            d = _build_csv()
     except Exception as e:
         try:
             notifications.record_integration_result(p, ok=False, error=e)
@@ -3036,7 +3088,7 @@ def get_holdings_csv():
     ACTIVE PORTFOLIO_PROVIDER, so a user can populate holdings.csv before switching to it (SETTINGS
     -> Portfolio provider)."""
     return {"rows": _read_holdings_csv_rows(), "path": _holdings_csv_path(),
-            "active_provider": os.environ.get("PORTFOLIO_PROVIDER", "monarch").lower(),
+            "active_provider": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower(),
             "type_hints": HOLDINGS_TYPE_HINTS}
 
 
@@ -5291,6 +5343,10 @@ def raw_holdings(account_id: str = "", limit: int = 2):
     Compare each node's basis vs totalValue vs security.currentPrice * quantity."""
     try:
         accts = [a for a in _accounts(_post("get_accounts", {})) if (a.get("holdingsCount") or 0) > 0]
+    except MonarchDisabled as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except MonarchDisabled as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:
         return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {e}"},
                             status_code=502)
@@ -5320,6 +5376,10 @@ def raw_accounts():
     out = []
     try:
         accts_raw = _accounts(_post("get_accounts", {}))
+    except MonarchDisabled as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except MonarchDisabled as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:
         return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {e}"},
                             status_code=502)
@@ -9869,6 +9929,10 @@ async def post_settings(req: Request):
     """Set advanced knobs (local settings.json). ENV-set knobs are ignored (env wins) and
     reported as env_locked. Blank clears back to default. Config only — no money action."""
     body = await req.json()
+    if str((body or {}).get("PORTFOLIO_PROVIDER") or "").lower() == "monarch" and _monarch_ack() is None:
+        return JSONResponse({"error": MONARCH_LABEL + " can only be selected via the acknowledgment in "
+                             "SETTINGS -> ACCOUNTS (POST /api/integrations/monarch/enable)."},
+                            status_code=400)
     old = _read_settings()   # independent read, captured before any mutation
     stored = _read_settings()
     applied, ignored = [], []
@@ -9911,6 +9975,65 @@ async def post_settings(req: Request):
     _emit_config_changed(req, "/api/settings", old, stored)
     return {"ok": True, "applied": applied, "ignored_env_locked": ignored,
             "staged_behind_env": staged_behind_env, "restart_required": restart_needed, "settings": stored}
+
+
+# ---- Monarch opt-in (TASK-003): status / enable-with-acknowledgment / disable. Admin only. ----
+@app.get("/api/integrations/monarch")
+def monarch_status(request: Request):
+    ack = _monarch_ack()
+    return {"label": MONARCH_LABEL, "enabled": _monarch_enabled(), "acknowledged": ack is not None,
+            "acknowledgment": ({"at": ack.get("at"), "by": ack.get("by")} if ack else None),
+            "provider": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower(),
+            "ack_text": MONARCH_ACK_TEXT,
+            "cooldown_s": max(0, int(_MONARCH_COOLDOWN_S - (time.time() - _monarch_state["fail_ts"])))}
+
+
+@app.post("/api/integrations/monarch/enable")
+async def monarch_enable(req: Request):
+    user = _require_admin(req)
+    if not user:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    if (body or {}).get("acknowledge") is not True:
+        return JSONResponse({"error": "You must accept the risk acknowledgment to enable " + MONARCH_LABEL},
+                            status_code=400)
+    stored = _read_settings()
+    stored["MONARCH_RISK_ACK"] = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                                  "by": user.get("username"), "version": MONARCH_ACK_VERSION}
+    stored["PORTFOLIO_PROVIDER"] = "monarch"
+    store.write_json(SETTINGS_FILE, stored)
+    env_locked = "PORTFOLIO_PROVIDER" in _ENV_SECRETS_AT_BOOT and \
+        os.environ.get("PORTFOLIO_PROVIDER", "").lower() != "monarch"
+    if not env_locked:
+        os.environ["PORTFOLIO_PROVIDER"] = "monarch"
+    _monarch_state.update(fail_ts=0.0, err="")
+    _cache["data"], _cache["ts"] = None, 0
+    audit.emit("integration.monarch.enabled", actor=user.get("id"), actor_name=user.get("username"),
+               resource="/api/integrations/monarch/enable", request=req,
+               detail={"ack_version": MONARCH_ACK_VERSION, "ack_text": MONARCH_ACK_TEXT,
+                       "env_locked": env_locked})
+    return {"ok": True, "enabled": _monarch_enabled(), "env_locked": env_locked}
+
+
+@app.post("/api/integrations/monarch/disable")
+async def monarch_disable(req: Request):
+    user = _require_admin(req)
+    if not user:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    stored = _read_settings()
+    stored.pop("MONARCH_RISK_ACK", None)
+    if str(stored.get("PORTFOLIO_PROVIDER") or "").lower() == "monarch":
+        stored["PORTFOLIO_PROVIDER"] = "csv"
+    store.write_json(SETTINGS_FILE, stored)
+    if os.environ.get("PORTFOLIO_PROVIDER", "").lower() == "monarch":
+        os.environ["PORTFOLIO_PROVIDER"] = "csv"
+    _cache["data"], _cache["ts"] = None, 0
+    audit.emit("integration.monarch.disabled", actor=user.get("id"), actor_name=user.get("username"),
+               resource="/api/integrations/monarch/disable", request=req)
+    return {"ok": True, "enabled": False}
 
 
 # ---- Secrets editor (N6 Phase 2): write-only, masked. Values are NEVER returned. ----

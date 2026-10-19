@@ -22,7 +22,7 @@ Two containers via Docker Compose, plus Ollama on the host:
 | Service           | Role |
 |-------------------|------|
 | **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, the built-in chat, **and the built-in job scheduler** (the recurring agent runs — see *Scheduling* below). |
-| **mcpo**          | Bridges MCP servers (Monarch, Tavily, time) to the app over HTTP. |
+| **mcpo**          | Bridges MCP servers (Tavily, time, and optionally the unofficial Monarch integration) to the app over HTTP. |
 | **Ollama** *(host)* | Runs the local LLM that does the analysis & Strategist reasoning. Not a container here — see prerequisites. |
 
 So `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`); Ollama
@@ -81,7 +81,7 @@ ollama pull bge-m3             # embeddings for the Fiduciary knowledge RAG
 | **Finnhub** | Quotes, valuation multiples, trading volume | https://finnhub.io/ |
 | **Tavily**  | News-discovery agent | https://tavily.com/ |
 | **SEC EDGAR** | GAAP fundamentals — needs a descriptive User-Agent **with your email** (no signup) | just set `SEC_USER_AGENT` |
-| **Portfolio source** | Your holdings (see below) | Monarch / SnapTrade, or a local CSV (no account needed) |
+| **Portfolio source** | Your holdings (see below) | A local CSV (no account needed) or SnapTrade; Monarch is optional/unofficial |
 
 ---
 
@@ -114,7 +114,9 @@ Then run **`python setup.py`** to validate your config and print any remaining s
 
 ## Portfolio data source (`PORTFOLIO_PROVIDER`)
 
-The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
+The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env` (default: `csv`).
+
+### Data sources — supported paths
 
 - **`csv`** *(most portable — no brokerage account required)*: maintain a simple
   `holdings.csv` (see **`holdings.csv.example`**: ticker, quantity, cost_basis, account,
@@ -126,11 +128,20 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env`:
   holdings across brokerages via [SnapTrade](https://snaptrade.com/) (free dev tier). Set
   the `SNAPTRADE_*` vars, then run **`python snaptrade_register.py`** once to register a
   user, link your brokerage(s), and get your `USER_ID`/`USER_SECRET`.
-- **`monarch`**: pulls live from [Monarch Money](https://www.monarchmoney.com/) via mcpo
-  (set the `MONARCH_*` vars). Monarch aggregates most brokerages.
 
-> All three plug into the same `build()` interface, so you can switch providers with one
-> env var without touching anything else.
+### Unofficial / optional — **Monarch (unofficial, at your own risk)**
+
+- **`monarch`** *(off by default)*: Monarch Money has **no public API**. This integration
+  talks to its private, undocumented API through mcpo, and Monarch's terms restrict
+  automated access. It may break without notice, and your Monarch account could be
+  restricted or closed. It is not a supported integration. To enable it, an admin must tick the
+  risk acknowledgment under **SETTINGS → ACCOUNTS → Monarch (unofficial, at your own risk)**
+  (the acknowledgment is audit-logged as `integration.monarch.enabled`); selecting `monarch`
+  in `.env` alone does nothing until that is done. Then set the `MONARCH_*` secrets. If Monarch
+  fails, the app shows a clear error and backs off for 5 minutes rather than retrying.
+
+> All providers plug into the same `build()` interface, so you can switch with one setting
+> without touching anything else. The app runs fully without Monarch.
 
 **Liabilities (loans, credit cards, etc.) — 2026-07-30:** `csv`/`snaptrade` never had a way
 to represent debt (every account was hardcoded as an asset, so net worth for those two
@@ -205,7 +216,11 @@ what to fill in and where, ranked by how much it unlocks.
 - Use a **private repository** for anything holding your configuration.
 - Your portfolio data and API keys never leave your machine.
 
-## Not financial advice
+## Disclaimer
 
-This project is for education and personal research. It is not investment, tax, or legal
-advice. Verify everything with a qualified professional before acting.
+This project is an educational tool for personal research. It is **not** financial,
+investment, tax, or legal advice, and nothing it outputs (including AI-generated analysis)
+should be acted on without verifying with a qualified professional. You run it on your own
+hardware and are solely responsible for complying with the terms of every third-party
+provider you connect (brokerage aggregators, market-data and news APIs, Monarch, etc.).
+It is provided as-is, without warranty.

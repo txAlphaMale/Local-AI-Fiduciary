@@ -44,7 +44,7 @@ once it's running (a `docker compose up -d portfolio-api` applies a UI-saved cha
 |----------|-------|
 | `csv` *(no account)* | **Easiest: use the in-app HOLDINGS tab** (2026-07-24) — enter positions in an editable table or upload a CSV, no host file access needed. The old manual path still works too: fill a `holdings.csv` from `holdings.csv.example` and put it where `HOLDINGS_CSV` points (default `/data/holdings.csv`, or bind-mount it in the compose). **Have debt (loans/credit cards)?** (2026-07-30) The same HOLDINGS tab has a separate LIABILITIES table below the positions editor — there's no CSV/file equivalent for this one, it's in-app only. Without it, `csv`/`snaptrade` accounts were always treated as debt-free. |
 | `snaptrade` *(live, many brokers incl. Robinhood)* | Free dev signup at snaptrade.com → set `SNAPTRADE_CLIENT_ID`/`CONSUMER_KEY`; run `python3 snaptrade_register.py` to link brokerage(s) and get `USER_ID`/`USER_SECRET`. Debt isn't synced by SnapTrade either — use the HOLDINGS tab's LIABILITIES table (see the `csv` row above) for any loan/credit card. |
-| `monarch` | Set `MONARCH_EMAIL`/`PASSWORD`/`MFA_SECRET`. |
+| `monarch` *(unofficial, at your own risk — off by default)* | Uses Monarch's private API, which their terms restrict. Set `MONARCH_EMAIL`/`PASSWORD`/`MFA_SECRET`, then an admin must accept the risk acknowledgment under SETTINGS → ACCOUNTS → Monarch before it activates. |
 
 ```bash
 # 5. Start the stack (portfolio-api + mcpo)
