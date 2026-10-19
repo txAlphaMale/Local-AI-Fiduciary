@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_monarch_optional.py -- TASK-003: Monarch is optional, unofficial, default-off and gated by an
 audited risk acknowledgment. Runs the real app against a throwaway data dir.
