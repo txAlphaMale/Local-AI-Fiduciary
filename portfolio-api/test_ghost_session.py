@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_ghost_session.py -- TASK-001b: a session whose account was deleted (or whose password/MFA was
 changed since it was minted) must stop working. Real app + real global gate, throwaway data dir.
