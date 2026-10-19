@@ -8246,7 +8246,8 @@ CALC_SPECS.drip={title:'DIVIDEND REINVESTMENT (DRIP)',
     {g:'TAX & EXTRAS',f:[
       {k:'tax_rate_pct',l:'Dividend tax rate',u:'%',ph:'0 in IRA · ~15 taxable',h:'Qualified dividends: 0/15/20% federal (+3.8% NIIT at high income) + state. 0 inside tax-advantaged accounts.'},
       {k:'drip_discount_pct',l:'DRIP purchase discount',u:'%',ph:'0',h:'Some company-run plans buy reinvested shares at a 1–5% discount.'},
-      {k:'inflation_pct',l:'Inflation (for real value)',u:'%/yr',ph:'2.5'}]}]};
+      {k:'inflation_pct',l:'Inflation (for real value)',u:'%/yr',ph:'2.5'},
+      {k:'hold_yield',l:'Hold yield constant (dividend tracks price)',t:'chk',d:false,wide:1,h:'Ignores Dividend growth and moves the dividend with the share price, so today\'s yield stays put. The realistic case for high-yield payers (mortgage REITs, BDCs, covered-call funds) that cut when the price falls.'}]}]};
 CALC_SPECS.drip.holdingPicker=true;
 CALC_SPECS.tvm={title:'TVM SOLVER · N · I/Y · PV · PMT · FV',
   intro:'One formula, every "all but one is known" problem. Fill in four of the five, leave the one you want BLANK, and it is solved. Signs follow the financial-calculator convention: money you RECEIVE is positive, money you PAY OUT is negative (a loan: PV +, PMT −; a savings plan: PV −, PMT −, FV +).',
@@ -8704,11 +8705,13 @@ CALC_RENDER.land_loan=(r,key)=>{
 };
 CALC_RENDER.drip=(r,key)=>{
   const w=el('div'), nd=r.without_drip||{};
+  if((r.warnings||[]).length){ const wb=el('div'); wb.style.cssText='border:1px solid var(--color-negative);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);color:var(--color-negative);font-size:var(--font-size-base);line-height:1.45;';
+    wb.textContent='⚠ '+r.warnings.join(' ⚠ '); w.appendChild(wb); }
   w.appendChild(_cTiles([
     ['FINAL VALUE',_c$(r.final_value),null,_cN(r.final_shares,2)+' shares @ '+_c$2(r.final_price)],
     ['DRIP ADVANTAGE',_c$(r.drip_advantage),r.drip_advantage>0?'pos':null,'vs taking dividends as cash'],
     ['ANNUAL INCOME AT END',_c$(r.annual_income_at_end),'pos',_c$(r.monthly_income_at_end)+'/mo'],
-    ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested'],
+    ['YIELD ON COST',_cP(r.yield_on_cost_pct,2),null,'end income ÷ total invested · yield then '+_cP(r.end_yield_pct,1)],
     r.final_value_real!=null&&['IN TODAY\'S DOLLARS',_c$(r.final_value_real),null,'inflation-adjusted'],
   ]));
   const cols=el('div'); cols.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--space-4);';

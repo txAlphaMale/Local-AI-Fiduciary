@@ -847,6 +847,7 @@ def drip(inp):
         gc = _num(inp, "contribution_growth_pct", 0.0, lo=0, hi=50)
         fq = int(_num(inp, "frequency", 4, lo=1, hi=12))
         tax = _num(inp, "tax_rate_pct", 0.0, lo=0, hi=60)
+        hold_yield = str(inp.get("hold_yield", False)).lower() in ("true", "1", "yes", "on")
         disc = _num(inp, "drip_discount_pct", 0.0, lo=0, hi=20)
         infl = _num(inp, "inflation_pct", None, lo=-5, hi=30)
     except _Missing as m:
@@ -855,6 +856,13 @@ def drip(inp):
         return {"error": str(e)}
     if 12 % fq:
         return {"error": "Dividend frequency must be 12, 4, 2 or 1 payments per year."}
+    if hold_yield:
+        # Dividend tracks the price, so the yield stays where it is today. The realistic case
+        # for high-yield payers (mortgage REITs, BDCs, covered-call funds) whose payout is set
+        # as a % of book/NAV: when the price falls, the dividend gets cut with it.
+        gd = gp
+        pre_notes.append("Yield held constant: dividend growth set equal to price growth "
+                         f"({gp:g}%/yr).")
     shares0 = sh0 if sh0 is not None else init / price0
     invested0 = shares0 * price0
     months = int(round(years * 12))
@@ -901,6 +909,22 @@ def drip(inp):
                 "yearly": yearly}
     d, c = sim(True), sim(False)
     total_in = invested0 + d["contrib"]
+    # Sanity guard (2026-10-19, found by Jason's MFA test): with dividend growth well above price
+    # growth, the implied yield compounds without limit — a price falling 15%/yr against a
+    # dividend falling 4%/yr reaches a 200%+ yield and DRIP "buys" billions of dollars. That is
+    # arithmetic, not a forecast: in reality the dividend gets cut. Say so loudly.
+    warnings = []
+    end_yield = 100.0 * d["dps_end"] / d["price_end"] if d["price_end"] else None
+    if end_yield is not None and y0 > 0 and end_yield > max(2.0 * y0, y0 + 10.0):
+        warnings.append(f"Implausible projection: the dividend outgrows the price by {gd - gp:.1f} "
+                        f"pts/yr, so the yield climbs from {y0:.1f}% today to {end_yield:.0f}% by the "
+                        "end, and every reinvested dividend buys ever-cheaper shares. Real payers cut "
+                        "the dividend long before that. Tick 'hold yield constant' (dividend tracks "
+                        "the price) or narrow the gap between the two growth rates.")
+    elif y0 >= 10:
+        warnings.append(f"A {y0:.1f}% yield usually means the market expects a cut or the payout "
+                        "includes return of capital. Check the payout's coverage before trusting a "
+                        "steady-dividend projection; 'hold yield constant' is the conservative case.")
     income_end = d["shares"] * d["dps_end"]
     out = {"calculator": "drip", "starting_shares": round(shares0, 4), "starting_value": _r2(invested0),
            "final_value": _r2(d["value"]), "final_shares": round(d["shares"], 4),
@@ -917,6 +941,8 @@ def drip(inp):
            "extra_shares_from_drip": round(d["shares"] - c["shares"], 4),
            "yearly": d["yearly"],
            "share_price_used": _r2(price0), "dividend_yield_used_pct": round(y0, 4),
+           "end_yield_pct": round(end_yield, 2) if end_yield is not None else None,
+           "warnings": warnings,
            "assumptions": {"price_growth_pct": gp, "dividend_growth_pct": gd, "frequency": fq,
                            "tax_rate_pct": tax, "drip_discount_pct": disc},
            "notes": pre_notes + ["Steady growth rates are a simplification — real dividends get cut and prices "

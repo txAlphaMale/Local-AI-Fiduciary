@@ -285,6 +285,19 @@ class TestDripInputs(unittest.TestCase):
         self.assertAlmostEqual(r["dividend_yield_used_pct"], 4.0, places=6)
 
 
+class TestDripSanity(unittest.TestCase):
+    def test_divergent_growth_warns(self):
+        r = c.drip({"initial_investment": 10000, "share_price": 6.43, "dividend_yield_pct": 22.4,
+                    "dividend_growth_pct": -3.64, "price_growth_pct": -14.63, "years": 20})
+        self.assertTrue(any("Implausible" in w for w in r["warnings"]))
+
+    def test_hold_yield_keeps_yield(self):
+        r = c.drip({"initial_investment": 10000, "share_price": 6.43, "dividend_yield_pct": 22.4,
+                    "price_growth_pct": -14.63, "dividend_growth_pct": 5, "years": 20, "hold_yield": True})
+        self.assertFalse(any("Implausible" in w for w in r["warnings"]))
+        self.assertLess(abs(r["end_yield_pct"] - 22.4), 3.0)   # annual DPS step vs monthly price drift
+
+
 class TestDividendProfile(unittest.TestCase):
     @staticmethod
     def _ts(y, m, d=15):
