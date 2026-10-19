@@ -930,6 +930,14 @@ async function load(refresh, bg){
       SETTINGS_CFG=setg; SECRETS_CFG=secg; HOLDCSV=hcsv; MANLIAB=mlia;
       document.getElementById('body').innerHTML='<div class="err">'+d.error
         +'<br><br><span class="muted" style="font-size:var(--font-size-sm);">Portfolio data is unavailable, but SETTINGS (⚙, top right) and the HOLDINGS tab still work — no brokerage account required if you switch to CSV.</span></div>';
+      // TASK-002 finding: break-glass must not depend on the portfolio provider. The designee's
+      // REQUEST button and the vault live in vaultContent(), so mount it here too.
+      try{
+        const bodyEl=document.getElementById('body');
+        const vp=el('div','panel'); vp.style.cssText='margin-top:var(--space-4);padding:var(--space-3);';
+        vp.appendChild(el('div','ph','DOCUMENT VAULT · EMERGENCY ACCESS (available even while portfolio data is down)'));
+        vp.appendChild(emergencyBannerNode()); vp.appendChild(vaultContent()); bodyEl.appendChild(vp);
+      }catch(_){ }
       return;
     }
     DATA=d;
@@ -5909,8 +5917,8 @@ function emergencyPanel(){
     if((st.history||[]).length){
       body.appendChild(el('div','ph','REQUEST HISTORY'));
       const tb=el('table'); tb.style.cssText='border-collapse:collapse;width:100%;font-size:var(--font-size-sm);';
-      const hr=el('tr'); ['Requested','By','Type','Status','Decided'].forEach(h=>{ const th=el('th'); th.textContent=h; th.style.cssText='text-align:left;padding:2px 8px;'; hr.appendChild(th); }); tb.appendChild(hr);
-      st.history.forEach(h=>{ const tr=el('tr'); [_emTs(h.requested_at),h.designee,h.grant_type||'',h.status,_emTs(h.decided_at)].forEach(v=>{ const td=el('td'); td.textContent=v; td.style.cssText='padding:2px 8px;'; tr.appendChild(td); }); tb.appendChild(tr); });
+      const hr=el('tr'); ['Requested','For','Type','Status','Decided','Decided by'].forEach(h=>{ const th=el('th'); th.textContent=h; th.style.cssText='text-align:left;padding:2px 8px;'; hr.appendChild(th); }); tb.appendChild(hr);
+      st.history.forEach(h=>{ const tr=el('tr'); [_emTs(h.requested_at),h.designee,h.grant_type||'',h.status,_emTs(h.decided_at),h.decided_by||''].forEach(v=>{ const td=el('td'); td.textContent=v; td.style.cssText='padding:2px 8px;'; tr.appendChild(td); }); tb.appendChild(tr); });
       body.appendChild(tb);
     }
   }
@@ -5951,13 +5959,19 @@ function emergencyVaultBar(){
       const box=el('div'); box.style.cssText='border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);';
       const t=el('div'); t.textContent='EMERGENCY KIT · an offline, passphrase-encrypted copy of every EMERGENCY document plus your contacts, usable even if this server is gone.'; box.appendChild(t);
       const s=el('div','muted'); s.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;';
-      s.textContent=ks.never_generated?('Never generated · '+ks.current_count+' emergency document(s) on file'):('Last generated '+_emTs(ks.generated_at)+' · '+ks.item_count+' document(s)'); box.appendChild(s);
-      if(ks.stale){ const w=el('div'); w.style.cssText='color:var(--color-accent);font-weight:600;'; w.textContent='⚠ KIT IS STALE — emergency documents changed since it was generated'; box.appendChild(w); }
+      const w=el('div'); w.style.cssText='color:var(--color-accent);font-weight:600;';
+      const setStatus=k=>{
+        s.textContent=k.never_generated?('No kit generated yet · '+k.current_count+' emergency document(s) on file'):('Last generated '+_emTs(k.generated_at)+' · '+k.item_count+' document(s)');
+        w.textContent=k.never_generated?(k.current_count?'⚠ NO KIT YET — generate one so these documents survive the loss of this server':'')
+          :(k.stale?'⚠ KIT IS STALE — emergency documents changed since it was generated':'');
+      };
+      setStatus(ks); box.appendChild(s); box.appendChild(w);
       const out=el('div'); out.style.cssText='margin-top:var(--space-2);';
       const g=el('button'); g.textContent='GENERATE EMERGENCY KIT';
       g.onclick=async()=>{ g.disabled=true; out.textContent='Building…';
         const r=await _emPost('/api/vault/kit',{}); g.disabled=false;
         if(!r.ok){ out.textContent='Failed: '+(r.j.error||r.status); return; }
+        try{ setStatus(await (await fetch('/api/vault/kit/status')).json()); }catch(_){}   // refresh the status lines in place; `out` (one-time passphrase) is never rebuilt
         out.textContent='';
         const pw=el('div'); pw.style.cssText='border:2px solid var(--color-accent);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);';
         const l=el('div'); l.textContent='KIT PASSPHRASE — shown ONCE, not stored anywhere. Write it down and keep it apart from the file:'; pw.appendChild(l);
@@ -5993,7 +6007,7 @@ function vaultContent(){
   const wrap=el('div');
   const hd=el('div','ph','DOCUMENT VAULT · ENCRYPTED AT REST'); wrap.appendChild(hd);
   const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
-  note.textContent='Files are encrypted on this server (AES-256-GCM, per-file keys wrapped by the app key). This protects stolen disks and backups, not a compromised host. Visibility: PRIVATE = admin only · HOUSEHOLD = admin + viewers · EMERGENCY = admin now; the designated contact only after an emergency request is granted (coming in Phase 2).';
+  note.textContent='Files are encrypted on this server (AES-256-GCM, per-file keys wrapped by the app key). This protects stolen disks and backups, not a compromised host. Visibility: PRIVATE = admin only · HOUSEHOLD = admin + viewers · EMERGENCY = admin now; the designated contact only after an emergency request is granted (SETTINGS → IAM → EMERGENCY ACCESS).';
   wrap.appendChild(note);
   wrap.appendChild(emergencyVaultBar());   // TASK-002: designee request button / admin emergency kit
   const body=el('div'); wrap.appendChild(body);

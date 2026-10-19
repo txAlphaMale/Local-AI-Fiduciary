@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 kit_decrypt.py -- decrypt a Fiduciary Emergency Kit (*.fidkit) with NOTHING but a passphrase.
 Needs only Python 3.8+ and the `cryptography` package:   pip install cryptography

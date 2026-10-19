@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 kit.py -- the offline Emergency Kit (TASK-002 §3.5). Survives total loss of the server: ONE
 passphrase-encrypted *.fidkit (all `emergency` vault items + a binder export + a manifest of sha256s)

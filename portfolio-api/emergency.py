@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 emergency.py -- break-glass emergency access for the document vault (TASK-002, Vault Phase 2).
 
@@ -616,7 +618,14 @@ def status_for(user):
 def _req_view(r):
     if not r:
         return None
+    if r["decided_by"]:
+        dby = _name(r["decided_by"])
+    elif r["decided_at"]:
+        dby = "automatic"                       # the scheduler (wait elapsed / expiry / auto-disable)
+    else:
+        dby = None
     return {"id": r["id"], "designee_uid": r["designee_uid"], "designee": _name(r["designee_uid"]),
             "requested_at": r["requested_at"], "status": r["status"], "decided_at": r["decided_at"],
+            "decided_by": dby,
             "grant_type": r["grant_type"], "grant_expires_at": r["grant_expires_at"],
             "grants_at": _grants_at(r), "wait_seconds": r["wait_seconds"]}

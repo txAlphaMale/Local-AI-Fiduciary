@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_emergency.py -- TASK-002: emergency access (break-glass) + Emergency Kit.
 Real app + real global gate against a PRIVATE copy of the auth/store/audit databases (so role swaps
@@ -197,6 +199,8 @@ class TestStateMachine(Base):
         self.assertNotIn(self.em, self.ids_for(self.D))
         self.assertEqual(emergency.history()[0]["status"], "denied")
         self.assertIn("emergency.denied", self.audit_types())
+        h = emergency.status_for(self.admin())["history"][0]
+        self.assertEqual(h["decided_by"], "em_admin")                       # records WHO decided
 
     def test_auto_grant_after_wait_only_exposes_emergency_items(self):
         emergency.request_access(self.des())
@@ -207,6 +211,7 @@ class TestStateMachine(Base):
         T[0] += 2
         self.assertEqual(emergency.tick()["granted"], [emergency.history()[0]["id"]])
         self.assertTrue(emergency.emergency_granted(self.des()))
+        self.assertEqual(emergency.status_for(self.admin())["history"][0]["decided_by"], "automatic")
         ids = self.ids_for(self.D)
         self.assertIn(self.em, ids)
         self.assertIn(self.hh, ids)

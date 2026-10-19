@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 emergency_api.py -- HTTP layer for emergency.py and the Emergency Kit (TASK-002). register(app).
 
