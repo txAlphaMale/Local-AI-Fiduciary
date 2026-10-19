@@ -172,6 +172,8 @@ EVENT_TYPES = (
     # annual re-anchor-with-fresh-crypto renewal (RFC 4998/ETSI-inspired, see audit_anchor.py).
     "audit.anchor.completed", "audit.anchor.verify.ok", "audit.anchor.verify.failed",
     "audit.anchor.renewed",
+    # TASK-001 (2026-10): encrypted document vault (vault.py / vault_api.py).
+    "vault.upload", "vault.download", "vault.update", "vault.delete",
 )
 
 

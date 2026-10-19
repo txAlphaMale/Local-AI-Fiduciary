@@ -144,3 +144,7 @@ infra/terraform/backend.hcl
 infra/terraform/.live-snapshot/
 # NOTE: demo-env/waf.auto.tfvars.json is intentionally NOT ignored -- public scanner CIDRs + the
 # geo allow-list are the WAF's source of truth and need to be in the repo for plan/CI.
+
+# ---- Claude Code agent guardrails (internal paths/policy; place per-checkout, never publish) ----
+CLAUDE.md
+.claude/

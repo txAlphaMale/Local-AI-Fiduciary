@@ -73,6 +73,8 @@ import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Stor
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
 import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
+import vault          # TASK-001 — encrypted document vault
+import vault_api      # TASK-001 — /api/vault/* handlers
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
 # _boot_merge two lines down) — store.py itself does no work at import time, so this is the
@@ -10197,6 +10199,11 @@ def get_secrets_key_status(request: Request):
     return secrets_crypto.key_status()
 
 
+# TASK-001: encrypted document vault. Tables live in store.db; blobs under VAULT_DIR.
+vault.init_db()
+vault_api.register(app)
+
+
 @app.post("/api/secrets/rotate-key")
 def post_secrets_rotate_key(request: Request):
     """SEC-3 (2026-07-25) — admin-only: generate a new encryption key and make it current for all
@@ -10210,8 +10217,14 @@ def post_secrets_rotate_key(request: Request):
     if not admin:
         return JSONResponse({"error": "admin only"}, status_code=403)
     new_version = secrets_crypto.rotate_key()
+    try:
+        rewrapped = vault.rewrap_all()   # vault DEKs move to the new key; blobs are untouched
+    except Exception as e:
+        rewrapped = None
+        print(f"[vault] DEK re-wrap after key rotation failed (old key still opens everything): {e}", flush=True)
     audit.emit("secret.rotated", request=request, actor=admin["id"], actor_name=admin["username"],
-               resource="/api/secrets/rotate-key", detail={"new_version": new_version})
+               resource="/api/secrets/rotate-key",
+               detail={"new_version": new_version, "vault_deks_rewrapped": rewrapped})
     return {"ok": True, "status": secrets_crypto.key_status()}
 
 

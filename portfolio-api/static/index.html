@@ -3050,6 +3050,7 @@ function planContent(r){
     (CASHDEBT && !CASHDEBT.error) && {key:'cashdebt',label:'CASH · DEBT',build:()=>cashdebtContent()},
     (BEN && !BEN.error) && {key:'benefits',label:'BENEFITS',build:()=>benefitsContent()},
     (CONTIN && !CONTIN.error) && {key:'continuity',label:'CONTINUITY',build:()=>continuityContent()},
+    (CONTIN && !CONTIN.error) && {key:'vault',label:'VAULT',build:()=>vaultContent()},
     (ROTH && !ROTH.error) && {key:'roth',label:'ROTH · RATE CURVE',build:()=>rothContent()},
     (REALESTATE && !REALESTATE.error) && {key:'realestate',label:'REAL ESTATE',build:()=>realEstateContent()},
     (BUSINESS && !BUSINESS.error) && {key:'business',label:'BUSINESS',build:()=>businessContent()},
@@ -5839,6 +5840,115 @@ function continuityContent(){
                              estate_doc_review_years:parseFloat(g('dc-cadence').value)||3})});
       load(false); };
   },0);
+  return wrap;
+}
+
+// ---------------- VAULT (TASK-001 P1): encrypted document vault, PLAN -> VAULT ----------------
+// Self-fetching (does not ride the main load()). Every user-supplied string (title, filename) goes
+// in via textContent -- el()'s 3rd arg is innerHTML, so never pass document metadata through it.
+let VAULT_FOLDER='';
+function vaultContent(){
+  const wrap=el('div');
+  const hd=el('div','ph','DOCUMENT VAULT · ENCRYPTED AT REST'); wrap.appendChild(hd);
+  const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
+  note.textContent='Files are encrypted on this server (AES-256-GCM, per-file keys wrapped by the app key). This protects stolen disks and backups, not a compromised host. Visibility: PRIVATE = admin only · HOUSEHOLD = admin + viewers · EMERGENCY = admin now; the designated contact only after an emergency request is granted (coming in Phase 2).';
+  wrap.appendChild(note);
+  const body=el('div'); wrap.appendChild(body);
+  const fmtSize=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+  const daysTo=d=>{ if(!d) return null; const t=Date.parse(d+'T00:00:00'); return isNaN(t)?null:Math.round((t-Date.now())/86400000); };
+  async function refresh(){
+    body.textContent='Loading…';
+    let F,I;
+    try{
+      F=await (await fetch('/api/vault/folders')).json();
+      I=await (await fetch('/api/vault/items'+(VAULT_FOLDER?'?folder='+encodeURIComponent(VAULT_FOLDER):''))).json();
+    }catch(e){ body.textContent='Vault unavailable: '+e; return; }
+    if(F.error||I.error){ body.textContent='Vault unavailable: '+(F.error||I.error); return; }
+    body.textContent='';
+    const admin=!!F.is_admin;
+    // folder chips
+    const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);';
+    const chip=(label,val)=>{ const c=el('span'); c.textContent=label; const on=VAULT_FOLDER===val;
+      c.style.cssText='cursor:pointer;font-size:var(--font-size-sm);padding:var(--space-1) var(--space-2);border-radius:var(--radius-md);border:1px solid var(--color-border);'+(on?'background:rgba(230,180,80,0.13);color:var(--color-accent);':'color:var(--color-text-muted);');
+      c.onclick=()=>{ VAULT_FOLDER=val; refresh(); }; bar.appendChild(c); };
+    chip('ALL','');
+    F.folders.forEach(f=>chip(f.name+' ('+f.count+')',f.name));
+    body.appendChild(bar);
+    if(admin){
+      const lim=F.limits||{};
+      const box=el('div'); box.style.cssText='border:1px dashed var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);';
+      const msg=el('div','muted'); msg.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);';
+      const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;';
+      const mk=(tag,attrs)=>{ const x=document.createElement(tag); Object.assign(x,attrs||{}); return x; };
+      const file=mk('input',{type:'file'}); file.accept='.pdf,.png,.jpg,.jpeg,.heic,.txt,.docx,.xlsx';
+      const folder=mk('select'); F.folders.forEach(f=>{ const o=mk('option',{value:f.name,textContent:f.name}); if(f.name===VAULT_FOLDER) o.selected=true; folder.appendChild(o); });
+      const vis=mk('select'); [['','visibility: folder default'],['private','PRIVATE'],['household','HOUSEHOLD'],['emergency','EMERGENCY']].forEach(([v,l])=>vis.appendChild(mk('option',{value:v,textContent:l})));
+      const title=mk('input',{type:'text',placeholder:'title (optional)'});
+      const exp=mk('input',{type:'date',title:'expires on (optional)'});
+      const rev=mk('input',{type:'date',title:'review by (optional)'});
+      const go=mk('button',{textContent:'⬆ UPLOAD'});
+      [file,folder,vis,title,exp,rev,go].forEach(x=>row.appendChild(x));
+      box.appendChild(row);
+      const hint=el('div','muted'); hint.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);';
+      hint.textContent='Drop a file here or choose one · PDF, PNG, JPEG, HEIC, TXT, DOCX, XLSX · max '+lim.max_file_mb+' MB each · '+lim.max_total_gb+' GB total'+(lim.used_bytes!=null?' ('+fmtSize(lim.used_bytes)+' used)':'')+' · expires/review dates feed alerts.';
+      box.appendChild(hint); box.appendChild(msg);
+      async function send(f){
+        if(!f){ msg.textContent='Choose a file first.'; return; }
+        msg.textContent='Encrypting and uploading '+f.name+'…';
+        const h={'X-Vault-Filename':encodeURIComponent(f.name),'X-Vault-Folder':encodeURIComponent(folder.value)};
+        if(vis.value) h['X-Vault-Visibility']=vis.value;
+        if(title.value) h['X-Vault-Title']=encodeURIComponent(title.value);
+        if(exp.value) h['X-Vault-Expires-On']=exp.value;
+        if(rev.value) h['X-Vault-Review-By']=rev.value;
+        try{
+          const r=await fetch('/api/vault/upload',{method:'POST',headers:h,body:f});
+          const j=await r.json();
+          if(!r.ok){ msg.textContent='Upload failed: '+(j.error||r.status); return; }
+          refresh();
+        }catch(e){ msg.textContent='Upload failed: '+e; }
+      }
+      go.onclick=()=>send(file.files[0]);
+      box.ondragover=e=>{ e.preventDefault(); box.style.background='rgba(230,180,80,0.08)'; };
+      box.ondragleave=()=>{ box.style.background=''; };
+      box.ondrop=e=>{ e.preventDefault(); box.style.background=''; const f=e.dataTransfer&&e.dataTransfer.files[0]; if(f) send(f); };
+      body.appendChild(box);
+    }
+    if(!I.items.length){
+      const em=el('div','muted'); em.textContent=admin?'No documents here yet — upload one above.':'No documents are shared with you here.'; body.appendChild(em);
+      return;
+    }
+    I.items.forEach(it=>{
+      const card=el('div'); card.style.cssText='border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;';
+      const main=el('div'); main.style.cssText='flex:1;min-width:200px;';
+      const t=el('div'); t.textContent=it.title; t.style.fontWeight='600'; main.appendChild(t);
+      const sub=el('div','muted'); sub.style.fontSize='var(--font-size-sm)';
+      sub.textContent=it.folder+' · '+it.filename+' · '+fmtSize(it.size)+(it.doc_type?' · '+it.doc_type:''); main.appendChild(sub);
+      card.appendChild(main);
+      const vc=el('span'); vc.textContent=it.visibility.toUpperCase();
+      vc.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;padding:2px var(--space-2);border-radius:var(--radius-md);border:1px solid var(--color-border-strong);'+(it.visibility==='private'?'color:var(--color-negative);':it.visibility==='emergency'?'color:var(--color-accent);':'color:var(--color-text-muted);');
+      card.appendChild(vc);
+      const dd=daysTo(it.expires_on), rd=daysTo(it.review_by);
+      const badge=(label,d)=>{ if(d==null) return; const b=el('span'); const bad=d<0, soon=d<=60;
+        b.textContent=(bad?'⚠ '+label+' EXPIRED ':label+' in ')+(bad?Math.abs(d)+'d ago':d+'d'); b.className=bad?'neg':(soon?'':'muted');
+        b.style.cssText='font-size:var(--font-size-sm);'+(soon&&!bad?'color:var(--color-accent);':''); card.appendChild(b); };
+      badge('EXPIRES',dd); badge('REVIEW',rd);
+      const act=el('div'); act.style.cssText='display:flex;gap:var(--space-2);';
+      if(it.inline_ok){ const p=el('a'); p.textContent='👁 VIEW'; p.href='/api/vault/items/'+it.id+'/download?inline=1'; p.target='_blank'; p.rel='noopener noreferrer'; act.appendChild(p); }
+      const dl=el('a'); dl.textContent='⬇ DOWNLOAD'; dl.href='/api/vault/items/'+it.id+'/download'; act.appendChild(dl);
+      if(admin){
+        const sel=document.createElement('select'); ['private','household','emergency'].forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; if(v===it.visibility) o.selected=true; sel.appendChild(o); });
+        sel.onchange=async()=>{ await fetch('/api/vault/items/'+it.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({visibility:sel.value})}); refresh(); };
+        act.appendChild(sel);
+        const del=el('button'); del.textContent='✕'; del.title='Delete (crypto-shred)';
+        del.onclick=async()=>{ if(!confirm('Permanently delete "'+it.title+'"? Its encryption key is destroyed; this cannot be undone.')) return;
+          await fetch('/api/vault/items/'+it.id,{method:'DELETE'}); refresh(); };
+        act.appendChild(del);
+      }
+      card.appendChild(act);
+      body.appendChild(card);
+    });
+  }
+  refresh();
   return wrap;
 }
 
