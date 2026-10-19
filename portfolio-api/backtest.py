@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 backtest.py — P0-2: does the AI actually add value? (decision backtest)
 

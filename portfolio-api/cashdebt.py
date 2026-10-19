@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 cashdebt.py — GAP-2 (final review): cash, liquidity & debt hygiene — the household-CFO desk.
 

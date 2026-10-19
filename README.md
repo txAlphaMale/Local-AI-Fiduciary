@@ -215,6 +215,16 @@ what to fill in and where, ranked by how much it unlocks.
 - Use a **private repository** for anything holding your configuration.
 - Your portfolio data and API keys never leave your machine.
 
+## License
+
+Copyright (C) 2026 Jason Bentley. Licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE) (`AGPL-3.0-or-later`).
+
+This project is developed for personal use and is **not accepting outside contributions
+or pull requests.** Third-party components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Optional integrations
+(for example Monarch) are unofficial, off by default, and subject to the provider's own
+terms of service; you are responsible for complying with them.
+
 ## Not financial advice
 
 This project is for education and personal research. It is not investment, tax, or legal

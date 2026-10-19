@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 backup.py -- SEC-7a (Backup & Disaster Recovery), UI-triggered path (2026-07-27).
 

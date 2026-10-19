@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_cashdebt.py — unit tests for the cash / liquidity / debt desk (cashdebt.py).
 

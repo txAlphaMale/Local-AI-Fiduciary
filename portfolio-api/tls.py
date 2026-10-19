@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 tls.py — in-app HTTPS certificate management (LOCAL-HOSTING-HARDENING-PLAN.md's HTTPS note,
 2026-07-23d, expanded 2026-07-23f/g). Three methods, all built-in — no "read the docs and run

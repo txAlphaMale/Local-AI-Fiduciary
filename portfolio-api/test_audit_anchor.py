@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_audit_anchor.py -- unit tests for audit_anchor.py (SEC-9: RFC 3161 + Merkle-batched external
 anchoring for the hash-chained audit log).

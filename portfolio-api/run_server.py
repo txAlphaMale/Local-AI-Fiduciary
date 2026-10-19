@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 run_server.py — the container's entrypoint. Decides plain-HTTP vs. HTTPS by checking whether a
 valid certificate/key pair currently exists under TLS_DIR (see tls.py), then serves accordingly.

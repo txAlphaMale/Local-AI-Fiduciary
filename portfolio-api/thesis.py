@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 thesis.py — per-holding thesis & exit-trigger registry (Fable G14). Exit-discipline-as-code.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 insider.py — SEC Form 4 insider-transaction signal (Fable G15). Context-only.
 
