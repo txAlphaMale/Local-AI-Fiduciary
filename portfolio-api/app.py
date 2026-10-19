@@ -5642,6 +5642,47 @@ def _grounded(sym, with_meta=False):
     return (g, meta) if with_meta else g
 
 
+# 2026-10-19: Tavily failures used to be INVISIBLE. mcp-tavily's unpinned `mcp` dependency resolved
+# to 2.x (which renamed McpError -> MCPError), so mcpo's Tavily server died on import and mcpo
+# registered no /tavily route: every call here got a 404 for ~6 weeks, _compute() swallowed it as
+# []/"" and cached_fetch quietly served the Sept 3 copy. These helpers record WHY each call failed
+# so /api/news-status, the discovery report and the cockpit can say so. In-memory (per process).
+_NEWS_DIAG = {"last_ok": None, "last_fail": None, "last_fail_detail": None,
+              "ok_count": 0, "fail_count": 0, "consecutive_failures": 0}
+_NEWS_DIAG_LOCK = threading.Lock()
+_NEWS_LOG_LAST = {"detail": None, "at": 0.0}
+
+
+def _news_note(ok, detail=None, where=""):
+    now = time.time()
+    with _NEWS_DIAG_LOCK:
+        if ok:
+            _NEWS_DIAG["last_ok"] = now
+            _NEWS_DIAG["ok_count"] += 1
+            _NEWS_DIAG["consecutive_failures"] = 0
+            return
+        _NEWS_DIAG["last_fail"] = now
+        _NEWS_DIAG["fail_count"] += 1
+        _NEWS_DIAG["consecutive_failures"] += 1
+        _NEWS_DIAG["last_fail_detail"] = detail
+        # one log line per distinct reason per 10 minutes -- a dead feed makes dozens of calls a run
+        if detail != _NEWS_LOG_LAST["detail"] or now - _NEWS_LOG_LAST["at"] > 600:
+            _NEWS_LOG_LAST.update(detail=detail, at=now)
+            print(f"[news] Tavily call failed ({where}): {detail}", flush=True)
+
+
+def _news_http_detail(r):
+    d = f"HTTP {r.status_code}"
+    if r.status_code == 404:
+        d += (" from mcpo /tavily/tavily_news_search -- the mcpo 'tavily' MCP server is not "
+              "registered (it likely failed to start; see `docker logs fiduciary-mcpo` for a Traceback)")
+    elif r.status_code in (401, 403):
+        d += " -- mcpo rejected MCPO_API_KEY"
+    else:
+        d += ": " + (r.text or "")[:160].replace("\n", " ")
+    return d
+
+
 def _news(sym, name, with_meta=False):
     """Raw Tavily news blob (truncated) for the LLM's research-brief prompt context -- a SEPARATE
     direct call from _tavily_results()/_company_news() (different endpoint usage: raw text, not
@@ -5657,8 +5698,13 @@ def _news(sym, name, with_meta=False):
             r = requests.post(f"{MCPO}/tavily/tavily_news_search",
                               headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
                               json={"query": query, "days": 7, "max_results": 5}, timeout=45)
-            return r.text[:2500] if r.status_code < 400 else ""
-        except Exception:
+            if r.status_code >= 400:
+                _news_note(False, _news_http_detail(r), "brief-news")
+                return ""
+            _news_note(True)
+            return r.text[:2500]
+        except Exception as e:
+            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "brief-news")
             return ""
 
     # NOTE the failure signal here is an EMPTY body, which only happens on an HTTP error or an
@@ -7643,14 +7689,27 @@ def _whatif_liabilities():
     registry edits); a mortgage falls back to the household mortgage_rate_pct /
     mortgage_payment_monthly from PLAN→CASH·DEBT only when exactly ONE mortgage exists — with two,
     there's no way to know which one those facts describe, so they're reported missing instead of
-    attached to the wrong loan. Nothing is guessed: a blank stays blank and is listed in `missing`."""
+    attached to the wrong loan. Nothing is guessed: a blank stays blank and is listed in `missing`.
+
+    Paid-off accounts (balance KNOWN to be $0) are left out entirely (2026-10-19, Jason) — a feed
+    keeps closed/zeroed cards and loans around indefinitely, and "what if I paid more on a $0
+    balance" has no answer. An account whose balance is UNKNOWN (no figure at all) is kept, with
+    "balance" in `missing`, since it may well be owed. The single-mortgage fallback below counts
+    only mortgages that still carry a balance, so a paid-off old mortgage left in the feed no
+    longer blocks the household mortgage facts from attaching to the live one."""
     d = _data()
     cfg = _read_insurance_cfg()
     rates = cfg.get("debt_rates") or {}
     mins = cfg.get("debt_min_payments") or {}
     pif = cfg.get("pay_in_full_overrides") or {}
     mort_ov = cfg.get("is_mortgage_overrides") or {}
+    def _bal(a):
+        try:
+            return None if a.get("balance") in (None, "") else abs(float(a.get("balance")))
+        except (TypeError, ValueError):
+            return None
     accts = [a for a in (d.get("accounts") or []) if a.get("is_asset") is False]
+    accts = [a for a in accts if _bal(a) is None or _bal(a) >= 0.005]   # drop known-$0 (paid off)
     n_mort = sum(1 for a in accts if _is_mortgage_account(a, mort_ov))
     out = []
     for a in accts:
@@ -7663,12 +7722,12 @@ def _whatif_liabilities():
                 rate, rate_src = cfg.get("mortgage_rate_pct"), "plan_cashdebt_mortgage"
             if pay in (None, 0) and cfg.get("mortgage_payment_monthly"):
                 pay, pay_src = cfg.get("mortgage_payment_monthly"), "plan_cashdebt_mortgage"
-        bal = abs(a.get("balance") or 0)
-        missing = [k for k, v in (("apr", rate), ("payment", pay)) if v in (None, "")]
+        bal = _bal(a)
+        missing = [k for k, v in (("balance", bal), ("apr", rate), ("payment", pay)) if v in (None, "")]
         if pay == 0:
             missing.append("payment")
         out.append({"name": nm, "institution": a.get("institution"), "type": a.get("type"),
-                    "balance": round(bal, 2), "apr": rate, "apr_source": rate_src if rate is not None else None,
+                    "balance": round(bal, 2) if bal is not None else None, "apr": rate, "apr_source": rate_src if rate is not None else None,
                     "payment": pay, "payment_source": pay_src if pay else None,
                     "is_mortgage": is_m, "pay_in_full": bool(pif.get(nm)),
                     "manual": bool(a.get("manual")), "missing": sorted(set(missing))})
@@ -11490,12 +11549,15 @@ def _tavily_results(query, days=14, max_results=5, with_meta=False):
                               headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
                               json={"query": query, "days": days, "max_results": max_results}, timeout=45)
             if r.status_code >= 400:
+                _news_note(False, _news_http_detail(r), "search")
                 return []
+            _news_note(True)
             try:
                 data = r.json()
             except ValueError:
                 data = r.text
-        except Exception:
+        except Exception as e:
+            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "search")
             return []
         if isinstance(data, str):
             return _parse_tavily_text(data)
@@ -11621,6 +11683,7 @@ def _do_discovery():
         d = _data()
         cfg = _read_scanner()
         tavily_meta = []
+        _fail0 = _NEWS_DIAG["fail_count"]
         discovered = _discover(d, cfg.get("criteria") or {}, _tavily_meta_acc=tavily_meta)
         fetch_times = [m["fetched_at"] for m in tavily_meta if m.get("fetched_at") is not None]
         out = {"generated_at": int(time.time()),
@@ -11633,6 +11696,11 @@ def _do_discovery():
                "alerts": _holdings_alerts(d, cfg.get("alert_holdings_limit") or 15),
                "discovered": discovered,
                "note": "News-discovered ideas + material-news alerts on holdings. Read-only research, not advice."}
+        # 2026-10-19: surface fetch failures IN the report (see _news_note) so the UI can say why
+        # news is stale instead of only that it is.
+        _fails = _NEWS_DIAG["fail_count"] - _fail0
+        out["fetch_failures"] = _fails
+        out["fetch_error"] = _NEWS_DIAG["last_fail_detail"] if _fails else None
         store.write_json(DISCOVERY_FILE, out)
         _disc_state["status"] = "idle"
     finally:
@@ -11647,6 +11715,34 @@ def get_discovery():
     except Exception:
         return {"generated_at": None, "discovered": [], "alerts": [],
                 "note": "No discovery run yet — POST /api/run-discovery (or wait for the scheduled job)."}
+
+
+@app.get("/api/news-status")
+def get_news_status(probe: int = 0):
+    """Health of the Tavily news path (2026-10-19; sibling of /api/edgar-status). Counters are
+    since this process started. `?probe=1` makes ONE live, uncached call through mcpo (uses a
+    Tavily credit) and reports exactly what came back -- the fastest way to tell 'mcpo's Tavily
+    server is down' (HTTP 404) from 'key rejected' from 'working'."""
+    out = {}
+    if probe:
+        t0 = time.time()
+        try:
+            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
+                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+                              json={"query": "SPY stock news", "days": 3, "max_results": 1}, timeout=45)
+            if r.status_code >= 400:
+                _news_note(False, _news_http_detail(r), "probe")
+                out["probe"] = {"ok": False, "detail": _news_http_detail(r)}
+            else:
+                _news_note(True)
+                out["probe"] = {"ok": True, "http": r.status_code, "bytes": len(r.text or "")}
+        except Exception as e:
+            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "probe")
+            out["probe"] = {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:160]}"}
+        out["probe"]["ms"] = int((time.time() - t0) * 1000)
+    with _NEWS_DIAG_LOCK:
+        diag = dict(_NEWS_DIAG)
+    return {**diag, **out, "mcpo": MCPO, "cache_ttl_s": TAVILY_CACHE_TTL, "stale_after_s": NEWS_STALE_AFTER}
 
 
 @app.post("/api/run-discovery")

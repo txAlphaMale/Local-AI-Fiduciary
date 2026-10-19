@@ -1697,6 +1697,13 @@ function cockpitPanel(){
   if(DISCO && !DISCO.error){
     const nA=((DISCO.alerts)||[]).length;
     if(nA) A.push({sev:'info',cat:'NEWS',msg:nA+' holding alert(s)',tab:'research'});
+    // 2026-10-19: a dead news feed went unnoticed for ~6 weeks because it only showed as a small
+    // amber line inside the NEWS panel while this strip kept counting stale alerts as if current.
+    if(DISCO.cache_stale || (DISCO.fetch_failures>0 && !DISCO.cache_fetched_at)){
+      const when=DISCO.cache_fetched_at?new Date(DISCO.cache_fetched_at*1000).toLocaleDateString():'never';
+      A.push({sev:'warn',cat:'NEWS FEED',msg:'stale (last good pull '+when+') — source failing',tab:'research',
+              tip:DISCO.fetch_error||'Tavily news could not be refreshed'});
+    }
   }
   if(RETIRE && !RETIRE.error && RETIRE.monte_carlo && RETIRE.monte_carlo.success_pct!=null){
     const sp=RETIRE.monte_carlo.success_pct;
@@ -1722,7 +1729,7 @@ function cockpitPanel(){
     chip.style.cssText=`cursor:pointer;border:1px solid ${c};border-left:3px solid ${c};border-radius:var(--radius-md);`+
       `padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);color:var(--color-text);white-space:nowrap;`;
     chip.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
-    chip.title='Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
+    chip.title=(a.tip?a.tip+' — ':'')+'Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
     chip.onclick=()=>{ TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
     strip.appendChild(chip);
   });
@@ -2234,7 +2241,7 @@ function scannerContent(){
 // spec: a simple "Based on data retrieved <date>" line at the top of the panel; color-flags it
 // (rather than adding more text) when the backend reports the panel fell back to a stale/last-
 // known-good value instead of a fresh fetch.
-function _cacheAgeLabel(fetchedAt, stale, missing){
+function _cacheAgeLabel(fetchedAt, stale, missing, fetchError){
   // `missing` (2026-08-08): array of source names that could not be retrieved at all. Rendered
   // even when there is no fetchedAt to show — "nothing came back" is the case most worth saying.
   const miss=(missing||[]).length
@@ -2244,7 +2251,8 @@ function _cacheAgeLabel(fetchedAt, stale, missing){
   const dt=new Date(fetchedAt*1000).toLocaleString();
   const color=stale?'var(--color-accent)':'var(--color-text-muted)';
   return miss+`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);color:${color};">`+
-    `Based on data retrieved ${dt}${stale?' — a source could not be refreshed and this copy is past its freshness window':''}</div>`;
+    `Based on data retrieved ${dt}${stale?' — a source could not be refreshed and this copy is past its freshness window':''}`+
+    (stale&&fetchError?`<br>Why: ${String(fetchError).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}`:'')+`</div>`;
 }
 function researchBrief(d){
   const wrap=el('div'); wrap.style.cssText='padding:6px 0;font-size:var(--font-size-md);line-height:1.5;';
@@ -2376,7 +2384,7 @@ function discoveredContent(){
     wrap.appendChild(el('div','muted','No newsfeed-discovered ideas yet — run discovery (or the daily job) to populate this.')); return wrap; }
   const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='discovered from the newsfeed · research ideas, not advice'; wrap.appendChild(sub);
-  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale); wrap.appendChild(cl);
+  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale, null, DISCO.fetch_error); wrap.appendChild(cl);
   DISCO.discovered.forEach(i=>{
     const m=i.llm||{}, g=i.grounded||{};
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
@@ -2405,7 +2413,7 @@ function alertsContent(){
   if(typeof DISCO==='undefined' || !DISCO || !DISCO.alerts || !DISCO.alerts.length){
     wrap.appendChild(el('div','muted','No holdings news alerts right now.')); return wrap; }
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='material news / SEC 8-K on your largest positions'; wrap.appendChild(sub);
-  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale); wrap.appendChild(cl);
+  const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale, null, DISCO.fetch_error); wrap.appendChild(cl);
   DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid var(--color-border);'; let html=`<span style="color:var(--color-accent)">${a.ticker}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
   return wrap;
 }
@@ -8766,7 +8774,7 @@ async function _calcLoadLiabs(){
 function _wiSelected(){ return (CALC_LIABS||[]).find(l=>l.name===CALC_WI_SEL)||null; }
 function _wiSeedFrom(l){
   const o=CALC_IN.whatif||{};
-  o.balance=l?String(l.balance):''; o.apr=(l&&l.apr!=null)?String(l.apr):''; o.payment=(l&&l.payment)?String(l.payment):'';
+  o.balance=(l&&l.balance!=null)?String(l.balance):''; o.apr=(l&&l.apr!=null)?String(l.apr):''; o.payment=(l&&l.payment)?String(l.payment):'';
   CALC_IN.whatif=o; CALC_OUT.whatif=null; _calcSave();
 }
 async function _wiSaveToAccount(l, btn){
@@ -8808,13 +8816,13 @@ function whatifPanel(){
   row.appendChild(sel);
   const rl=el('span',null,'↻'); rl.title='Reload liabilities'; rl.style.cssText='cursor:pointer;color:var(--color-text-muted);';
   rl.onclick=()=>{ CALC_LIABS=null; _wiRepaint(); }; row.appendChild(rl);
-  if(!CALC_LIABS.length) row.appendChild(el('span','muted','No liabilities on file — use "Enter a debt by hand", or add them under HOLDINGS → LIABILITIES.'));
+  if(!CALC_LIABS.length) row.appendChild(el('span','muted','No debts with a balance on file — use "Enter a debt by hand", or add them under HOLDINGS → LIABILITIES. (Paid-off $0 accounts are hidden.)'));
   wrap.appendChild(row);
   let L=_wiSelected();
   if(CALC_WI_SEL && CALC_WI_SEL!=='__custom' && !L){ CALC_WI_SEL=''; _calcSave(); sel.value=''; }   // account renamed/removed
   if(!CALC_WI_SEL){ return wrap; }
   if(L && !CALC_WI_EDIT){   // account values are the source of truth — refresh any stale saved copy
-    const o=CALC_IN.whatif; o.balance=String(L.balance);
+    const o=CALC_IN.whatif; if(L.balance!=null) o.balance=String(L.balance);
     if(L.apr!=null) o.apr=String(L.apr);
     if(L.payment) o.payment=String(L.payment);
   }
@@ -8823,7 +8831,7 @@ function whatifPanel(){
   if(L && !CALC_WI_EDIT){
     const src=s=>s==='plan_cashdebt_mortgage'?' <span class="muted" title="From PLAN → CASH·DEBT mortgage facts">(plan)</span>':'';
     const line=el('div'); line.style.cssText='font-size:var(--font-size-md);margin:var(--space-1) 0 var(--space-2);';
-    line.innerHTML=`<b>${_cE(L.name)}</b>${L.institution?' <span class="muted">· '+_cE(L.institution)+'</span>':''} &nbsp; balance <b>${_c$2(L.balance)}</b>`+
+    line.innerHTML=`<b>${_cE(L.name)}</b>${L.institution?' <span class="muted">· '+_cE(L.institution)+'</span>':''} &nbsp; balance <b>${L.balance!=null?_c$2(L.balance):'<span style="color:var(--color-accent)">unknown</span>'}</b>`+
       ` · APR <b>${L.apr!=null?_cE(L.apr)+'%':'<span style="color:var(--color-accent)">missing</span>'}</b>${src(L.apr_source)}`+
       ` · payment <b>${L.payment?_c$2(L.payment)+'/mo':'<span style="color:var(--color-accent)">missing</span>'}</b>${src(L.payment_source)} `;
     const ed=el('span',null,'✎ adjust'); ed.style.cssText='cursor:pointer;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-left:var(--space-2);';
@@ -8833,12 +8841,14 @@ function whatifPanel(){
     if(L.pay_in_full){ wrap.appendChild(el('div','muted','This card is marked "paid in full every month" — there is no revolving balance to pay down early.')); }
     if(L.missing.length){
       const msg=el('div'); msg.style.cssText='color:var(--color-accent);font-size:var(--font-size-sm);margin-bottom:var(--space-1);';
-      msg.textContent='Not on file for this account: '+L.missing.map(k=>k==='apr'?'APR':'payment').join(' and ')+'. Enter it below to run the what-if — and optionally save it to the account.';
+      const _wl={balance:'balance',apr:'APR',payment:'payment'};
+      const savable=L.missing.filter(k=>k!=='balance');
+      msg.textContent='Not on file for this account: '+L.missing.map(k=>_wl[k]||k).join(' and ')+'. Enter it below to run the what-if'+(savable.length?' — and optionally save the APR/payment to the account.':' (the balance comes from your account feed, so it is used here only, not saved).');
       wrap.appendChild(msg);
       const g=_calcGrid(); facts.filter(f=>L.missing.includes(f.k)).forEach(f=>g.appendChild(_calcFieldNode(key,f,{highlight:true})));
       const sb=el('button',null,'SAVE TO ACCOUNT'); sb.style.cssText='align-self:end;font-size:var(--font-size-sm);';
       sb.title='Writes the value(s) to this account\'s settings — the same store PLAN → CASH·DEBT and SETTINGS → ACCOUNTS edit.';
-      sb.onclick=()=>_wiSaveToAccount(L,sb); g.appendChild(sb);
+      sb.onclick=()=>_wiSaveToAccount(L,sb); if(savable.length) g.appendChild(sb);
       wrap.appendChild(g);
     }
     if(L.is_mortgage){ const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; n.textContent='Mortgage: use the principal & interest payment only — escrowed taxes and insurance don\'t reduce the balance.'; wrap.appendChild(n); }
