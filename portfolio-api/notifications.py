@@ -195,7 +195,18 @@ def _vapid_claim_email():
             return v
     except Exception:
         pass
-    return "admin@localhost"  # VAPID requires *a* contact -- doesn't need to be deliverable
+    # Apple's push service (every iPhone/iPad) REJECTS a VAPID `sub` whose mailto domain isn't a
+    # real-looking one (403 BadJwtToken) -- "admin@localhost" worked for Chrome/Firefox but not iOS
+    # (found 2026-10-19). Prefer an address the admin already configured for email alerts.
+    try:
+        s = _read_app_secrets()
+        for k in ("SMTP_TO_ADDRESS", "SMTP_FROM_ADDRESS", "SMTP_USERNAME"):
+            v = (s.get(k) or "").strip()
+            if "@" in v and "." in v.split("@")[-1]:
+                return v
+    except Exception:
+        pass
+    return "admin@example.com"   # syntactically valid for Apple; set NOTIFY_VAPID_CONTACT_EMAIL to your own
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +296,18 @@ def _send_email(subject, body):
     return ok
 
 
+_push_tls = threading.local()
+
+
+def last_push_error():
+    """{"status": int|None, "reason": str, "gone": bool} for the most recent FAILED _send_push on
+    this thread (None if the last one succeeded)."""
+    return getattr(_push_tls, "err", None)
+
+
 def _send_push(subscription, title, body):
     from pywebpush import webpush, WebPushException
+    _push_tls.err = None
     try:
         webpush(
             subscription_info=subscription,
@@ -296,11 +317,21 @@ def _send_push(subscription, title, body):
         )
         return True
     except WebPushException as e:
-        # Expected/benign: 404/410 means the browser dropped this subscription (uninstalled,
-        # permissions revoked, storage cleared) -- caller removes it so it stops being retried.
-        print(f"[notifications] push failed (subscription likely stale): {e}", flush=True)
+        resp = getattr(e, "response", None)
+        status = getattr(resp, "status_code", None)
+        text = ""
+        try:
+            text = (resp.text or "")[:160] if resp is not None else ""
+        except Exception:
+            pass
+        # Only 404/410 mean the browser dropped this subscription (uninstalled, permission revoked,
+        # storage cleared). Anything else (403 bad VAPID claim, 413, 429, 5xx) is OUR or a transient
+        # problem -- the caller must NOT delete a good subscription over it.
+        _push_tls.err = {"status": status, "reason": text or str(e)[:160], "gone": status in (404, 410)}
+        print(f"[notifications] push failed ({status}): {text or e}", flush=True)
         return False
     except Exception as e:
+        _push_tls.err = {"status": None, "reason": f"{type(e).__name__}: {str(e)[:160]}", "gone": False}
         print(f"[notifications] push failed (unexpected): {e}", flush=True)
         return False
 
@@ -423,8 +454,10 @@ def _dispatch(category, event_type, outcome, actor_name, resource, detail):
             for sub in user_subs:
                 if _send_push(sub, title, body):
                     surviving.append(sub)
+                elif (last_push_error() or {}).get("gone"):
+                    changed = True                    # 404/410: really gone -- stop retrying it
                 else:
-                    changed = True
+                    surviving.append(sub)             # transient/our-side failure: keep the subscription
             subs[uid] = surviving
         if changed:
             _write_subs(subs)
@@ -449,6 +482,9 @@ def send_test(uid, is_admin):
         for sub in subs:
             if _send_push(sub, "Fiduciary test notification", "If you can see this, push is working."):
                 results["push_sent"] += 1
+            elif not results.get("push_error"):
+                e = last_push_error() or {}
+                results["push_error"] = f"{e.get('status') or 'error'}: {e.get('reason') or 'unknown'}"
     if is_admin and prefs.get("email") and smtp_configured():
         results["email_sent"] = _send_email("Test notification",
                                              "If you received this, email notifications are working.")

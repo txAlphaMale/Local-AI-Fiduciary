@@ -4050,7 +4050,8 @@ function notifSendTest(){
   if(btn){ btn.disabled=true; btn.textContent='sending…'; }
   fetch('/api/notifications/test',{method:'POST'}).then(r=>r.json()).then(d=>{
     alert(`Test sent — push attempted: ${d.push_attempted}, push delivered: ${d.push_sent}, email sent: ${d.email_sent}.`+
-      (d.push_attempted===0?'\n\n(No push devices subscribed yet — click SUBSCRIBE above first.)':''));
+      (d.push_attempted===0?'\n\n(No push devices subscribed yet — click SUBSCRIBE above first.)':'')+
+      (d.push_error?'\n\nPush service said: '+d.push_error+(/BadJwt|403/.test(d.push_error)?'\n(An iPhone/Apple rejection like this usually means the push contact address is not a real email — set one under SETTINGS → ADVANCED KNOBS → Push notification contact email, or save your SMTP address.)':''):''));
   }).catch(e=>alert('Test failed: '+e))
     .finally(()=>{ if(btn){ btn.disabled=false; btn.textContent='✉ SEND TEST NOTIFICATION'; } });
 }
