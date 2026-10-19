@@ -4095,6 +4095,25 @@ function notificationsContent(){
   prefWrap.appendChild(saveBtn);
   wrap.appendChild(prefWrap);
 
+  if(NOTIF_PREFS.is_admin){
+    wrap.appendChild(el('div','ph','PUSH CONTACT EMAIL'));
+    const cw=el('div'); cw.style.cssText='margin-bottom:var(--space-4);';
+    const cn=el('div','muted'); cn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:6px;';
+    cn.textContent='The address sent to the push services (Apple, Google, Mozilla) as the sender contact. Apple rejects fake-looking addresses. Leave blank to use your "Send alert emails to" address. Never shown to other users.';
+    cw.appendChild(cn);
+    const cur=((SETTINGS_CFG&&SETTINGS_CFG.config)||[]).find(x=>x.key==='NOTIFY_VAPID_CONTACT_EMAIL');
+    const ci=document.createElement('input'); ci.type='text'; ci.autocomplete='off'; ci.style.cssText='width:280px;';
+    ci.value=(cur&&cur.source==='settings')?(cur.value||''):''; ci.placeholder='(defaults to your alert email)';
+    const cs=el('button',null,'↳ SAVE'); cs.style.marginLeft='8px';
+    const cm=el('span','muted'); cm.style.cssText='margin-left:8px;font-size:var(--font-size-sm);';
+    cs.onclick=async()=>{ try{
+        const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({NOTIFY_VAPID_CONTACT_EMAIL:ci.value.trim()})});
+        const d=await r.json(); if(!r.ok){ cm.className='neg'; cm.textContent=d.error||'failed'; return; }
+        SETTINGS_CFG=await (await fetch('/api/settings')).json(); cm.className='pos'; cm.textContent='Saved — used on the next push (no restart needed).';
+      }catch(e){ cm.className='neg'; cm.textContent=String(e); } };
+    cw.appendChild(ci); cw.appendChild(cs); cw.appendChild(cm); wrap.appendChild(cw);
+  }
+
   wrap.appendChild(el('div','ph','TEST'));
   const testWrap=el('div');
   const testBtn=el('button',null,'✉ SEND TEST NOTIFICATION'); testBtn.id='notif-test-btn'; testBtn.onclick=notifSendTest;
@@ -4920,8 +4939,10 @@ function settingsContent(){
     // knobs, group by it.group so they don't all pile under one confusing heading).
     const cfgGroups={}; s.config.forEach(it=>{ (cfgGroups[it.group]=cfgGroups[it.group]||[]).push(it); });
     Object.keys(cfgGroups).forEach(g=>{
+      if(cfgGroups[g].every(it=>it.key==='NOTIFY_VAPID_CONTACT_EMAIL')) return;   // nothing left to show in this group
       const ch=el('div','ph',g); ch.style.marginTop='12px'; wrap.appendChild(ch);
       cfgGroups[g].forEach(it=>{
+        if(it.key==='NOTIFY_VAPID_CONTACT_EMAIL') return;   // lives in SETTINGS → NOTIFICATIONS now
         const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
         const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
         let inp;

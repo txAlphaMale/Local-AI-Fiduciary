@@ -384,8 +384,10 @@ CONFIG_SPECS = [
     # ---- Notifications (2026-07-26) -- VAPID requires *a* contact address in its claim (the push
     # service, e.g. Chrome's/Mozilla's, may use it to reach you about a misbehaving sender); it
     # does not need to be monitored or even real-looking, so this is not in SECRET_SPECS.
-    {"key": "NOTIFY_VAPID_CONTACT_EMAIL", "label": "Push notification contact email (VAPID claim — any address, not shown to users)",
-     "group": "Notifications", "default": "admin@localhost"},
+    # Edited from SETTINGS -> NOTIFICATIONS (hidden in ADVANCED KNOBS). Blank = use the SMTP
+    # alert address (notifications._vapid_claim_email). Apple needs a real-looking address.
+    {"key": "NOTIFY_VAPID_CONTACT_EMAIL", "label": "Push notification contact email (VAPID claim — not shown to users)",
+     "group": "Notifications", "default": ""},
     # ---- Reverse proxy (2026-07-27) -- found live on the AWS demo: request.client.host is always
     # the proxy/load-balancer's own address once one sits in front of this app, never the real
     # visitor, which silently breaks the audit log's source IP, the SEC-4 first-seen-IP detection
