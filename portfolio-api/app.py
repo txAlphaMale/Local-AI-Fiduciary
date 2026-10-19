@@ -739,6 +739,31 @@ def _note_session_expired(request, path):
 @app.middleware("http")
 async def _security_and_auth_gate(request: Request, call_next):
     path = request.url.path
+    # TASK-001b (ghost session): a signed cookie proves only that WE issued it, not that the account
+    # still exists or that the session is still wanted. Re-validate against the users table on every
+    # request (SQLite PK lookup -- negligible). Missing user, or a session minted under an older
+    # per-user epoch (password change / MFA disable), is cleared and treated as unauthenticated.
+    _sess_uid = request.session.get("uid")
+    if _sess_uid:
+        _su = auth.get_user_by_id(_sess_uid)
+        _why = None
+        if not _su:
+            _why = "user_missing"
+        else:
+            _uep = int(_su.get("session_epoch") or 0)
+            _sep = request.session.get("ep")
+            if _sep is None and _uep == 0:
+                request.session["ep"] = 0          # pre-epoch cookie, never bumped: adopt, don't log out
+            elif _sep != _uep:
+                _why = "session_epoch_mismatch"
+        if _why:
+            request.session.clear()
+            audit.emit("session.invalidated", outcome="denied", request=request, actor=_sess_uid,
+                       resource=path, detail={"reason": _why, "method": request.method})
+            if path == "/api/auth/logout":         # let the browser drop the dead cookie cleanly
+                return JSONResponse({"ok": True})
+            if path not in _AUTH_PUBLIC_PATHS:
+                return JSONResponse({"error": "authentication required"}, status_code=401)
     if path not in _AUTH_PUBLIC_PATHS and not request.session.get("uid"):
         _note_session_expired(request, path)
         audit.emit("authz.denied", outcome="denied", request=request, resource=path,
@@ -920,6 +945,7 @@ async def auth_first_run(request: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     request.session["uid"] = uid
+    request.session["ep"] = auth.session_epoch(uid)
     # 2026-08-06: session.created is emitted at the two (and only two) points that actually mint a
     # session cookie -- here and in auth_login below. SEC-1 noted this "would need to hook the
     # session-cookie-issuance point, not just login success"; that's exactly what this is. It is
@@ -969,6 +995,7 @@ async def auth_login(request: Request):
             return JSONResponse({"error": "invalid or missing authenticator code", "mfa_required": True},
                                 status_code=401)
     request.session["uid"] = user["id"]
+    request.session["ep"] = int(user.get("session_epoch") or 0)
     audit.emit("auth.login.success", request=request,
                actor=user["id"], actor_name=user.get("username"), resource="/api/auth/login",
                detail={"mfa_used": bool(user["totp_enabled"])})
@@ -1002,6 +1029,7 @@ async def auth_change_password(request: Request):
         auth.set_password(uid, body.get("new_password") or "")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    request.session["ep"] = auth.session_epoch(uid)   # this session stays signed in; all others die
     audit.emit("auth.password.changed", request=request, actor=uid, resource="/api/auth/change-password")
     return {"ok": True}
 
@@ -1038,6 +1066,7 @@ async def auth_mfa_disable(request: Request):
     if not auth.verify_password(user, body.get("password") or ""):
         return JSONResponse({"error": "password is incorrect"}, status_code=401)
     auth.mfa_disable(uid)
+    request.session["ep"] = auth.session_epoch(uid)
     audit.emit("auth.mfa.disabled", request=request, actor=uid, resource="/api/auth/mfa/disable")
     return {"ok": True}
 

@@ -21,6 +21,10 @@ def _user(request):
     return auth.get_user_by_id(uid) if uid else None
 
 
+def _unauth():
+    return JSONResponse({"error": "authentication required"}, status_code=401)
+
+
 def _err(e):
     return JSONResponse({"error": str(e)}, status_code=getattr(e, "status", 400))
 
@@ -38,6 +42,8 @@ def register(app):
     @app.get("/api/vault/folders")
     def vault_folders(request: Request):
         user = _user(request)
+        if not user:
+            return _unauth()
         folders = vault.list_folders()
         readable = vault.list_items(user, emergency_granted=_emergency_granted(user))
         counts = {}
@@ -53,11 +59,15 @@ def register(app):
     @app.get("/api/vault/items")
     def vault_items(request: Request, folder: str = ""):
         user = _user(request)
+        if not user:
+            return _unauth()
         return {"items": vault.list_items(user, folder or None, _emergency_granted(user))}
 
     def _readable_row(request, item_id, action):
         """(user, row) if the caller may read the item, else None after auditing the denial."""
         user = _user(request)
+        if not user:
+            return None
         row = vault.get_item_row(item_id)
         if row and vault.can_read(user, row, _emergency_granted(user)):
             return user, row

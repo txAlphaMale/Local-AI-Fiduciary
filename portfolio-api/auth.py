@@ -80,6 +80,11 @@ def init_db():
         # created 'viewer' account is actually restricted, via _security_and_auth_gate (app.py).
         if "role" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
+        # TASK-001b: per-user session epoch. A session cookie carries the epoch it was minted
+        # under ("ep"); the gate rejects a cookie whose epoch no longer matches, so a password
+        # change / MFA disable / forced logout kills every OTHER live session (stolen cookies too).
+        if "session_epoch" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0")
     try:
         os.chmod(AUTH_DB, 0o600)
     except Exception:
@@ -252,7 +257,8 @@ def set_password(uid, new_password):
         raise ValueError("password must be at least 8 characters")
     ph = _ph.hash(new_password)
     with _conn() as c:
-        c.execute("UPDATE users SET password_hash=?, updated=? WHERE id=?", (ph, int(time.time()), uid))
+        c.execute("UPDATE users SET password_hash=?, updated=?, session_epoch=session_epoch+1 WHERE id=?",
+                  (ph, int(time.time()), uid))
 
 
 def set_username(uid, new_username):
@@ -271,6 +277,21 @@ def set_username(uid, new_username):
         if clash:
             raise ValueError("that username is already in use")
         c.execute("UPDATE users SET username=?, updated=? WHERE id=?", (new_username, int(time.time()), uid))
+
+
+def session_epoch(uid):
+    """Current session epoch for `uid` (0 if unknown). Stamp it into a session at login."""
+    user = get_user_by_id(uid)
+    return int((user or {}).get("session_epoch") or 0)
+
+
+def bump_session_epoch(uid):
+    """'Sign out everywhere': invalidates every session minted under the old epoch. Returns the new
+    epoch. The caller re-stamps its own session if it should stay signed in."""
+    with _conn() as c:
+        c.execute("UPDATE users SET session_epoch=session_epoch+1, updated=? WHERE id=?",
+                  (int(time.time()), uid))
+    return session_epoch(uid)
 
 
 def delete_user(uid):
@@ -438,8 +459,8 @@ def mfa_check_code(uid, code):
 
 def mfa_disable(uid):
     with _conn() as c:
-        c.execute("UPDATE users SET totp_enabled=0, totp_secret=NULL, backup_codes_json=NULL, updated=? "
-                  "WHERE id=?", (int(time.time()), uid))
+        c.execute("UPDATE users SET totp_enabled=0, totp_secret=NULL, backup_codes_json=NULL, updated=?, "
+                  "session_epoch=session_epoch+1 WHERE id=?", (int(time.time()), uid))
 
 
 def mfa_backup_codes_remaining(uid):

@@ -174,6 +174,8 @@ EVENT_TYPES = (
     "audit.anchor.renewed",
     # TASK-001 (2026-10): encrypted document vault (vault.py / vault_api.py).
     "vault.upload", "vault.download", "vault.update", "vault.delete",
+    # TASK-001b: a session cookie was rejected (deleted account, or superseded by a password/MFA change).
+    "session.invalidated",
 )
 
 
