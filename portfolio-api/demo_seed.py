@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 demo_seed.py -- synthetic-data seeder + reset harness for a PUBLIC DEMO instance of Fiduciary.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 vault.py -- encrypted document vault (TASK-001 Phase 1, Quicken-parity Q6).
 

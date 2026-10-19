@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 benefits.py — GAP-5 (final review): employer benefits & contribution-room optimizer.
 

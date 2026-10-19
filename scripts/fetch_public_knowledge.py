@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 fetch_public_knowledge.py — preload the knowledge/ RAG folder with PUBLIC reference docs.
 

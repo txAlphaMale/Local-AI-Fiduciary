@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 washsale.py — GAP-4 (final review): make TLH recommendations shippable, not booby-trapped.
 

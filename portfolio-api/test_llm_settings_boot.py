@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 test_llm_settings_boot.py -- regression tests for "UI-saved LLM settings never take effect".
 

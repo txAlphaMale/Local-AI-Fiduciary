@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 # ============================================================================
 # store.py — Storage Stage A (LOCAL-HOSTING-HARDENING-PLAN.md §4). Consolidates the ~45 flat
 # JSON config/cache files this app used to read/write directly (one `open()`/`json.load`/

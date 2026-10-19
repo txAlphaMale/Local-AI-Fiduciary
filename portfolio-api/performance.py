@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 performance.py — GAP-3 (final review): the fiduciary bottom line — "am I beating my policy?"
 

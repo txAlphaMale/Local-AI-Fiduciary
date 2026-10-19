@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Jason Bentley
 """
 aca.py — ACA / MAGI ledger + premium-subsidy (PTC) estimator for the Fiduciary.
 
