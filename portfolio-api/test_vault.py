@@ -59,6 +59,12 @@ def _login(username, password):
 class VaultBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Another test module may have imported app (and so vault) first with default settings;
+        # pin the limits and storage dir here instead of relying on import-time env vars.
+        vault.VAULT_MAX_FILE_MB = 1
+        vault.VAULT_MAX_TOTAL_GB = 0.002          # ~2 MB total
+        vault.VAULT_DIR = os.path.join(_TMP, "vault")
+        vault.init_db()
         try:
             auth.create_user("boss", "correct-horse-battery-1", role="admin")
         except Exception:
