@@ -201,9 +201,11 @@ class TestMapping(Base):
         self.assertFalse(cc["is_asset"]); self.assertEqual(cc["balance"], 352.0); self.assertEqual(cc["type"], "Credit Card")
         self.assertFalse(self.by["plaid:a_mort"]["is_asset"]); self.assertEqual(self.by["plaid:a_mort"]["type"], "Mortgage")
 
-    def test_names_carry_mask_and_subtype_for_tax_classification(self):
+    def test_names_carry_mask_and_subtype_only_when_tax_classification_needs_it(self):
         self.assertEqual(self.by["plaid:a_chk"]["name"], "Plaid Gold Standard Checking (...0000)")
-        self.assertIn("Roth", self.by["plaid:a_roth"]["name"])
+        self.assertEqual(self.by["plaid:a_roth"]["name"], "Plaid IRA · Roth IRA (...7777)")      # name said IRA, subtype says Roth
+        self.assertEqual(self.by["plaid:a_401k"]["name"], "Plaid 401k (...9999)")               # already classifiable: untouched
+        self.assertEqual(self.by["plaid:a_bro"]["name"], "Plaid Brokerage (...8888)")           # no tax keyword needed
         self.assertEqual(appmod._account_tax_status(self.by["plaid:a_roth"]["name"], self.by["plaid:a_roth"]["type"]), "roth")
         self.assertEqual(appmod._account_tax_status(self.by["plaid:a_401k"]["name"], "Investments"), "deferred")
         self.assertEqual(appmod._account_tax_status(self.by["plaid:a_bro"]["name"], self.by["plaid:a_bro"]["type"]), "taxable")
@@ -351,6 +353,46 @@ class TestProviderIntegration(Base):
     def test_plaid_is_a_selectable_provider(self):
         spec = next(s for s in appmod.CONFIG_SPECS if s["key"] == "PORTFOLIO_PROVIDER")
         self.assertIn("plaid", spec["options"])
+
+
+class TestRealSandboxShapes(unittest.TestCase):
+    """Responses recorded from Plaid's real SANDBOX (First Platypus Bank test data, no credentials):
+    guards the mapping against Plaid's actual response shapes, not just my hand-written fixtures."""
+    @classmethod
+    def setUpClass(cls):
+        cls.real = json.load(open(os.path.join(_HERE, "test_data", "plaid_sandbox_first_platypus.json")))
+        cls.m = P.map_item({"item_id": "i", "institution": "First Platypus Bank"}, cls.real["accounts"],
+                           cls.real["holdings"], cls.real["liabilities"])
+        cls.by = {a["name"]: a for a in cls.m["accounts"]}
+
+    def test_all_accounts_map_with_the_right_side_of_the_balance_sheet(self):
+        self.assertEqual(len(self.m["accounts"]), 14)
+        liab = {a["type"] for a in self.m["accounts"] if not a["is_asset"]}
+        self.assertEqual(liab, {"Student Loan", "Mortgage", "Auto Loan", "HELOC", "Credit Card"})
+        self.assertTrue(all(a["balance"] >= 0 for a in self.m["accounts"]))
+
+    def test_liability_defaults_come_from_real_payloads(self):
+        mort = next(a for a in self.m["accounts"] if a["type"] == "Mortgage")
+        stu = next(a for a in self.m["accounts"] if a["type"] == "Student Loan")
+        cc = next(a for a in self.m["accounts"] if a["name"].startswith("Plaid Diamond"))
+        self.assertEqual((mort["apr_pct"], stu["apr_pct"], cc["apr_pct"]), (3.99, 5.25, 12.5))
+        self.assertTrue(all(a.get("min_payment") for a in (mort, stu, cc)))
+
+    def test_holdings_securities_cash_and_tax_status(self):
+        types = {p["type"] for p in self.m["positions"]}
+        self.assertTrue({"Stock", "ETF", "Mutual Fund", "Bond", "Cash", "Crypto", "Option"} <= types)
+        self.assertEqual(sum(1 for a in self.m["inv"]), 2)                                  # IRA + 401k have holdings
+        names = {a["name"] for a in self.m["accounts"] if a["type"] == "Investments"}
+        status = {n: appmod._account_tax_status(n, "Investments") for n in names}
+        self.assertEqual(sorted(status.values()), ["deferred", "deferred"])
+        self.assertTrue(all(p["ticker"] for p in self.m["positions"]))
+
+    def test_derive_accepts_real_data(self):
+        m = self.m
+        a = round(sum(x["balance"] for x in m["accounts"] if x["is_asset"]), 2)
+        l = round(sum(x["balance"] for x in m["accounts"] if not x["is_asset"]), 2)
+        d = appmod._derive(m["accounts"], m["positions"], m["by_account"], m["inv"], a - l, a, l, balance_only=m["balance_only"])
+        self.assertEqual(d["account_count"], 14); self.assertGreater(d["invested_value"], 20000)
 
 
 if __name__ == "__main__":

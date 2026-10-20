@@ -336,14 +336,21 @@ def subtype_label(a):
     return _SUBTYPE_LABELS.get((a.get("subtype") or "").lower())
 
 
+# The app classifies tax status from the account NAME (Roth/IRA/401/HSA...). When Plaid's subtype says
+# something the name does not, append the subtype label -- but only if the keyword that classification
+# needs is missing (so "Plaid 401k" is left alone, while a bare "Brokerage Account" that Plaid says is a
+# Roth IRA becomes "Brokerage Account · Roth IRA").
+_TAX_KEYWORD = {"roth": "ROTH", "roth 401k": "ROTH", "hsa": "HSA", "ira": "IRA", "sep ira": "IRA",
+                "simple ira": "IRA", "401k": "401", "401a": "401", "403b": "403", "457b": "457", "529": "529"}
+
+
 def account_name(a):
-    """'<name> · <subtype>(...1234)'. The app classifies tax status from the NAME (Roth/IRA/401/HSA),
-    so a subtype Plaid reports but the name omits is appended."""
+    """'<name>[ · <tax subtype>] (...1234)'."""
     base = (a.get("official_name") or a.get("name") or "Account").strip()
-    lab = subtype_label(a)
-    if lab and lab.upper() not in base.upper() and (a.get("type") in ("investment", "depository")):
-        if a.get("type") != "depository" or (a.get("subtype") or "") == "hsa":
-            base = f"{base} · {lab}"
+    sub = (a.get("subtype") or "").lower()
+    kw, lab = _TAX_KEYWORD.get(sub), subtype_label(a)
+    if kw and lab and kw not in base.upper():
+        base = f"{base} · {lab}"
     mask = a.get("mask")
     return f"{base} (...{mask})" if mask else base
 
