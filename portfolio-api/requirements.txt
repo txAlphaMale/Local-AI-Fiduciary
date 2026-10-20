@@ -1,20 +1,20 @@
-fastapi==0.140.1
-uvicorn[standard]==0.51.0
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
 requests==2.34.2
-pypdf==6.14.2                  # extract text from PDF knowledge docs for the RAG index (N12)
-snaptrade-python-sdk==12.0.1    # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)
+pypdf==6.21.1                  # extract text from PDF knowledge docs for the RAG index (N12)
+snaptrade-python-sdk==12.0.4    # only used when PORTFOLIO_PROVIDER=snaptrade; held below 13 on purpose (see .github/dependabot.yml)
 itsdangerous==2.2.0             # session-cookie signing (starlette.middleware.sessions.SessionMiddleware)
 argon2-cffi==25.1.0             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
 pyotp==2.10.0                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
 qrcode[pil]==8.2                # renders the TOTP QR code for MFA setup (auth.py)
-cryptography==49.0.0            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
-pywebpush==2.3.0                # VAPID web push delivery (notifications.py) — 2026-07-26, pulls in py_vapid
-rfc3161-client==1.0.8            # RFC 3161 timestamp-authority client (audit_anchor.py) — 2026-09-01,
+cryptography==50.0.2            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
+pywebpush==2.5.0                # VAPID web push delivery (notifications.py) — 2026-07-26, pulls in py_vapid
+rfc3161-client==1.0.9            # RFC 3161 timestamp-authority client (audit_anchor.py) — 2026-09-01,
                                  # SEC-9. Trail of Bits-maintained; builds/parses/verifies TimeStampReq
                                  # /TimeStampToken (CMS SignedData) on top of `cryptography` (already
                                  # pinned above). Ships a compiled Rust extension (manylinux wheel,
                                  # cp39-abi3 — compatible with this image's python:3.12-slim base).
-# Pinned 2026-07-27 (versions resolved fresh against PyPI that day) so pip-audit / Dependabot /
+# Pinned 2026-07-27, refreshed 2026-10-20 (pip-audit clean, full suite run in the python:3.12 image). Versions resolved fresh against PyPI that day) so pip-audit / Dependabot /
 # Trivy check the ACTUAL deployed version instead of "would the latest resolvable version be
 # vulnerable" — bare names meant a vuln in an old pinned-nothing install could go undetected if a
 # newer, patched release happened to be latest at scan time. Bump deliberately (not silently) when

@@ -11,6 +11,16 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    # One PR for routine patch/minor bumps instead of a PR per package; majors stay individual so each
+    # gets its own review (cryptography 49->50 and snaptrade 12->13 were majors).
+    groups:
+      python-patch-and-minor:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Held on the 12.0.x line: SnapTrade 12.1+/13.x changed the client constructor (auth=...) and
+      # response types, which cannot be verified without live SnapTrade credentials. Migrate by hand.
+      - dependency-name: "snaptrade-python-sdk"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -19,6 +29,11 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    ignore:
+      # Deliberately held at the pinned v0.35.0 commit: aquasecurity/trivy-action had a tag-hijack
+      # supply-chain compromise (GHSA-69fq-xp46-6x23); the advisory names only 0.35.0 as confirmed clean
+      # and does not vouch for later tags. Bump by hand, after re-reading the advisory.
+      - dependency-name: "aquasecurity/trivy-action"
 
   - package-ecosystem: "docker"
     directory: "/portfolio-api"
@@ -27,3 +42,9 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    ignore:
+      # The base image tag (python:3.12-slim-bookworm) already floats to the latest 3.12.x patch on every
+      # rebuild. Moving to a new Python MINOR is a deliberate, tested change, not an automatic PR
+      # (3.12 is supported into 2028).
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
