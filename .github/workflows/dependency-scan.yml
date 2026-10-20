@@ -54,7 +54,7 @@ jobs:
     name: pip-audit (Python dependencies)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -70,7 +70,7 @@ jobs:
     name: Trivy scan (built portfolio-api image)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build portfolio-api image (scan target, not published)
         run: docker build -t fiduciary-portfolio-api:scan ./portfolio-api
       - name: Run Trivy vulnerability scanner
