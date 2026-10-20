@@ -80,6 +80,7 @@ import vault_api      # TASK-001 — /api/vault/* handlers
 import emergency      # TASK-002 — break-glass emergency access
 import kit            # TASK-002 — offline Emergency Kit
 import emergency_api  # TASK-002 — /api/emergency/* + /api/vault/kit*
+import snaptrade_integration  # SnapTrade provider on SDK 13.x (personal + commercial keys)
 import plaid_integration  # TASK-005 — Plaid provider (balances/holdings/liabilities; never transactions)
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
@@ -3030,69 +3031,57 @@ def _build_plaid():
     return d
 
 
+def _snaptrade_env():
+    return (os.environ.get("SNAPTRADE_CLIENT_ID"), os.environ.get("SNAPTRADE_CONSUMER_KEY"),
+            os.environ.get("SNAPTRADE_USER_ID"), os.environ.get("SNAPTRADE_USER_SECRET"))
+
+
 def _build_snaptrade():
-    """Portfolio via SnapTrade (PORTFOLIO_PROVIDER=snaptrade) — one connection aggregates holdings
-    across many brokerages (Robinhood, Fidelity, Schwab, E*TRADE, Webull, ...). Requires a dev
-    signup (SNAPTRADE_CLIENT_ID / SNAPTRADE_CONSUMER_KEY) and a registered, brokerage-linked user
-    (SNAPTRADE_USER_ID / SNAPTRADE_USER_SECRET — see snaptrade_register.py). Field access is
-    defensive; verify the mapping against one live response the first time (see the diag prints)."""
-    cid = os.environ.get("SNAPTRADE_CLIENT_ID")
-    ckey = os.environ.get("SNAPTRADE_CONSUMER_KEY")
-    uid = os.environ.get("SNAPTRADE_USER_ID")
-    usec = os.environ.get("SNAPTRADE_USER_SECRET")
-    if not all([cid, ckey, uid, usec]):
-        raise RuntimeError("SnapTrade not configured: set SNAPTRADE_CLIENT_ID, SNAPTRADE_CONSUMER_KEY, "
-                           "SNAPTRADE_USER_ID, SNAPTRADE_USER_SECRET (run snaptrade_register.py first).")
-    from snaptrade_client import SnapTrade   # pip: snaptrade-python-sdk
-    st = SnapTrade(consumer_key=ckey, client_id=cid)
+    """Portfolio via SnapTrade (PORTFOLIO_PROVIDER=snaptrade) on the 13.x SDK — one connection aggregates
+    holdings across many brokerages. PERSONAL keys (client ID starts "PERS-") need only the client ID and
+    consumer key; COMMERCIAL keys also need SNAPTRADE_USER_ID/SECRET (snaptrade_register.py). See
+    snaptrade_integration.py for the mapping rules (verified against SnapTrade's sandbox)."""
+    cid, ckey, uid, usec = _snaptrade_env()
+    m = snaptrade_integration.build_portfolio(cid, ckey, uid, usec)
+    d = _derive(m["accounts"], m["positions"], m["by_account"], m["inv"], m["net_worth"], m["total_assets"], 0.0,
+                balance_only=m["balance_only"])
+    d["snaptrade_mode"] = m["mode"]
+    d["snaptrade_notes"] = m["notes"]
+    return d
 
-    def _body(resp):
-        return getattr(resp, "body", resp) or []
 
-    accts_raw = _body(st.account_information.list_user_accounts(user_id=uid, user_secret=usec))
-    accounts, positions, by_account = [], [], []
-    for ar in accts_raw:
-        aid = _dig(ar, "id")
-        aname = _dig(ar, "name") or _dig(ar, "number") or "Account"
-        inst = _dig(ar, "institution_name")
-        bal = _num(_dig(ar, "balance", "total", "amount")) or 0.0
-        accounts.append({"id": aid, "name": aname, "institution": inst, "type": "Investments",
-                         "balance": round(bal, 2), "holdings_count": 0, "is_asset": True})
-        try:
-            plist = _body(st.account_information.get_user_account_positions(
-                user_id=uid, user_secret=usec, account_id=aid))
-        except Exception as e:
-            by_account.append({"account": aname, "institution": inst, "value": round(bal, 2),
-                               "error": str(e), "holdings": []})
-            continue
-        holds = []
-        for p in plist:
-            tkr = _dig(p, "symbol", "symbol", "symbol") or _dig(p, "symbol", "symbol") or _dig(p, "symbol")
-            tkr = str(tkr).upper().strip() if isinstance(tkr, str) else ""
-            qty = _num(_dig(p, "units")) or 0
-            if not tkr or qty == 0:
-                continue
-            price = _num(_dig(p, "price"))
-            avg = _num(_dig(p, "average_purchase_price"))
-            cost = round(qty * avg, 2) if avg is not None else None
-            value = round(qty * price, 2) if price is not None else None
-            gain = round(value - cost, 2) if (value is not None and cost is not None) else None
-            rec = {"ticker": tkr, "name": _dig(p, "symbol", "symbol", "description") or tkr,
-                   "type": _dig(p, "symbol", "symbol", "type", "description") or "Stock",
-                   "quantity": round(qty, 4), "value": value, "cost_total": cost, "price": price,
-                   "day_pct": None, "gain": gain,
-                   "gain_pct": round(gain / cost * 100, 2) if (gain is not None and cost) else None,
-                   "suspect": cost is None}
-            holds.append(rec)
-            rec2 = dict(rec)
-            rec2["account"], rec2["institution"] = aname, inst
-            positions.append(rec2)
-        accounts[-1]["holdings_count"] = len(holds)
-        by_account.append({"account": aname, "institution": inst,
-                           "value": round(sum(h["value"] or 0 for h in holds), 2),
-                           "balance": round(bal, 2), "holdings": holds})
-    nw = round(sum(p["value"] or 0 for p in positions), 2)
-    return _derive(accounts, positions, by_account, accounts, nw, nw, 0.0)
+# ---- SnapTrade connect (admin only; each handler checks for itself — viewers can GET everything)
+@app.get("/api/integrations/snaptrade")
+def get_snaptrade_status(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    cid, ckey, uid, usec = _snaptrade_env()
+    mode = snaptrade_integration.auth_mode(cid) if cid else None
+    return {"configured": bool(cid and ckey and (mode == "personal" or (uid and usec))), "mode": mode,
+            "selected": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() == "snaptrade",
+            "note": "SnapTrade links brokerages. Personal keys (client ID starts with PERS-) need no user setup; "
+                    "commercial keys need a registered user (snaptrade_register.py). The connect link expires in "
+                    "about 5 minutes."}
+
+
+@app.post("/api/integrations/snaptrade/portal")
+async def post_snaptrade_portal(request: Request):
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    body = await request.json()
+    cid, ckey, uid, usec = _snaptrade_env()
+    try:
+        client, user_kwargs, _mode = snaptrade_integration.make_client(cid, ckey, uid, usec)
+        url = snaptrade_integration.portal_url(client, user_kwargs, sandbox=bool((body or {}).get("sandbox")))
+    except snaptrade_integration.SnapTradeConfigError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"SnapTrade did not return a link ({type(e).__name__})."}, status_code=502)
+    audit.emit("integration.snaptrade.portal_link", request=request, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/integrations/snaptrade/portal", detail={"sandbox": bool((body or {}).get("sandbox"))})
+    _cache["data"] = None
+    return {"ok": True, "url": url, "expires_in_seconds": 300}
 
 
 def build():

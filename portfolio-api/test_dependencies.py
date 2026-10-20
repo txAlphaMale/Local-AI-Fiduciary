@@ -26,18 +26,21 @@ class TestRequirements(unittest.TestCase):
             self.assertEqual(op, "==", f"{name} must be pinned with == (reproducible image, auditable by pip-audit)")
             self.assertTrue(ver, name)
 
-    def test_snaptrade_stays_on_the_sdk_line_the_code_was_written_for(self):
-        """SnapTrade 12.1+/13.x require SnapTrade(auth=...) and return typed models; app.py and
-        snaptrade_register.py still use SnapTrade(consumer_key=..., client_id=...). Bumping the pin
-        without migrating both (and testing against a live SnapTrade account) would break the
-        optional SnapTrade provider silently, because no unit test reaches the network."""
+    def test_snaptrade_code_matches_the_pinned_sdk_generation(self):
+        """The code must use the constructor style of the pinned SDK major: 13.x needs SnapTrade(auth=SnapTradeAuth...);
+        12.0.x accepted SnapTrade(consumer_key=..., client_id=...). Bumping/downgrading the pin without
+        the matching code would break the optional SnapTrade provider silently (no unit test reaches the network)."""
         op, ver = pins()["snaptrade-python-sdk"]
-        uses_old_constructor = "SnapTrade(consumer_key=ckey, client_id=cid)" in APP
-        if uses_old_constructor:
-            major, minor = (int(x) for x in ver.split(".")[:2])
-            self.assertEqual((major, minor), (12, 0),
-                             "snaptrade-python-sdk >= 12.1 needs the code migrated to SnapTrade(auth=...) first")
-            self.assertIn("SnapTrade(consumer_key=ckey, client_id=cid)", open(REGISTER, encoding="utf-8").read())
+        major = int(ver.split(".")[0])
+        integ = open(os.path.join(_HERE, "snaptrade_integration.py"), encoding="utf-8").read()
+        reg = open(REGISTER, encoding="utf-8").read()
+        if major >= 13:
+            for src in (integ, reg):
+                self.assertIn("SnapTradeAuth", src)
+                self.assertNotIn("SnapTrade(consumer_key=", src)
+            self.assertNotIn("SnapTrade(consumer_key=ckey, client_id=cid)", APP)
+        else:
+            self.fail("snaptrade-python-sdk < 13: the integration was migrated to 13.x (SnapTradeAuth); pin must stay >= 13")
 
 
 if __name__ == "__main__":
