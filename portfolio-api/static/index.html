@@ -1652,6 +1652,7 @@ function render(){
   else if(TAB==='chat'){ tc.appendChild(chatContent()); }
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
   else if(TAB==='settings'){
+    tc.appendChild(envOverrideBanner());
     tc.appendChild(panelSubtabs('settings',[
       {key:'accounts',label:'ACCOUNTS',build:()=>accountRegistryContent()},
       {key:'theme',label:'THEME',build:()=>themeContent()},
@@ -3466,6 +3467,28 @@ function plaidPanel(){
     },3000);
   }
   load(); return box;
+}
+
+// Warns on EVERY settings sub-tab when a value saved in the UI is being ignored because the server's .env sets the
+// same thing (the .env always wins at boot). Admin only; hidden when there is nothing to report.
+function envOverrideBanner(){
+  const box=el('div'); box.id='env-override-banner';
+  const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  if(!u||u.role!=='admin') return box;
+  fetch('/api/settings/overrides').then(r=>r.json()).then(m=>{
+    const list=(m&&m.overrides)||[]; if(!list.length) return;
+    box.style.cssText='background:rgba(224,98,58,0.14);border:1px solid var(--color-negative);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-sm);line-height:1.55;';
+    const h=el('div'); h.style.cssText='font-weight:bold;margin-bottom:var(--space-1);';
+    h.textContent='⚠ '+list.length+' saved setting'+(list.length>1?'s are':' is')+' being IGNORED because the server\'s .env file sets '+(list.length>1?'them':'it')+' too';
+    box.appendChild(h);
+    list.forEach(o=>{ const li=el('div');
+      li.textContent='• '+o.label+' ('+o.key+')'+(o.kind==='secret'?' — saved here and also in .env; the .env value is the one in use':' — you saved “'+o.saved+'” but .env says “'+o.env+'”, which is what runs');
+      box.appendChild(li); });
+    const fix=el('div','muted'); fix.style.marginTop='var(--space-2)';
+    fix.textContent='To use what you saved here: delete those lines from the .env file on the server, then run  docker compose up -d  (a plain restart will not re-read .env). Or edit .env to the value you want. The .env file always wins over this screen.';
+    box.appendChild(fix);
+  }).catch(()=>{});
+  return box;
 }
 
 // Portfolio data source selector (moved here from ADVANCED KNOBS, tester feedback 2026-10-21): it sits above the
