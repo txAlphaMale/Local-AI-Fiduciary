@@ -89,7 +89,7 @@ Same household-register file again.
 | Position caps per ticker | Same panel | Per-name concentration alerts | |
 | API keys (Finnhub, Tavily) | SETTINGS → SECRETS (2026-07-24 — was `.env`-only) | Research briefs, news alerts, opportunity scanning | `.env` still works as a fallback/seed value, but the UI is the preferred path now — see the in-app WIKI → "Secrets encryption & the secrets.key backup" entry. |
 | AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |
-| No brokerage account? Portfolio data source (CSV) | HOLDINGS tab + SETTINGS → ADVANCED KNOBS | A full portfolio with no Monarch/SnapTrade account needed at all | See "No-brokerage-account holdings (CSV)" below — new 2026-07-24, this used to require hand-placing a file on the host. |
+| No brokerage account? Portfolio data source (CSV) | HOLDINGS tab + SETTINGS → ACCOUNTS | A full portfolio with no Monarch/SnapTrade account needed at all | See "No-brokerage-account holdings (CSV)" below — new 2026-07-24, this used to require hand-placing a file on the host. |
 | Manual liabilities (loans, credit cards) | HOLDINGS tab → LIABILITIES (below the positions table) | Debt shows up in net worth and PLAN → CASH·DEBT even with no Monarch/SnapTrade sync | New 2026-07-30 — see "No-brokerage-account holdings (CSV)" below; previously `csv`/`snaptrade` accounts could never represent debt at all. |
 | Notifications (push and/or email) | SETTINGS → NOTIFICATIONS (+ SETTINGS → SECRETS & KEYS for email) | Security alerts and portfolio-outage warnings pushed/emailed to you, instead of only showing up in the audit log | New 2026-07-26 — see "Notifications" below. |
 
@@ -152,8 +152,7 @@ normal in-app panel:
 
 **One more step to make it live:** filling in the table doesn't automatically switch the active
 data source. Check the banner at the top of the HOLDINGS tab — if it says these holdings aren't
-active, go to SETTINGS → ADVANCED KNOBS → "Portfolio data source" and set it to `csv`, then run
-`docker compose up -d portfolio-api` (again, not a plain `restart`). This field used to be
+active, go to SETTINGS → ACCOUNTS → "Portfolio data source" and set it to `csv` (applies immediately). This field used to be
 `.env`-only (`PORTFOLIO_PROVIDER=csv`); either path works, but the UI dropdown is the easier one
 now.
 
