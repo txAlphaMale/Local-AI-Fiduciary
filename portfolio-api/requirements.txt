@@ -7,7 +7,7 @@ itsdangerous==2.2.0             # session-cookie signing (starlette.middleware.s
 argon2-cffi==25.1.0             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
 pyotp==2.10.0                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
 qrcode[pil]==8.2                # renders the TOTP QR code for MFA setup (auth.py)
-cryptography==49.0.0            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
+cryptography==50.0.2            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
 pywebpush==2.3.0                # VAPID web push delivery (notifications.py) — 2026-07-26, pulls in py_vapid
 rfc3161-client==1.0.8            # RFC 3161 timestamp-authority client (audit_anchor.py) — 2026-09-01,
                                  # SEC-9. Trail of Bits-maintained; builds/parses/verifies TimeStampReq
