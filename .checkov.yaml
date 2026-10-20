@@ -1,0 +1,24 @@
+# Checkov (IaC / Dockerfile / workflow scanner) policy. Run:  checkov --config-file .checkov.yaml
+# Every skip below is a DECISION with a reason, not an oversight. Re-review when the demo goes beyond a
+# short-lived, synthetic-data showcase.
+framework: [dockerfile, terraform, github_actions]
+directory: [.]
+compact: true
+quiet: true
+skip-check:
+  # --- GitHub Actions
+  - CKV_GHA_7      # manual workflows take an optional image TAG input; it is passed via env and validated against a strict regex (no injection path)
+  # --- AWS demo (infra/terraform): public, synthetic-data showcase, cost-minimised. Not applied to the live home instance.
+  - CKV_AWS_336    # ECS read-only root FS: needs writable mounts for /tmp, the ACME dir and the data path; untestable without redeploying the demo. TODO: try on the demo.
+  - CKV_AWS_338    # log retention >= 1 year: demo logs are disposable; cost
+  - CKV_AWS_158    # log group KMS CMK: AWS-managed encryption is on; CMK adds cost/ops
+  - CKV_AWS_184    # EFS CMK: same
+  - CKV_AWS_297    # EventBridge scheduler CMK: same
+  - CKV_AWS_136    # ECR KMS: same
+  - CKV_AWS_145    # S3 KMS by default: SSE-S3 is on
+  - CKV_AWS_144    # S3 cross-region replication: single-region demo
+  - CKV2_AWS_62    # S3 event notifications: nothing consumes them
+  - CKV_AWS_150    # ALB deletion protection: the demo is torn down on purpose
+  - CKV2_AWS_28    # WAF on the public ALB: cost; the demo holds no real data
+  - CKV2_AWS_38    # Route53 DNSSEC: registrar-level setting, out of scope for the demo
+  - CKV2_AWS_39    # Route53 query logging: cost

@@ -1,0 +1,32 @@
+name: IaC & Dockerfile scan (Checkov)
+
+# Static checks of what we ship as configuration: Dockerfiles, Terraform (the AWS demo) and these workflows.
+# Policy and every accepted exception (with the reason) live in .checkov.yaml -- a NEW finding fails the run,
+# an accepted one is a reviewed line in that file. Complements pip-audit/Trivy (dependencies and image CVEs).
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/Dockerfile*", "infra/**", ".github/workflows/**", ".checkov.yaml"]
+  pull_request:
+    branches: [main]
+    paths: ["**/Dockerfile*", "infra/**", ".github/workflows/**", ".checkov.yaml"]
+  schedule:
+    - cron: "0 9 * * 2"     # Tuesdays: new Checkov rules land over time
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install Checkov (pinned)
+        run: pip install checkov==3.3.29
+      - name: Scan
+        run: checkov --config-file .checkov.yaml

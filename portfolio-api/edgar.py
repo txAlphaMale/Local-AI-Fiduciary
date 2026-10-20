@@ -178,6 +178,76 @@ def cik_map_status():
         return {"ok": False, "entries": 0, "error": str(e)}
 
 
+_EXCH = {"ts": 0.0, "map": {}}    # ticker -> {name, exchange}
+
+
+def _exchange_map():
+    """SEC ticker -> {name, exchange} from company_tickers_exchange.json (stocks AND exchange-listed
+    ETFs, with a name). Weekly, disk-persisted, same pattern as _cik_map."""
+    if _EXCH["map"] and (time.time() - _EXCH["ts"] < 604800):
+        return _EXCH["map"]
+
+    def _compute():
+        try:
+            r = requests.get("https://www.sec.gov/files/company_tickers_exchange.json",
+                             headers=_headers(), timeout=30)
+            r.raise_for_status()
+            j = r.json() or {}
+            f = j.get("fields") or ["cik", "name", "ticker", "exchange"]
+            ni, ti, xi = f.index("name"), f.index("ticker"), f.index("exchange")
+            return {(row[ti] or "").upper(): {"name": row[ni], "exchange": row[xi]}
+                    for row in (j.get("data") or []) if row[ti]}
+        except Exception as e:
+            _EXCH["last_error"] = f"{type(e).__name__}: {e}"
+            return {}
+
+    m, _meta = store.cached_fetch("sec_exchange_map", "all", 604800, _compute,
+                                  is_ok=lambda v: bool(v), stale_after=2592000)
+    if not m:
+        raise CikMapUnavailable(_EXCH.get("last_error") or "SEC exchange ticker map fetch returned nothing")
+    _EXCH.update(ts=time.time(), map=m)
+    return m
+
+
+def ticker_profile(ticker):
+    """What SEC can tell us about a ticker, for auto-filling a holdings row:
+    {found, ticker, name, type ('Stock'|'ETF'|'Mutual Fund'), exchange, source} or {found: False, ...}.
+    Funds: the series name comes from the fund's latest N-PORT (cached, shared with look-through);
+    stocks: the SEC registrant name (the same map that fixed VOYG). Type: a ticker in SEC's fund map is a
+    Mutual Fund when it is not exchange-listed and looks like one (5 letters ending in X), else an ETF.
+    Never raises; an SEC outage returns {found: False, error: ...} so the caller leaves the row alone."""
+    tkr = (ticker or "").upper().strip()
+    if not tkr or not re.fullmatch(r"[A-Z0-9.\-]{1,10}", tkr):
+        return {"found": False, "ticker": tkr}
+    try:
+        fund = fund_series(tkr)
+        ex = _exchange_map().get(tkr)
+        if fund:
+            name = None
+            try:
+                name = (fund_holdings(tkr, top=1) or {}).get("series_name")
+            except Exception:
+                pass
+            name = name or (ex or {}).get("name")
+            listed = bool(ex and ex.get("exchange"))
+            is_mf = (not listed) and bool(re.fullmatch(r"[A-Z]{4}X", tkr)) and "ETF" not in (name or "").upper()
+            return {"found": True, "ticker": tkr, "name": name, "exchange": (ex or {}).get("exchange"),
+                    "type": "Mutual Fund" if is_mf else "ETF", "source": "SEC fund registry"}
+        if ex:
+            nm = ex.get("name") or ""
+            etf = bool(re.search(r"\bETF\b|^(ISHARES|SPDR|PROSHARES|VANGUARD)\b", nm.upper()))
+            return {"found": True, "ticker": tkr, "name": nm, "exchange": ex.get("exchange"),
+                    "type": "ETF" if etf else "Stock", "source": "SEC company tickers"}
+        cik = get_cik(tkr)
+        if cik:
+            return {"found": True, "ticker": tkr, "name": None, "type": "Stock", "source": "SEC company tickers"}
+    except CikMapUnavailable as e:
+        return {"found": False, "ticker": tkr, "error": f"SEC lookup unavailable ({e})"}
+    except Exception as e:
+        return {"found": False, "ticker": tkr, "error": f"{type(e).__name__}"}
+    return {"found": False, "ticker": tkr}
+
+
 # ---------------- Fund look-through via SEC N-PORT (free, authoritative) ----------------
 # Mutual funds and ETFs file NPORT-P monthly, disclosing their portfolio holdings (public,
 # with a ~60-day lag). We resolve a fund TICKER -> registrant CIK + seriesId, pull the latest

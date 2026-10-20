@@ -43,4 +43,16 @@ COPY compliance/ /compliance-baked/
 ENV COMPLIANCE_DIR=/compliance-baked
 
 EXPOSE 8097 8443
+# Optional non-root run (2026-10-20, Checkov CKV_DOCKER_3). Default 0 = root, unchanged: on WSL/bind-mounted
+# data directories a non-root uid hits file-ownership errors, so the live compose does not use it.
+# Containers whose /data is managed by the platform (the AWS demo) can build with --build-arg APP_UID=10001.
+ARG APP_UID=0
+RUN if [ "$APP_UID" != "0" ]; then useradd --uid "$APP_UID" --no-create-home --shell /usr/sbin/nologin app \
+      && mkdir -p /data && chown -R "$APP_UID" /app /data; fi
+USER ${APP_UID}
+
+# Liveness: any HTTP answer on the plain port counts (once HTTPS is on, 8097 answers with a 307 redirect);
+# only a refused/hung connection fails. Compose or ECS may override this.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -s -o /dev/null --max-time 4 http://127.0.0.1:8097/ || exit 1
 CMD ["python", "run_server.py"]

@@ -3261,6 +3261,28 @@ async def post_holdings_csv(req: Request):
     return {"ok": True, "rows_written": len(clean)}
 
 
+@app.get("/api/ticker-profile")
+def get_ticker_profile(request: Request, ticker: str = ""):
+    """Auto-fill helper for the HOLDINGS editor: name + type for a ticker from SEC EDGAR (the same
+    ticker->registrant map that fixed VOYG). Admin-only like the editor it serves."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    prof = edgar.ticker_profile(ticker)
+    if prof.get("name"):
+        prof["name"] = _readable_fund_name(_clean_name(prof["name"]))
+    return prof
+
+
+_KEEP_UPPER = {"ETF", "ETFS", "US", "USA", "REIT", "SPDR", "S&P", "QQQ", "ADR", "MSCI", "NASDAQ", "ESG", "AI", "II", "III", "IV", "LP", "LLC", "ETN"}
+
+
+def _readable_fund_name(n):
+    """SEC fund/registrant names are often ALL CAPS ('VANGUARD 500 INDEX FUND'); title-case those only."""
+    if not n or n != n.upper():
+        return n
+    return " ".join(w if w in _KEEP_UPPER else w.capitalize() for w in n.split())
+
+
 @app.post("/api/holdings-csv/upload")
 async def post_holdings_csv_upload(req: Request):
     """Wholesale replace from an uploaded .csv file. The frontend reads the file client-side with
