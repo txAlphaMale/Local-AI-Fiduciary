@@ -10660,6 +10660,12 @@ def get_secrets(request: Request):
                     "(it's a startup CLI flag, not a runtime value)."}
 
 
+# Secrets read fresh on every use (see _snaptrade_env / _plaid_creds) -- saving one takes effect at once. A key
+# that is ALSO set in the real .env still wins (reported as staged_behind_env), so it is not "applied live".
+_LIVE_SECRETS = {"SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET",
+                 "PLAID_CLIENT_ID", "PLAID_SECRET"}
+
+
 @app.post("/api/secrets")
 async def post_secrets(req: Request):
     """Set portfolio-api 'app' secrets and mcpo-bridged 'mcpo-file' secrets (write-only, encrypted
@@ -10701,7 +10707,8 @@ async def post_secrets(req: Request):
         _write_mcpo_secrets_file()   # regenerate ./mcpo-secrets/mcpo.env from the just-saved DB state
                                       # (still correctly excludes any key that's env_locked)
     return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
-            "restart_required": bool(saved)}
+            "applied_live": [k for k in saved if k in _LIVE_SECRETS and k not in staged_behind_env],
+            "restart_required": bool([k for k in saved if not (k in _LIVE_SECRETS and k not in staged_behind_env)])}
 
 
 # ============================================================================

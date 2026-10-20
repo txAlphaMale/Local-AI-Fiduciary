@@ -5199,7 +5199,8 @@ function saveSecrets(){
     .then(r=>r.json()).then(d=>{
       const specByKey={}; (SECRETS_CFG&&SECRETS_CFG.secrets||[]).forEach(it=>specByKey[it.key]=it);
       const mcpoRestart=(d.saved||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
-      const apiRestart=(d.saved||[]).some(k=>!specByKey[k]||specByKey[k].scope!=='mcpo-file');
+      const live=new Set(d.applied_live||[]);   // SnapTrade/Plaid keys are read on every use — nothing to restart
+      const apiRestart=(d.saved||[]).some(k=>!live.has(k)&&(!specByKey[k]||specByKey[k].scope!=='mcpo-file'));
       const stagedMcpo=(d.staged_behind_env||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
       let msg='Saved: '+((d.saved||[]).join(', ')||'(none)');
       // 2026-07-24: `docker compose restart` reuses the container's EXISTING environment and will
@@ -5212,7 +5213,8 @@ function saveSecrets(){
       // so a plain `up -d mcpo` can silently do nothing even though mcpo.env changed. mcpo
       // ALWAYS needs an explicit `--force-recreate`; portfolio-api doesn't, as long as `--build`
       // is part of the command (which it always should be here).
-      if(apiRestart) msg+='\n\nApplies on the next `docker compose up -d --build portfolio-api` (not a plain restart).';
+      if(live.size) msg+='\n\nApplied immediately — no restart or rebuild needed: '+[...live].join(', ')+'.';
+      if(apiRestart) msg+='\n\n'+(live.size?'The other saved keys apply':'Applies')+' on the next `docker compose up -d --build portfolio-api` (not a plain restart).';
       if(mcpoRestart) msg+='\n\nApplies on the next `docker compose up -d mcpo --force-recreate` (not a plain restart, and not a plain `up -d mcpo` either -- Compose won\'t detect an mcpo.env content change on its own).';
       if(d.staged_behind_env && d.staged_behind_env.length){
         msg+='\n\n'+d.staged_behind_env.join(', ')+' still won\'t take effect until you also remove '

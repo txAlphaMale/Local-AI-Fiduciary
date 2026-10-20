@@ -135,5 +135,23 @@ class TestSnapTradeHealth(unittest.TestCase):
             self.assertIn(needle, HTML)
 
 
+
+class TestSecretsPopup(unittest.TestCase):
+    """Tester 2026-10-21: saving SnapTrade creds popped 'applies on the next docker compose up --build' although
+    they apply at once. The save response now says which keys are live and the popup only warns about the rest."""
+    def test_response_marks_snaptrade_and_plaid_keys_live(self):
+        saved = {}
+        with mock.patch.object(appmod, "_read_secrets", lambda: dict(saved)), \
+             mock.patch.object(appmod, "_write_secrets", lambda d: saved.update(d)), \
+             mock.patch.object(appmod.audit, "emit", lambda *a, **k: None):
+            r = asyncio.run(appmod.post_secrets(FakeReq({"SNAPTRADE_CLIENT_ID": "PERS-X", "SNAPTRADE_CONSUMER_KEY": "k"})))
+        self.assertEqual(sorted(r["applied_live"]), ["SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY"])
+        self.assertFalse(r["restart_required"])
+
+    def test_popup_only_warns_about_keys_that_are_not_live(self):
+        for needle in ("applied_live", "Applied immediately — no restart or rebuild needed", "!live.has(k)"):
+            self.assertIn(needle, HTML)
+
+
 if __name__ == "__main__":
     unittest.main()
