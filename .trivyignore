@@ -2,6 +2,10 @@
 # RISK-REGISTER.md (R-10) -- renamed 2026-07-27 from the old shared "SEC-7" label, see
 # dependency-scan.yml's matching header comment.
 #
+# NOTE (2026-10-20): the blocking CI step now uses `ignore-unfixed`, so findings with no vendor fix no longer
+# fail the run on their own. The entries below remain as the documented, expiring record of what was
+# formally accepted; renew one only if it ever gains a fix that cannot be applied. See dependency-scan.yml.
+#
 # Every entry below is a CRITICAL finding from the 2026-07-27 scan of the bookworm-pinned
 # portfolio-api image that has NO available vendor fix (or an explicit permanent will_not_fix),
 # confirmed via a real local Trivy 0.69.3 run against the actual built image -- not assumed.

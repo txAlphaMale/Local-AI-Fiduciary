@@ -1801,11 +1801,12 @@ _RISK_REGISTER_SEED = [
          treatment="SEC-7b CI dependency scanning is live: `pip-audit` on every push/PR touching "
                     "dependency files + a weekly Monday scan (catches newly-disclosed CVEs against "
                     "unchanged pins), and a Trivy image scan of the actual built container (OS "
-                    "packages, not just Python deps) blocking on CRITICAL/HIGH per the 7/30-day "
-                    "patch SLA. 6 CRITICAL findings with no vendor fix (essential Debian "
-                    "`perl-base`, `zlib1g` — one `will_not_fix`) are formally risk-accepted via "
-                    "`.trivyignore` with 90-day `exp:` dates (review due 2026-10-25), not silently "
-                    "suppressed — see `dependency-scan.yml` and `.trivyignore` at repo root",
+                    "packages, not just Python deps) blocking on CRITICAL/HIGH findings that have a "
+                    "vendor fix (`ignore-unfixed`) per the 7/30-day patch SLA. Findings with NO vendor "
+                    "fix (20 unique Debian base-image CVEs on 2026-10-20 — util-linux, curl, sqlite, "
+                    "openssl…; curl is needed at runtime by acme.sh) do not gate CI but are listed in "
+                    "every run's full report and reviewed weekly; earlier acceptances stay in "
+                    "`.trivyignore` with `exp:` dates — see `dependency-scan.yml` and `.trivyignore`",
          residual="Low-Medium — real scanning + documented risk acceptance in place; residual risk "
                    "is the inherent gap between an upstream CVE's disclosure and a vendor patch "
                    "actually landing, which no scanning tool can close on its own", owner="Jason"),

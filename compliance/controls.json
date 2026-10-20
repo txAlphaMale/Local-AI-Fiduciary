@@ -542,7 +542,7 @@
       "title": "Management of technical vulnerabilities",
       "theme": "Technological",
       "status": "Applied",
-      "rationale": "SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), blocking on CRITICAL/HIGH per a documented 7/30-day patch SLA, with a formal .trivyignore risk-acceptance mechanism (90-day exp: dates) for genuinely unpatched upstream findings.",
+      "rationale": "SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), blocking on CRITICAL/HIGH findings that have a vendor fix per a documented 7/30-day patch SLA (unfixed upstream findings are reported on every run and reviewed weekly, not hidden), with a formal .trivyignore risk-acceptance mechanism (exp: dates) for accepted exceptions.",
       "evidence": ".github/workflows/dependency-scan.yml, .trivyignore"
     },
     {
