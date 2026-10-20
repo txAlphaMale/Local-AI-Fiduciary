@@ -863,10 +863,26 @@ function reorderKeys(orderedKeys, fromKey, toKey, after){
   return ks;
 }
 function wireTabBarDnD(bar, onMove){
-  const mark=(t,after)=>{ [...bar.querySelectorAll('[data-dkey]')].forEach(x=>x.style.boxShadow=''); if(t) t.style.boxShadow=after?'inset -3px 0 0 var(--color-accent)':'inset 3px 0 0 var(--color-accent)'; };
+  // The insertion marker is its own thin vertical line drawn in the GAP between two tabs (feedback 2026-10-21: a
+  // shadow on the tab itself looked "bound to the word"). Positioned from the tab rectangles, so it also works when
+  // the bar wraps onto a second row.
+  const ind=document.createElement('div');
+  ind.style.cssText='position:absolute;width:3px;border-radius:2px;background:var(--color-accent);pointer-events:none;display:none;z-index:5;';
+  try{ if(getComputedStyle(bar).position==='static') bar.style.position='relative'; }catch(_){ bar.style.position='relative'; }
+  bar.appendChild(ind);
+  const tabsOf=()=>[...bar.querySelectorAll('[data-dkey]')];
+  const mark=(t,after)=>{
+    if(!t){ ind.style.display='none'; return; }
+    const all=tabsOf(), r=t.getBoundingClientRect(), br=bar.getBoundingClientRect();
+    const nb=all[all.indexOf(t)+(after?1:-1)], nr=nb&&nb.getBoundingClientRect();
+    let x=after?r.right:r.left;
+    if(nr && Math.abs(nr.top-r.top)<r.height/2) x=(x+(after?nr.left:nr.right))/2;   // middle of the gap to the neighbour
+    else x+=after?8:-8;                                                          // end of a row: just outside the tab
+    ind.style.left=(x-br.left-1.5)+'px'; ind.style.top=(r.top-br.top-3)+'px'; ind.style.height=(r.height+6)+'px'; ind.style.display='block';
+  };
   const pick=e=>{
     let best=null, bd=1e12;
-    bar.querySelectorAll('[data-dkey]').forEach(t=>{ const r=t.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
+    tabsOf().forEach(t=>{ const r=t.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
       const d=Math.hypot(e.clientX-cx,(e.clientY-cy)*3); if(d<bd){ bd=d; best={t,after:e.clientX>cx}; } });
     return best;
   };
@@ -875,7 +891,8 @@ function wireTabBarDnD(bar, onMove){
   bar.ondragleave=e=>{ const r=bar.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) mark(null); };
   bar.ondrop=e=>{ e.preventDefault(); mark(null); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){}
     const b=pick(e); if(from && b) onMove(from, b.t.dataset.dkey, b.after); };
-  bar.ondragend=()=>mark(null);
+  bar.ondragstart=e=>{ const t=e.target&&e.target.closest&&e.target.closest('[data-dkey]'); if(t) setTimeout(()=>{ t.style.opacity='0.35'; },0); };   // dim the tab being moved
+  bar.ondragend=e=>{ mark(null); const t=e.target&&e.target.closest&&e.target.closest('[data-dkey]'); if(t) t.style.opacity=''; };
 }
 function reorderSubtab(panel, orderedKeys, fromKey, toKey, after){
   const ks=reorderKeys(orderedKeys, fromKey, toKey, after); if(!ks) return;

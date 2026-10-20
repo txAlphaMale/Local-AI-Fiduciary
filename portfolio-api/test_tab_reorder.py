@@ -38,9 +38,10 @@ class TestReorder(unittest.TestCase):
     def test_drop_anywhere_on_the_bar_picks_nearest_tab_and_side(self):
         # tabs at x 0-100 (a), 120-220 (b), 240-340 (c); the gaps/separators in between used to be dead zones
         out = self.run_js("""
-        const mk=(k,l)=>({dataset:{dkey:k},style:{},getBoundingClientRect:()=>({left:l,width:100,top:0,height:20})});
+        const mk=(k,l)=>({dataset:{dkey:k},style:{},getBoundingClientRect:()=>({left:l,right:l+100,width:100,top:0,height:20})});
         const tabs=[mk('a',0),mk('b',120),mk('c',240)];
-        const bar={querySelectorAll:()=>tabs,getBoundingClientRect:()=>({left:0,right:400,top:0,bottom:20})};
+        global.document={createElement:()=>({style:{}})}; global.getComputedStyle=()=>({position:'relative'});
+        const bar={style:{},appendChild(){},querySelectorAll:()=>tabs,getBoundingClientRect:()=>({left:0,right:400,top:0,bottom:20})};
         const calls=[]; wireTabBarDnD(bar,(f,t,a)=>calls.push([f,t,a]));
         const ev=(x,y)=>({clientX:x,clientY:y,preventDefault(){},dataTransfer:{getData:()=>'a',dropEffect:''}});
         bar.ondrop(ev(110,10));   // in the gap between a and b, nearer a's side -> after a? (nearest is a or b)
@@ -57,6 +58,30 @@ class TestReorder(unittest.TestCase):
         self.assertEqual(HTML.count("wireTabBarDnD("), 3)          # definition + sub-tab bar + top bar
         self.assertNotIn("t.ondrop=", HTML.split("function wireTabBarDnD")[1].split("function panelSubtabs")[0])
         self.assertNotRegex(HTML, r"t\.ondrop=e=>\{ e\.preventDefault\(\); let from")
+
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed")
+class TestMarker(unittest.TestCase):
+    def test_marker_sits_in_the_gap_between_tabs_not_on_the_word(self):
+        src = _fn("reorderKeys") + "\n" + _fn("wireTabBarDnD") + """
+        const mk=(k,l)=>({dataset:{dkey:k},style:{},getBoundingClientRect:()=>({left:l,right:l+100,width:100,top:10,height:20})});
+        const tabs=[mk('a',0),mk('b',120),mk('c',240)];
+        const ind={style:{}};
+        global.document={createElement:()=>ind}; global.getComputedStyle=()=>({position:'relative'});
+        const bar={style:{},appendChild(){},querySelectorAll:()=>tabs,getBoundingClientRect:()=>({left:0,right:400,top:0,bottom:40})};
+        wireTabBarDnD(bar,()=>{});
+        const ev=(x)=>({clientX:x,clientY:20,preventDefault(){},dataTransfer:{}});
+        bar.ondragover(ev(80));                // right half of a: after a -> middle of the 20px gap between a and b (x=110)
+        const x1=parseFloat(ind.style.left)+1.5;
+        bar.ondragover(ev(390));               // far right: after the last tab -> just outside it (x=348)
+        const x2=parseFloat(ind.style.left)+1.5;
+        console.log(JSON.stringify([x1,x2,ind.style.display,parseFloat(ind.style.height)]));"""
+        r = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        x1, x2, disp, h = json.loads(r.stdout)
+        self.assertEqual((x1, x2, disp), (110, 348, "block"))
+        self.assertGreater(h, 20)              # taller than the label, so it reads as a divider, not a text highlight
 
 
 if __name__ == "__main__":
