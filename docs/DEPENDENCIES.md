@@ -35,7 +35,7 @@ ollama pull bge-m3          # embeddings for the Fiduciary knowledge RAG
 | **Tavily** | `TAVILY_API_KEY` | news-discovery agent | https://tavily.com/ |
 | **SEC EDGAR** | `SEC_USER_AGENT` (your email, no signup) | GAAP fundamentals | — |
 | **Monarch Money** *(optional)* | `MONARCH_EMAIL`, `MONARCH_PASSWORD`, `MONARCH_MFA_SECRET` | live portfolio (only if `PORTFOLIO_PROVIDER=monarch`) | https://www.monarchmoney.com/ |
-| **SnapTrade** *(optional)* | `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY`, `SNAPTRADE_USER_ID`, `SNAPTRADE_USER_SECRET` | live multi-brokerage portfolio, incl. Robinhood (only if `PORTFOLIO_PROVIDER=snaptrade`; run `snaptrade_register.py` once). Installs `snaptrade-python-sdk`. | https://snaptrade.com/ |
+| **SnapTrade** *(optional)* | `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` (+ `SNAPTRADE_USER_ID`, `SNAPTRADE_USER_SECRET` for commercial keys only) | live multi-brokerage portfolio, incl. Robinhood (only if `PORTFOLIO_PROVIDER=snaptrade`; link brokerages in SETTINGS → ACCOUNTS → SnapTrade, or run `snaptrade_register.py`). Installs `snaptrade-python-sdk`. | https://snaptrade.com/ |
 
 > Finnhub's **free tier** does not return analyst price targets or mutual-fund
 > profiles — the app degrades gracefully (nulls, not errors) when they're missing.

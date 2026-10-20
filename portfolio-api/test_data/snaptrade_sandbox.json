@@ -1,0 +1,398 @@
+{
+ "_note": "Recorded from SnapTrade's SANDBOX broker with SDK 13.0.43 (personal key): list_all_user_accounts (accounts), list_user_accounts (legacy_accounts), connections, positions, balances. Simulated data; uuids replaced.",
+ "accounts": [
+  {
+   "cash_or_margin": "unknown",
+   "connection_id": "00000000-0000-0000-0000-000000000000",
+   "display_name": "Individual",
+   "id": "66b27e42-8808-4271-b85f-a7957aaff5a3",
+   "institution_account_id": "SANDBOX-001",
+   "institution_id": "9a017398-f89a-4ae7-82d2-a2fd819f301d",
+   "is_paper": true,
+   "kind": "investment",
+   "masked_account_number": "****-001",
+   "net_value": {
+    "amount": 68851.25,
+    "currency": "USD"
+   },
+   "raw_type": "Individual",
+   "sync_status": {
+    "balances": "2026-10-20T20:50:19.666408+00:00",
+    "orders": "2026-10-20T20:50:19.666408+00:00",
+    "positions": "2026-10-20T20:50:19.666408+00:00",
+    "transactions": {
+     "first_transaction_date": "2026-09-21",
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-19"
+    }
+   }
+  },
+  {
+   "cash_or_margin": "unknown",
+   "connection_id": "00000000-0000-0000-0000-000000000000",
+   "display_name": "IRA",
+   "id": "a6ba861c-0b93-4261-8b41-1b84d3536e08",
+   "institution_account_id": "SANDBOX-002",
+   "institution_id": "9a017398-f89a-4ae7-82d2-a2fd819f301d",
+   "is_paper": true,
+   "kind": "investment",
+   "masked_account_number": "****-002",
+   "net_value": {
+    "amount": 36774.60064,
+    "currency": "USD"
+   },
+   "raw_type": "IRA",
+   "sync_status": {
+    "balances": "2026-10-20T20:50:19.577750+00:00",
+    "orders": "2026-10-20T20:50:19.577750+00:00",
+    "positions": "2026-10-20T20:50:19.577750+00:00",
+    "transactions": {
+     "first_transaction_date": "2026-09-20",
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-19"
+    }
+   }
+  }
+ ],
+ "balances": {
+  "66b27e42-8808-4271-b85f-a7957aaff5a3": [
+   {
+    "buying_power": 50000.0,
+    "cash": 25000.0,
+    "currency": {
+     "code": "USD",
+     "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b",
+     "name": "US Dollar"
+    }
+   }
+  ],
+  "a6ba861c-0b93-4261-8b41-1b84d3536e08": [
+   {
+    "buying_power": 12500.0,
+    "cash": 12500.0,
+    "currency": {
+     "code": "USD",
+     "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b",
+     "name": "US Dollar"
+    }
+   }
+  ]
+ },
+ "connections": [
+  {
+   "brokerage": {
+    "id": "9a017398-f89a-4ae7-82d2-a2fd819f301d",
+    "name": "sandbox",
+    "slug": "SANDBOX"
+   },
+   "disabled": false,
+   "id": "00000000-0000-0000-0000-000000000000"
+  }
+ ],
+ "legacy_accounts": [
+  {
+   "account_category": "INVESTMENT",
+   "balance": {
+    "total": {
+     "amount": 68851.25,
+     "currency": "USD"
+    }
+   },
+   "brokerage_authorization": "00000000-0000-0000-0000-000000000000",
+   "cash_restrictions": [],
+   "created_date": "2026-10-20T20:50:18.635975Z",
+   "funding_date": null,
+   "id": "66b27e42-8808-4271-b85f-a7957aaff5a3",
+   "institution_account_id": "SANDBOX-001",
+   "institution_name": "sandbox",
+   "is_paper": true,
+   "meta": {
+    "currency": "USD",
+    "institution_name": "sandbox"
+   },
+   "name": "Individual",
+   "number": "SANDBOX-001",
+   "opening_date": null,
+   "portfolio_group": "00000000-0000-0000-0000-000000000001",
+   "raw_data": null,
+   "raw_type": "Individual",
+   "status": "open",
+   "sync_status": {
+    "holdings": {
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-20T20:50:19.666408+00:00"
+    },
+    "transactions": {
+     "first_transaction_date": "2026-09-21",
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-19"
+    }
+   }
+  },
+  {
+   "account_category": "INVESTMENT",
+   "balance": {
+    "total": {
+     "amount": 36774.60064,
+     "currency": "USD"
+    }
+   },
+   "brokerage_authorization": "00000000-0000-0000-0000-000000000000",
+   "cash_restrictions": [],
+   "created_date": "2026-10-20T20:50:18.665301Z",
+   "funding_date": null,
+   "id": "a6ba861c-0b93-4261-8b41-1b84d3536e08",
+   "institution_account_id": "SANDBOX-002",
+   "institution_name": "sandbox",
+   "is_paper": true,
+   "meta": {
+    "currency": "USD",
+    "institution_name": "sandbox"
+   },
+   "name": "IRA",
+   "number": "SANDBOX-002",
+   "opening_date": null,
+   "portfolio_group": "00000000-0000-0000-0000-000000000001",
+   "raw_data": null,
+   "raw_type": "IRA",
+   "status": "open",
+   "sync_status": {
+    "holdings": {
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-20T20:50:19.577750+00:00"
+    },
+    "transactions": {
+     "first_transaction_date": "2026-09-20",
+     "initial_sync_completed": true,
+     "last_successful_sync": "2026-10-19"
+    }
+   }
+  }
+ ],
+ "positions": {
+  "66b27e42-8808-4271-b85f-a7957aaff5a3": {
+   "data_freshness": {
+    "as_of": "2026-10-20T20:50:46Z"
+   },
+   "results": [
+    {
+     "cost_basis": "175",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Apple Inc.",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG000B9Y5X2",
+       "figi_share_class": "BBG001S5N8V8"
+      },
+      "id": "c15a817e-7171-4940-9ae7-f7b4a95408ee",
+      "kind": "stock",
+      "raw_symbol": "AAPL",
+      "symbol": "AAPL"
+     },
+     "price": "180.5",
+     "units": "5"
+    },
+    {
+     "cost_basis": "395",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Microsoft Corporation Common Stock",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG000BPHFS9",
+       "figi_share_class": "BBG001S5TD05"
+      },
+      "id": "5563d000-af45-47ba-a2ec-7be565340077",
+      "kind": "stock",
+      "raw_symbol": "MSFT",
+      "symbol": "MSFT"
+     },
+     "price": "410",
+     "units": "10"
+    },
+    {
+     "cost_basis": "250",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Tesla, Inc.",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG000N9P426",
+       "figi_share_class": "BBG001SQKGD7"
+      },
+      "id": "a7ceb2ae-2b3f-4246-b153-8c15292330e5",
+      "kind": "stock",
+      "raw_symbol": "TSLA",
+      "symbol": "TSLA"
+     },
+     "price": "240",
+     "units": "8"
+    },
+    {
+     "cost_basis": "540",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "State Street SPDR S&P 500 ETF Trust",
+      "exchange": "ARCX",
+      "figi_instrument": {
+       "figi_code": "BBG000BDTF76",
+       "figi_share_class": "BBG001S72SM3"
+      },
+      "id": "ee576918-ffd1-4908-9cc5-ca2469759e83",
+      "kind": "etf",
+      "raw_symbol": "SPY",
+      "symbol": "SPY"
+     },
+     "price": "558.25",
+     "units": "15"
+    },
+    {
+     "cost_basis": "62000",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Bitcoin",
+      "id": "9ecfad90-10d5-431c-9878-49960a323673",
+      "kind": "crypto",
+      "raw_symbol": "BTC",
+      "symbol": "BTC"
+     },
+     "price": "59000",
+     "units": "0.25"
+    },
+    {
+     "cost_basis": "2400",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Ethereum",
+      "id": "99cd9935-0abf-43dd-a4e2-4e4f91284026",
+      "kind": "crypto",
+      "raw_symbol": "ETH",
+      "symbol": "ETH"
+     },
+     "price": "2650",
+     "units": "2.5"
+    },
+    {
+     "cost_basis": "150",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "SOL",
+      "id": "4a9bff77-ac47-4129-a507-a31dfdf835e9",
+      "kind": "crypto",
+      "raw_symbol": "SOL",
+      "symbol": "SOL"
+     },
+     "price": "142",
+     "units": "40"
+    },
+    {
+     "cost_basis": "1",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "USDC",
+      "id": "0a6d368a-ac52-4e79-a557-c15acf51e5bd",
+      "kind": "crypto",
+      "raw_symbol": "USDC",
+      "symbol": "USDC"
+     },
+     "price": "1",
+     "units": "1500"
+    }
+   ]
+  },
+  "a6ba861c-0b93-4261-8b41-1b84d3536e08": {
+   "data_freshness": {
+    "as_of": "2026-10-20T20:50:47Z"
+   },
+   "results": [
+    {
+     "cost_basis": "115",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "NVIDIA Corporation",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG000BBK0R0",
+       "figi_share_class": "BBG001S5TZJ6"
+      },
+      "id": "f2d10516-9aff-4338-b983-8db42a8bce91",
+      "kind": "stock",
+      "raw_symbol": "NVDA",
+      "symbol": "NVDA"
+     },
+     "price": "120",
+     "units": "12"
+    },
+    {
+     "cost_basis": "165",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Alphabet Inc. Class A Common Stock",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG009S4MT03",
+       "figi_share_class": "BBG009S39JY5"
+      },
+      "id": "7be63bdb-f517-4ba4-b509-b7de77d96fd3",
+      "kind": "stock",
+      "raw_symbol": "GOOGL",
+      "symbol": "GOOGL"
+     },
+     "price": "170",
+     "units": "3"
+    },
+    {
+     "cash_equivalent": false,
+     "cost_basis": "178",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Fidelity 500 Index Fund",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG001P8F023",
+       "figi_share_class": "BBG001TX1Z13"
+      },
+      "id": "c45f304b-846e-4f8c-b985-34278705d90c",
+      "kind": "mutualfund",
+      "raw_symbol": "FXAIX",
+      "symbol": "FXAIX"
+     },
+     "price": "185.2",
+     "units": "120.5432"
+    },
+    {
+     "cash_equivalent": true,
+     "cost_basis": "1",
+     "currency": "USD",
+     "instrument": {
+      "currency": "USD",
+      "description": "Fidelity Hereford Street Trust - Fidelity Government Money Market Fund",
+      "exchange": "XNAS",
+      "figi_instrument": {
+       "figi_code": "BBG000B9Y9C7",
+       "figi_share_class": "BBG001S5P6W9"
+      },
+      "id": "a5530fbb-0b00-4d95-a4a8-f88362979611",
+      "kind": "mutualfund",
+      "raw_symbol": "SPAXX",
+      "symbol": "SPAXX"
+     },
+     "price": "1",
+     "units": "3500"
+    }
+   ]
+  }
+ }
+}

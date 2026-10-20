@@ -2,7 +2,7 @@ fastapi==0.143.3
 uvicorn[standard]==0.54.0
 requests==2.34.2
 pypdf==6.21.1                  # extract text from PDF knowledge docs for the RAG index (N12)
-snaptrade-python-sdk==12.0.4    # only used when PORTFOLIO_PROVIDER=snaptrade; held below 13 on purpose (see .github/dependabot.yml)
+snaptrade-python-sdk==13.0.43    # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)
 itsdangerous==2.2.0             # session-cookie signing (starlette.middleware.sessions.SessionMiddleware)
 argon2-cffi==25.1.0             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
 pyotp==2.10.0                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)

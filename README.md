@@ -135,9 +135,13 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env` (default: 
   in the account name so the tax audit classifies it. Path via `HOLDINGS_CSV`
   (default `/data/holdings.csv`); prices are fetched live from Finnhub.
 - **`snaptrade`** *(live, many brokerages incl. Robinhood)*: one connection aggregates
-  holdings across brokerages via [SnapTrade](https://snaptrade.com/) (free dev tier). Set
-  the `SNAPTRADE_*` vars, then run **`python snaptrade_register.py`** once to register a
-  user, link your brokerage(s), and get your `USER_ID`/`USER_SECRET`.
+  holdings across brokerages via [SnapTrade](https://snaptrade.com/). Two key types (SDK 13.x):
+  a free **personal key** (client ID starts with `PERS-`) needs only `SNAPTRADE_CLIENT_ID` and
+  `SNAPTRADE_CONSUMER_KEY` — there is no user to register; link brokerages from **SETTINGS → ACCOUNTS →
+  SnapTrade → CONNECT** (or `python snaptrade_register.py`, which just prints the connect link;
+  `--sandbox` links SnapTrade's simulated test broker). A **commercial key** also needs a registered
+  user: run `python snaptrade_register.py` once and save the `SNAPTRADE_USER_ID`/`SNAPTRADE_USER_SECRET`
+  it prints.
 
 - **`plaid`** *(official API; your own Plaid account)*: links banks, brokerages, credit cards and
   loans through [Plaid](https://plaid.com/) and shows **balances, investment holdings and

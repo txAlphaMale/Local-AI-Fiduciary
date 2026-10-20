@@ -16,11 +16,7 @@ updates:
     groups:
       python-patch-and-minor:
         update-types: ["minor", "patch"]
-    ignore:
-      # Held on the 12.0.x line: SnapTrade 12.1+/13.x changed the client constructor (auth=...) and
-      # response types, which cannot be verified without live SnapTrade credentials. Migrate by hand.
-      - dependency-name: "snaptrade-python-sdk"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
 
   - package-ecosystem: "github-actions"
     directory: "/"
