@@ -2950,6 +2950,14 @@ def _build_csv():
     except FileNotFoundError:
         return _derive([], [], [], [], 0.0, 0.0, 0.0)
     accounts_map, positions = {}, []
+    # The same account NAME at two institutions ("Brokerage" at Robinhood and at Fidelity -- the editor's
+    # default name) used to collapse into ONE account labelled with the first row's institution and holding
+    # both brokerages' money (tester report 2026-10-21). Accounts are keyed by name AND institution; a name
+    # shared across institutions is shown as "<name> · <institution>".
+    _insts = {}
+    for r in rows:
+        _n = (r.get("account") or "Brokerage").strip() or "Brokerage"
+        _insts.setdefault(_n, set()).add((r.get("institution") or "").strip().lower())
     for r in rows:
         tkr = (r.get("ticker") or "").strip().upper()
         try:
@@ -2964,6 +2972,8 @@ def _build_csv():
             cost = None
         acct = (r.get("account") or "Brokerage").strip() or "Brokerage"
         inst = (r.get("institution") or "").strip() or None
+        if len(_insts.get(acct, ())) > 1:
+            acct = f"{acct} · {inst or 'no institution'}"
         typ = (r.get("type") or "Stock").strip() or "Stock"
         q = {"c": 1.0, "dp": 0.0} if typ.lower() == "cash" else (_finnhub("quote", tkr) or {})
         price = (q.get("c") if isinstance(q, dict) else None) or None
