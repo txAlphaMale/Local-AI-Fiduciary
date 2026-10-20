@@ -871,7 +871,8 @@ function wireTabBarDnD(bar, onMove){
     return best;
   };
   bar.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} const b=pick(e); mark(b&&b.t,b&&b.after); };
-  bar.ondragleave=e=>{ if(!bar.contains(e.relatedTarget)) mark(null); };
+  // Firefox reports relatedTarget as null on dragleave, so decide by pointer position instead of the element left to.
+  bar.ondragleave=e=>{ const r=bar.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) mark(null); };
   bar.ondrop=e=>{ e.preventDefault(); mark(null); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){}
     const b=pick(e); if(from && b) onMove(from, b.t.dataset.dkey, b.after); };
   bar.ondragend=()=>mark(null);

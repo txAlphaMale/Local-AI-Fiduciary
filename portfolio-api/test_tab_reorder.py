@@ -40,7 +40,7 @@ class TestReorder(unittest.TestCase):
         out = self.run_js("""
         const mk=(k,l)=>({dataset:{dkey:k},style:{},getBoundingClientRect:()=>({left:l,width:100,top:0,height:20})});
         const tabs=[mk('a',0),mk('b',120),mk('c',240)];
-        const bar={querySelectorAll:()=>tabs,contains:()=>false};
+        const bar={querySelectorAll:()=>tabs,getBoundingClientRect:()=>({left:0,right:400,top:0,bottom:20})};
         const calls=[]; wireTabBarDnD(bar,(f,t,a)=>calls.push([f,t,a]));
         const ev=(x,y)=>({clientX:x,clientY:y,preventDefault(){},dataTransfer:{getData:()=>'a',dropEffect:''}});
         bar.ondrop(ev(110,10));   // in the gap between a and b, nearer a's side -> after a? (nearest is a or b)
