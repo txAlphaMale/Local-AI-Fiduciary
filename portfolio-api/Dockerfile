@@ -9,7 +9,7 @@
 # rebuild + rescan (`docker build -t fiduciary-portfolio-api:scan .` then `trivy image ... fiduciary-
 # portfolio-api:scan`) to confirm this actually clears the 2 CRITICAL findings above -- not verified
 # against a real Trivy run from this session (no Docker available in the sandbox).
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 WORKDIR /app
 
 # curl: fetches acme.sh below. tar: extracts it. socat: acme.sh's --standalone HTTP-01 challenge
