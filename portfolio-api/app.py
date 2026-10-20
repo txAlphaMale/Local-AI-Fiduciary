@@ -10253,6 +10253,39 @@ def get_settings():
                     "provider credentials live in the SECRETS tab instead (also DB-backed, encrypted)."}
 
 
+def _env_overrides():
+    """Saved (UI) values that the server's real .env is currently overriding -- the user changes a setting, nothing
+    happens, and nothing says why (tester 2026-10-21: .env said csv and silently beat the UI choice). Never returns
+    secret values; for secrets we can only say 'set in both'. PORTFOLIO_PROVIDER is exempt: the data-source selector
+    deliberately wins over the .env/compose default (see the boot override near _boot_merge)."""
+    out, stored = [], _read_settings()
+    for key, spec in SETTING_SPECS.items():
+        ev, sv = os.environ.get(spec["env"]), stored.get(key)
+        if ev not in (None, "") and sv is not None and str(sv) != str(ev):
+            out.append({"key": spec["env"], "label": spec["label"], "kind": "setting",
+                        "saved": str(sv), "env": str(ev)})
+    for spec in CONFIG_SPECS:
+        k = spec["key"]
+        if k == "PORTFOLIO_PROVIDER":
+            continue
+        ev, sv = os.environ.get(k), stored.get(k)
+        if k in _ENV_SECRETS_AT_BOOT and sv not in (None, "") and str(sv) != str(ev):
+            out.append({"key": k, "label": spec["label"], "kind": "config", "saved": str(sv), "env": str(ev)})
+    sec = _read_secrets()
+    for spec in SECRET_SPECS:
+        k = spec["key"]
+        if spec.get("scope") in ("app", "mcpo-file") and k in _ENV_SECRETS_AT_BOOT and sec.get(k):
+            out.append({"key": k, "label": spec.get("label") or k, "kind": "secret"})
+    return out
+
+
+@app.get("/api/settings/overrides")
+def get_env_overrides(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    return {"overrides": _env_overrides()}
+
+
 @app.post("/api/settings")
 async def post_settings(req: Request):
     """Set advanced knobs (local settings.json). ENV-set knobs are ignored (env wins) and
