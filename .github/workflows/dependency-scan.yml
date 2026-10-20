@@ -85,7 +85,7 @@ jobs:
         # this step can't be silently re-pointed by any future tag manipulation of the same kind.
         # Do NOT change this to @0.25.0, @master, or any other trivy-action tag/branch without
         # first checking https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23.
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: "fiduciary-portfolio-api:scan"
           format: "sarif"
@@ -108,7 +108,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Full report (all severities, informational -- does not fail the job)
         if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 -- see pinning note on the step above
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.35.0 -- see pinning note on the step above
         with:
           image-ref: "fiduciary-portfolio-api:scan"
           format: "table"
