@@ -80,6 +80,7 @@ import vault_api      # TASK-001 — /api/vault/* handlers
 import emergency      # TASK-002 — break-glass emergency access
 import kit            # TASK-002 — offline Emergency Kit
 import emergency_api  # TASK-002 — /api/emergency/* + /api/vault/kit*
+import plaid_integration  # TASK-005 — Plaid provider (balances/holdings/liabilities; never transactions)
 
 # store.init_db() has to run before ANYTHING below reads a *_FILE via the store (starting with
 # _boot_merge two lines down) — store.py itself does no work at import time, so this is the
@@ -380,7 +381,7 @@ CONFIG_SPECS = [
     # in-app way to even pick "csv" without editing .env by hand. See /api/holdings-csv for the
     # matching in-app editor that goes with this.
     {"key": "PORTFOLIO_PROVIDER", "label": "Portfolio data source", "group": "Portfolio provider",
-     "default": "csv", "options": ["csv", "snaptrade", "monarch"]},
+     "default": "csv", "options": ["csv", "snaptrade", "monarch", "plaid"]},
     # ---- Notifications (2026-07-26) -- VAPID requires *a* contact address in its claim (the push
     # service, e.g. Chrome's/Mozilla's, may use it to reach you about a misbehaving sender); it
     # does not need to be monitored or even real-looking, so this is not in SECRET_SPECS.
@@ -388,6 +389,9 @@ CONFIG_SPECS = [
     # alert address (notifications._vapid_claim_email). Apple needs a real-looking address.
     {"key": "NOTIFY_VAPID_CONTACT_EMAIL", "label": "Push notification contact email (VAPID claim — not shown to users)",
      "group": "Notifications", "default": ""},
+    # ---- Plaid (TASK-005): sandbox = Plaid's fake banks (free, for trying it); production = real banks.
+    {"key": "PLAID_ENV", "label": "Plaid environment (sandbox = test data, production = your real banks)",
+     "group": "Portfolio (Plaid)", "default": "sandbox", "options": ["sandbox", "production"]},
     # ---- Reverse proxy (2026-07-27) -- found live on the AWS demo: request.client.host is always
     # the proxy/load-balancer's own address once one sits in front of this app, never the real
     # visitor, which silently breaks the audit log's source IP, the SEC-4 first-seen-IP detection
@@ -1899,6 +1903,18 @@ _RISK_REGISTER_SEED = [
                     "detection alerts when the admin has not signed in 24 h into a request; the wait "
                     "length is the owner's choice (>= 24 h)",
          residual="Medium — accepted trade-off of a time-delay design", owner="Jason"),
+    dict(id="R-20", asset="Plaid connection (third-party aggregator)",
+         threat="Plaid credentials or per-institution access tokens are stolen from the host, or the "
+                "household's financial account data is exposed through the third-party aggregator",
+         likelihood="Low", impact="High", inherent="Medium",
+         treatment="TASK-005: official API only; balances/holdings/liabilities with the Transactions "
+                    "product never requested; secret in the encrypted secrets store; access tokens in the "
+                    "encrypted store blob and never returned to the browser, logged or audited; every "
+                    "endpoint admin-only; institution logins happen on Plaid's hosted page, never on this "
+                    "server; REMOVE calls /item/remove at Plaid before deleting the token; off unless "
+                    "PORTFOLIO_PROVIDER=plaid",
+         residual="Medium — host compromise yields live tokens (same class as R-7); Plaid is a "
+                   "third-party processor holding the institution link", owner="Jason"),
 ]
 
 
@@ -1932,7 +1948,7 @@ def _read_risk_register():
     seeded = {"rows": [dict(r, status="open", closed_reason=None, closed_date=None,
                              created="2026-06-23", updated="2026-07-27")
                        for r in _RISK_REGISTER_SEED],
-              "next_number": 20}
+              "next_number": 21}
     store.write_json(RISK_REGISTER_FILE, seeded)
     return seeded
 
@@ -2990,6 +3006,29 @@ def _num(v):
         return None
 
 
+def _plaid_creds():
+    """(client_id, secret, env) -- read fresh each call so a saved secret applies without a restart.
+    .env still wins if someone set PLAID_CLIENT_ID/PLAID_SECRET there."""
+    st = _read_secrets()
+    cid = os.environ.get("PLAID_CLIENT_ID") or st.get("PLAID_CLIENT_ID")
+    sec = os.environ.get("PLAID_SECRET") or st.get("PLAID_SECRET")
+    env = os.environ.get("PLAID_ENV") or _read_settings().get("PLAID_ENV") or "sandbox"
+    return cid, sec, env
+
+
+plaid_integration.configure(_plaid_creds)
+
+
+def _build_plaid():
+    """Portfolio via Plaid (PORTFOLIO_PROVIDER=plaid): balances, holdings and liabilities from every
+    connected Item (NO transactions). Item-level failures are recorded on the Item, not fatal."""
+    m = plaid_integration.build_portfolio()
+    d = _derive(m["accounts"], m["positions"], m["by_account"], m["inv"], m["net_worth"],
+                m["total_assets"], m["total_liabilities"], balance_only=m["balance_only"])
+    d["plaid_item_errors"] = m.get("item_errors") or []
+    return d
+
+
 def _build_snaptrade():
     """Portfolio via SnapTrade (PORTFOLIO_PROVIDER=snaptrade) — one connection aggregates holdings
     across many brokerages (Robinhood, Fidelity, Schwab, E*TRADE, Webull, ...). Requires a dev
@@ -3072,6 +3111,8 @@ def build():
             d = _build_snaptrade()
         elif p == "monarch":
             d = _build_monarch()
+        elif p == "plaid":
+            d = _build_plaid()
         else:
             p = "csv"
             d = _build_csv()
@@ -4943,6 +4984,15 @@ def _alerts_digest():
     except Exception:
         pass
 
+    # TASK-005: a connected Plaid institution needs the user to log in again
+    try:
+        if os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() == "plaid":
+            for _pi in plaid_integration.public_items():
+                if _pi.get("status") == "login_required":
+                    add("action", "Plaid", f"{_pi.get('institution') or 'A connected institution'} needs you to log in "
+                        "again (SETTINGS → ACCOUNTS → Plaid → RECONNECT) — its balances are not updating", "SETTINGS → ACCOUNTS")
+    except Exception:
+        pass
     # TASK-002: emergency kit staleness + an open emergency request (visible from the cockpit)
     try:
         _ks = kit.stale_alert()
@@ -7861,7 +7911,9 @@ def get_cashdebt():
                 continue
             nm = a.get("name") or "?"
             debts.append({"name": nm, "balance": abs(a.get("balance") or 0),
-                          "rate_pct": rates.get(nm), "min_payment": min_payments.get(nm),
+                          # a figure the user entered wins; otherwise the provider's (Plaid /liabilities/get)
+                          "rate_pct": rates.get(nm) if rates.get(nm) not in (None, "") else a.get("apr_pct"),
+                          "min_payment": min_payments.get(nm) if min_payments.get(nm) not in (None, "") else a.get("min_payment"),
                           "pay_in_full": bool(pay_in_full.get(nm))})
     inputs = {"cash_total": _cash_total(d),
               "annual_expenses": exp,
@@ -7964,6 +8016,10 @@ def _whatif_liabilities():
         is_m = _is_mortgage_account(a, mort_ov)
         rate, rate_src = rates.get(nm), "account"
         pay, pay_src = mins.get(nm), "account"
+        if rate in (None, "") and a.get("apr_pct") is not None:      # provider default (Plaid), user entry wins
+            rate, rate_src = a.get("apr_pct"), "plaid"
+        if pay in (None, "", 0) and a.get("min_payment"):
+            pay, pay_src = a.get("min_payment"), "plaid"
         if is_m and n_mort == 1:
             if rate is None and cfg.get("mortgage_rate_pct") is not None:
                 rate, rate_src = cfg.get("mortgage_rate_pct"), "plan_cashdebt_mortgage"
@@ -10115,6 +10171,87 @@ async def post_settings(req: Request):
 
 
 # ---- Monarch opt-in (TASK-003): status / enable-with-acknowledgment / disable. Admin only. ----
+# ---- Plaid (TASK-005) -- every endpoint is admin-only and checks for itself (the global gate lets
+# viewers GET everything). Access tokens never leave the server.
+def _plaid_admin(request):
+    a = _require_admin(request)
+    return a, (None if a else JSONResponse({"error": "admin only"}, status_code=403))
+
+
+@app.get("/api/integrations/plaid")
+def get_plaid_status(request: Request):
+    admin, bad = _plaid_admin(request)
+    if bad:
+        return bad
+    return {"configured": plaid_integration.configured(), "environment": plaid_integration.environment(),
+            "selected": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() == "plaid",
+            "kinds": [{"kind": k, "label": v} for k, v in plaid_integration.KIND_LABELS.items()],
+            "items": plaid_integration.public_items(),
+            "note": "Balances, investment holdings and liabilities only — transactions are never requested. "
+                    "Sandbox (test data) is always free. For real banks, Plaid offers new US/Canada accounts "
+                    "a free Trial plan limited to 10 connections for the life of the account (details: "
+                    "plaid.com/docs/account/billing); otherwise it is Pay-as-you-go, where Investments and "
+                    "Liabilities are billed per connected institution per month until you remove it. Check "
+                    "your own Plaid Dashboard for the plan and prices that apply to you."}
+
+
+def _plaid_err(e):
+    return JSONResponse({"error": str(e), "code": getattr(e, "code", None)},
+                        status_code=502 if getattr(e, "code", "") not in ("NOT_CONFIGURED", "BAD_KIND", "NO_SUCH_ITEM") else 400)
+
+
+@app.post("/api/integrations/plaid/link")
+async def post_plaid_link(request: Request):
+    admin, bad = _plaid_admin(request)
+    if bad:
+        return bad
+    body = await request.json()
+    try:
+        r = plaid_integration.start_link((body or {}).get("kind") or "bank", admin["id"], (body or {}).get("item_id"))
+    except plaid_integration.PlaidError as e:
+        return _plaid_err(e)
+    audit.emit("integration.plaid.link_started", request=request, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/integrations/plaid/link", detail={"kind": r["kind"], "update": bool((body or {}).get("item_id"))})
+    return {"ok": True, "session_id": r["session_id"], "hosted_link_url": r["hosted_link_url"], "kind": r["kind"]}
+
+
+@app.post("/api/integrations/plaid/poll")
+async def post_plaid_poll(request: Request):
+    admin, bad = _plaid_admin(request)
+    if bad:
+        return bad
+    body = await request.json()
+    try:
+        r = plaid_integration.poll_link((body or {}).get("session_id") or "")
+    except plaid_integration.PlaidError as e:
+        return _plaid_err(e)
+    if r["status"] == "linked" and r["items"]:
+        _cache["data"] = None          # next dashboard load re-reads the new accounts
+        for it in r["items"]:
+            audit.emit("integration.plaid.item_added", request=request, actor=admin["id"], actor_name=admin.get("username"),
+                       resource="/api/integrations/plaid/poll",
+                       detail={"institution": it.get("institution"), "kind": it.get("kind")})
+    return {"ok": True, **r}
+
+
+@app.post("/api/integrations/plaid/remove")
+async def post_plaid_remove(request: Request):
+    admin, bad = _plaid_admin(request)
+    if bad:
+        return bad
+    body = await request.json()
+    iid = (body or {}).get("item_id") or ""
+    inst = next((i.get("institution") for i in plaid_integration.public_items() if i["item_id"] == iid), None)
+    try:
+        plaid_integration.remove_item(iid)
+    except plaid_integration.PlaidError as e:
+        return _plaid_err(e)
+    _cache["data"] = None
+    audit.emit("integration.plaid.item_removed", request=request, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/integrations/plaid/remove", detail={"institution": inst})
+    return {"ok": True}
+
+
 @app.get("/api/integrations/monarch")
 def monarch_status(request: Request):
     ack = _monarch_ack()
@@ -10224,6 +10361,8 @@ SECRET_SPECS = [
     # configurability (each self-hosted deployment brings its own mailbox). For Gmail specifically:
     # smtp.gmail.com / 587 / your address / a 16-character App Password (not your real password —
     # Google requires 2-Step Verification enabled first to generate one). See notifications.py.
+    {"key": "PLAID_CLIENT_ID", "label": "Plaid client ID", "group": "Portfolio (Plaid)", "scope": "app", "plain": True},
+    {"key": "PLAID_SECRET", "label": "Plaid secret (the one for the environment chosen under ADVANCED KNOBS)", "group": "Portfolio (Plaid)", "scope": "app"},
     {"key": "SMTP_HOST",         "label": "SMTP server (e.g. smtp.gmail.com)",         "group": "Notifications (Email)", "scope": "app", "plain": True},
     {"key": "SMTP_PORT",         "label": "SMTP port (587 = STARTTLS, blank defaults to 587)", "group": "Notifications (Email)", "scope": "app", "plain": True},
     {"key": "SMTP_USERNAME",     "label": "SMTP username (usually your full email address)", "group": "Notifications (Email)", "scope": "app", "plain": True},

@@ -26,6 +26,7 @@ Controls: ISO/IEC 27001:2022 **A.8.10** (Information deletion); NIST SP 800-53 *
 | Document vault files (`/data/vault`, `vault_items`) | Until the household deletes the item | Delete = crypto-shred (wrapped key dropped, ciphertext blob removed, row tombstoned) | Estate/identity documents are kept on purpose; disposal is the owner's decision |
 | Emergency-access requests (`emergency_requests`) | Indefinite | None built (small rows; audit value outweighs minimisation) | Evidence of who asked for emergency access and what was decided; the matching audit events follow the audit retention above |
 | Emergency Kit temp file (`/data/tmp/kit-*.zip`) | Until downloaded once, 10 minutes, or the next restart — whichever is first | Deleted after the single permitted download; token expiry; startup sweep | A decrypted-content-adjacent artifact should not linger on the server; the admin-held copy is outside this app's control |
+| Plaid access tokens + item list (`plaid_items.json`) | Until the institution is removed in SETTINGS → ACCOUNTS → Plaid | REMOVE → `/item/remove` at Plaid (stops billing) then the local token is deleted; a failed remove is kept so it can be retried | A live token keeps Plaid syncing (and billing) the institution, so it should not outlive the household's use of it |
 
 ## Flagged gaps (honest, not yet remediated)
 

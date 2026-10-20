@@ -3403,6 +3403,61 @@ function monarchPanel(){
   load(); return box;
 }
 
+// TASK-005: Plaid — balances, holdings and liabilities (never transactions). Admin only.
+function plaidPanel(){
+  const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  const box=el('div'); box.style.cssText='border:1px solid var(--border,#555);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-3);';
+  if(!u||u.role!=='admin') return box;
+  box.appendChild(el('div','ph','Plaid · connect banks, brokerages, cards & loans'));
+  const body=el('div'); box.appendChild(body); body.textContent='Loading…';
+  let pollTimer=null;
+  const stopPoll=()=>{ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } };
+  const load=()=>fetch('/api/integrations/plaid').then(r=>r.json()).then(m=>{
+    stopPoll(); body.textContent='';
+    if(m.error){ body.textContent=m.error; return; }
+    const note=el('div','muted'); note.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-2);'; note.textContent=m.note; body.appendChild(note);
+    const st=el('div'); st.style.marginBottom='var(--space-2)';
+    st.textContent='Environment: '+m.environment.toUpperCase()+(m.environment==='sandbox'?' (Plaid test data — not your real banks)':'')+' · '+(m.configured?'credentials saved':'NO credentials yet')+' · '+(m.selected?'active data source':'not the active data source');
+    body.appendChild(st);
+    if(!m.configured){ const h=el('div','muted'); h.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; h.textContent='Add your Plaid client ID and secret under SETTINGS → SECRETS & KEYS → Portfolio (Plaid), then reopen this panel.'; body.appendChild(h); }
+    (m.items||[]).forEach(it=>{
+      const row=el('div'); row.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;padding:3px 0;';
+      const t=el('span'); t.textContent=(it.institution||'Institution')+' · '+((m.kinds.find(k=>k.kind===it.kind)||{}).label||it.kind)+(it.accounts!=null?' · '+it.accounts+' account(s)':'');
+      const s=el('span'); s.textContent=it.status==='ok'?'✓ connected':(it.status==='login_required'?'⚠ needs re-login':'✗ error: '+(it.error||'')); s.className=it.status==='ok'?'pos':'neg';
+      row.appendChild(t); row.appendChild(s);
+      if(it.status==='login_required'){ const rb=el('button',null,'RECONNECT'); rb.onclick=()=>startLink(it.kind,it.item_id); row.appendChild(rb); }
+      const rm=el('button',null,'REMOVE'); rm.title='Disconnects at Plaid (stops billing) and deletes the stored token';
+      rm.onclick=async()=>{ if(!confirm('Remove '+(it.institution||'this institution')+'? Plaid stops syncing it and billing for it ends.')) return;
+        const r=await fetch('/api/integrations/plaid/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_id:it.item_id})}); const j=await r.json();
+        if(!r.ok) alert(j.error||'Could not remove'); load(); };
+      row.appendChild(rm); body.appendChild(row);
+    });
+    const cb=el('div'); cb.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-2);';
+    (m.kinds||[]).forEach(k=>{ const b=el('button',null,'＋ '+k.label.toUpperCase()); b.disabled=!m.configured; b.onclick=()=>startLink(k.kind); cb.appendChild(b); });
+    body.appendChild(cb);
+    const msg=el('div','muted'); msg.id='plaid-msg'; msg.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);'; body.appendChild(msg);
+    if(!m.selected){ const h=el('div','muted'); h.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);'; h.textContent='To show these accounts on the dashboard: ADVANCED KNOBS → Portfolio data source → plaid, then run docker compose up -d --build portfolio-api.'; body.appendChild(h); }
+  }).catch(()=>{ body.textContent='Could not load Plaid status.'; });
+  async function startLink(kind,itemId){
+    const msg=document.getElementById('plaid-msg'); if(msg){ msg.className='muted'; msg.textContent='Creating a secure Plaid link…'; }
+    const r=await fetch('/api/integrations/plaid/link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,item_id:itemId||null})});
+    const j=await r.json();
+    if(!r.ok){ if(msg){ msg.className='neg'; msg.textContent=j.error||'Could not start Plaid.'; } return; }
+    window.open(j.hosted_link_url,'_blank','noopener');
+    if(msg) msg.textContent='A Plaid window opened — sign in to your institution there. Waiting for you to finish (this page updates automatically; link expires in 30 minutes)…';
+    const started=Date.now(); stopPoll();
+    pollTimer=setInterval(async()=>{
+      if(Date.now()-started>31*60*1000){ stopPoll(); if(msg) msg.textContent='The link expired. Start again.'; return; }
+      try{ const pr=await fetch('/api/integrations/plaid/poll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:j.session_id})}); const p=await pr.json();
+        if(p.status==='linked'){ stopPoll(); load(); const m2=document.getElementById('plaid-msg'); if(m2){ m2.className='pos'; m2.textContent='✓ Connected '+(p.items||[]).map(i=>i.institution).join(', '); } }
+        else if(p.status==='exited'){ stopPoll(); if(msg){ msg.className='neg'; msg.textContent='The Plaid window was closed before finishing.'+(p.exit&&p.exit.error_code?' ('+p.exit.error_code+')':''); } }
+        else if(p.status==='unknown'){ stopPoll(); }
+      }catch(_){ }
+    },3000);
+  }
+  load(); return box;
+}
+
 function accountRegistryContent(){
   const wrap=el('div');
   const h=el('div','ph','ACCOUNTS · PER-ACCOUNT SETTINGS'); wrap.appendChild(h);
@@ -3416,6 +3471,7 @@ function accountRegistryContent(){
     'Tax-deferred accounts are blocked: an early withdrawal costs income tax plus a 10% penalty, so they aren\'t emergency money. A Roth is allowed but should carry a cap equal to your contribution basis — only contributions come out free.';
   wrap.appendChild(sub);
   wrap.appendChild(monarchPanel());
+  wrap.appendChild(plaidPanel());
   if(ACCTREG && ACCTREG.ef_stress_drawdown_pct!=null){
     const k=el('div','muted'); k.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
     k.textContent='EF target '+ACCTREG.ef_target_months+' months · stress test assumes a '+ACCTREG.ef_stress_drawdown_pct+'% equity drawdown on market-risk sources (both adjustable under ADVANCED KNOBS).';

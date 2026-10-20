@@ -1,0 +1,1583 @@
+{
+ "accounts": {
+  "accounts": [
+   {
+    "account_id": "NEMva75GR1S53rk5pjAlSydLMzlbVafX8ZdGm",
+    "apy": 0,
+    "balances": {
+     "available": 100,
+     "current": 110,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "0000",
+    "name": "Plaid Checking",
+    "official_name": "Plaid Gold Standard 0% Interest Checking",
+    "subtype": "checking",
+    "type": "depository"
+   },
+   {
+    "account_id": "PljvNQ5qbpT5AGx5gkq9SNJWBn34LauXLdaeW",
+    "apy": 0.1,
+    "balances": {
+     "available": 200,
+     "current": 210,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "1111",
+    "name": "Plaid Saving",
+    "official_name": "Plaid Silver Standard 0.1% Interest Saving",
+    "subtype": "savings",
+    "type": "depository"
+   },
+   {
+    "account_id": "pBlNkP3z5VszvjZzxpwWHKegVzjzd1hJlgGvn",
+    "apy": 0.2,
+    "balances": {
+     "available": null,
+     "current": 1000,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "2222",
+    "name": "Plaid CD",
+    "official_name": "Plaid Bronze Standard 0.2% Interest CD",
+    "subtype": "cd",
+    "type": "depository"
+   },
+   {
+    "account_id": "ozW4dJBr5VHraenr3XQ6CBWg6rKrpafpQ9DZb",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 410,
+     "iso_currency_code": "USD",
+     "limit": 2000,
+     "unofficial_currency_code": null
+    },
+    "mask": "3333",
+    "name": "Plaid Credit Card",
+    "official_name": "Plaid Diamond 12.5% APR Interest Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   },
+   {
+    "account_id": "ggNKlP58bVFemZQe9xXPUZLznbwbdDiLNDB67",
+    "apy": 1.85,
+    "balances": {
+     "available": 43200,
+     "current": 43200,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "4444",
+    "name": "Plaid Money Market",
+    "official_name": "Plaid Platinum Standard 1.85% Interest Money Market",
+    "subtype": "money market",
+    "type": "depository"
+   },
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 320.76,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "5555",
+    "name": "Plaid IRA",
+    "official_name": null,
+    "subtype": "ira",
+    "type": "investment"
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23631.9805,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "6666",
+    "name": "Plaid 401k",
+    "official_name": null,
+    "subtype": "401k",
+    "type": "investment"
+   },
+   {
+    "account_id": "WxpvqL5dRGH57Ny5L9jaSwLlGdRdg6HP3M8bZ",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 65262,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "7777",
+    "name": "Plaid Student Loan",
+    "official_name": null,
+    "subtype": "student",
+    "type": "loan"
+   },
+   {
+    "account_id": "AP48yxRen3IZb9DZdRo3HaJVWEME5qC4LwDpN",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 56302.06,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "8888",
+    "name": "Plaid Mortgage",
+    "official_name": null,
+    "subtype": "mortgage",
+    "type": "loan"
+   },
+   {
+    "account_id": "GMRvKy5pQPi5wqv57BDPSylvAq9qZxIGK9vp5",
+    "apy": null,
+    "balances": {
+     "available": 6009,
+     "current": 6009,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9001",
+    "name": "Plaid HSA",
+    "official_name": "Plaid Cares Health Savings Account",
+    "subtype": "hsa",
+    "type": "depository"
+   },
+   {
+    "account_id": "nrbaxMzK5VhKEZeKkmnDI7Ag6DVDM4F39kR5B",
+    "apy": null,
+    "balances": {
+     "available": 12060,
+     "current": 12060,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9002",
+    "name": "Plaid Cash Management",
+    "official_name": "Plaid Growth Cash Management",
+    "subtype": "cash management",
+    "type": "depository"
+   },
+   {
+    "account_id": "bMwvP6J1xVi4zpX4PvweI9BJ5VEVgyHonLjk4",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23211.33,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9003",
+    "name": "Plaid Auto Loan",
+    "official_name": null,
+    "subtype": "auto",
+    "type": "loan"
+   },
+   {
+    "account_id": "mKad3gkq5Vcq78pqz9PMSK7xoVpVB4h4ejNob",
+    "apy": null,
+    "balances": {
+     "available": 47647.5,
+     "current": 13500.5,
+     "iso_currency_code": "USD",
+     "limit": 61148,
+     "unofficial_currency_code": null
+    },
+    "mask": "9004",
+    "name": "Plaid Home Equity Line of Credit",
+    "official_name": null,
+    "subtype": "home equity",
+    "type": "loan"
+   },
+   {
+    "account_id": "y7DLJMejVlIj5d4jvklyupRq7WNW58FKPdmaG",
+    "apy": null,
+    "balances": {
+     "available": 4980,
+     "current": 5020,
+     "iso_currency_code": "USD",
+     "limit": 10000,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "business",
+    "mask": "9999",
+    "name": "Plaid Business Credit Card",
+    "official_name": "Plaid Platinum Small Business Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   }
+  ],
+  "item": {
+   "auth_method": "INSTANT_AUTH",
+   "available_products": [
+    "assets",
+    "balance",
+    "identity",
+    "identity_match",
+    "income_verification",
+    "investments_auth",
+    "recurring_transactions",
+    "signal",
+    "statements",
+    "transactions",
+    "transactions_refresh",
+    "transfer"
+   ],
+   "billed_products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "consent_expiration_time": null,
+   "error": null,
+   "institution_id": "ins_109508",
+   "institution_name": "First Platypus Bank",
+   "item_id": "item_sandbox",
+   "products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "update_type": "background",
+   "webhook": ""
+  }
+ },
+ "holdings": {
+  "accounts": [
+   {
+    "account_id": "NEMva75GR1S53rk5pjAlSydLMzlbVafX8ZdGm",
+    "apy": 0,
+    "balances": {
+     "available": 100,
+     "current": 110,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": 5,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "0000",
+    "name": "Plaid Checking",
+    "official_name": "Plaid Gold Standard 0% Interest Checking",
+    "subtype": "checking",
+    "type": "depository"
+   },
+   {
+    "account_id": "PljvNQ5qbpT5AGx5gkq9SNJWBn34LauXLdaeW",
+    "apy": 0.1,
+    "balances": {
+     "available": 200,
+     "current": 210,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": 22,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "1111",
+    "name": "Plaid Saving",
+    "official_name": "Plaid Silver Standard 0.1% Interest Saving",
+    "subtype": "savings",
+    "type": "depository"
+   },
+   {
+    "account_id": "pBlNkP3z5VszvjZzxpwWHKegVzjzd1hJlgGvn",
+    "apy": 0.2,
+    "balances": {
+     "available": null,
+     "current": 1000,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "2222",
+    "name": "Plaid CD",
+    "official_name": "Plaid Bronze Standard 0.2% Interest CD",
+    "subtype": "cd",
+    "type": "depository"
+   },
+   {
+    "account_id": "ozW4dJBr5VHraenr3XQ6CBWg6rKrpafpQ9DZb",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 410,
+     "iso_currency_code": "USD",
+     "limit": 2000,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "3333",
+    "name": "Plaid Credit Card",
+    "official_name": "Plaid Diamond 12.5% APR Interest Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   },
+   {
+    "account_id": "ggNKlP58bVFemZQe9xXPUZLznbwbdDiLNDB67",
+    "apy": 1.85,
+    "balances": {
+     "available": 43200,
+     "current": 43200,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "4444",
+    "name": "Plaid Money Market",
+    "official_name": "Plaid Platinum Standard 1.85% Interest Money Market",
+    "subtype": "money market",
+    "type": "depository"
+   },
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 320.76,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": 100,
+     "unofficial_currency_code": null
+    },
+    "mask": "5555",
+    "name": "Plaid IRA",
+    "official_name": null,
+    "subtype": "ira",
+    "type": "investment"
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23631.9805,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "6666",
+    "name": "Plaid 401k",
+    "official_name": null,
+    "subtype": "401k",
+    "type": "investment"
+   },
+   {
+    "account_id": "WxpvqL5dRGH57Ny5L9jaSwLlGdRdg6HP3M8bZ",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 65262,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "7777",
+    "name": "Plaid Student Loan",
+    "official_name": null,
+    "subtype": "student",
+    "type": "loan"
+   },
+   {
+    "account_id": "AP48yxRen3IZb9DZdRo3HaJVWEME5qC4LwDpN",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 56302.06,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "8888",
+    "name": "Plaid Mortgage",
+    "official_name": null,
+    "subtype": "mortgage",
+    "type": "loan"
+   },
+   {
+    "account_id": "GMRvKy5pQPi5wqv57BDPSylvAq9qZxIGK9vp5",
+    "apy": null,
+    "balances": {
+     "available": 6009,
+     "current": 6009,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9001",
+    "name": "Plaid HSA",
+    "official_name": "Plaid Cares Health Savings Account",
+    "subtype": "hsa",
+    "type": "depository"
+   },
+   {
+    "account_id": "nrbaxMzK5VhKEZeKkmnDI7Ag6DVDM4F39kR5B",
+    "apy": null,
+    "balances": {
+     "available": 12060,
+     "current": 12060,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9002",
+    "name": "Plaid Cash Management",
+    "official_name": "Plaid Growth Cash Management",
+    "subtype": "cash management",
+    "type": "depository"
+   },
+   {
+    "account_id": "bMwvP6J1xVi4zpX4PvweI9BJ5VEVgyHonLjk4",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23211.33,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9003",
+    "name": "Plaid Auto Loan",
+    "official_name": null,
+    "subtype": "auto",
+    "type": "loan"
+   },
+   {
+    "account_id": "mKad3gkq5Vcq78pqz9PMSK7xoVpVB4h4ejNob",
+    "apy": null,
+    "balances": {
+     "available": 47647.5,
+     "current": 13500.5,
+     "iso_currency_code": "USD",
+     "limit": 61148,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9004",
+    "name": "Plaid Home Equity Line of Credit",
+    "official_name": null,
+    "subtype": "home equity",
+    "type": "loan"
+   },
+   {
+    "account_id": "y7DLJMejVlIj5d4jvklyupRq7WNW58FKPdmaG",
+    "apy": null,
+    "balances": {
+     "available": 4980,
+     "current": 5020,
+     "iso_currency_code": "USD",
+     "limit": 10000,
+     "margin_loan_amount": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "business",
+    "mask": "9999",
+    "name": "Plaid Business Credit Card",
+    "official_name": "Plaid Platinum Small Business Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   }
+  ],
+  "holdings": [
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "cost_basis": 0.01,
+    "institution_price": 1,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 0.01,
+    "iso_currency_code": "USD",
+    "quantity": 0.01,
+    "security_id": "d6ePmbPxgWCWmMVv66q9iPV94n91vMtov5Are",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 1.5,
+    "institution_price": 2.11,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 2.11,
+    "iso_currency_code": "USD",
+    "quantity": 1,
+    "security_id": "KDwjlXj1Rqt58dVvmzRguxJybmyQL8FgeWWAy",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 20,
+    "institution_price": 10.42,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 20.84,
+    "iso_currency_code": "USD",
+    "quantity": 2,
+    "security_id": "NDVQrXQoqzt5v3bAe8qRt4A7mK7wvZCLEBBJk",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "cost_basis": 100,
+    "institution_price": 0.011,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 110,
+    "iso_currency_code": "USD",
+    "quantity": 10000,
+    "security_id": "8E4L9XLl6MudjEpwPAAgivmdZRdBPJuvMPlPb",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 120.03,
+    "institution_price": 39358.09375,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 115.57268,
+    "iso_currency_code": "USD",
+    "quantity": 0.00293644,
+    "security_id": "9EWp9Xpqk1ua6DyXQb89ikMARWA6eyUzAbPMg",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "cost_basis": 200,
+    "institution_price": 42.15,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 210.75,
+    "iso_currency_code": "USD",
+    "quantity": 5,
+    "security_id": "abJamDazkgfvBkVGgnnLUWXoxnomp5up8llg4",
+    "tax_lots": [
+     {
+      "cost_basis": 266,
+      "current_value": 295.05,
+      "institution_lot_id": "EWZ-LONG-001",
+      "original_purchase_datetime": "2019-04-15T00:00:00.000Z",
+      "position_type": "LONG",
+      "purchase_price": 38,
+      "quantity": 7
+     },
+     {
+      "cost_basis": -66,
+      "current_value": -84.3,
+      "institution_lot_id": "EWZ-SHORT-001",
+      "original_purchase_datetime": "2021-02-10T00:00:00.000Z",
+      "position_type": "SHORT",
+      "purchase_price": 33,
+      "quantity": -2
+     }
+    ],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 344,
+    "institution_price": 20,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 430,
+    "iso_currency_code": "USD",
+    "quantity": 21.5,
+    "security_id": "lngLy3Le7vflLnAzKqwZs19l6bl8P5H1jG9Zz",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 542.041,
+    "institution_price": 27,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 636.309,
+    "iso_currency_code": "USD",
+    "quantity": 23.567,
+    "security_id": "JDdP7XPMklt5vwPmDN45t3KAoWAPmjtpaW7DP",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 948.08,
+    "institution_price": 94.808,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 948.08,
+    "iso_currency_code": "USD",
+    "quantity": 10,
+    "security_id": "QDQ13y1Ezxt51QbDb6A8cjk9EK978our9NaAM",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 1500.75,
+    "institution_price": 13.73,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 1373.6865,
+    "iso_currency_code": "USD",
+    "quantity": 100.05,
+    "security_id": "nnmo8doZ4lfKNEDe3mPJipLGkaGw3jfPrpxoN",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 1666.5,
+    "institution_price": 24.5,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 1855.875,
+    "iso_currency_code": "USD",
+    "quantity": 75.75,
+    "security_id": "MD9eKXeplrt5yKRlzLqXiavwb6wrdxUb3wdnM",
+    "tax_lots": [
+     {
+      "cost_basis": 1666.5,
+      "current_value": null,
+      "institution_lot_id": "CAMYX-INTENTIONALLY-SPARSE-001",
+      "original_purchase_datetime": "2020-06-01T00:00:00.000Z",
+      "position_type": null,
+      "purchase_price": null,
+      "quantity": null
+     }
+    ],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 6390,
+    "institution_price": 34.73,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 7397.49,
+    "iso_currency_code": "USD",
+    "quantity": 213,
+    "security_id": "eW4jmnjd6AtjxXVrjmj6SX1dNEdZp3Cy8RnRQ",
+    "tax_lots": [
+     {
+      "cost_basis": 2800,
+      "current_value": 3473,
+      "institution_lot_id": "SBSI-LONG-001",
+      "original_purchase_datetime": "2018-02-15T00:00:00.000Z",
+      "position_type": "LONG",
+      "purchase_price": 28,
+      "quantity": 100
+     },
+     {
+      "cost_basis": 1890,
+      "current_value": 2187.99,
+      "institution_lot_id": "SBSI-LONG-002",
+      "original_purchase_datetime": "2019-08-20T00:00:00.000Z",
+      "position_type": "LONG",
+      "purchase_price": 30,
+      "quantity": 63
+     },
+     {
+      "cost_basis": 1700,
+      "current_value": 1736.5,
+      "institution_lot_id": "SBSI-LONG-003",
+      "original_purchase_datetime": "2020-11-12T00:00:00.000Z",
+      "position_type": "LONG",
+      "purchase_price": 34,
+      "quantity": 50
+     }
+    ],
+    "unofficial_currency_code": null,
+    "vested_quantity": 100,
+    "vested_value": 3473
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "cost_basis": 12345.67,
+    "institution_price": 1,
+    "institution_price_as_of": "2021-05-25",
+    "institution_price_datetime": null,
+    "institution_value": 12345.67,
+    "iso_currency_code": "USD",
+    "quantity": 12345.67,
+    "security_id": "d6ePmbPxgWCWmMVv66q9iPV94n91vMtov5Are",
+    "tax_lots": [],
+    "unofficial_currency_code": null,
+    "vested_quantity": null,
+    "vested_value": null
+   }
+  ],
+  "item": {
+   "auth_method": "INSTANT_AUTH",
+   "available_products": [
+    "assets",
+    "balance",
+    "identity",
+    "identity_match",
+    "income_verification",
+    "investments_auth",
+    "recurring_transactions",
+    "signal",
+    "statements",
+    "transactions",
+    "transactions_refresh",
+    "transfer"
+   ],
+   "billed_products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "consent_expiration_time": null,
+   "error": null,
+   "institution_id": "ins_109508",
+   "institution_name": "First Platypus Bank",
+   "item_id": "item_sandbox",
+   "products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "update_type": "background",
+   "webhook": ""
+  },
+  "securities": [
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Nflx Feb 01'18 $355 Call",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "8E4L9XLl6MudjEpwPAAgivmdZRdBPJuvMPlPb",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "NFLX180201C00355000",
+    "type": "derivative",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": true,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Bitcoin",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "9EWp9Xpqk1ua6DyXQb89ikMARWA6eyUzAbPMg",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "BTC",
+    "type": "cryptocurrency",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Matthews Pacific Tiger Fund Insti Class",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "JDdP7XPMklt5vwPmDN45t3KAoWAPmjtpaW7DP",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "MIPTX",
+    "type": "mutual fund",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Achillion Pharmaceuticals Inc.",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "KDwjlXj1Rqt58dVvmzRguxJybmyQL8FgeWWAy",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "ACHN",
+    "type": "equity",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Cambiar International Equity Institutional",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "MD9eKXeplrt5yKRlzLqXiavwb6wrdxUb3wdnM",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "CAMYX",
+    "type": "mutual fund",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "DoubleLine Total Return Bond Fund",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "NDVQrXQoqzt5v3bAe8qRt4A7mK7wvZCLEBBJk",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "DBLTX",
+    "type": "mutual fund",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "T. Rowe Price Equity Income",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "PDRMBVM8r3t5BA9NmJdKfPolGqlg8dtEGB37n",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "PRFDX",
+    "type": "mutual fund",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "United States Treas Bills 0.000% 10/31/24 B/E Dtd 11/02/23 N/C",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "QDQ13y1Ezxt51QbDb6A8cjk9EK978our9NaAM",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": null,
+    "type": "fixed income",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "iShares Inc MSCI Brazil",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "abJamDazkgfvBkVGgnnLUWXoxnomp5up8llg4",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "EWZ",
+    "type": "etf",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": true,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "U S Dollar",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "d6ePmbPxgWCWmMVv66q9iPV94n91vMtov5Are",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": null,
+    "type": "cash",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Southside Bancshares Inc.",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "eW4jmnjd6AtjxXVrjmj6SX1dNEdZp3Cy8RnRQ",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "SBSI",
+    "type": "equity",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": null,
+    "institution_security_id": null,
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "Trp Equity Income",
+    "option_contract": null,
+    "proxy_security_id": "PDRMBVM8r3t5BA9NmJdKfPolGqlg8dtEGB37n",
+    "sector": null,
+    "security_id": "lngLy3Le7vflLnAzKqwZs19l6bl8P5H1jG9Zz",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": null,
+    "type": "mutual fund",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   },
+   {
+    "cfi_code": null,
+    "close_price": null,
+    "close_price_as_of": null,
+    "cusip": null,
+    "figi": null,
+    "fixed_income": null,
+    "industry": null,
+    "institution_id": "ins_109508",
+    "institution_security_id": "NHX105509",
+    "is_cash_equivalent": false,
+    "isin": null,
+    "iso_currency_code": "USD",
+    "market_identifier_code": null,
+    "name": "NH PORTFOLIO 1055 (FIDELITY INDEX)",
+    "option_contract": null,
+    "proxy_security_id": null,
+    "sector": null,
+    "security_id": "nnmo8doZ4lfKNEDe3mPJipLGkaGw3jfPrpxoN",
+    "sedol": null,
+    "subtype": null,
+    "ticker_symbol": "NHX105509",
+    "type": "etf",
+    "unofficial_currency_code": null,
+    "update_datetime": null
+   }
+  ]
+ },
+ "liabilities": {
+  "accounts": [
+   {
+    "account_id": "NEMva75GR1S53rk5pjAlSydLMzlbVafX8ZdGm",
+    "apy": 0,
+    "balances": {
+     "available": 100,
+     "current": 110,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "0000",
+    "name": "Plaid Checking",
+    "official_name": "Plaid Gold Standard 0% Interest Checking",
+    "subtype": "checking",
+    "type": "depository"
+   },
+   {
+    "account_id": "PljvNQ5qbpT5AGx5gkq9SNJWBn34LauXLdaeW",
+    "apy": 0.1,
+    "balances": {
+     "available": 200,
+     "current": 210,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "1111",
+    "name": "Plaid Saving",
+    "official_name": "Plaid Silver Standard 0.1% Interest Saving",
+    "subtype": "savings",
+    "type": "depository"
+   },
+   {
+    "account_id": "pBlNkP3z5VszvjZzxpwWHKegVzjzd1hJlgGvn",
+    "apy": 0.2,
+    "balances": {
+     "available": null,
+     "current": 1000,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "2222",
+    "name": "Plaid CD",
+    "official_name": "Plaid Bronze Standard 0.2% Interest CD",
+    "subtype": "cd",
+    "type": "depository"
+   },
+   {
+    "account_id": "ozW4dJBr5VHraenr3XQ6CBWg6rKrpafpQ9DZb",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 410,
+     "iso_currency_code": "USD",
+     "limit": 2000,
+     "unofficial_currency_code": null
+    },
+    "mask": "3333",
+    "name": "Plaid Credit Card",
+    "official_name": "Plaid Diamond 12.5% APR Interest Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   },
+   {
+    "account_id": "ggNKlP58bVFemZQe9xXPUZLznbwbdDiLNDB67",
+    "apy": 1.85,
+    "balances": {
+     "available": 43200,
+     "current": 43200,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "4444",
+    "name": "Plaid Money Market",
+    "official_name": "Plaid Platinum Standard 1.85% Interest Money Market",
+    "subtype": "money market",
+    "type": "depository"
+   },
+   {
+    "account_id": "8rveyDk3pGhdEqbdX3x8cK6pneaeGQhZ7a6X7",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 320.76,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "5555",
+    "name": "Plaid IRA",
+    "official_name": null,
+    "subtype": "ira",
+    "type": "investment"
+   },
+   {
+    "account_id": "EQnGlw5194u5v935PRWmSgnEWwXw96hg8Q7Be",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23631.9805,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "6666",
+    "name": "Plaid 401k",
+    "official_name": null,
+    "subtype": "401k",
+    "type": "investment"
+   },
+   {
+    "account_id": "WxpvqL5dRGH57Ny5L9jaSwLlGdRdg6HP3M8bZ",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 65262,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "personal",
+    "mask": "7777",
+    "name": "Plaid Student Loan",
+    "official_name": null,
+    "subtype": "student",
+    "type": "loan"
+   },
+   {
+    "account_id": "AP48yxRen3IZb9DZdRo3HaJVWEME5qC4LwDpN",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 56302.06,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "8888",
+    "name": "Plaid Mortgage",
+    "official_name": null,
+    "subtype": "mortgage",
+    "type": "loan"
+   },
+   {
+    "account_id": "GMRvKy5pQPi5wqv57BDPSylvAq9qZxIGK9vp5",
+    "apy": null,
+    "balances": {
+     "available": 6009,
+     "current": 6009,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9001",
+    "name": "Plaid HSA",
+    "official_name": "Plaid Cares Health Savings Account",
+    "subtype": "hsa",
+    "type": "depository"
+   },
+   {
+    "account_id": "nrbaxMzK5VhKEZeKkmnDI7Ag6DVDM4F39kR5B",
+    "apy": null,
+    "balances": {
+     "available": 12060,
+     "current": 12060,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9002",
+    "name": "Plaid Cash Management",
+    "official_name": "Plaid Growth Cash Management",
+    "subtype": "cash management",
+    "type": "depository"
+   },
+   {
+    "account_id": "bMwvP6J1xVi4zpX4PvweI9BJ5VEVgyHonLjk4",
+    "apy": null,
+    "balances": {
+     "available": null,
+     "current": 23211.33,
+     "iso_currency_code": "USD",
+     "limit": null,
+     "unofficial_currency_code": null
+    },
+    "mask": "9003",
+    "name": "Plaid Auto Loan",
+    "official_name": null,
+    "subtype": "auto",
+    "type": "loan"
+   },
+   {
+    "account_id": "mKad3gkq5Vcq78pqz9PMSK7xoVpVB4h4ejNob",
+    "apy": null,
+    "balances": {
+     "available": 47647.5,
+     "current": 13500.5,
+     "iso_currency_code": "USD",
+     "limit": 61148,
+     "unofficial_currency_code": null
+    },
+    "mask": "9004",
+    "name": "Plaid Home Equity Line of Credit",
+    "official_name": null,
+    "subtype": "home equity",
+    "type": "loan"
+   },
+   {
+    "account_id": "y7DLJMejVlIj5d4jvklyupRq7WNW58FKPdmaG",
+    "apy": null,
+    "balances": {
+     "available": 4980,
+     "current": 5020,
+     "iso_currency_code": "USD",
+     "limit": 10000,
+     "unofficial_currency_code": null
+    },
+    "holder_category": "business",
+    "mask": "9999",
+    "name": "Plaid Business Credit Card",
+    "official_name": "Plaid Platinum Small Business Credit Card",
+    "subtype": "credit card",
+    "type": "credit"
+   }
+  ],
+  "item": {
+   "auth_method": "INSTANT_AUTH",
+   "available_products": [
+    "assets",
+    "balance",
+    "identity",
+    "identity_match",
+    "income_verification",
+    "investments_auth",
+    "recurring_transactions",
+    "signal",
+    "statements",
+    "transactions",
+    "transactions_refresh",
+    "transfer"
+   ],
+   "billed_products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "consent_expiration_time": null,
+   "error": null,
+   "institution_id": "ins_109508",
+   "institution_name": "First Platypus Bank",
+   "item_id": "item_sandbox",
+   "products": [
+    "auth",
+    "investments",
+    "liabilities"
+   ],
+   "update_type": "background",
+   "webhook": ""
+  },
+  "liabilities": {
+   "credit": [
+    {
+     "account_id": "ozW4dJBr5VHraenr3XQ6CBWg6rKrpafpQ9DZb",
+     "aprs": [
+      {
+       "apr_percentage": 15.24,
+       "apr_type": "balance_transfer_apr",
+       "balance_subject_to_apr": 1562.32,
+       "interest_charge_amount": 130.22
+      },
+      {
+       "apr_percentage": 27.95,
+       "apr_type": "cash_apr",
+       "balance_subject_to_apr": 56.22,
+       "interest_charge_amount": 14.81
+      },
+      {
+       "apr_percentage": 12.5,
+       "apr_type": "purchase_apr",
+       "balance_subject_to_apr": 157.01,
+       "interest_charge_amount": 25.66
+      },
+      {
+       "apr_percentage": 0,
+       "apr_type": "special",
+       "balance_subject_to_apr": 1000,
+       "interest_charge_amount": 0
+      }
+     ],
+     "cash_advance_limit": null,
+     "is_overdue": false,
+     "last_payment_amount": 168.25,
+     "last_payment_date": "2019-05-22",
+     "last_statement_balance": 1708.77,
+     "last_statement_issue_date": "2019-05-28",
+     "minimum_payment_amount": 20,
+     "next_payment_due_date": "2020-05-28"
+    }
+   ],
+   "line_of_credit": [
+    {
+     "account_id": "mKad3gkq5Vcq78pqz9PMSK7xoVpVB4h4ejNob",
+     "aprs": [
+      {
+       "apr_percentage": 8.5,
+       "apr_type": "purchase_apr",
+       "balance_subject_to_apr": 13500.5,
+       "interest_charge_amount": 89.15
+      }
+     ],
+     "available_credit": 47647.5,
+     "credit_limit": 61148,
+     "draw_period_end_date": "2027-05-22",
+     "finance_charges": 89.15,
+     "interest_rate": {
+      "percentage": 8.5,
+      "type": "variable"
+     },
+     "last_payment_amount": 500,
+     "last_payment_date": "2026-08-01",
+     "last_statement_balance": 13480.25,
+     "last_statement_issue_date": "2026-08-05",
+     "minimum_payment_amount": 150,
+     "next_payment_amount": 150,
+     "next_payment_due_date": "2026-09-01",
+     "past_due_amount": 0,
+     "principal_balance": 13500.5
+    }
+   ],
+   "loan": [
+    {
+     "account_id": "bMwvP6J1xVi4zpX4PvweI9BJ5VEVgyHonLjk4",
+     "account_number": "48112911309003",
+     "compounding_period": "monthly",
+     "interest_rate": {
+      "percentage": 6.24,
+      "type": "fixed"
+     },
+     "last_payment_amount": 411.37,
+     "last_payment_date": "2026-07-15",
+     "loan_term_months": 85,
+     "maturity_date": "2029-04-15",
+     "next_payment_amount": 411.37,
+     "next_payment_due_date": "2026-08-15",
+     "origination_date": "2022-03-18",
+     "origination_principal_amount": 28411.35,
+     "payment_count": 85,
+     "payment_frequency": "monthly",
+     "payoff_amount": 23245.38,
+     "principal_balance": 23211.33,
+     "ytd_interest_paid": 611.4
+    }
+   ],
+   "mortgage": [
+    {
+     "account_id": "AP48yxRen3IZb9DZdRo3HaJVWEME5qC4LwDpN",
+     "account_number": "3120194154",
+     "current_late_fee": 25,
+     "escrow_balance": 1200,
+     "has_pmi": true,
+     "has_prepayment_penalty": true,
+     "interest_rate": {
+      "percentage": 3.99,
+      "type": "fixed"
+     },
+     "last_payment_amount": 3141.54,
+     "last_payment_date": "2019-08-01",
+     "loan_term": "30 year",
+     "loan_type_description": "conventional",
+     "maturity_date": "2045-07-31",
+     "next_monthly_payment": 3141.54,
+     "next_payment_due_date": "2019-11-15",
+     "origination_date": "2015-08-01",
+     "origination_principal_amount": 425000,
+     "past_due_amount": 2304,
+     "property_address": {
+      "city": "Malakoff",
+      "country": "US",
+      "postal_code": "14236",
+      "region": "NY",
+      "street": "2992 Cameron Road"
+     },
+     "ytd_interest_paid": 12300.4,
+     "ytd_principal_paid": 12340.5
+    }
+   ],
+   "student": [
+    {
+     "account_id": "WxpvqL5dRGH57Ny5L9jaSwLlGdRdg6HP3M8bZ",
+     "account_number": "4277075694",
+     "disbursement_dates": [
+      "2002-08-28"
+     ],
+     "expected_payoff_date": "2032-07-28",
+     "guarantor": "DEPT OF ED",
+     "interest_rate_percentage": 5.25,
+     "is_overdue": false,
+     "last_payment_amount": 138.05,
+     "last_payment_date": "2019-04-22",
+     "last_statement_balance": 138.05,
+     "last_statement_issue_date": "2019-04-28",
+     "loan_name": "Consolidation",
+     "loan_status": {
+      "end_date": "2032-07-28",
+      "type": "repayment"
+     },
+     "minimum_payment_amount": 25,
+     "next_payment_due_date": "2019-05-28",
+     "origination_date": "2002-08-28",
+     "origination_principal_amount": 25000,
+     "outstanding_interest_amount": 6227.36,
+     "payment_reference_number": "4277075694",
+     "pslf_status": {
+      "estimated_eligibility_date": "2021-01-01",
+      "payments_made": 78,
+      "payments_remaining": 42
+     },
+     "repayment_plan": {
+      "description": "Standard Repayment",
+      "type": "standard"
+     },
+     "sequence_number": "1",
+     "servicer_address": {
+      "city": "San Matias",
+      "country": "US",
+      "postal_code": "99415",
+      "region": "CA",
+      "street": "123 Relaxation Road"
+     },
+     "ytd_interest_paid": 280.55,
+     "ytd_principal_paid": 271.65
+    }
+   ]
+  }
+ }
+}

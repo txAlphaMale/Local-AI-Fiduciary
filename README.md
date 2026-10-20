@@ -139,6 +139,19 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env` (default: 
   the `SNAPTRADE_*` vars, then run **`python snaptrade_register.py`** once to register a
   user, link your brokerage(s), and get your `USER_ID`/`USER_SECRET`.
 
+- **`plaid`** *(official API; your own Plaid account)*: links banks, brokerages, credit cards and
+  loans through [Plaid](https://plaid.com/) and shows **balances, investment holdings and
+  liabilities (with APR / minimum payment)**. **Transactions are never requested** — this app is
+  not a transaction tracker. Create a Plaid developer account (sandbox/test banks are always free; for real
+  banks, new US/CA accounts can apply for a free Trial plan limited to 10 connections for the
+  life of the account, otherwise it is Pay-as-you-go, where Investments and Liabilities are billed
+  per connected institution per month until removed — check your Plaid Dashboard for current terms), save the client ID and secret under
+  **SETTINGS → SECRETS & KEYS → Portfolio (Plaid)**, pick `sandbox` (Plaid's fake banks) or
+  `production` under ADVANCED KNOBS, connect institutions in **SETTINGS → ACCOUNTS → Plaid**
+  (Plaid's own hosted login page opens in a new tab; no public URL or webhook is needed), then set
+  **Portfolio data source = plaid** and recreate the container. Access tokens stay on your server,
+  encrypted; REMOVE disconnects the institution at Plaid and deletes the token.
+
 ### Unofficial / optional — **Monarch (unofficial, at your own risk)**
 
 - **`monarch`** *(off by default)*: Monarch Money has **no public API**. This integration
