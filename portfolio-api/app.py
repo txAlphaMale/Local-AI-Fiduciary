@@ -10185,8 +10185,11 @@ def get_plaid_status(request: Request):
             "kinds": [{"kind": k, "label": v} for k, v in plaid_integration.KIND_LABELS.items()],
             "items": plaid_integration.public_items(),
             "note": "Balances, investment holdings and liabilities only — transactions are never requested. "
-                    "On a paid Plaid plan, Investments and Liabilities are billed per connected institution per "
-                    "month until you remove it; Plaid's free Trial plan covers up to 10 institutions."}
+                    "Sandbox (test data) is always free. For real banks, Plaid offers new US/Canada accounts "
+                    "a free Trial plan limited to 10 connections for the life of the account (details: "
+                    "plaid.com/docs/account/billing); otherwise it is Pay-as-you-go, where Investments and "
+                    "Liabilities are billed per connected institution per month until you remove it. Check "
+                    "your own Plaid Dashboard for the plan and prices that apply to you."}
 
 
 def _plaid_err(e):
