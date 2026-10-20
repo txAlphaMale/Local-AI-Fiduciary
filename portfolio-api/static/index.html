@@ -850,52 +850,53 @@ let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'
 // ledgers) — remembered across reloads; null until the first load() resolves the server's default.
 let CURRENT_SCENARIO_ID=null; try{ CURRENT_SCENARIO_ID=localStorage.getItem('fidScenarioId')||null; }catch(_){ CURRENT_SCENARIO_ID=null; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
-// Drag-reorder for tab bars. The old per-tab drop handlers always inserted the dragged tab BEFORE the one it was
-// dropped on and only existed on the tab labels, so (a) moving right stopped one slot short and the LAST position was
-// unreachable, and (b) the separators/gaps between tabs were not drop targets, so the cursor showed the "no drop"
-// stop icon there (reported 2026-10-21: left worked, right showed the stop icon). Now the whole bar is the drop zone
-// and the pointer picks the nearest tab and which side of it.
-function reorderKeys(orderedKeys, fromKey, toKey, after){
-  if(fromKey===toKey) return null;
-  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return null;
-  ks.splice(fi,1); const ti=ks.indexOf(toKey); if(ti<0) return null;
-  ks.splice(after?ti+1:ti,0,fromKey);
-  return ks;
-}
-function wireTabBarDnD(bar, onMove){
-  // The insertion marker is its own thin vertical line drawn in the GAP between two tabs (feedback 2026-10-21: a
-  // shadow on the tab itself looked "bound to the word"). Positioned from the tab rectangles, so it also works when
-  // the bar wraps onto a second row.
-  const ind=document.createElement('div');
-  ind.style.cssText='position:absolute;width:3px;border-radius:2px;background:var(--color-accent);pointer-events:none;display:none;z-index:5;';
-  try{ if(getComputedStyle(bar).position==='static') bar.style.position='relative'; }catch(_){ bar.style.position='relative'; }
-  bar.appendChild(ind);
-  const tabsOf=()=>[...bar.querySelectorAll('[data-dkey]')];
-  const mark=(t,after)=>{
-    if(!t){ ind.style.display='none'; return; }
-    const all=tabsOf(), r=t.getBoundingClientRect(), br=bar.getBoundingClientRect();
-    const nb=all[all.indexOf(t)+(after?1:-1)], nr=nb&&nb.getBoundingClientRect();
-    let x=after?r.right:r.left;
-    if(nr && Math.abs(nr.top-r.top)<r.height/2) x=(x+(after?nr.left:nr.right))/2;   // middle of the gap to the neighbour
-    else x+=after?8:-8;                                                          // end of a row: just outside the tab
-    ind.style.left=(x-br.left-1.5)+'px'; ind.style.top=(r.top-br.top-3)+'px'; ind.style.height=(r.height+6)+'px'; ind.style.display='block';
+// Drag-reorder for tab bars, browser-tab style: the tabs rearrange LIVE under the pointer while you hold the mouse, and
+// the order is saved when you let go (Esc / dropping outside the bar puts everything back). History: the first version
+// had drop handlers only on the labels and always inserted BEFORE the target (stop icon over the separators, last slot
+// unreachable); the second drew an insertion marker that looked glued to the word. Live movement needs no marker.
+// A tab moves past a neighbour only once the pointer crosses that neighbour's midpoint, which keeps it from jittering
+// when tabs have different widths. The whole bar is the drop zone, so gaps/separators never show the no-drop cursor.
+function wireTabBarDnD(bar, onCommit, onRevert){
+  let drag=null, dropped=false, orig='';
+  const tabs=()=>[...bar.querySelectorAll('[data-dkey]')];
+  const keys=()=>tabs().map(t=>t.dataset.dkey);
+  const tpl=bar.querySelector('[data-sep]');
+  const resep=()=>{            // exactly one separator between neighbouring tabs, whatever order they are in now
+    if(!tpl) return;
+    bar.querySelectorAll('[data-sep]').forEach(x=>x.remove());
+    tabs().forEach((t,i)=>{ if(i) t.parentNode.insertBefore(tpl.cloneNode(true), t); });
   };
-  const pick=e=>{
+  const nearest=e=>{
     let best=null, bd=1e12;
-    tabsOf().forEach(t=>{ const r=t.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
-      const d=Math.hypot(e.clientX-cx,(e.clientY-cy)*3); if(d<bd){ bd=d; best={t,after:e.clientX>cx}; } });
+    tabs().filter(t=>t!==drag).forEach(t=>{ const r=t.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
+      const d=Math.hypot(e.clientX-cx,(e.clientY-cy)*3); if(d<bd){ bd=d; best={t,cx}; } });
     return best;
   };
-  bar.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} const b=pick(e); mark(b&&b.t,b&&b.after); };
-  // Firefox reports relatedTarget as null on dragleave, so decide by pointer position instead of the element left to.
-  bar.ondragleave=e=>{ const r=bar.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) mark(null); };
-  bar.ondrop=e=>{ e.preventDefault(); mark(null); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){}
-    const b=pick(e); if(from && b) onMove(from, b.t.dataset.dkey, b.after); };
-  bar.ondragstart=e=>{ const t=e.target&&e.target.closest&&e.target.closest('[data-dkey]'); if(t) setTimeout(()=>{ t.style.opacity='0.35'; },0); };   // dim the tab being moved
-  bar.ondragend=e=>{ mark(null); const t=e.target&&e.target.closest&&e.target.closest('[data-dkey]'); if(t) t.style.opacity=''; };
+  bar.ondragstart=e=>{
+    const t=e.target&&e.target.closest&&e.target.closest('[data-dkey]'); if(!t) return;
+    drag=t; dropped=false; orig=keys().join('|');
+    setTimeout(()=>{ if(drag) drag.style.opacity='0.35'; },0);           // dim the tab being moved (its slot follows the pointer)
+  };
+  bar.ondragover=e=>{
+    e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){}
+    if(!drag) return;
+    const n=nearest(e); if(!n) return;
+    const all=tabs(), di=all.indexOf(drag), ti=all.indexOf(n.t);
+    if(di<ti && e.clientX>n.cx){ n.t.parentNode.insertBefore(drag, n.t.nextSibling); resep(); }
+    else if(di>ti && e.clientX<n.cx){ n.t.parentNode.insertBefore(drag, n.t); resep(); }
+  };
+  bar.ondrop=e=>{
+    e.preventDefault(); dropped=true;
+    if(drag && keys().join('|')!==orig) onCommit(keys());
+  };
+  bar.ondragend=()=>{
+    if(drag) drag.style.opacity='';
+    const moved=drag && keys().join('|')!==orig;
+    if(!dropped && moved && onRevert) onRevert();                          // cancelled: put the tabs back
+    drag=null;
+  };
 }
-function reorderSubtab(panel, orderedKeys, fromKey, toKey, after){
-  const ks=reorderKeys(orderedKeys, fromKey, toKey, after); if(!ks) return;
+function commitSubOrder(panel, ks){
   SUBORDER[panel]=ks; try{ localStorage.setItem('fidSubOrder',JSON.stringify(SUBORDER)); }catch(_){}
   render();
 }
@@ -903,8 +904,7 @@ function reorderSubtab(panel, orderedKeys, fromKey, toKey, after){
 // TOP row, so dragging a top tab just highlighted its text instead of moving it). Persisted
 // separately from SUBORDER since this reorders a flat list, not one list per panel.
 let TABORDER=[]; try{ TABORDER=JSON.parse(localStorage.getItem('fidTabOrder')||'[]')||[]; }catch(_){ TABORDER=[]; }
-function reorderTopTab(orderedKeys, fromKey, toKey, after){
-  const ks=reorderKeys(orderedKeys, fromKey, toKey, after); if(!ks) return;
+function commitTopOrder(ks){
   TABORDER=ks; try{ localStorage.setItem('fidTabOrder',JSON.stringify(TABORDER)); }catch(_){}
   render();
 }
@@ -917,12 +917,11 @@ function panelSubtabs(panel, sections){
   if(!avail.length) return wrap;
   const ord=SUBORDER[panel];   // user-dragged order (persisted); unknown keys fall to the end
   if(ord){ const ix=k=>{ const i=ord.indexOf(k); return i<0?999:i; }; avail=avail.slice().sort((a,b)=>ix(a.key)-ix(b.key)); }
-  const orderedKeys=avail.map(s=>s.key);
   let active=SUBTAB[panel];
   if(!avail.some(s=>s.key===active)) active=avail[0].key;
   const bar=el('div'); bar.style.cssText='display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin:0 0 13px;';
   avail.forEach((s,i)=>{
-    if(i){ const sep=el('span',null,'·'); sep.style.cssText='color:var(--color-border-strong);opacity:0.6;font-size:var(--font-size-base);user-select:none;'; bar.appendChild(sep); }
+    if(i){ const sep=el('span',null,'·'); sep.dataset.sep='1'; sep.style.cssText='color:var(--color-border-strong);opacity:0.6;font-size:var(--font-size-base);user-select:none;'; bar.appendChild(sep); }
     const on=s.key===active;
     const t=el('span',null,s.label);
     t.title='drag to reorder';
@@ -933,7 +932,7 @@ function panelSubtabs(panel, sections){
     t.ondragstart=e=>{ try{ e.dataTransfer.setData('text/plain', s.key); e.dataTransfer.effectAllowed='move'; }catch(_){} };
     bar.appendChild(t);
   });
-  wireTabBarDnD(bar,(from,to,after)=>reorderSubtab(panel, orderedKeys, from, to, after));
+  wireTabBarDnD(bar, ks=>commitSubOrder(panel, ks), render);
   wrap.appendChild(bar);
   const sec=avail.find(s=>s.key===active)||avail[0];
   try{ wrap.appendChild(sec.build()); }
@@ -1615,7 +1614,6 @@ function render(){
   const tabSpecs = TABORDER.length
     ? tabSpecsRaw.slice().sort((a,b)=>{ const ix=k=>{ const i=TABORDER.indexOf(k); return i<0?999:i; }; return ix(a[0])-ix(b[0]); })
     : tabSpecsRaw;
-  const topTabKeys = tabSpecs.map(ts=>ts[0]);
   const mkTab=(key,label)=>{
     const active=TAB===key;
     const t=el('span',null,label);
@@ -1630,10 +1628,10 @@ function render(){
     return t;
   };
   tabSpecs.forEach((ts,i)=>{
-    if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--color-border-strong);opacity:0.7;font-size:var(--font-size-md);user-select:none;'; tabBar.appendChild(sep); }
+    if(i){ const sep=el('span',null,'|'); sep.dataset.sep='1'; sep.style.cssText='color:var(--color-border-strong);opacity:0.7;font-size:var(--font-size-md);user-select:none;'; tabBar.appendChild(sep); }
     tabBar.appendChild(mkTab(ts[0],ts[1]));
   });
-  wireTabBarDnD(tabBar,(from,to,after)=>reorderTopTab(topTabKeys, from, to, after));
+  wireTabBarDnD(tabBar, commitTopOrder, render);
   if(TAB==='positions'){   // right-aligned consolidated/by-account sub-toggle
     const tg=el('span'); tg.style.cssText='cursor:pointer;letter-spacing:1px;margin-left:auto;font-size:var(--font-size-base);';
     tg.innerHTML=`<span style="${VIEW==='consolidated'?on:off}">CONSOLIDATED</span> <span class="muted">·</span> <span style="${VIEW==='detail'?on:off}">BY ACCOUNT</span>`;
