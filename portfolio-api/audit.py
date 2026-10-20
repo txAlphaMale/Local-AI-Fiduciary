@@ -188,7 +188,7 @@ EVENT_TYPES = (
     "notification.test_email",
     # TASK-005: Plaid connections (never the tokens).
     "integration.plaid.link_started", "integration.plaid.item_added", "integration.plaid.item_removed",
-    "integration.snaptrade.portal_link",
+    "integration.snaptrade.portal_link", "integration.provider.changed", "integration.snaptrade.test",
 )
 
 

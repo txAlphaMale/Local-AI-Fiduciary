@@ -36,9 +36,8 @@ ollama pull bge-m3          # embeddings for the knowledge RAG
 ```
 
 **4. Pick your data source** — set `PORTFOLIO_PROVIDER`, either in `.env` before first boot, or
-(2026-07-24) from the dashboard itself at **SETTINGS → ADVANCED KNOBS → "Portfolio data source"**
-once it's running (a `docker compose up -d portfolio-api` applies a UI-saved change — a plain
-`restart` won't):
+(2026-07-24) from the dashboard itself at **SETTINGS → ACCOUNTS → "Portfolio data source"**
+once it's running (the change applies immediately — no restart):
 
 | Provider | Steps |
 |----------|-------|

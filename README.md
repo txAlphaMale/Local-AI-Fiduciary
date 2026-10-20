@@ -153,7 +153,7 @@ The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env` (default: 
   **SETTINGS → SECRETS & KEYS → Portfolio (Plaid)**, pick `sandbox` (Plaid's fake banks) or
   `production` under ADVANCED KNOBS, connect institutions in **SETTINGS → ACCOUNTS → Plaid**
   (Plaid's own hosted login page opens in a new tab; no public URL or webhook is needed), then set
-  **Portfolio data source = plaid** and recreate the container. Access tokens stay on your server,
+  **Portfolio data source = plaid** (SETTINGS → ACCOUNTS; applies immediately). Access tokens stay on your server,
   encrypted; REMOVE disconnects the institution at Plaid and deletes the token.
 
 ### Unofficial / optional — **Monarch (unofficial, at your own risk)**

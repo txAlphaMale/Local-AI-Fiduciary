@@ -155,6 +155,15 @@ def _boot_merge(_path, _only=None, _decrypt=False):
 
 _boot_merge(SECRETS_FILE, _decrypt=True)           # secrets (all keys) — values are encrypted at rest
 _boot_merge(_SETTINGS_FILE_BOOT, _CONFIG_ENV_KEYS)  # restart-class non-secret config only
+# The data-source selector (SETTINGS -> ACCOUNTS) is the user's explicit choice and must survive a restart even
+# though docker-compose always injects PORTFOLIO_PROVIDER (default csv) -- which a gap-fill merge would never
+# override. A value saved in settings.json therefore wins over that env default; with nothing saved, env/.env rules.
+try:
+    _pp = str((store.read_json_strict(_SETTINGS_FILE_BOOT) or {}).get("PORTFOLIO_PROVIDER") or "").strip().lower()
+    if _pp in ("csv", "snaptrade", "plaid", "monarch"):
+        os.environ["PORTFOLIO_PROVIDER"] = _pp
+except Exception:
+    pass
 
 MCPO = os.environ.get("MCPO_BASE_URL", "http://mcpo:8000").rstrip("/")
 ROUTE = os.environ.get("MONARCH_ROUTE", "monarch")
@@ -3042,8 +3051,15 @@ def _build_plaid():
 
 
 def _snaptrade_env():
-    return (os.environ.get("SNAPTRADE_CLIENT_ID"), os.environ.get("SNAPTRADE_CONSUMER_KEY"),
-            os.environ.get("SNAPTRADE_USER_ID"), os.environ.get("SNAPTRADE_USER_SECRET"))
+    """Read fresh each call (like _plaid_creds) so keys saved in SETTINGS -> SECRETS & KEYS apply without a
+    restart. A value set in the real .env still wins."""
+    st = _read_secrets()
+    return tuple(os.environ.get(k) or st.get(k) for k in
+                 ("SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET"))
+
+
+_snaptrade_state = {"last_ok_ts": None, "last_err": None, "last_err_ts": None, "accounts": None, "positions": None,
+                    "notes": []}
 
 
 def _build_snaptrade():
@@ -3052,12 +3068,59 @@ def _build_snaptrade():
     consumer key; COMMERCIAL keys also need SNAPTRADE_USER_ID/SECRET (snaptrade_register.py). See
     snaptrade_integration.py for the mapping rules (verified against SnapTrade's sandbox)."""
     cid, ckey, uid, usec = _snaptrade_env()
-    m = snaptrade_integration.build_portfolio(cid, ckey, uid, usec)
+    try:
+        m = snaptrade_integration.build_portfolio(cid, ckey, uid, usec)
+    except Exception as e:
+        _first = (str(getattr(e, "body", None) or e).strip().splitlines() or [""])[0]   # no HTTP header dumps
+        _snaptrade_state.update(last_err=f"{type(e).__name__}: {_first[:200]}", last_err_ts=time.time())
+        print(f"[snaptrade] portfolio load FAILED: {_snaptrade_state['last_err']}", flush=True)
+        raise
     d = _derive(m["accounts"], m["positions"], m["by_account"], m["inv"], m["net_worth"], m["total_assets"], 0.0,
                 balance_only=m["balance_only"])
+    _snaptrade_state.update(last_ok_ts=time.time(), last_err=None, accounts=len(m["accounts"]),
+                            positions=len(m["positions"]), notes=list(m["notes"]))
+    print(f"[snaptrade] portfolio load ok: {len(m['accounts'])} account(s), {len(m['positions'])} position(s)"
+          + (f", {len(m['notes'])} note(s)" if m["notes"] else ""), flush=True)
     d["snaptrade_mode"] = m["mode"]
     d["snaptrade_notes"] = m["notes"]
     return d
+
+
+# ---- Portfolio data source selector (SETTINGS -> ACCOUNTS). Admin only; applies live (no restart).
+_PROVIDER_LABELS = {"csv": "Manual holdings (HOLDINGS tab / CSV)", "snaptrade": "SnapTrade (brokerages)",
+                    "plaid": "Plaid (banks, cards, loans)", "monarch": "Monarch Money (opt-in, unofficial)"}
+
+
+@app.get("/api/integrations/provider")
+def get_provider(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    opts = [{"value": k, "label": v} for k, v in _PROVIDER_LABELS.items() if k != "monarch" or _monarch_ack() is not None]
+    active = os.environ.get("PORTFOLIO_PROVIDER", "csv").lower()
+    locked = False   # a saved choice beats the .env default at every boot (see the boot override near _boot_merge)
+    return {"active": active, "options": opts, "env_locked": bool(locked)}
+
+
+@app.post("/api/integrations/provider")
+async def post_provider(req: Request):
+    admin = _require_admin(req)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    prov = str(((await req.json()) or {}).get("provider") or "").lower()
+    if prov not in _PROVIDER_LABELS:
+        return JSONResponse({"error": "Unknown data source."}, status_code=400)
+    if prov == "monarch" and _monarch_ack() is None:
+        return JSONResponse({"error": MONARCH_LABEL + " must be enabled first, with the risk acknowledgment in the Monarch panel below."},
+                            status_code=400)
+    old = os.environ.get("PORTFOLIO_PROVIDER", "csv").lower()
+    stored = _read_settings()
+    stored["PORTFOLIO_PROVIDER"] = prov
+    store.write_json(SETTINGS_FILE, stored)
+    os.environ["PORTFOLIO_PROVIDER"] = prov
+    _cache["data"], _cache["ts"] = None, 0
+    audit.emit("integration.provider.changed", request=req, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/integrations/provider", detail={"from": old, "to": prov})
+    return {"ok": True, "active": prov}
 
 
 # ---- SnapTrade connect (admin only; each handler checks for itself — viewers can GET everything)
@@ -3069,9 +3132,35 @@ def get_snaptrade_status(request: Request):
     mode = snaptrade_integration.auth_mode(cid) if cid else None
     return {"configured": bool(cid and ckey and (mode == "personal" or (uid and usec))), "mode": mode,
             "selected": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower() == "snaptrade",
+            "last_load": dict(_snaptrade_state),
             "note": "SnapTrade links brokerages. Personal keys (client ID starts with PERS-) need no user setup; "
                     "commercial keys need a registered user (snaptrade_register.py). The connect link expires in "
                     "about 5 minutes."}
+
+
+@app.post("/api/integrations/snaptrade/test")
+async def post_snaptrade_test(request: Request):
+    """Live connection check for the SETTINGS -> ACCOUNTS panel: are the keys accepted, which accounts and
+    brokerage connections does SnapTrade report, is any connection disabled. Read-only."""
+    admin = _require_admin(request)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    cid, ckey, uid, usec = _snaptrade_env()
+    try:
+        client, user_kwargs, mode = snaptrade_integration.make_client(cid, ckey, uid, usec)
+        h = snaptrade_integration.health(client, user_kwargs)
+    except snaptrade_integration.SnapTradeConfigError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        detail = f"{type(e).__name__}: {str(getattr(e, 'body', e))[:160]}"
+        print(f"[snaptrade] connection test FAILED: {detail}", flush=True)
+        return JSONResponse({"ok": False, "error": "SnapTrade rejected the request — check the client ID / consumer key "
+                             f"(SECRETS & KEYS). ({detail})"}, status_code=502)
+    print(f"[snaptrade] connection test: {h['n_accounts']} account(s), {len(h['connections'])} connection(s), "
+          f"ok={h['ok']}", flush=True)
+    audit.emit("integration.snaptrade.test", request=request, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/integrations/snaptrade/test", detail={"accounts": h["n_accounts"], "ok": h["ok"]})
+    return {**h, "mode": mode}
 
 
 @app.post("/api/integrations/snaptrade/portal")
@@ -10571,6 +10660,12 @@ def get_secrets(request: Request):
                     "(it's a startup CLI flag, not a runtime value)."}
 
 
+# Secrets read fresh on every use (see _snaptrade_env / _plaid_creds) -- saving one takes effect at once. A key
+# that is ALSO set in the real .env still wins (reported as staged_behind_env), so it is not "applied live".
+_LIVE_SECRETS = {"SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET",
+                 "PLAID_CLIENT_ID", "PLAID_SECRET"}
+
+
 @app.post("/api/secrets")
 async def post_secrets(req: Request):
     """Set portfolio-api 'app' secrets and mcpo-bridged 'mcpo-file' secrets (write-only, encrypted
@@ -10612,7 +10707,8 @@ async def post_secrets(req: Request):
         _write_mcpo_secrets_file()   # regenerate ./mcpo-secrets/mcpo.env from the just-saved DB state
                                       # (still correctly excludes any key that's env_locked)
     return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
-            "restart_required": bool(saved)}
+            "applied_live": [k for k in saved if k in _LIVE_SECRETS and k not in staged_behind_env],
+            "restart_required": bool([k for k in saved if not (k in _LIVE_SECRETS and k not in staged_behind_env)])}
 
 
 # ============================================================================
