@@ -1695,36 +1695,36 @@ function cockpitPanel(){
   if(!anyLoaded){ const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-base);'; m.textContent='Scanning your book (drift · concentration · tax · fees · liquidity · outlook)…'; p.appendChild(m); return p; }
   const A=[];  // {sev: warn|opp|info|ok, cat, msg, tab}
   if(EXP && !EXP.error){
-    ((EXP.concentration||{}).flags||[]).forEach(f=>A.push({sev:'warn',cat:'CONCENTRATION',msg:f,tab:'insights'}));
-    if(EXP.portfolio_beta!=null && EXP.portfolio_beta>1.3) A.push({sev:'warn',cat:'BETA',msg:'portfolio beta '+EXP.portfolio_beta,tab:'insights'});
+    ((EXP.concentration||{}).flags||[]).forEach(f=>A.push({sev:'warn',cat:'CONCENTRATION',msg:f,tab:'insights',subtab:'exposure'}));
+    if(EXP.portfolio_beta!=null && EXP.portfolio_beta>1.3) A.push({sev:'warn',cat:'BETA',msg:'portfolio beta '+EXP.portfolio_beta,tab:'insights',subtab:'risk'});
   }
   if(INSIGHTS && !INSIGHTS.error){
     const nOver=(INSIGHTS.concentration||[]).length;
-    if(nOver) A.push({sev:'warn',cat:'OVER CAP',msg:nOver+' position(s) over your cap',tab:'insights'});
+    if(nOver) A.push({sev:'warn',cat:'OVER CAP',msg:nOver+' position(s) over your cap',tab:'insights',subtab:'drift'});
     const nDrift=(INSIGHTS.allocation||[]).filter(a=>a.flag).length;
-    if(nDrift) A.push({sev:'warn',cat:'DRIFT',msg:nDrift+' sleeve(s) out of band',tab:'insights'});
+    if(nDrift) A.push({sev:'warn',cat:'DRIFT',msg:nDrift+' sleeve(s) out of band',tab:'insights',subtab:'drift'});
   }
   if(TAXAUDIT && !TAXAUDIT.error){
     const tlh=TAXAUDIT.tax_loss_harvest||{};
     if(tlh.total_harvestable_loss && Math.abs(tlh.total_harvestable_loss)>0)
-      A.push({sev:'opp',cat:'TAX-LOSS',msg:usd(Math.abs(tlh.total_harvestable_loss))+' harvestable ('+(tlh.count||0)+')',tab:'audits'});
+      A.push({sev:'opp',cat:'TAX-LOSS',msg:usd(Math.abs(tlh.total_harvestable_loss))+' harvestable ('+(tlh.count||0)+')',tab:'audits',subtab:'tax'});
     const nLoc=((TAXAUDIT.asset_location||{}).misplaced||[]).length;
-    if(nLoc) A.push({sev:'opp',cat:'ASSET LOC',msg:nLoc+' holding(s) misplaced',tab:'audits'});
+    if(nLoc) A.push({sev:'opp',cat:'ASSET LOC',msg:nLoc+' holding(s) misplaced',tab:'audits',subtab:'tax'});
   }
   if(FL && !FL.error){
     const nHigh=(((FL.fees||{}).funds)||[]).filter(x=>x.high).length;
-    if(nHigh) A.push({sev:'warn',cat:'FEES',msg:nHigh+' high-cost fund(s)',tab:'audits'});
+    if(nHigh) A.push({sev:'warn',cat:'FEES',msg:nHigh+' high-cost fund(s)',tab:'audits',subtab:'fees'});
     const nLiq=(((FL.liquidity||{}).flagged)||[]).length;
-    if(nLiq) A.push({sev:'warn',cat:'LIQUIDITY',msg:nLiq+' hard-to-exit',tab:'audits'});
+    if(nLiq) A.push({sev:'warn',cat:'LIQUIDITY',msg:nLiq+' hard-to-exit',tab:'audits',subtab:'fees'});
   }
   if(DISCO && !DISCO.error){
     const nA=((DISCO.alerts)||[]).length;
-    if(nA) A.push({sev:'info',cat:'NEWS',msg:nA+' holding alert(s)',tab:'research'});
+    if(nA) A.push({sev:'info',cat:'NEWS',msg:nA+' holding alert(s)',tab:'research',subtab:'alerts'});
     // 2026-10-19: a dead news feed went unnoticed for ~6 weeks because it only showed as a small
     // amber line inside the NEWS panel while this strip kept counting stale alerts as if current.
     if(DISCO.cache_stale || (DISCO.fetch_failures>0 && !DISCO.cache_fetched_at)){
       const when=DISCO.cache_fetched_at?new Date(DISCO.cache_fetched_at*1000).toLocaleDateString():'never';
-      A.push({sev:'warn',cat:'NEWS FEED',msg:'stale (last good pull '+when+') — source failing',tab:'research',
+      A.push({sev:'warn',cat:'NEWS FEED',msg:'stale (last good pull '+when+') — source failing',tab:'research',subtab:'alerts',
               tip:DISCO.fetch_error||'Tavily news could not be refreshed'});
     }
   }
@@ -1757,7 +1757,7 @@ function cockpitPanel(){
   }
   if(LT && !LT.error && LT.hidden_exposure){
     LT.hidden_exposure.filter(h=>h.ticker && (h.weight_pct||0)>20).slice(0,3).forEach(h=>{
-      A.push({sev:'warn',cat:'HIDDEN EXPOSURE',msg:h.ticker+' truly '+h.weight_pct+'% incl. funds',tab:'insights'});
+      A.push({sev:'warn',cat:'HIDDEN EXPOSURE',msg:h.ticker+' truly '+h.weight_pct+'% incl. funds',tab:'insights',subtab:'lookthrough'});
     });
   }
   // Complete = every source the tiles above read has loaded without error; only then is it safe to

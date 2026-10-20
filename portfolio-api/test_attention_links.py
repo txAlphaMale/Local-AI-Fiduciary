@@ -75,6 +75,28 @@ class TestUi(unittest.TestCase):
             self.assertNotRegex(open(p, encoding="utf-8").read(), r"INSIGHTS\s*→", p)
 
 
+class TestCockpitChips(unittest.TestCase):
+    """Tester feedback 2026-10-20: ASSET LOC chip landed on AUDITS -> ACCOUNTS (a DRIP checkbox editor) because
+    the chip named a tab but no sub-tab. Every chip must name a real sub-tab of its tab."""
+    def test_every_chip_names_a_real_subtab(self):
+        i = HTML.index("function cockpitPanel")
+        block = HTML[i:i + 20000]
+        chips = re.findall(r"A\.push\(\{[^\n]*?tab:'([a-z]+)'[^\n]*", block)
+        self.assertGreaterEqual(len(chips), 14)
+        for line in re.findall(r"A\.push\(\{[^\n]*", block):
+            tab = re.search(r"tab:'([a-z]+)'", line)
+            if not tab or tab.group(1) not in ("insights", "audits", "research", "plan"):
+                continue
+            sub = re.search(r"subtab:'([a-z0-9_]+)'", line)
+            self.assertTrue(sub, "chip without subtab: " + line[:90])
+            self.assertIn(sub.group(1), subtab_keys(tab.group(1)), line[:90])
+
+    def test_asset_location_and_tax_loss_chips_open_tax_tlh(self):
+        for cat in ("ASSET LOC", "TAX-LOSS"):
+            line = next(l for l in HTML.splitlines() if f"cat:'{cat}'" in l)
+            self.assertIn("tab:'audits',subtab:'tax'", line)
+
+
 import unittest.mock  # noqa: E402,F401
 
 if __name__ == "__main__":

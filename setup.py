@@ -90,8 +90,10 @@ def step_provider():
     log(DOT, "csv      : fill holdings.csv (template: holdings.csv.example) at $HOLDINGS_CSV (default /data/holdings.csv)")
     log(" ", "           columns ticker,quantity,cost_basis,account,institution,type; prices fetch live from Finnhub")
     log(" ", "           tip: put IRA/Roth/401k in the account name so the tax audit classifies it")
-    log(DOT, "snaptrade: free dev signup at https://snaptrade.com -> set SNAPTRADE_CLIENT_ID + SNAPTRADE_CONSUMER_KEY, then")
-    log(" ", "           run  python3 snaptrade_register.py  to link brokerage(s) and get SNAPTRADE_USER_ID/USER_SECRET")
+    log(DOT, "snaptrade: free personal key at https://snaptrade.com (client ID starts PERS-) -> set SNAPTRADE_CLIENT_ID +")
+    log(" ", "           SNAPTRADE_CONSUMER_KEY, then link a brokerage in the app: SETTINGS -> ACCOUNTS -> SnapTrade -> CONNECT")
+    log(" ", "           (or  python3 snaptrade_register.py  to print the link; add --sandbox to try a simulated broker).")
+    log(" ", "           Commercial keys also need SNAPTRADE_USER_ID/USER_SECRET -- snaptrade_register.py creates them.")
 
 
 def main():
