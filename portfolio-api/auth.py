@@ -68,7 +68,7 @@ def init_db():
         )""")
         # Migration for databases created before 2026-07-24 (Account Recovery Tier 2) --
         # CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table, and
-        # an existing live deployment already has a users row from before this column existed.
+        # An existing live deployment already has a users row from before this column existed.
         # has_recovery_key()/verify_recovery_key() below treat a NULL hash as "not set" and the
         # setup checklist (SETUP_FIELDS "recovery_key_set") surfaces that as a critical, unfilled
         # item so a migrated-in account doesn't silently stay without one.

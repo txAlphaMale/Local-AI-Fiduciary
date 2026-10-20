@@ -233,10 +233,9 @@ what to fill in and where, ranked by how much it unlocks.
 
 ## Security & sharing
 
-- **Read `SHARING-CHECKLIST.md` before pushing anywhere.** Your `.env`,
-  `mcpo/config.json`, any `*-sample.json`, `holdings.csv`, and the runtime `data/` are
-  git-ignored — but verify.
-- Use a **private repository** for anything holding your configuration.
+- If you fork or commit your own changes: your `.env`, `mcpo/config.json`, any `*-sample.json`,
+  `holdings.csv`, and the runtime `data/` are git-ignored — verify with `git status` before pushing,
+  and keep any repository that holds your own configuration private.
 - Your portfolio data and API keys never leave your machine.
 
 ## License

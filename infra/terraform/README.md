@@ -65,11 +65,11 @@ Run these with `export AWS_PROFILE=fiduciary-demo`. Terraform must be version 1.
 2. **Bootstrap the state bucket:**
    - `terraform -chdir=infra/terraform/bootstrap init && terraform -chdir=infra/terraform/bootstrap apply`
    - Then: `terraform -chdir=infra/terraform/bootstrap output -raw backend_hcl > infra/terraform/backend.hcl`
-3. **Adopt the persistent resources while the environment is still up:**
+3. **Apply the persistent resources (state bucket consumers, backups, ECR, DNS zone):**
    - `cd infra/terraform/persistent && terraform init -backend-config=../backend.hcl`
-   - `terraform plan -var import_zone_id=<ZONE_ID from route53-zone.json>`
-   - Expected plan: imports, plus a few adds/changes as described in `imports.tf`. **Zero destroys.**
-   - `terraform apply -var import_zone_id=...`, then delete `imports.tf`.
+   - `terraform plan`, review it, then `terraform apply`. (If you are adopting resources that were first
+     built with the CLI scripts, add `import` blocks for them before the first apply and expect **zero
+     destroys** in the plan.)
 4. **Tear down the CLI-built environment:** `KEEP_ECR=1 KEEP_SSM=1 ./scripts/aws-demo/teardown.sh`
    (it backs up first).
 5. **Rebuild from Terraform:** `./scripts/aws-demo/up.sh`. It restores the backup step 4 just took.

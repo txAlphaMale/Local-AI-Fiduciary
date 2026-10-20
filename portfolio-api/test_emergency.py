@@ -26,7 +26,7 @@ import audit, auth, detections, emergency, kit, notifications, store, vault, vau
 PW = "correct-horse-battery-1"
 PDF = b"%PDF-1.4\n" + os.urandom(300)
 T = [1_000_000.0]
-KIT_VENV = os.environ.get("KIT_VENV", "/home/user/work/venv-kit")
+KIT_VENV = os.environ.get("KIT_VENV") or os.path.join(tempfile.gettempdir(), "fiduciary-kit-venv")   # built on first use (needs network once)
 
 
 def _login(u):

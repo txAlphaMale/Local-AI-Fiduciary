@@ -1,7 +1,7 @@
 # ============================================================================
 #  Fiduciary — .gitignore
 #  Goal: NEVER commit secrets or real personal/financial data. Review the
-#  SHARING-CHECKLIST.md before your first push.
+#  Run `git status` / `git ls-files | grep -iE 'env|secret|diag'` before your first push.
 # ============================================================================
 
 # ---- Secrets & credentials (NEVER commit) ----
@@ -69,11 +69,11 @@ chat.db
 # These are working notes/reviews, not user-facing docs, and several embedded real financial
 # figures/account names. Untracked 2026-07-22 (were committed earlier by mistake). The whole docs/
 # folder is internal R&D EXCEPT DEPENDENCIES.md (a plain, non-personal dependency list linked from
-# INSTALL.md). See SHARING-CHECKLIST.md section 4.
+# INSTALL.md).
 # 2026-07-24: the 2026-07-22 pass only untracked these AT THE TIP (git rm --cached) — none of them
 # were ever actually scrubbed from HISTORY despite section 4 saying so, and four more
 # internal-planning docs were added and committed in the days since (same mistake, again). ALL of
-# them — old and new — need a real git-filter-repo pass; see SHARING-CHECKLIST.md section 4 for
+# them — old and new — need a real git-filter-repo pass; for
 # the command block.
 RESUME-TRACKER.md
 MEMORY-HANDOFF-FROM-LOCAL-AI.md
@@ -107,7 +107,7 @@ docs/*
 # transitional history irrelevant (the content is intentionally public again). This does NOT
 # resolve the SEPARATE, still-open history-scrub debt for the genuinely-internal docs listed above
 # (RESUME-TRACKER.md, POSITIONING-BRIEF.md, SECURITY-CONTROLS-GAP-ANALYSIS.md, etc.) — those still
-# need the git-filter-repo pass in SHARING-CHECKLIST.md section 4 before this repo goes public.
+# need a git-filter-repo pass before any repo holding them goes public.
 
 # ---- Local backups / scratch ----
 *.known-good
@@ -148,3 +148,7 @@ infra/terraform/.live-snapshot/
 # ---- Claude Code agent guardrails (internal paths/policy; place per-checkout, never publish) ----
 CLAUDE.md
 .claude/
+
+# ---- local scratch/rewrite clones (never commit a nested repo) ----
+Fiduciary-history-scrub/
+*-history-scrub/

@@ -142,5 +142,5 @@ variable "demo_reset_interval_s" {
 
 variable "sec_user_agent" {
   type    = string
-  default = "Fiduciary Demo 16510154+txAlphaMale@users.noreply.github.com"
+  default = "Fiduciary Demo"
 }

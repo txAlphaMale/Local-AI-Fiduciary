@@ -13353,7 +13353,7 @@ STRATEGIST_TOOLS = [
         "description": "The user's REAL portfolio (net worth + consolidated holdings) — context only.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_fees_liquidity",
-        "description": "Fee drag (fund/ETF expense ratios) and liquidity flags on The user's REAL holdings — "
+        "description": "Fee drag (fund/ETF expense ratios) and liquidity flags on the user's REAL holdings — "
                        "context only, e.g. when weighing a paper idea against what he already pays elsewhere.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_benefits",

@@ -39,9 +39,3 @@ variable "ecr_keep_images" {
   default = 10
 }
 
-# Only used by imports.tf during the one-time adoption of the live resources. Take the value from
-# .live-snapshot/<stamp>/route53-zone.json (HostedZone.Id, without the "/hostedzone/" prefix).
-variable "import_zone_id" {
-  type    = string
-  default = ""
-}
