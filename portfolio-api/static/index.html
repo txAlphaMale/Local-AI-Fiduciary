@@ -1245,10 +1245,10 @@ W('tlh','Taxes & audits','Tax-loss harvesting',
   'Finds positions at a loss in taxable accounts whose sale would generate a deductible capital loss to offset gains (and up to 3k of ordinary income).',
   'It lists harvestable losses with the dollar amount; the cockpit shows the total. Mind the 30-day wash-sale rule on repurchase.',
   'Use it near year-end or after a drawdown to bank losses — but never let the tax tail wag a good position, and avoid the wash sale.');
-W('asset-location','Taxes & audits','Asset location',
-  'Audits whether tax-inefficient holdings (high-yield, high-turnover) are sitting in taxable accounts where they should be tax-advantaged, and vice versa.',
-  'It flags misplaced holdings; the list is taxable-account-focused by design. Relocating is about which wrapper holds what, not what you own.',
-  'Use it to cut lifetime tax drag by moving income-heavy assets into IRAs/Roth and keeping tax-efficient index funds in taxable.');
+W('asset-location','Taxes & audits','Asset location ("holdings misplaced")',
+  'Some investments throw off a lot of taxable income every year (high-yield funds, REITs, bond funds). In a regular taxable brokerage account you owe tax on that income each April, even if you reinvest it. In an IRA/401(k) the same income is sheltered, and in a Roth it is never taxed. "Misplaced" means: a holding that pays a high yield (3% or more by default) is sitting in a TAXABLE account, where it creates a yearly tax bill it would not create inside an IRA/401(k)/Roth.',
+  'Nothing is wrong with the investment itself, and nothing is urgent. The cockpit chip counts these holdings; click it to open AUDITS → TAX · TLH → "Relocation candidates", which lists each holding, its account, its yield and the estimated income it generates per year. Example: a 5% yield fund worth $40,000 in a taxable account throws off about $2,000 of taxable income a year; in an IRA that tax bill goes away.',
+  'What to do: you do not sell and rebuy in the same account. The usual approach is to put new money for income-heavy holdings into your IRA/401(k)/Roth, and keep low-yield, tax-efficient index funds in the taxable account. Swapping positions between accounts can trigger tax if done in the taxable account, so check with your CPA first. If you have no IRA/401(k)/Roth, there is nowhere better to move them and you can ignore this. Change what counts as "high yield" in SETTINGS → ADVANCED KNOBS ("Tax-inefficient yield at/above"). Educational only, not tax advice.');
 W('fees-liquidity','Taxes & audits','Fees and liquidity',
   'Flags high-cost funds (by expense ratio where available) and hard-to-exit positions (thin trading volume) so you can see hidden frictions.',
   'High-fee funds and thin/micro-liquidity names are flagged in the FEES and LIQUIDITY tab and summarized in the cockpit.',
@@ -1709,7 +1709,7 @@ function cockpitPanel(){
     if(tlh.total_harvestable_loss && Math.abs(tlh.total_harvestable_loss)>0)
       A.push({sev:'opp',cat:'TAX-LOSS',msg:usd(Math.abs(tlh.total_harvestable_loss))+' harvestable ('+(tlh.count||0)+')',tab:'audits',subtab:'tax'});
     const nLoc=((TAXAUDIT.asset_location||{}).misplaced||[]).length;
-    if(nLoc) A.push({sev:'opp',cat:'ASSET LOC',msg:nLoc+' holding(s) misplaced',tab:'audits',subtab:'tax'});
+    if(nLoc) A.push({sev:'opp',cat:'ASSET LOC',msg:nLoc+' high-yield holding(s) in taxable accounts',tab:'audits',subtab:'tax',tip:'High-yield holdings in a taxable account create a yearly tax bill; they would be sheltered in an IRA/401(k)/Roth. Click for the list, and the ? there for an explanation.'});
   }
   if(FL && !FL.error){
     const nHigh=(((FL.fees||{}).funds)||[]).filter(x=>x.high).length;
@@ -7970,7 +7970,7 @@ function taxContent(bracket, audit){
       const ni=el('div','muted'); ni.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:8px 0 14px;'; ni.textContent=inc.note||''; wrap.appendChild(ni);
     }
     // --- taxable-only relocation audit (which of the above sits in taxable & is worth sheltering) ---
-    const relHead=el('div','ph','↳ TAXABLE-ONLY · RELOCATION CANDIDATES'); relHead.style.cssText+='border:none;padding:0;margin:6px 0 6px;font-size:var(--font-size-base);'; wrap.appendChild(relHead);
+    const relHead=el('div','ph','↳ TAXABLE-ONLY · RELOCATION CANDIDATES'); relHead.appendChild(wikiLink('asset-location')); relHead.style.cssText+='border:none;padding:0;margin:6px 0 6px;font-size:var(--font-size-base);'; wrap.appendChild(relHead);
     if(loc.misplaced && loc.misplaced.length){
       const tot2=el('div'); tot2.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
       tot2.innerHTML=`<span class="muted">~</span>${usd(loc.est_annual_income_in_taxable)}<span class="muted">/yr of that income is taxable distributions across ${loc.count} high-yield holding(s) — sheltering these in an IRA/401k stops the yearly tax:</span>`;
