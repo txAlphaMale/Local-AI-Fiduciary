@@ -32,7 +32,7 @@ class TestPlaidWiki(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "node not installed")
 class TestAutolink(unittest.TestCase):
     def test_linkify_is_https_only_and_escapes_html(self):
-        m = re.search(r"const nl=s=>(esc\(s\)[^;]+);", HTML)
+        m = re.search(r"const nl=s=>(esc\(s\).*);[ \t]*\r?\n", HTML)
         self.assertIsNotNone(m)
         code = ("const esc=s=>(s==null?'':s).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;');"
                 f"const nl=s=>{m.group(1)};"
