@@ -42,12 +42,16 @@ jobs:
 
       - name: Resolve image tag
         id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}   # via env, never inlined into the script (injection)
         run: |
-          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          TAG="$INPUT_TAG"
+          [ -n "$TAG" ] || TAG="$(git rev-parse --short HEAD)"
+          if ! echo "$TAG" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::image tag '$TAG' is invalid"
+            exit 1
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
