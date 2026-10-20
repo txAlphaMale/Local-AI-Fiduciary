@@ -850,10 +850,34 @@ let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'
 // ledgers) — remembered across reloads; null until the first load() resolves the server's default.
 let CURRENT_SCENARIO_ID=null; try{ CURRENT_SCENARIO_ID=localStorage.getItem('fidScenarioId')||null; }catch(_){ CURRENT_SCENARIO_ID=null; }
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
-function reorderSubtab(panel, orderedKeys, fromKey, toKey){
-  if(fromKey===toKey) return;
-  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return;
-  ks.splice(fi,1); const ti=ks.indexOf(toKey); ks.splice(ti<0?ks.length:ti,0,fromKey);
+// Drag-reorder for tab bars. The old per-tab drop handlers always inserted the dragged tab BEFORE the one it was
+// dropped on and only existed on the tab labels, so (a) moving right stopped one slot short and the LAST position was
+// unreachable, and (b) the separators/gaps between tabs were not drop targets, so the cursor showed the "no drop"
+// stop icon there (reported 2026-10-21: left worked, right showed the stop icon). Now the whole bar is the drop zone
+// and the pointer picks the nearest tab and which side of it.
+function reorderKeys(orderedKeys, fromKey, toKey, after){
+  if(fromKey===toKey) return null;
+  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return null;
+  ks.splice(fi,1); const ti=ks.indexOf(toKey); if(ti<0) return null;
+  ks.splice(after?ti+1:ti,0,fromKey);
+  return ks;
+}
+function wireTabBarDnD(bar, onMove){
+  const mark=(t,after)=>{ [...bar.querySelectorAll('[data-dkey]')].forEach(x=>x.style.boxShadow=''); if(t) t.style.boxShadow=after?'inset -3px 0 0 var(--color-accent)':'inset 3px 0 0 var(--color-accent)'; };
+  const pick=e=>{
+    let best=null, bd=1e12;
+    bar.querySelectorAll('[data-dkey]').forEach(t=>{ const r=t.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
+      const d=Math.hypot(e.clientX-cx,(e.clientY-cy)*3); if(d<bd){ bd=d; best={t,after:e.clientX>cx}; } });
+    return best;
+  };
+  bar.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} const b=pick(e); mark(b&&b.t,b&&b.after); };
+  bar.ondragleave=e=>{ if(!bar.contains(e.relatedTarget)) mark(null); };
+  bar.ondrop=e=>{ e.preventDefault(); mark(null); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){}
+    const b=pick(e); if(from && b) onMove(from, b.t.dataset.dkey, b.after); };
+  bar.ondragend=()=>mark(null);
+}
+function reorderSubtab(panel, orderedKeys, fromKey, toKey, after){
+  const ks=reorderKeys(orderedKeys, fromKey, toKey, after); if(!ks) return;
   SUBORDER[panel]=ks; try{ localStorage.setItem('fidSubOrder',JSON.stringify(SUBORDER)); }catch(_){}
   render();
 }
@@ -861,10 +885,8 @@ function reorderSubtab(panel, orderedKeys, fromKey, toKey){
 // TOP row, so dragging a top tab just highlighted its text instead of moving it). Persisted
 // separately from SUBORDER since this reorders a flat list, not one list per panel.
 let TABORDER=[]; try{ TABORDER=JSON.parse(localStorage.getItem('fidTabOrder')||'[]')||[]; }catch(_){ TABORDER=[]; }
-function reorderTopTab(orderedKeys, fromKey, toKey){
-  if(fromKey===toKey) return;
-  const ks=orderedKeys.slice(); const fi=ks.indexOf(fromKey); if(fi<0) return;
-  ks.splice(fi,1); const ti=ks.indexOf(toKey); ks.splice(ti<0?ks.length:ti,0,fromKey);
+function reorderTopTab(orderedKeys, fromKey, toKey, after){
+  const ks=reorderKeys(orderedKeys, fromKey, toKey, after); if(!ks) return;
   TABORDER=ks; try{ localStorage.setItem('fidTabOrder',JSON.stringify(TABORDER)); }catch(_){}
   render();
 }
@@ -889,12 +911,11 @@ function panelSubtabs(panel, sections){
     t.style.cssText='cursor:pointer;letter-spacing:1px;font-size:var(--font-size-sm);padding:var(--space-1) var(--space-2);border-radius:var(--radius-md);'+
       (on?'background:rgba(230,180,80,0.13);color:var(--color-accent);':'color:var(--color-text-muted);');
     t.onclick=()=>setSubtab(panel,s.key);
-    t.draggable=true;
+    t.draggable=true; t.dataset.dkey=s.key;
     t.ondragstart=e=>{ try{ e.dataTransfer.setData('text/plain', s.key); e.dataTransfer.effectAllowed='move'; }catch(_){} };
-    t.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} };
-    t.ondrop=e=>{ e.preventDefault(); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){} if(from) reorderSubtab(panel, orderedKeys, from, s.key); };
     bar.appendChild(t);
   });
+  wireTabBarDnD(bar,(from,to,after)=>reorderSubtab(panel, orderedKeys, from, to, after));
   wrap.appendChild(bar);
   const sec=avail.find(s=>s.key===active)||avail[0];
   try{ wrap.appendChild(sec.build()); }
@@ -1586,16 +1607,15 @@ function render(){
     t.style.cssText=`cursor:pointer;letter-spacing:2px;font-size:var(--font-size-base);padding-bottom:var(--space-2);margin-bottom:-8px;user-select:none;`+
       `border-bottom:2px solid ${active?'var(--color-accent)':'transparent'};color:${active?'var(--color-accent)':'var(--color-text-muted)'};`;
     t.onclick=()=>{ TAB=key; render(); };
-    t.draggable=true;
+    t.draggable=true; t.dataset.dkey=key;
     t.ondragstart=e=>{ try{ e.dataTransfer.setData('text/plain', key); e.dataTransfer.effectAllowed='move'; }catch(_){} };
-    t.ondragover=e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} };
-    t.ondrop=e=>{ e.preventDefault(); let from=''; try{ from=e.dataTransfer.getData('text/plain'); }catch(_){} if(from) reorderTopTab(topTabKeys, from, key); };
     return t;
   };
   tabSpecs.forEach((ts,i)=>{
     if(i){ const sep=el('span',null,'|'); sep.style.cssText='color:var(--color-border-strong);opacity:0.7;font-size:var(--font-size-md);user-select:none;'; tabBar.appendChild(sep); }
     tabBar.appendChild(mkTab(ts[0],ts[1]));
   });
+  wireTabBarDnD(tabBar,(from,to,after)=>reorderTopTab(topTabKeys, from, to, after));
   if(TAB==='positions'){   // right-aligned consolidated/by-account sub-toggle
     const tg=el('span'); tg.style.cssText='cursor:pointer;letter-spacing:1px;margin-left:auto;font-size:var(--font-size-base);';
     tg.innerHTML=`<span style="${VIEW==='consolidated'?on:off}">CONSOLIDATED</span> <span class="muted">·</span> <span style="${VIEW==='detail'?on:off}">BY ACCOUNT</span>`;
