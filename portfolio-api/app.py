@@ -712,6 +712,9 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # reachable by viewers. Each handler re-checks "is the configured designee" itself
     # (emergency.request_access / cancel); every other emergency write is admin-only.
     "/api/emergency/request", "/api/emergency/cancel",
+    # COCKPIT tile dismissals (TASK-004): per-user UI state ("I've seen this green tile"); affects
+    # only the caller's own view, never data or config, so a viewer may manage their own.
+    "/api/cockpit/dismiss", "/api/cockpit/restore",
 }
 
 
@@ -10424,6 +10427,74 @@ async def post_secrets(req: Request):
                                       # (still correctly excludes any key that's env_locked)
     return {"ok": True, "saved": saved, "ignored": ignored, "staged_behind_env": staged_behind_env,
             "restart_required": bool(saved)}
+
+
+# ============================================================================
+# COCKPIT tile dismissals (TASK-004, 2026-10-20) -- green (ok/opp) tiles can be acknowledged and
+# hidden; stored per USER so it follows them across devices. {uid: {tile_id: severity_at_dismissal}}.
+# The client hides a tile only while its current severity still equals the stored one and prunes
+# entries that no longer apply (via /restore), so a green tile that turns yellow/red -- or goes
+# away and later comes back -- shows again on its own. Only green severities are accepted here:
+# warnings and reds can never be dismissed.
+# ============================================================================
+COCKPIT_DISMISSED_FILE = os.environ.get("COCKPIT_DISMISSED_FILE", "/data/cockpit_dismissed.json")
+_DISMISSIBLE_SEVERITIES = ("ok", "opp")
+_cockpit_lock = threading.Lock()
+
+
+def _cockpit_user(request):
+    uid = request.session.get("uid")
+    return uid if (uid and auth.get_user_by_id(uid)) else None
+
+
+@app.get("/api/cockpit/dismissed")
+def get_cockpit_dismissed(request: Request):
+    uid = _cockpit_user(request)
+    if not uid:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    return {"dismissed": (store.read_json(COCKPIT_DISMISSED_FILE, {}) or {}).get(uid, {})}
+
+
+@app.post("/api/cockpit/dismiss")
+async def post_cockpit_dismiss(request: Request):
+    uid = _cockpit_user(request)
+    if not uid:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    body = await request.json()
+    tid, sev = str((body or {}).get("id") or "").strip(), (body or {}).get("sev")
+    if not tid or len(tid) > 120:
+        return JSONResponse({"error": "id required (max 120 chars)"}, status_code=400)
+    if sev not in _DISMISSIBLE_SEVERITIES:
+        return JSONResponse({"error": "only green tiles can be dismissed"}, status_code=400)
+    with _cockpit_lock:
+        allu = store.read_json(COCKPIT_DISMISSED_FILE, {}) or {}
+        mine = allu.setdefault(uid, {})
+        if len(mine) >= 200 and tid not in mine:
+            return JSONResponse({"error": "too many dismissed tiles"}, status_code=400)
+        mine[tid] = sev
+        store.write_json(COCKPIT_DISMISSED_FILE, allu)
+    return {"ok": True, "dismissed": mine}
+
+
+@app.post("/api/cockpit/restore")
+async def post_cockpit_restore(request: Request):
+    """Body: {"ids": [...]} or {"all": true}. Used both for the user's own ↺ and for the client's
+    pruning of dismissals that no longer apply."""
+    uid = _cockpit_user(request)
+    if not uid:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    body = await request.json() or {}
+    with _cockpit_lock:
+        allu = store.read_json(COCKPIT_DISMISSED_FILE, {}) or {}
+        mine = allu.get(uid, {})
+        if body.get("all"):
+            mine = {}
+        else:
+            for tid in (body.get("ids") or ([body["id"]] if body.get("id") else []))[:200]:
+                mine.pop(str(tid), None)
+        allu[uid] = mine
+        store.write_json(COCKPIT_DISMISSED_FILE, allu)
+    return {"ok": True, "dismissed": mine}
 
 
 # ============================================================================

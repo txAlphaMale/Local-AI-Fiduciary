@@ -1064,7 +1064,7 @@ W('growth-vs-spy','Dashboard','Portfolio vs SPY (growth of 100)',
   'Use it as a rough benchmark of whether your positioning beats a plain index over the window it has data for — not precise attribution.');
 W('cockpit','Dashboard','Cockpit — what needs attention',
   'A persistent strip of chips summarizing everything outside a threshold: concentration, drift, tax-loss opportunities, high fees, illiquid names, ACA cliffs, FIRE success, hidden fund exposure.',
-  'Chip color encodes severity — amber is watch, green is opportunity/ok, grey is info. Each chip names the issue and a count.',
+  'Chip color encodes severity — red is act now, amber is watch, green is ok/opportunity, grey is info. Each chip names the issue and a count. EMERGENCY FUND shows how many months of essential spending your reserve covers against your target. Green chips have a ✕: dismiss one once you have seen it and it stays out of the way — it comes back on its own the moment it stops being green. "N acknowledged · show" under the strip lists them again.',
   'Click a chip to jump to the tab with the full detail. Treat the cockpit as your daily triage list.');
 W('attention','Insights & risk','⚠ Attention digest + header badge (alerting layer)',
   'A materiality-filtered digest, aggregated server-side: tripped thesis exit-triggers, single-name loss-budget breaches, concentration/macro-stress flags, policy and IPS sleeve drift-band breaches, a realized-volatility regime-shift check (last 21 trading days vs this book\'s own 45-day trailing baseline — not a generic threshold), earnings-this-week on your holdings, and data-grounding staleness. Distinct from the older COCKPIT strip (client-side, dashboard-only) — this one has a header badge so it is visible from every tab, not just when you remember to look.',
@@ -1722,6 +1722,23 @@ function cockpitPanel(){
     const sp=RETIRE.monte_carlo.success_pct;
     A.push({sev: sp>=80?'ok':(sp>=60?'info':'warn'), cat:'FIRE', msg:sp+'% success', tab:'plan', subtab:'fi'});
   }
+  // TASK-004: EMERGENCY FUND — red/yellow/green from PLAN → CASH·DEBT's own status (no new maths).
+  if(CASHDEBT && !CASHDEBT.error && CASHDEBT.emergency_fund){
+    const ef=CASHDEBT.emergency_fund;
+    if(ef.months_covered!=null && ef.target_months){
+      let sev=ef.status==='critical'?'crit':(ef.status==='low'?'warn':'ok');
+      const stressShort=(ef.status==='ok' && (ef.status_stress==='low'||ef.status_stress==='critical'));
+      if(stressShort) sev='warn';
+      const msg=ef.months_covered+' of '+ef.target_months+' months'
+        +((ef.gap_dollars>0)?(' · gap '+usd(ef.gap_dollars)):'')
+        +(stressShort?(' · only '+ef.months_covered_stress+' after a '+ef.stress_drawdown_pct+'% drawdown'):'')
+        +(ef.designated?'':' · estimate (no accounts designated)');
+      A.push({id:'EMERGENCY FUND',sev,cat:'EMERGENCY FUND',msg,tab:'plan',subtab:'cashdebt',
+              tip:ef.designated?'Reserve = the accounts you designated':'Auto-detected cash only — designate your real reserve accounts in PLAN → CASH·DEBT'});
+    } else {
+      A.push({id:'EMERGENCY FUND',sev:'info',cat:'EMERGENCY FUND',msg:'set your annual expenses to size it',tab:'plan',subtab:'assumptions'});
+    }
+  }
   if(RETIRE && !RETIRE.error && RETIRE.bridge && RETIRE.bridge.aca){
     const ac=RETIRE.bridge.aca, fl=ac.flags||{}, sub=ac.subsidy||{}, fp=sub.fpl_pct;
     if(fl.over_cliff) A.push({sev:'warn',cat:'ACA CLIFF',msg:'bridge MAGI '+(fp||'?')+'% FPL — over 400%, $0 subsidy',tab:'plan',subtab:'bridge'});
@@ -1733,22 +1750,78 @@ function cockpitPanel(){
       A.push({sev:'warn',cat:'HIDDEN EXPOSURE',msg:h.ticker+' truly '+h.weight_pct+'% incl. funds',tab:'insights'});
     });
   }
-  if(!A.length){ const ok=el('div'); ok.style.cssText='font-size:var(--font-size-md);color:var(--color-positive);'; ok.textContent='✓ All clear — nothing over your thresholds right now.'; p.appendChild(ok); return p; }
-  const colOf={warn:'var(--color-accent)',opp:'var(--color-positive)',ok:'var(--color-positive)',info:'var(--color-text-muted)'};
+  // Complete = every source the tiles above read has loaded without error; only then is it safe to
+  // prune dismissals for tiles that are "absent" (a half-loaded cockpit must not forget them).
+  const complete=!!(EXP&&!EXP.error&&INSIGHTS&&!INSIGHTS.error&&TAXAUDIT&&!TAXAUDIT.error&&FL&&!FL.error&&RETIRE&&!RETIRE.error&&DISCO&&!DISCO.error&&CASHDEBT&&!CASHDEBT.error);
+  if(COCKPIT_DISM===null){ _cockpitFetchDismissed(); }
+  const vis=cockpitVisibility(A, COCKPIT_DISM||{});
+  if(complete && COCKPIT_DISM && vis.prune.length){ _cockpitPrune(vis.prune); }
+  const sevRank={crit:0,warn:1};
+  const shown=vis.shown.map((a,i)=>[a,i]).sort((x,y)=>((sevRank[x[0].sev]??2)-(sevRank[y[0].sev]??2))||(x[1]-y[1])).map(x=>x[0]);
+  if(!shown.length && !(COCKPIT_SHOW&&vis.hidden.length)){
+    const ok=el('div'); ok.style.cssText='font-size:var(--font-size-md);color:var(--color-positive);';
+    ok.textContent='✓ All clear — nothing over your thresholds right now.'; p.appendChild(ok);
+  }
+  const colOf={crit:'var(--color-negative)',warn:'var(--color-accent)',opp:'var(--color-positive)',ok:'var(--color-positive)',info:'var(--color-text-muted)'};
   const strip=el('div'); strip.style.cssText='display:flex;flex-wrap:wrap;gap:var(--space-2);';
-  A.forEach(a=>{
+  const addChip=(a,dim)=>{
     const c=colOf[a.sev]||'var(--color-text-muted)';
     const chip=el('span');
     chip.style.cssText=`cursor:pointer;border:1px solid ${c};border-left:3px solid ${c};border-radius:var(--radius-md);`+
-      `padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);color:var(--color-text);white-space:nowrap;`;
-    chip.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
+      `padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);color:var(--color-text);white-space:nowrap;`+(dim?'opacity:0.55;':'');
+    const lab=document.createElement('span'); lab.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
+    chip.appendChild(lab);
     chip.title=(a.tip?a.tip+' — ':'')+'Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
     chip.onclick=()=>{ TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
+    if(a.sev==='ok'||a.sev==='opp'){      // green tiles are dismissible; reappear if they stop being green
+      const x=document.createElement('span'); x.style.cssText='margin-left:8px;opacity:0.7;'; x.textContent=dim?'↺':'✕';
+      x.title=dim?'Restore this tile':'Dismiss — it comes back on its own if it stops being green';
+      x.onclick=ev=>{ ev.stopPropagation(); dim?_cockpitRestore([a.id||a.cat]):_cockpitDismiss(a.id||a.cat,a.sev); };
+      chip.appendChild(x);
+    }
     strip.appendChild(chip);
-  });
+  };
+  shown.forEach(a=>addChip(a,false));
+  if(COCKPIT_SHOW) vis.hidden.forEach(a=>addChip(a,true));
   p.appendChild(strip);
+  if(vis.hidden.length){
+    const t=el('div','muted'); t.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);cursor:pointer;';
+    t.textContent=(COCKPIT_SHOW?'▾ hide':'✓ '+vis.hidden.length+' acknowledged · show')+(COCKPIT_SHOW?' acknowledged':'');
+    t.onclick=()=>{ COCKPIT_SHOW=!COCKPIT_SHOW; _cockpitRerender(); };
+    p.appendChild(t);
+  }
   return p;
 }
+
+// ---- cockpit tile dismissal (TASK-004) ----
+let COCKPIT_DISM=null, COCKPIT_SHOW=false;
+// Pure: which tiles show / are hidden, and which stored dismissals no longer apply. A green tile
+// (ok/opp) is hidden only while its severity still equals the one stored at dismissal; a stored
+// entry whose tile is gone or changed severity is returned in `prune` so it can reappear later.
+function cockpitVisibility(A, dism){
+  dism=dism||{}; const shown=[], hidden=[], prune=[], present={};
+  A.forEach(a=>{ present[a.id||a.cat]=a; });
+  A.forEach(a=>{ const id=a.id||a.cat, green=(a.sev==='ok'||a.sev==='opp');
+    if(green && dism[id]===a.sev) hidden.push(a); else shown.push(a); });
+  Object.keys(dism).forEach(id=>{ const a=present[id]; if(!a || a.sev!==dism[id]) prune.push(id); });
+  return {shown, hidden, prune};
+}
+function _cockpitRerender(){ const old=document.getElementById('cockpit-panel'); if(old) old.replaceWith(cockpitPanel()); }
+async function _cockpitFetchDismissed(){
+  COCKPIT_DISM={};   // placeholder so we don't refetch in a loop
+  try{ const d=await (await fetch('/api/cockpit/dismissed')).json(); COCKPIT_DISM=d.dismissed||{}; }catch(_){ }
+  _cockpitRerender();
+}
+async function _cockpitPost(path,body){
+  try{ const d=await (await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+       if(d&&d.dismissed) COCKPIT_DISM=d.dismissed; }catch(_){ }
+  _cockpitRerender();
+}
+function _cockpitDismiss(id,sev){ COCKPIT_DISM=Object.assign({},COCKPIT_DISM||{},{[id]:sev}); _cockpitRerender(); _cockpitPost('/api/cockpit/dismiss',{id,sev}); }
+function _cockpitRestore(ids){ const m=Object.assign({},COCKPIT_DISM||{}); ids.forEach(i=>delete m[i]); COCKPIT_DISM=m; _cockpitRerender(); _cockpitPost('/api/cockpit/restore',{ids}); }
+let _cockpitPruning=false;
+function _cockpitPrune(ids){ if(_cockpitPruning) return; _cockpitPruning=true; const m=Object.assign({},COCKPIT_DISM||{}); ids.forEach(i=>delete m[i]); COCKPIT_DISM=m;
+  fetch('/api/cockpit/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}).catch(()=>{}).finally(()=>{ _cockpitPruning=false; }); }
 
 function allocPanel(title,cid,items,total){
   const p=el('div','panel');
