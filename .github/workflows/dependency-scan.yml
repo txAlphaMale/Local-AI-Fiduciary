@@ -97,6 +97,7 @@ jobs:
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: "true"   # gate only on findings a patch exists for (see GATE POLICY above)
+          limit-severities-for-sarif: "true"   # without this the action ignores the severity input for SARIF output and gates on EVERY severity (found 2026-10-20)
           exit-code: "1"   # fail the job -- fixable CRITICAL/HIGH are inside the 7/30-day SLA above
           # 2026-07-27: 6 genuine CRITICALs (essential Debian/perl/zlib packages, no vendor fix,
           # one permanent will_not_fix) formally risk-accepted per Jason -- see .trivyignore at

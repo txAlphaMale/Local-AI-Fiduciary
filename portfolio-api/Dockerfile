@@ -38,6 +38,13 @@ RUN curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz 
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Nothing at runtime needs a package manager, and pip carries vendored copies of urllib3/msgpack/setuptools
+# that scanners flag (Trivy, 2026-10-20: pip 25.0.1's own CVEs, then the vendored copies in a newer pip).
+# Removing pip from the FINAL image clears that whole class of findings and shrinks the attack surface.
+# (Build-time installs above already used it. To install something inside a running container, use a
+# throwaway build stage or `python -m ensurepip`.)
+RUN pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.12/site-packages/pip* /usr/local/bin/pip* /root/.cache
 COPY . .
 
 # 8097 = plain HTTP (default, no certificate configured yet). 8443 = HTTPS, once one of the 3
