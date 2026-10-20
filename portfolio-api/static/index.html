@@ -3511,7 +3511,24 @@ function snaptradePanel(){
     const st=el('div'); st.style.marginBottom='var(--space-2)';
     st.textContent=(m.mode?('Key type: '+m.mode.toUpperCase()+' · '):'')+(m.configured?'credentials saved':'NOT configured yet (save the client ID + consumer key under SECRETS & KEYS — no restart needed)')+' · '+(m.selected?'active data source':'not the active data source');
     body.appendChild(st);
+    // Health feedback: what the last dashboard load got from SnapTrade, plus an on-demand live check.
+    const ll=m.last_load||{}, hl=el('div'); hl.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);line-height:1.5;';
+    const ago=t=>{ const sec=Math.max(0,Math.round(Date.now()/1000-t)); return sec<90?sec+'s ago':(sec<5400?Math.round(sec/60)+' min ago':Math.round(sec/3600)+' h ago'); };
+    if(ll.last_err){ hl.className='neg'; hl.textContent='Last dashboard load FAILED '+ago(ll.last_err_ts)+': '+ll.last_err; }
+    else if(ll.last_ok_ts){ hl.className='pos'; hl.textContent='✓ Last dashboard load '+ago(ll.last_ok_ts)+': '+ll.accounts+' account(s), '+ll.positions+' position(s)'+((ll.notes||[]).length?' · '+ll.notes.join(' · '):''); }
+    else { hl.className='muted'; hl.textContent=m.selected?'No dashboard load yet — refresh the dashboard, or press TEST CONNECTION.':'Not the active data source, so the dashboard has not loaded SnapTrade. Press TEST CONNECTION to check your keys and linked accounts.'; }
+    body.appendChild(hl);
     const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;';
+    const tres=el('div'); tres.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);line-height:1.5;white-space:pre-line;';
+    const tb=el('button',null,'TEST CONNECTION'); tb.disabled=!m.configured;
+    tb.onclick=async()=>{ tres.className='muted'; tres.textContent='Asking SnapTrade…';
+      const r=await fetch('/api/integrations/snaptrade/test',{method:'POST'}); const j=await r.json();
+      if(!r.ok){ tres.className='neg'; tres.textContent='✗ '+(j.error||'Test failed.'); return; }
+      const lines=['Keys accepted ('+(j.mode||'').toUpperCase()+'). '+j.n_accounts+' linked account(s) at '+((j.connections||[]).map(c=>c.name+(c.disabled?' (DISABLED)':'')).join(', ')||'no brokerage')+'.']
+        .concat((j.accounts||[]).map(a=>'  • '+a.name+' — '+a.institution+' — '+usd(a.total)))
+        .concat((j.problems||[]).map(p=>'⚠ '+p));
+      tres.className=j.ok?'pos':'neg'; tres.textContent=(j.ok?'✓ ':'')+lines.join('\n'); };
+    row.appendChild(tb);
     const msg=el('div','muted'); msg.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);';
     const mk=(label,sandbox)=>{ const b=el('button',null,label); b.disabled=!m.configured;
       b.onclick=async()=>{ msg.className='muted'; msg.textContent='Creating a connect link…';
@@ -3520,7 +3537,7 @@ function snaptradePanel(){
         window.open(j.url,'_blank','noopener'); msg.textContent='A SnapTrade window opened — finish there (link valid ~5 minutes; press the button again for a fresh one). Then refresh the dashboard.'; };
       row.appendChild(b); };
     mk('＋ CONNECT A BROKERAGE',false); mk('CONNECT SANDBOX (TEST DATA)',true);
-    body.appendChild(row); body.appendChild(msg);
+    body.appendChild(row); body.appendChild(tres); body.appendChild(msg);
     if(!m.selected){ const h=el('div','muted'); h.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);'; h.textContent='To show these accounts, set “Portfolio data source” to snaptrade (selector at the top of this page).'; body.appendChild(h); }
   }).catch(()=>{ body.textContent='Could not load SnapTrade status.'; });
   return box;
@@ -5235,7 +5252,9 @@ function holdingsContent(){
   const h=HOLDCSV||{rows:[],active_provider:'csv',type_hints:['Stock','ETF','Mutual Fund','Bond','Cash','Real Estate','Other']};
   if(h.active_provider!=='csv'){
     const banner=el('div'); banner.style.cssText='background:rgba(224,98,58,0.12);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
-    banner.innerHTML='These holdings are saved but <b>not the active data source</b> — the dashboard is currently reading from <b>'+((h.active_provider||'monarch').toUpperCase())+'</b>. Set SETTINGS → ACCOUNTS → "Portfolio data source" to CSV to make this the live source.';
+    const _ap=(h.active_provider||'monarch').toUpperCase();
+    banner.innerHTML='<b>This is your MANUAL holdings list, and it is not being used right now.</b> The dashboard is reading from <b>'+_ap+'</b>, so the accounts and positions you see on the dashboard come from there — they will <b>not</b> appear in this table, and edits here do not change the dashboard. '+
+      'Your entries are saved and come back if you switch the source back to manual: SETTINGS → ACCOUNTS → "Portfolio data source". To check that '+_ap+' is connected and returning accounts, open SETTINGS → ACCOUNTS.';
     wrap.appendChild(banner);
   }
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);line-height:1.5;';

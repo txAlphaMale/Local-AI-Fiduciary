@@ -80,5 +80,60 @@ class TestUi(unittest.TestCase):
         self.assertIn('os.environ["PORTFOLIO_PROVIDER"] = _pp', open(os.path.join(_HERE, "app.py"), encoding="utf-8").read())
 
 
+
+class _Fake:
+    """Minimal fake SnapTrade client for health()."""
+    def __init__(self, accounts, conns, boom=False):
+        outer = self
+        class AI:
+            def list_all_user_accounts(s, **k):
+                if boom: raise RuntimeError("401 unauthorized")
+                return {"results": accounts}
+        class CN:
+            def list_brokerage_authorizations(s, **k): return conns
+        self.account_information, self.connections = AI(), CN()
+
+
+class TestSnapTradeHealth(unittest.TestCase):
+    ACC = [{"id": "a1", "display_name": "Individual", "masked_account_number": "1234", "connection_id": "c1",
+            "net_value": {"amount": 1500.0}, "raw_type": "Margin"}]
+
+    def test_healthy_connection(self):
+        import snaptrade_integration as si
+        h = si.health(_Fake(self.ACC, [{"id": "c1", "brokerage": {"name": "Robinhood"}, "disabled": False}]), {})
+        self.assertTrue(h["ok"]); self.assertEqual(h["n_accounts"], 1)
+        self.assertEqual(h["accounts"][0]["institution"], "Robinhood"); self.assertEqual(h["problems"], [])
+
+    def test_no_accounts_and_disabled_connection_are_reported(self):
+        import snaptrade_integration as si
+        h = si.health(_Fake([], []), {})
+        self.assertFalse(h["ok"]); self.assertIn("no brokerage accounts", h["problems"][0])
+        h = si.health(_Fake(self.ACC, [{"id": "c1", "brokerage": {"name": "Robinhood"}, "disabled": True}]), {})
+        self.assertFalse(h["ok"]); self.assertIn("disabled", h["problems"][0])
+
+    def test_endpoint_reports_bad_keys_without_leaking_them(self):
+        import snaptrade_integration as si
+        fake = _Fake([], [], boom=True)
+        with mock.patch.object(appmod, "_require_admin", lambda r: {"id": 1, "username": "a"}), \
+             mock.patch.object(appmod, "_snaptrade_env", lambda: ("PERS-X", "SECRETKEY", None, None)), \
+             mock.patch.object(si, "make_client", lambda *a: (fake, {}, "personal")):
+            r = asyncio.run(appmod.post_snaptrade_test(FakeReq({})))
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn(b"SECRETKEY", r.body)
+
+    def test_failed_portfolio_load_is_recorded_for_the_panel(self):
+        import snaptrade_integration as si
+        with mock.patch.object(appmod, "_snaptrade_env", lambda: ("PERS-X", "k", None, None)), \
+             mock.patch.object(si, "build_portfolio", mock.Mock(side_effect=RuntimeError("SnapTrade returned no accounts yet"))):
+            with self.assertRaises(RuntimeError):
+                appmod._build_snaptrade()
+        self.assertIn("no accounts yet", appmod._snaptrade_state["last_err"])
+
+    def test_ui_has_test_button_and_clear_holdings_banner(self):
+        for needle in ("TEST CONNECTION", "/api/integrations/snaptrade/test", "Last dashboard load",
+                       "This is your MANUAL holdings list, and it is not being used right now"):
+            self.assertIn(needle, HTML)
+
+
 if __name__ == "__main__":
     unittest.main()

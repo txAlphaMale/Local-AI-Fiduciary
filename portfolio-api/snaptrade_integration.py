@@ -98,6 +98,36 @@ def fetch_raw(client, user_kwargs):
     return out
 
 
+def health(client, user_kwargs):
+    """Cheap connection check (two list calls, no positions): what SnapTrade says is linked right now.
+    -> {"ok", "n_accounts", "accounts":[{name, institution, total}], "connections":[{name, disabled}], "problems":[...]}.
+    Raises on auth/network failure -- the caller turns that into a message."""
+    raw = fetch_accounts_and_connections(client, user_kwargs)
+    conns = {c.get("id"): c for c in raw["connections"] if isinstance(c, dict)}
+    accounts = [{"name": account_display_name(a), "institution": _institution(a, conns), "total": account_total(a)}
+                for a in raw["accounts"]]
+    cons = [{"name": ((c.get("brokerage") or {}).get("name") or c.get("name") or "Brokerage"),
+             "disabled": bool(c.get("disabled"))} for c in conns.values()]
+    problems = []
+    if not accounts:
+        problems.append("Connected to SnapTrade, but no brokerage accounts are linked yet — click CONNECT A BROKERAGE and finish the login in the SnapTrade window.")
+    for c in cons:
+        if c["disabled"]:
+            problems.append(f"{c['name']}: the connection is disabled — reconnect it (CONNECT A BROKERAGE).")
+    return {"ok": bool(accounts) and not any(c["disabled"] for c in cons), "n_accounts": len(accounts),
+            "accounts": accounts, "connections": cons, "problems": problems}
+
+
+def fetch_accounts_and_connections(client, user_kwargs):
+    listed = _body(client.account_information.list_all_user_accounts(**user_kwargs))
+    accounts = listed.get("results") if isinstance(listed, dict) else listed
+    try:
+        conns = list(_body(client.connections.list_brokerage_authorizations(**user_kwargs)) or [])
+    except Exception:
+        conns = []
+    return {"accounts": list(accounts or []), "connections": conns}
+
+
 def portal_url(client, user_kwargs, sandbox=False):
     """A one-time Connection Portal link (expires in ~5 minutes) for linking a brokerage — or SnapTrade's
     simulated SANDBOX broker for testing."""
