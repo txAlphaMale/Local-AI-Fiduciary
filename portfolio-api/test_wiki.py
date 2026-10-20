@@ -44,5 +44,25 @@ class TestAutolink(unittest.TestCase):
         self.assertNotIn('<a href="javascript', out)
 
 
+class TestTour(unittest.TestCase):
+    def test_data_source_step_covers_all_four_paths_and_points_to_the_wiki(self):
+        i = HTML.index("title:'Where your data comes from'")
+        step = HTML[i:i + 1400]
+        for needle in ("Plaid", "SnapTrade", "Monarch", "HOLDINGS tab", "never transactions", "WIKI entry"):
+            self.assertIn(needle, step)
+
+    def test_integrations_step_is_admin_only_general_and_targets_a_real_element(self):
+        i = HTML.index("Integrations overview (2026-10-20)")
+        block = HTML[i:i + 1700]
+        self.assertIn("role==='admin'", block)
+        self.assertIn("#integrations-panel", block)
+        for needle in ("Plaid", "Monarch", "SnapTrade", "NOTIFICATIONS", "AI / LLM PROVIDER", "WIKI entry"):
+            self.assertIn(needle, block)
+        self.assertIn("id='integrations-panel'", HTML)            # the target exists in accountRegistryContent()
+
+    def test_a_missing_tour_target_falls_back_to_a_centered_popover(self):
+        self.assertIn("!document.querySelector(step.element)) delete step.element", HTML)
+
+
 if __name__ == "__main__":
     unittest.main()
