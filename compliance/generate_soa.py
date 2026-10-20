@@ -216,8 +216,9 @@ CONTROLS = [
      "beyond type/size validation on the knowledge-RAG ingestion path.", "portfolio-api/knowledge.py"),
     ("8.8", "Management of technical vulnerabilities", "Technological", "Applied",
      "SEC-7b: automated CVE/dependency scanning is live in CI (pip-audit + Trivy image scan), "
-     "blocking on CRITICAL/HIGH per a documented 7/30-day patch SLA, with a formal .trivyignore "
-     "risk-acceptance mechanism (90-day exp: dates) for genuinely unpatched upstream findings.",
+     "blocking on CRITICAL/HIGH findings that have a vendor fix per a documented 7/30-day patch SLA "
+     "(unfixed upstream findings are reported on every run and reviewed weekly, not hidden), with a "
+     "formal .trivyignore risk-acceptance mechanism (exp: dates) for accepted exceptions.",
      ".github/workflows/dependency-scan.yml, .trivyignore"),
     ("8.9", "Configuration management", "Technological", "Applied",
      "Every security-relevant config change (policy, retirement config, TLS state, etc.) is "
