@@ -186,6 +186,8 @@ EVENT_TYPES = (
     "emergency.auto_disabled", "emergency.takeover_failed", "emergency.test_mode_active",
     "vault.kit_generated", "vault.kit_downloaded",
     "notification.test_email",
+    # TASK-005: Plaid connections (never the tokens).
+    "integration.plaid.link_started", "integration.plaid.item_added", "integration.plaid.item_removed",
 )
 
 

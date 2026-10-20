@@ -37,7 +37,9 @@ Full technical detail, including exactly which files/tables hold what and for ho
 
 Certain features call external services on your behalf, using credentials you provide (SETTINGS
 → SECRETS): market-data providers (e.g. Finnhub, SEC EDGAR, FINRA, RentCast), a brokerage-linking
-service (SnapTrade, only if configured), an account-aggregation service (Monarch, only if
+service (SnapTrade, only if configured), a bank/brokerage/loan account-linking service
+(Plaid, only if configured — it receives your institution logins on its own hosted page, never on this server, and
+returns balances, holdings and liabilities, not transactions), an account-aggregation service (Monarch, only if
 configured), a news/search provider (Tavily, only if configured), and an AI/LLM provider (which
 may be a local model with no external call at all, or a cloud provider like Anthropic/OpenAI if
 configured). Each of these only receives what a normal use of that feature requires (e.g. a stock
