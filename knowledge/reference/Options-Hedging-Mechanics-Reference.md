@@ -1,6 +1,6 @@
 # Options & Hedging Mechanics — Frameworks Reference (2026)
 
-_Corpus doc for the Fiduciary knowledge RAG. Concepts behind the numbers `options.py` computes and INSIGHTS → HEDGING displays (covered calls, collars on concentrated names). Not investment or tax advice._
+_Corpus doc for the Fiduciary knowledge RAG. Concepts behind the numbers `options.py` computes and RISK · EXPOSURE → HEDGING displays (covered calls, collars on concentrated names). Not investment or tax advice._
 
 ## Contract basics
 - A **call** is the right (not obligation) to BUY 100 shares at the **strike** price on/before **expiration**; a **put** is the right to SELL. The buyer pays a **premium** to the seller ("writer") for that right; the app shows premiums as **mid-quotes** (midpoint of the delayed bid/ask), not a live tradeable price — always re-quote before an order.

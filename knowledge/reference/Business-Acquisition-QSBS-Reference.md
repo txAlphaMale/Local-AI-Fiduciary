@@ -19,7 +19,7 @@ _Corpus doc for the Fiduciary knowledge RAG (G11 companion). Decision-support fr
 - Planning consequence: buying/founding through a C-corp trades pass-through taxation during the hold for a potentially enormous tax-free exit; the breakeven depends on hold length, distribution needs, and exit size. S-corp/LLC → C-corp conversions start the QSBS clock at conversion.
 
 ## How this ranks against other avenues
-A levered small-business purchase is the highest-dispersion avenue the household can access: modeled after-tax IRRs (15–30%+) come with key-person risk, illiquidity, and personal guarantees on SBA debt. Compare its risk-adjusted, after-tax IRR against the cross-avenue sheet (INSIGHTS → AVENUES) — leverage-on-securities, real estate, Roth-conversion tax alpha — before treating the headline IRR as real.
+A levered small-business purchase is the highest-dispersion avenue the household can access: modeled after-tax IRRs (15–30%+) come with key-person risk, illiquidity, and personal guarantees on SBA debt. Compare its risk-adjusted, after-tax IRR against the cross-avenue sheet (RISK · EXPOSURE → AVENUES) — leverage-on-securities, real estate, Roth-conversion tax alpha — before treating the headline IRR as real.
 
 ## Sources (verified July 2026)
 The Tax Adviser, "QSBS gets a makeover: §1202's new look" (Nov 2025) · RSM, "OBBBA tax: QSBS changes" · Regalis Capital, SDE/EBITDA multiples guide · CT Acquisitions, SBA 7(a) business-acquisition guide.

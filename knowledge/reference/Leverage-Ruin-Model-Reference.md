@@ -1,6 +1,6 @@
 # Asset-Backed Leverage & Ruin Modeling — Frameworks Reference (2026)
 
-_Corpus doc for the Fiduciary knowledge RAG (G6 companion). Concepts behind `leverage.py` and INSIGHTS → LEVERAGE. This module never borrows or places an order — it models the decision. Not investment or tax advice._
+_Corpus doc for the Fiduciary knowledge RAG (G6 companion). Concepts behind `leverage.py` and RISK · EXPOSURE → LEVERAGE. This module never borrows or places an order — it models the decision. Not investment or tax advice._
 
 ## The core idea: borrowing against securities
 - A **securities-backed line of credit (SBLOC)**, **pledged-asset line (PAL)**, or plain **margin loan** lets you borrow against existing holdings without selling them — no capital-gains tax is triggered because no sale occurs. The mechanism behind **"buy, borrow, die"**: hold appreciated stock, borrow against it to fund spending instead of selling, and at death the heir's cost basis resets to fair market value (step-up, §1014), permanently erasing the embedded gain the loan let you avoid realizing.

@@ -85,7 +85,7 @@ Same household-register file again.
 | Field | Where | Unlocks | Notes |
 |---|---|---|---|
 | ACA benchmark Silver premium (SLCSP $/yr) | PLAN → ASSUMPTIONS | A real dollar premium-tax-credit estimate, not just the %-of-income figure | Only relevant pre-Medicare (before 65) |
-| IPS policy targets (by asset type + by sleeve) | INSIGHTS → POLICY · DRIFT (edit via the policy form) | Drift-band alerts | Ships with a reasonable default (70/10/15/5 US-equity/Intl/Bond/Cash) — only edit if your actual target allocation differs |
+| IPS policy targets (by asset type + by sleeve) | RISK · EXPOSURE → POLICY · DRIFT (edit via the policy form) | Drift-band alerts | Ships with a reasonable default (70/10/15/5 US-equity/Intl/Bond/Cash) — only edit if your actual target allocation differs |
 | Position caps per ticker | Same panel | Per-name concentration alerts | |
 | API keys (Finnhub, Tavily) | SETTINGS → SECRETS (2026-07-24 — was `.env`-only) | Research briefs, news alerts, opportunity scanning | `.env` still works as a fallback/seed value, but the UI is the preferred path now — see the in-app WIKI → "Secrets encryption & the secrets.key backup" entry. |
 | AI provider (Claude, optional) | SETTINGS → AI / LLM PROVIDER + SECRETS | Swaps chat/analysis from your local Ollama models to Anthropic's hosted Claude API | Purely optional — local Ollama (the default) already runs every feature at zero marginal cost. See below before turning this on. |

@@ -1,6 +1,6 @@
 # Portfolio Risk Metrics — Frameworks Reference (2026)
 
-_Corpus doc for the Fiduciary knowledge RAG (G4 companion). Concepts behind the numbers `risk.py` computes and INSIGHTS → RISK / ATTRIBUTION / PERFORMANCE display. Not investment advice._
+_Corpus doc for the Fiduciary knowledge RAG (G4 companion). Concepts behind the numbers `risk.py` computes and RISK · EXPOSURE → RISK / ATTRIBUTION / PERFORMANCE display. Not investment advice._
 
 ## Tail risk: VaR and CVaR
 - **VaR (Value at Risk)** at confidence level c and horizon h is the loss threshold exceeded only (1−c) of the time — e.g. a 95% 1-month VaR of 8% means a loss worse than 8% happens in roughly 1 of 20 months historically/statistically. VaR answers "how bad, how often" but says nothing about how much worse the tail beyond that threshold actually gets.

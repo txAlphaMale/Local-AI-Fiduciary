@@ -1296,7 +1296,7 @@ W('washsale','Taxes & audits','Wash-sale guard (TLH)',
   'Use it before executing any harvest: a washed loss isn\'t deferred, it\'s wasted paperwork (and an IRA repurchase kills it permanently, Rev. Rul. 2008-5). Replacement pairs keep market exposure during the window. The brokerage\'s lot records are the legal source of truth — confirm there before filing.');
 W('performance','Insights & risk','Performance vs policy (TWR)',
   'Time-weighted returns over standard periods (QTD/YTD/1Y/3Y) for three things side by side: your portfolio (current holdings × their price history — a stated approximation that assumes current weights), your OWN policy benchmark (the IPS sleeve targets mapped to proxy ETFs: VTI/VXUS/BND/BIL), and SPY. Plus a tracked TWR chained from the real daily snapshots with a flow guard that treats implausible one-day moves as deposits.',
-  'INSIGHTS → PERFORMANCE. EXCESS vs POLICY is the verdict column: green means your implementation (picks/tilts) beat the allocation itself; red means the plain policy mix would have done better. Coverage % tells you how much of the book had history; the flow-guard count tells you how approximate the tracked number is.',
+  'RISK · EXPOSURE → PERFORMANCE. EXCESS vs POLICY is the verdict column: green means your implementation (picks/tilts) beat the allocation itself; red means the plain policy mix would have done better. Coverage % tells you how much of the book had history; the flow-guard count tells you how approximate the tracked number is.',
   'Use it quarterly for the only honest self-review: "did my decisions add value over my own plan?" Persistent negative excess is the data telling you to index the sleeve. Money-weighted views (which include timing of contributions) live in ATTRIBUTION and the paper book.');
 W('cashdebt','Planning','Cash, liquidity & debt desk',
   'The household-CFO hygiene panel: emergency-fund months (designated reserve ÷ essential monthly spend, where essentials use the funded-ratio needs share), idle-cash drag vs the live 3-month T-bill, mortgage payoff-vs-invest (after-tax rate against both the guaranteed T-bill and the risky expected return), a refinance break-even, an avalanche ranking of non-mortgage debts against the invest hurdle (now with a $-RANK column too — a large low-rate balance can cost more real dollars/yr than a tiny high-rate one, and the panel flags it when the two rankings disagree), and a PAYOFF SIMULATOR comparing avalanche vs snowball month-by-month. **PMTS LEFT column (2026-08-08)**: payments remaining on each debt at its own current payment (the "if I change nothing" count), with the month it clears under the avalanche plan below it (rollover + extra $/mo included) — the two routinely differ by years, which is the whole argument for following the plan. **Emergency fund (2026-08-08)**: sized from the accounts you explicitly DESIGNATE as EF sources under SETTINGS → ACCOUNTS (or inline here), not from a guess at which account names look like cash — a reserve parked in a brokerage because savings yields are poor used to be invisible to the gauge. Each source can carry a cap so only part of an account counts, and the gauge also reports months covered after an assumed market drawdown, since the emergencies that drain a reserve tend to arrive with bad markets attached.',
@@ -1312,7 +1312,7 @@ W('theme','Automation','Theme (color palette)',
   'Purely cosmetic — pick whichever is easiest on your eyes/lighting. This also doubles as proof the color system is centralized: if a future palette ever looks wrong somewhere, that\'s a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
   'Options math on the concentrated names: a COVERED CALL sells the upside above a strike for cash now (income + assignment probability shown); a COLLAR buys a ~10% protective put funded by selling a call (floor and cap shown, often near zero net cost). Chains are delayed Yahoo data; deltas are computed locally from each contract\'s implied volatility.',
-  'INSIGHTS → HEDGING. Cards build for names over the sizing loss-budget plus top direct weights (≥3%), at the ~30-45 day expiration. Yield %/yr on calls, floor/cap on collars; premiums are mid-quotes — verify live before any order. Rebuilds daily or via REFRESH CHAINS.',
+  'RISK · EXPOSURE → HEDGING. Cards build for names over the sizing loss-budget plus top direct weights (≥3%), at the ~30-45 day expiration. Yield %/yr on calls, floor/cap on collars; premiums are mid-quotes — verify live before any order. Rebuilds daily or via REFRESH CHAINS.',
   'Use it when a position is too big to hold naked but too appreciated to sell (the collar) or when you\'d happily be paid to trim at a higher price (the covered call). Assignment REALIZES gains and tight collars trip constructive-sale/holding-period rules — check the lot and the CPA first. Educational, not advice.');
 W('insurance','Planning','Insurance & risk transfer (protection desk)',
   'A gap analysis of the coverages that protect the plan from non-market ruin: life (capital-needs method with DIME and human-life-value cross-checks), disability income replacement, umbrella liability sized to net worth, a property & casualty checklist (dwelling replacement cost, auto limits, TX flood/wind), and a long-term-care stance by net-worth band. Needs are computed from your live balance sheet at a real discount rate; in-force coverage comes from the policy register you enter.',
@@ -1382,7 +1382,7 @@ W('glossary-tax-retirement','Glossary','Tax & retirement acronyms — LTCG, NIIT
   'Use this when a PLAN or AUDITS panel assumes you already know the acronym. For year-specific numbers (thresholds, rates, brackets) always defer to AUDITS → GROUNDING over any static description, since those are indexed annually.');
 W('glossary-risk','Glossary','Risk & portfolio analytics — VaR, CVaR, Sharpe, HHI, TWR/XIRR…',
   'VaR (Value at Risk) = the loss you\'d expect to exceed only X% of the time over a horizon (e.g. 95% 1-month VaR of 8% means an 8%+ monthly loss happens about 1 in 20 months).\nCVaR/Expected Shortfall = the AVERAGE loss in that worst-X% tail — a harsher, more informative number than VaR alone since it captures how bad the tail actually gets.\nSHARPE = excess return per unit of total volatility; SORTINO/CALMAR/TREYNOR are variants using downside deviation, max drawdown, or beta instead.\nMAX DRAWDOWN = the largest peak-to-trough decline over the window.\nHHI (Herfindahl-Hirschman Index) = a concentration score (sum of squared weights) — higher means fewer names dominate the book.\nEFFECTIVE NUMBER OF BETS = 1/HHI on a risk-weighted basis, a more honest "how diversified am I really" than raw position count.\nFACTOR EXPOSURE (FF5 + momentum) = how much of the portfolio\'s return is explained by known systematic factors (market, size, value, profitability, investment, momentum) rather than stock-picking.\nTWR (Time-Weighted Return) = performance stripped of the effect of deposit/withdrawal timing — the right number to compare against a benchmark.\nXIRR/money-weighted return = the return actually experienced given YOUR cash-flow timing — the right number to judge your own results.',
-  'These live under INSIGHTS → RISK / ATTRIBUTION / PERFORMANCE. TWR vs policy/SPY answers "did my decisions add value"; XIRR answers "what did I personally earn."',
+  'These live under RISK · EXPOSURE → RISK / ATTRIBUTION / PERFORMANCE. TWR vs policy/SPY answers "did my decisions add value"; XIRR answers "what did I personally earn."',
   'Reach for VaR/CVaR and HHI/effective-bets when sizing or trimming a concentrated name; reach for TWR vs XIRR when someone asks "how am I doing" and you need to know which question they\'re really asking.');
 W('glossary-realestate-business','Glossary','Real estate & business acquisition — cap rate, DSCR, NOI, CoC, SDE…',
   'NOI (Net Operating Income) = rental income minus operating expenses, before debt service — the core rental-property profitability number.\nCAP RATE = NOI ÷ purchase price, a quick unlevered-yield comparison across deals.\nDSCR (Debt Service Coverage Ratio) = NOI (or SDE, for a business) ÷ annual debt payments; lenders gate financing at a minimum DSCR, commonly around 1.25×.\nCoC (Cash-on-Cash return) = annual pre-tax cash flow ÷ actual cash invested (down payment + closing costs) — the levered-return number, distinct from cap rate.\nSDE (Seller\'s Discretionary Earnings) = the small-business valuation metric for owner-operator businesses (pre-tax profit + owner comp + addbacks), vs EBITDA once professional management is assumed.\nPAYBACK PERIOD = years of cash flow to recover the initial equity.\nQSBS §1202 = the federal capital-gains exclusion for qualified small-business C-corp stock held past a multi-year threshold.',
@@ -5580,7 +5580,7 @@ function performanceContent(){
     const n2=el('div','muted'); n2.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);line-height:1.5;'; n2.textContent=tw.note||''; wrap.appendChild(n2);
   } else wrap.appendChild(el('div','muted',tw.note||'Accruing snapshots…'));
   const x=el('div','muted'); x.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);';
-  x.textContent='Money-weighted views (WHEN capital moved): INSIGHTS → ATTRIBUTION (per-holding XIRR) · STRATEGIST (paper book IRR).';
+  x.textContent='Money-weighted views (WHEN capital moved): RISK · EXPOSURE → ATTRIBUTION (per-holding XIRR) · STRATEGIST (paper book IRR).';
   wrap.appendChild(x);
   const rf=el('button','mut-btn','REBUILD'); rf.style.cssText='margin-top:var(--space-2);';
   rf.onclick=()=>runJob('/api/run-performance', rf, 'building…');
@@ -7356,7 +7356,15 @@ function attentionContent(){
     const newTag=a.new?' <span style="color:var(--color-accent);font-size:var(--font-size-xs);font-weight:bold;">● NEW</span>':'';
     card.innerHTML=`<div style="font-size:var(--font-size-base);"><span style="color:${col[a.level]||'var(--muted)'};font-weight:bold;font-size:var(--font-size-xs);letter-spacing:1px;">${lab[a.level]||(a.level||'').toUpperCase()}</span> <span class="muted" style="font-size:var(--font-size-xs);">· ${a.category}</span>${newTag}</div>`+
       `<div style="font-size:var(--font-size-md);margin:2px 0;">${a.message}</div>`+
-      `<div class="muted" style="font-size:var(--font-size-xs);">→ ${a.where}</div>`;
+      `<div class="muted" style="font-size:var(--font-size-xs);">→ </div>`;
+    // The destination is a real link (tester feedback 2026-10-20): same jump the cockpit chips use.
+    const wh=card.lastElementChild;
+    if(a.tab){
+      const lnk=el('a'); lnk.textContent=a.where; lnk.href='#'; lnk.title='Open '+a.where;
+      lnk.style.cssText='color:var(--color-accent);text-decoration:underline;cursor:pointer;';
+      lnk.onclick=ev=>{ ev.preventDefault(); TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
+      wh.appendChild(lnk);
+    } else { wh.appendChild(document.createTextNode(a.where||'')); }
     wrap.appendChild(card);
   });
   const nn=el('div','muted'); nn.style.cssText='font-size:var(--font-size-sm);line-height:1.4;margin-top:var(--space-2);'; nn.textContent=A.note||''; wrap.appendChild(nn);
@@ -9808,7 +9816,7 @@ function pollJobs(){
 
 // Alerting/monitoring push layer (built 2026-07-18): poll /api/alerts and show a materiality-
 // filtered action/warn count in the header, visible from ANY tab — not just when you remember to
-// open INSIGHTS → ⚠ ATTENTION. `new` (unseen since the last time the panel was opened, see
+// open RISK · EXPOSURE → ⚠ ATTENTION. `new` (unseen since the last time the panel was opened, see
 // attentionContent()'s ack call) gets its own count so a genuinely fresh condition stands out
 // from one you've already seen and left open. Slower cadence than the job badge (this is a
 // point-in-time read of cached analysis, not something that changes second-to-second).

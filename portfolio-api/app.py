@@ -4874,6 +4874,27 @@ def _estate_doc_staleness(icfg=None):
     return rows
 
 
+# Where each ATTENTION item can send you (2026-10-20, tester feedback: the digest said "INSIGHTS → EXPOSURE" (a retired tab name)
+# -- there is no INSIGHTS tab; the top-level tab is labelled "RISK · EXPOSURE" -- and the hint wasn't
+# clickable). `tab`/`subtab` are the UI's own keys (TAB / SUBTAB in static/index.html), `label` is what a
+# user actually sees on screen. test_attention_links.py checks every entry against the real tab/sub-tab
+# definitions so a rename can't silently strand an alert again. Keyed by the short `tab.subtab` id the digest passes to add().
+_ALERT_DESTINATIONS = {
+    "insights.sizing": {"tab": "insights", "subtab": "sizing",      "label": "RISK · EXPOSURE → SIZING"},
+    "insights.exposure": {"tab": "insights", "subtab": "exposure",    "label": "RISK · EXPOSURE → EXPOSURE"},
+    "insights.risk": {"tab": "insights", "subtab": "risk",        "label": "RISK · EXPOSURE → RISK"},
+    "insights.drift": {"tab": "insights", "subtab": "drift",      "label": "RISK · EXPOSURE → POLICY · DRIFT"},
+    "research.briefs": {"tab": "research", "subtab": "briefs",      "label": "RESEARCH · IDEAS → B/S/H BRIEFS"},
+    "research.theses": {"tab": "research", "subtab": "theses",      "label": "RESEARCH · IDEAS → THESES · EXIT"},
+    "audits.grounding": {"tab": "audits",   "subtab": "grounding",   "label": "AUDITS · TAX·FEES → GROUNDING"},
+    "plan.assumptions": {"tab": "plan",     "subtab": "assumptions", "label": "PLAN · FI → ASSUMPTIONS"},
+    "plan.continuity": {"tab": "plan",     "subtab": "continuity",  "label": "PLAN · FI → CONTINUITY"},
+    "plan.vault": {"tab": "plan",     "subtab": "vault",       "label": "PLAN · FI → VAULT"},
+    "settings.iam": {"tab": "settings", "subtab": "iam", "label": "⚙ SETTINGS → IAM → EMERGENCY ACCESS"},
+    "settings.accounts": {"tab": "settings", "subtab": "accounts",    "label": "⚙ SETTINGS → ACCOUNTS"},
+}
+
+
 def _alerts_digest():
     """Alerting/monitoring layer (Tier 4 roadmap item, built 2026-07-18 — was explicitly deferred
     pending the G4 risk suite, which is now live). Materiality-filtered, not a raw dump: only
@@ -4886,32 +4907,36 @@ def _alerts_digest():
     alerts = []
 
     def add(level, cat, msg, where):
-        alerts.append({"level": level, "category": cat, "message": msg, "where": where})
+        dest = _ALERT_DESTINATIONS.get(where)
+        a = {"level": level, "category": cat, "message": msg, "where": (dest["label"] if dest else where)}
+        if dest:                       # lets the UI make the hint a real link
+            a["tab"], a["subtab"] = dest["tab"], dest["subtab"]
+        alerts.append(a)
 
     # 0) Earnings on holdings this week (P1 adoption — event awareness beats cron-only research)
     for e in _earnings_this_week():
         est = f", est EPS {e['eps_estimate']}" if e.get("eps_estimate") is not None else ""
         add("info", "Earnings",
             f"{e['ticker']} reports {e.get('date')}{(' (' + e['hour'] + ')') if e.get('hour') else ''}{est} "
-            "— expect volatility; a post-print brief refresh is worth queuing", "RESEARCH → BRIEFS")
+            "— expect volatility; a post-print brief refresh is worth queuing", "research.briefs")
 
     # 1) Exit discipline — tripped thesis triggers (G14)
     for e in ((_read_theses_eval() or {}).get("evaluations") or []):
         if e.get("tripped_count", 0) > 0:
             add("action", "Exit discipline",
                 f"{e.get('ticker')}: {e.get('action')} — {', '.join(e.get('tripped_labels') or [])}",
-                "RESEARCH → THESES")
+                "research.theses")
     # 2) Position sizing — single-name loss-budget breaches (G7)
     for r in (((_read_sizing() or {}).get("loss_budget") or {}).get("positions") or []):
         if r.get("over_budget"):
             add("warn", "Position sizing",
                 f"{r.get('ticker')} exceeds the single-name CVaR loss budget "
                 f"(at-risk {r.get('at_risk_pct_of_nw')}% of net worth; suggested trim "
-                f"${(r.get('suggested_trim') or 0):,.0f})", "INSIGHTS → SIZING")
+                f"${(r.get('suggested_trim') or 0):,.0f})", "insights.sizing")
     # 3) Concentration + macro stress (G4 / exposure)
     ex = _read_exp() or {}
     for f in ((ex.get("concentration") or {}).get("flags") or []):
-        add("warn", "Concentration", f, "INSIGHTS → EXPOSURE")
+        add("warn", "Concentration", f, "insights.exposure")
     ms = ex.get("macro_stress") or {}
     scen = ms.get("scenarios") or []
     if scen:
@@ -4919,12 +4944,12 @@ def _alerts_digest():
         if (worst.get("pct_impact") or 0) <= -20:
             add("info", "Stress", f"Worst modeled macro scenario '{worst.get('name')}': "
                 f"{worst.get('pct_impact')}% ({usd_neg(worst.get('dollar_impact'))})",
-                "INSIGHTS → EXPOSURE")
+                "insights.exposure")
     # 4) Data grounding staleness (G13)
     try:
         for a in grounding.alerts():
             if a.get("level") in ("stale", "action"):
-                add("action", "Data grounding", a.get("msg"), "AUDITS → GROUNDING")
+                add("action", "Data grounding", a.get("msg"), "audits.grounding")
     except Exception:
         pass
     # 5) Drift-band breach — policy allocation (by type) + IPS sleeve, vs the drift_threshold_pct
@@ -4937,20 +4962,20 @@ def _alerts_digest():
                 verb = "over" if (a.get("drift_pct") or 0) > 0 else "under"
                 add("warn", "Drift", f"{a['type']} is {abs(a['drift_pct'])}pts {verb} target "
                     f"({a['actual_pct']}% vs {a['target_pct']}%, ~${abs(a.get('drift_usd') or 0):,.0f})",
-                    "INSIGHTS → POLICY · DRIFT")
+                    "insights.drift")
         for a in (rb.get("ips_allocation") or []):
             if a.get("flag"):
                 verb = "over" if (a.get("drift_pct") or 0) > 0 else "under"
                 add("warn", "Drift", f"IPS sleeve {a['sleeve']} is {abs(a['drift_pct'])}pts {verb} "
                     f"target ({a['actual_pct']}% vs {a['target_pct']}%, ~${abs(a.get('drift_usd') or 0):,.0f})",
-                    "INSIGHTS → POLICY · DRIFT")
+                    "insights.drift")
     except Exception:
         pass
     # 6) Risk-regime change — realized vol vs the book's own trailing baseline (new 2026-07-18).
     try:
         reg = _vol_regime_signal()
         if reg and reg.get("flag"):
-            add(reg["level"], "Risk regime", reg["msg"], "INSIGHTS → RISK")
+            add(reg["level"], "Risk regime", reg["msg"], "insights.risk")
     except Exception:
         pass
     # 7) Setup completeness — state of residence unconfirmed (RESUME-TRACKER item 8, found
@@ -4963,7 +4988,7 @@ def _alerts_digest():
                 "State of residence isn't set and no tracked real-estate account gave a state "
                 "to auto-detect — Estate, ACA, Tax, and Cash·Debt are all showing TEXAS "
                 "assumptions (community property, TOD deeds, Medicaid gap) as a GUESS, not a "
-                "confirmed fact. Set it once in ASSUMPTIONS.", "PLAN → ASSUMPTIONS")
+                "confirmed fact. Set it once in ASSUMPTIONS.", "plan.assumptions")
     except Exception:
         pass
     # 8) Estate document currency (GAP-8) — G13-style recurring staleness tripwire, not a
@@ -4975,12 +5000,12 @@ def _alerts_digest():
             if row["status"] == "missing":
                 add("info", "Estate hygiene",
                     f"{label}: no review date on file — record when it was last reviewed "
-                    "(or confirm it doesn't apply) in PLAN → CONTINUITY.", "PLAN → CONTINUITY")
+                    "(or confirm it doesn't apply) in PLAN → CONTINUITY.", "plan.continuity")
             elif row["status"] == "stale":
                 add("warn", "Estate hygiene",
                     f"{label}: last reviewed {row['last_reviewed']} ({row['years_since']}y ago, "
                     f"cadence is {row['cadence_years']}y) — due for a look, sooner if a life "
-                    "event happened since (marriage, divorce, birth, death, move).", "PLAN → CONTINUITY")
+                    "event happened since (marriage, divorce, birth, death, move).", "plan.continuity")
     except Exception:
         pass
 
@@ -4990,20 +5015,20 @@ def _alerts_digest():
             for _pi in plaid_integration.public_items():
                 if _pi.get("status") == "login_required":
                     add("action", "Plaid", f"{_pi.get('institution') or 'A connected institution'} needs you to log in "
-                        "again (SETTINGS → ACCOUNTS → Plaid → RECONNECT) — its balances are not updating", "SETTINGS → ACCOUNTS")
+                        "again (SETTINGS → ACCOUNTS → Plaid → RECONNECT) — its balances are not updating", "settings.accounts")
     except Exception:
         pass
     # TASK-002: emergency kit staleness + an open emergency request (visible from the cockpit)
     try:
         _ks = kit.stale_alert()
         if _ks:
-            add("warn", "Emergency kit", _ks + " — generate a fresh kit", "PLAN → VAULT")
+            add("warn", "Emergency kit", _ks + " — generate a fresh kit", "plan.vault")
         _er = emergency.open_request()
         if _er and _er["status"] == "pending":
             add("action", "Emergency access",
                 f"An emergency-access request is pending and will be granted automatically unless you deny it "
                 f"(by {time.strftime('%Y-%m-%d %H:%M', time.localtime(_er['requested_at'] + _er['wait_seconds']))})",
-                "SETTINGS → IAM → EMERGENCY ACCESS")
+                "settings.iam")
     except Exception:
         pass
 
