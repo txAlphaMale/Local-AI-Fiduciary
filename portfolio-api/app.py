@@ -2341,6 +2341,51 @@ def _enqueue(kind, source="manual"):
     _JOB_Q.put(jid)
     return jid, True
 
+# ---- persisted run history (2026-10-21): the in-memory _JOBS ring is wiped by every restart/deploy, which made
+# "how long did this take last time?" unanswerable for weekly/monthly jobs. A small per-kind list (last 10 runs) lives
+# in the store instead, so TASK SCHEDULE can show last/typical duration and warn about overlaps.
+JOB_HISTORY_FILE = os.environ.get("JOB_HISTORY_FILE", "/data/job_history.json")
+_JOB_HISTORY_KEEP = 10
+_JOB_HISTORY_LOCK = threading.Lock()
+
+
+def _read_job_history():
+    try:
+        h = store.read_json_strict(JOB_HISTORY_FILE) or {}
+    except Exception:
+        h = {}
+    return h if isinstance(h, dict) else {}
+
+
+def _record_job_run(kind, started, finished, status, source):
+    """Append one finished run (done or error) for `kind`. Never raises -- history must not break a job."""
+    if not started or not finished:
+        return
+    try:
+        with _JOB_HISTORY_LOCK:
+            h = _read_job_history()
+            runs = [r for r in (h.get(kind) or []) if isinstance(r, dict)]
+            runs.append({"started": int(started), "finished": int(finished), "status": status, "source": source})
+            h[kind] = runs[-_JOB_HISTORY_KEEP:]
+            store.write_json(JOB_HISTORY_FILE, h)
+    except Exception as e:
+        print(f"[jobs] could not record run history for {kind}: {type(e).__name__}", flush=True)
+
+
+def _history_summary(runs, n=5):
+    """-> {"last": {...}|None, "typical_seconds": median of the last n DONE runs | None, "runs": int}"""
+    runs = [r for r in (runs or []) if isinstance(r, dict) and r.get("started") and r.get("finished")]
+    last = runs[-1] if runs else None
+    durs = sorted(r["finished"] - r["started"] for r in runs if r.get("status") == "done")[-n:] if runs else []
+    typical = None
+    if durs:
+        mid = len(durs) // 2
+        typical = durs[mid] if len(durs) % 2 else (durs[mid - 1] + durs[mid]) / 2.0
+    return {"last": ({"finished": last["finished"], "seconds": last["finished"] - last["started"],
+                      "status": last.get("status"), "source": last.get("source")} if last else None),
+            "typical_seconds": (round(typical) if typical is not None else None), "runs": len(runs)}
+
+
 def _job_worker():
     while True:
         jid = _JOB_Q.get()
@@ -2357,6 +2402,7 @@ def _job_worker():
             rec["status"] = "error"; rec["error"] = str(e)[:300]
         finally:
             rec["finished"] = int(time.time())
+            _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
 
 threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
 
@@ -2373,8 +2419,8 @@ def _job_typical_seconds(kind, jobs, exclude_id=None, n=5):
         if j["kind"] == kind and j["id"] != exclude_id and j["status"] == "done"
         and j.get("started") and j.get("finished")
     )
-    if not durs:
-        return None
+    if not durs:                                   # nothing in memory (fresh restart): use the persisted history
+        return _history_summary(_read_job_history().get(kind)).get("typical_seconds")
     durs = durs[-n:]
     mid = len(durs) // 2
     return durs[mid] if len(durs) % 2 else (durs[mid - 1] + durs[mid]) / 2.0
@@ -2447,7 +2493,7 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist"]
+_SCHEDULE_ORDER = ["analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
 _SCHEDULE_DEFAULTS = {
     "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 21, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
@@ -2521,18 +2567,51 @@ def _warn_if_edgar_misconfigured():
 threading.Thread(target=_warn_if_edgar_misconfigured, daemon=True, name="edgar-cfg-warn").start()
 
 
+def _fires_on(s, day):
+    return _sched_match(s["dom"], day.day) and _sched_match(s["dow"], day.weekday())
+
+
+def _schedule_conflicts(sched, typical, days=14, today=None):
+    """Which jobs are expected to still be running when another job is due? Looks at the next `days` days using each job's
+    TYPICAL duration (median of recent runs; jobs with no history are skipped -- nothing to base a warning on). The job
+    queue is serial, so "overlap" really means the later job waits and starts late. -> {kind: [{"with","day","due","ends"}]}"""
+    today = today or datetime.date.today()
+    out = {}
+    for d in range(days):
+        day = today + datetime.timedelta(days=d)
+        starts = {k: datetime.datetime.combine(day, datetime.time(s["hour"], s["minute"])) for k, s in sched.items() if _fires_on(s, day)}
+        for a, sa in starts.items():
+            dur = typical.get(a)
+            if not dur:
+                continue
+            ea = sa + datetime.timedelta(seconds=dur)
+            for b, sb in starts.items():
+                if b != a and sa <= sb < ea and not any(c["with"] == b for c in out.get(a, [])):
+                    out.setdefault(a, []).append({"with": b, "day": sb.strftime("%a"), "due": sb.strftime("%H:%M"),
+                                                  "ends": ea.strftime("%H:%M")})
+    return out
+
+
 @app.get("/api/schedule")
 def get_schedule():
-    """The built-in job timetable: each automated job with its (overridable) 24h time,
-    cadence, and whether it's still on the default. Cheap: reads one small file."""
+    """The built-in job timetable: each automated job with its (overridable) 24h time, cadence, whether it's still on the
+    default, how long it took the last time it ran, its typical duration, and any expected overlap with another job.
+    Cheap: reads two small files."""
     sched = _read_schedule()
+    hist = _read_job_history()
+    summ = {k: _history_summary(hist.get(k)) for k in _SCHEDULE_ORDER}
+    typical = {k: v["typical_seconds"] for k, v in summ.items() if v["typical_seconds"]}
+    conflicts = _schedule_conflicts(sched, typical)
+    labels = {k: sched[k]["label"] for k in sched}
     jobs = []
     for k in _SCHEDULE_ORDER:
         s, dflt = sched[k], _SCHEDULE_DEFAULTS[k]
         jobs.append({"kind": k, "label": s["label"], "cadence": s["cadence"],
                      "hour": s["hour"], "minute": s["minute"],
                      "default_hour": dflt["hour"], "default_minute": dflt["minute"],
-                     "is_default": (s["hour"] == dflt["hour"] and s["minute"] == dflt["minute"])})
+                     "is_default": (s["hour"] == dflt["hour"] and s["minute"] == dflt["minute"]),
+                     "last_run": summ[k]["last"], "typical_seconds": summ[k]["typical_seconds"], "runs": summ[k]["runs"],
+                     "conflicts": [dict(c, with_label=labels.get(c["with"], c["with"])) for c in conflicts.get(k, [])]})
     return {"scheduler_enabled": INTERNAL_SCHEDULER, "tz": os.environ.get("TZ", ""), "jobs": jobs}
 
 
@@ -5353,8 +5432,10 @@ def get_backtest():
 
 @app.post("/api/run-backtest")
 def run_backtest_ep():
-    threading.Thread(target=_do_backtest, daemon=True).start()
-    return {"status": "started"}
+    # Through the serial job queue (like the scheduled run), so a manual run is serialized with other jobs, shows in
+    # /api/jobs and lands in the run history that TASK SCHEDULE reports. Used to be a bare thread.
+    jid, created = _enqueue("backtest", source="manual")
+    return {"status": "started" if created else "already queued or running", "job_id": jid}
 
 
 @app.get("/api/gpu")
