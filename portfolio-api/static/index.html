@@ -200,6 +200,9 @@
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);
     border-bottom:1px solid var(--color-border-strong);padding-bottom:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;}
   .brand{color:var(--color-accent);letter-spacing:2px;font-size:15px;font-weight:700;}
+  .brand a{color:inherit;text-decoration:none;cursor:pointer;}
+  .brand a:hover{text-decoration:underline;text-underline-offset:3px;}
+  .brand a:focus-visible{outline:2px solid var(--color-accent);outline-offset:3px;border-radius:2px;}
   .brand small{color:var(--color-text-dim);letter-spacing:1px;font-weight:400;font-size:var(--font-size-base);margin-left:var(--space-2);}
   .topstats{display:flex;gap:var(--space-6);flex-wrap:wrap;align-items:baseline;}
   .ts{display:flex;flex-direction:column;}
@@ -337,7 +340,7 @@
 <body>
 <div class="wrap">
   <div class="topbar">
-    <div class="brand">PORTFOLIO TERMINAL<small id="meta">loading…</small></div>
+    <div class="brand"><a id="brand-home" href="./" title="Go to the dashboard">PORTFOLIO TERMINAL</a><small id="meta">loading…</small></div>
     <div class="topstats" id="stats"></div>
     <div class="controls">
       <span id="attn" style="font-size:var(--font-size-base);cursor:pointer;" title="materiality-filtered alerts — click to open"></span>
@@ -920,6 +923,11 @@ let SUBORDER={}; try{ SUBORDER=JSON.parse(localStorage.getItem('fidSubOrder')||'
 // Which paper-trading scenario the STRATEGIST tab is currently viewing (2026-07-23, multi-scenario
 // ledgers) — remembered across reloads; null until the first load() resolves the server's default.
 let CURRENT_SCENARIO_ID=null; try{ CURRENT_SCENARIO_ID=localStorage.getItem('fidScenarioId')||null; }catch(_){ CURRENT_SCENARIO_ID=null; }
+// The title in the top-left is a real link to the dashboard (tester request 2026-10-21). A plain click is handled in-page (no reload,
+// and it works from any tab, including SETTINGS); ctrl/shift/middle-click fall through to the browser, which opens the app root.
+(function(){ const a=document.getElementById('brand-home'); if(!a) return;
+  a.addEventListener('click',e=>{ if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||e.button!==0) return; e.preventDefault();
+    TAB='dashboard'; render(); try{ window.scrollTo(0,0); }catch(_){} }); })();
 function setSubtab(panel,key){ SUBTAB[panel]=key; try{ localStorage.setItem('fidSubtab',JSON.stringify(SUBTAB)); }catch(_){} render(); }
 // Drag-reorder for tab bars, browser-tab style: the tabs rearrange LIVE under the pointer while you hold the mouse, and
 // the order is saved when you let go (Esc / dropping outside the bar puts everything back). History: the first version
