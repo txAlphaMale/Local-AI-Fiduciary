@@ -95,6 +95,26 @@ class TestAppWiring(unittest.TestCase):
             self.assertEqual(appmod._tavily_call("q", 7, 3)["via"], "mcpo")
         legacy.assert_called_once()
 
+    def test_direct_failure_falls_back_to_mcpo_except_for_key_and_plan_errors(self):
+        legacy_ok = {"ok": True, "articles": [{"title": "L"}], "text": "Title: L\n", "http": 200, "detail": "", "via": "mcpo"}
+        for http in (400, 502, None):
+            bad = {"ok": False, "articles": [], "http": http, "detail": "direct broke"}
+            with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
+                 mock.patch.object(appmod, "_tavily_via_mcpo", return_value=dict(legacy_ok)):
+                r = appmod._tavily_call("q", 7, 3)
+            self.assertEqual((r["ok"], r["via"], r["direct_detail"]), (True, "mcpo-fallback", "direct broke"), http)
+        for http in (401, 429, 432, 433):
+            bad = {"ok": False, "articles": [], "http": http, "detail": "key/plan"}
+            with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
+                 mock.patch.object(appmod, "_tavily_via_mcpo") as legacy:
+                r = appmod._tavily_call("q", 7, 3)
+            self.assertEqual((r["ok"], r["via"]), (False, "direct")); legacy.assert_not_called()
+        bad = {"ok": False, "articles": [], "http": 400, "detail": "direct broke"}
+        with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
+             mock.patch.object(appmod, "_tavily_via_mcpo", return_value={"ok": False, "articles": [], "http": 404, "detail": "mcpo 404", "via": "mcpo"}):
+            r = appmod._tavily_call("q", 7, 3)
+        self.assertEqual((r["ok"], r["detail"]), (False, "direct broke"))        # both failed: report the DIRECT error
+
     def test_legacy_mcpo_path_still_parses_text_and_reports_404_clearly(self):
         text = "Title: Hello\nURL: http://x\nContent: body\n"
         with mock.patch.object(appmod.requests, "post", return_value=Resp(200, None, text)):

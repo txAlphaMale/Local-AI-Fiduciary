@@ -6134,6 +6134,17 @@ def _tavily_call(query, days, max_results):
         res = tavily_client.search(query, days, max_results)
         res["text"] = tavily_client.as_text(res["articles"]) if res["ok"] else ""
         res["via"] = "direct"
+        # TRANSITION SAFETY NET: a failure that is NOT about the key/plan (bad request, 5xx, network, odd reply) is
+        # retried through the old mcpo helper, so a surprise in the new path cannot take news down. Key/limit errors
+        # (401/429/432/433) would fail identically there, so they are reported as they are. The direct error is kept
+        # in "direct_detail" so the TEST button and logs still show that the fallback was needed.
+        if not res["ok"] and res.get("http") not in (401, 429, 432, 433):
+            legacy = _tavily_via_mcpo(query, days, max_results)
+            if legacy["ok"]:
+                legacy["via"] = "mcpo-fallback"
+                legacy["direct_detail"] = res["detail"]
+                print(f"[news] direct Tavily call failed ({res['detail'][:120]}); answered via the legacy mcpo helper", flush=True)
+                return legacy
         return res
     return _tavily_via_mcpo(query, days, max_results)
 
@@ -12619,7 +12630,8 @@ def get_news_status(request: Request, probe: int = 0):
         res = _tavily_call("SPY stock news", 3, 1)
         _news_note(res["ok"], None if res["ok"] else res["detail"], "probe")
         out["probe"] = {"ok": res["ok"], "via": res["via"], "http": res["http"],
-                        **({"articles": len(res["articles"])} if res["ok"] else {"detail": res["detail"]})}
+                        **({"articles": len(res["articles"])} if res["ok"] else {"detail": res["detail"]}),
+                        **({"direct_detail": res["direct_detail"]} if res.get("direct_detail") else {})}
         out["probe"]["ms"] = int((time.time() - t0) * 1000)
     with _NEWS_DIAG_LOCK:
         diag = dict(_NEWS_DIAG)
