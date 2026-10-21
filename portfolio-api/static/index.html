@@ -1417,7 +1417,7 @@ W('continuity','Planning','Continuity binder + document currency',
   'Fill in the contacts, executor/will-location fields, and each document\'s last-reviewed year once — that\'s the part the app can\'t infer from your accounts. The 3-year cadence is a hygiene reminder, not a legal deadline: the real trigger to re-review any of these is a life event (marriage, divorce, birth, death, home purchase/sale, move to a new state) whenever it happens, cadence or not. Print a copy and put it somewhere a survivor or co-executor would actually find it; this is decision-support, not a substitute for the actual will/POA/trust documents, which still need a licensed attorney.');
 W('theme','Automation','Theme (color palette)',
   'Eight built-in color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders), DAYLIGHT (light mode), and the four CATPPUCCIN flavors (LATTE, light; FRAPPÉ/MACCHIATO/MOCHA, dark) — plus any CUSTOM themes you make. A theme is just 12 colors (page background, panel, alternate panel, two border strengths, accent, three text shades, and positive / negative / info), swapped by overriding CSS variables, so the whole app re-colors at once.',
-  'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices). To make your own: under CUSTOM THEME pick a theme to start from and press NEW CUSTOM THEME. Each of the 12 colors has a color-picker wheel, a HEX box, R/G/B boxes and HUE / SAT / LIGHT sliders — change any of them and the others follow, and the whole app previews the change live. The READABILITY line shows contrast ratios; 4.5 or higher keeps small text legible, and a ⚠ marks a pair that is hard to read. Name it and press SAVE THEME; it then shows up with a ★ among the theme cards, where you can EDIT, EXPORT (copies it as text) or DELETE it. IMPORT… on another browser pastes an exported theme in.',
+  'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices). To make your own: under CUSTOM THEME pick a theme to start from and press NEW CUSTOM THEME. Each of the 12 colors is listed with its swatch and HEX value; press CUSTOMIZE… (or click the swatch) to open a color dialog. In it, click or drag on the color wheel to pick a color close to what you want (hue goes around the wheel, saturation increases toward the rim, and the LIGHT slider darkens or lightens the whole wheel), then fine-tune with the HEX box, the R/G/B numbers or the HUE / SAT / LIGHT sliders — they all stay in sync. The wheel also works from the keyboard (arrow keys; hold Shift for bigger steps). ORIGINAL and NEW swatches sit side by side, two readability checks show how the color reads as text and behind your main text, and the whole app previews the change live behind the dialog. APPLY COLOR keeps it; CANCEL, Esc, or a click outside the dialog undoes the preview; RESET returns to the starting color. The READABILITY line shows contrast ratios; 4.5 or higher keeps small text legible, and a ⚠ marks a pair that is hard to read. Name it and press SAVE THEME; it then shows up with a ★ among the theme cards, where you can EDIT, EXPORT (copies it as text) or DELETE it. IMPORT… on another browser pastes an exported theme in.',
   'Purely cosmetic — pick whichever is easiest on your eyes/lighting. Custom themes live in this browser only; use EXPORT / IMPORT to move one to another device. If a built-in or custom palette ever looks wrong somewhere, that is a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
   'Options math on the concentrated names: a COVERED CALL sells the upside above a strike for cash now (income + assignment probability shown); a COLLAR buys a ~10% protective put funded by selling a call (floor and cap shown, often near zero net cost). Chains are delayed Yahoo data; deltas are computed locally from each contract\'s implied volatility.',
@@ -3761,11 +3761,141 @@ function presetValues(key){                // read a preset's values straight fr
   if(THEME_EDIT) setInlineTheme(THEME_EDIT.vars); else if(THEME.slice(0,7)==='custom:'){ const c=loadCustomThemes()[THEME.slice(7)]; if(c) setInlineTheme(c); }
   return vals;
 }
+// ---- Color dialog: a framed page for ONE color. A click-to-pick colour wheel (hue around, saturation outward, drawn at the
+// current lightness) plus HEX / R,G,B / H,S,L controls to fine-tune. The dialog uses fixed neutral colours of its own so it
+// stays readable while the app behind it is being recoloured by the live preview.
+function wheelHitToHs(dx,dy,r){                 // pointer offset from the wheel centre -> {h,s}
+  const d=Math.min(Math.hypot(dx,dy), r); let h=Math.atan2(dy,dx)*180/Math.PI; if(h<0) h+=360;
+  return {h:h, s:r>0?d/r*100:0};
+}
+function wheelHsToXY(h,sat,r){ const a=h*Math.PI/180, d=Math.max(0,Math.min(100,sat))/100*r; return {x:Math.cos(a)*d, y:Math.sin(a)*d}; }
+function openColorDialog(spec, startHex, onApply, onPreview, onCancel){
+  const prior=document.getElementById('color-dialog'); if(prior) prior.remove();
+  const D='#1c1d22', P='#26272e', T='#ececf1', M='#9a9cab', B='#43454f';
+  let [R0,G0,B0]=hexToRgb(startHex); let [H,S,L]=rgbToHsl(R0,G0,B0); const orig=startHex.toLowerCase();
+  const hex=()=>{ const [r,g,b]=hslToRgb(H,S,L); return rgbToHex(r,g,b); };
+  const back=document.createElement('div'); back.id='color-dialog';
+  back.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;';
+  const dlg=document.createElement('div'); dlg.setAttribute('role','dialog'); dlg.setAttribute('aria-modal','true'); dlg.setAttribute('aria-label','Customize '+spec.label);
+  dlg.style.cssText=`background:${D};color:${T};border:1px solid ${B};border-radius:8px;padding:16px 18px;width:min(560px,100%);box-shadow:0 10px 40px rgba(0,0,0,0.6);font-family:inherit;font-size:12px;`;
+  const title=document.createElement('div'); title.style.cssText='font-size:14px;letter-spacing:1px;margin-bottom:2px;'; title.textContent='Customize: '+spec.label;
+  const sub=document.createElement('div'); sub.style.cssText=`color:${M};font-size:11px;margin-bottom:12px;`; sub.textContent=spec.hint+' · '+spec.v;
+  dlg.appendChild(title); dlg.appendChild(sub);
+  const body=document.createElement('div'); body.style.cssText='display:flex;gap:18px;flex-wrap:wrap;';
+  dlg.appendChild(body);
+
+  // wheel column
+  const left=document.createElement('div'); left.style.cssText='display:flex;flex-direction:column;align-items:center;gap:8px;';
+  const SZ=216, RAD=SZ/2-2;
+  const cv=document.createElement('canvas'); cv.width=SZ; cv.height=SZ; cv.tabIndex=0; cv.setAttribute('aria-label','Color wheel: arrow left/right changes hue, up/down changes saturation');
+  cv.style.cssText='touch-action:none;cursor:crosshair;border-radius:50%;outline-offset:3px;';
+  left.appendChild(cv);
+  const wl=document.createElement('div'); wl.style.cssText=`color:${M};font-size:10px;`; wl.textContent='click or drag on the wheel'; left.appendChild(wl);
+  body.appendChild(left);
+
+  // controls column
+  const right=document.createElement('div'); right.style.cssText='flex:1;min-width:230px;display:flex;flex-direction:column;gap:8px;';
+  body.appendChild(right);
+  const inpCss=`background:${P};color:${T};border:1px solid ${B};border-radius:3px;padding:3px 5px;font-size:12px;`;
+  const mkNum=(max)=>{ const i=document.createElement('input'); i.type='number'; i.min=0; i.max=max; i.style.cssText=inpCss+'width:58px;'; return i; };
+  const lbl=(t)=>{ const x=document.createElement('span'); x.style.cssText=`color:${M};font-size:10px;letter-spacing:1px;width:34px;display:inline-block;`; x.textContent=t; return x; };
+  const line=(...kids)=>{ const d=document.createElement('div'); d.style.cssText='display:flex;align-items:center;gap:6px;'; kids.forEach(k=>d.appendChild(k)); return d; };
+
+  const cmp=document.createElement('div'); cmp.style.cssText='display:flex;gap:8px;align-items:stretch;';
+  const mkChip=(t)=>{ const c=document.createElement('div'); c.style.cssText=`flex:1;border:1px solid ${B};border-radius:4px;overflow:hidden;`; const sw=document.createElement('div'); sw.style.cssText='height:34px;'; const cap=document.createElement('div'); cap.style.cssText=`font-size:10px;color:${M};padding:2px 6px;display:flex;justify-content:space-between;`; const a=document.createElement('span'); a.textContent=t; const b=document.createElement('span'); cap.appendChild(a); cap.appendChild(b); c.appendChild(sw); c.appendChild(cap); return {c,sw,val:b}; };
+  const oChip=mkChip('ORIGINAL'), nChip=mkChip('NEW'); oChip.sw.style.background=orig; oChip.val.textContent=orig;
+  cmp.appendChild(oChip.c); cmp.appendChild(nChip.c); right.appendChild(cmp);
+
+  const hexIn=document.createElement('input'); hexIn.maxLength=7; hexIn.placeholder='#rrggbb'; hexIn.style.cssText=inpCss+'width:86px;font-family:monospace;';
+  right.appendChild(line(lbl('HEX'),hexIn));
+  const rI=mkNum(255), gI=mkNum(255), bI=mkNum(255);
+  right.appendChild(line(lbl('RGB'),rI,gI,bI));
+  const mkSld=(max)=>{ const i=document.createElement('input'); i.type='range'; i.min=0; i.max=max; i.style.cssText='flex:1;min-width:90px;'; return i; };
+  const hS=mkSld(360), sS=mkSld(100), lS=mkSld(100);
+  const hV=document.createElement('span'), sV=document.createElement('span'), lV=document.createElement('span');
+  [hV,sV,lV].forEach(x=>{ x.style.cssText=`color:${M};font-size:10px;width:36px;text-align:right;`; });
+  right.appendChild(line(lbl('HUE'),hS,hV)); right.appendChild(line(lbl('SAT'),sS,sV)); right.appendChild(line(lbl('LIGHT'),lS,lV));
+
+  const samp=document.createElement('div'); samp.style.cssText='display:flex;gap:8px;';
+  const mkSamp=()=>{ const d=document.createElement('div'); d.style.cssText=`flex:1;border:1px solid ${B};border-radius:4px;padding:6px 8px;font-size:11px;line-height:1.35;`; return d; };
+  const s1=mkSamp(), s2=mkSamp(); samp.appendChild(s1); samp.appendChild(s2); right.appendChild(samp);
+
+  // buttons
+  const btns=document.createElement('div'); btns.style.cssText='display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;';
+  const mkBtn=(t,primary)=>{ const b=document.createElement('button'); b.type='button'; b.textContent=t; b.style.cssText=`cursor:pointer;border-radius:4px;padding:5px 14px;font-size:12px;letter-spacing:1px;border:1px solid ${primary?'#e6b450':B};background:${primary?'#e6b450':P};color:${primary?'#1c1d22':T};`; return b; };
+  const reset=mkBtn('RESET'), cancel=mkBtn('CANCEL'), apply=mkBtn('APPLY COLOR',true);
+  btns.appendChild(reset); btns.appendChild(cancel); btns.appendChild(apply); dlg.appendChild(btns);
+  back.appendChild(dlg);
+
+  // ---- drawing
+  const ctx=cv.getContext('2d'); let cache=null, cacheL=-1;
+  const drawWheel=()=>{
+    if(cacheL!==Math.round(L)){
+      const img=ctx.createImageData(SZ,SZ), c=SZ/2; cacheL=Math.round(L);
+      for(let y=0;y<SZ;y++) for(let x=0;x<SZ;x++){
+        const dx=x+0.5-c, dy=y+0.5-c, d=Math.hypot(dx,dy), i=(y*SZ+x)*4;
+        if(d>RAD){ img.data[i+3]=0; continue; }
+        const hs=wheelHitToHs(dx,dy,RAD), rgb=hslToRgb(hs.h,hs.s,cacheL);
+        img.data[i]=rgb[0]; img.data[i+1]=rgb[1]; img.data[i+2]=rgb[2]; img.data[i+3]=255;
+      }
+      cache=img;
+    }
+    ctx.putImageData(cache,0,0);
+    const m=wheelHsToXY(H,S,RAD), mx=SZ/2+m.x, my=SZ/2+m.y;
+    ctx.beginPath(); ctx.arc(SZ/2,SZ/2,RAD,0,Math.PI*2); ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx,my,7,0,Math.PI*2); ctx.strokeStyle='#000'; ctx.lineWidth=3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx,my,7,0,Math.PI*2); ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+  };
+  const sync=(src)=>{
+    const h=hex(), [r,g,b]=hexToRgb(h);
+    nChip.sw.style.background=h; nChip.val.textContent=h;
+    if(src!=='hex') hexIn.value=h;
+    if(src!=='rgb'){ rI.value=r; gI.value=g; bI.value=b; }
+    if(src!=='sliders'){ hS.value=Math.round(H); sS.value=Math.round(S); lS.value=Math.round(L); }
+    hV.textContent=Math.round(H)+'°'; sV.textContent=Math.round(S)+'%'; lV.textContent=Math.round(L)+'%';
+    // readability of THIS colour: as text on the panel, and as a background behind the main text colour
+    const cur=(THEME_EDIT&&THEME_EDIT.vars)||{}; const panel=cur['--panel']||'#000000', txt=cur['--txt']||'#ffffff';
+    const c1=contrastRatio(h,panel), c2=contrastRatio(txt,h);
+    s1.style.background=panel; s1.style.color=h; s1.textContent='As text on the panel: Aa 123 '+c1.toFixed(1)+(c1>=4.5?' ✓':' ⚠');
+    s2.style.background=h; s2.style.color=txt; s2.textContent='Behind your main text: Aa 123 '+c2.toFixed(1)+(c2>=4.5?' ✓':' ⚠');
+    drawWheel();
+    if(onPreview) onPreview(h);
+  };
+  const fromRgbHex=(h)=>{ const [r,g,b]=hexToRgb(h), [nh,ns,nl]=rgbToHsl(r,g,b); if(ns>0.5) H=nh; S=ns; L=nl; };   // a grey has no hue: keep the last one
+
+  // ---- interaction
+  const pick=(e)=>{ const r=cv.getBoundingClientRect(); const k=SZ/r.width; const hs=wheelHitToHs((e.clientX-r.left)*k-SZ/2,(e.clientY-r.top)*k-SZ/2,RAD); H=hs.h; S=hs.s; sync('wheel'); };
+  let down=false;
+  cv.onpointerdown=e=>{ down=true; try{ cv.setPointerCapture(e.pointerId); }catch(_){} pick(e); e.preventDefault(); };
+  cv.onpointermove=e=>{ if(down) pick(e); };
+  cv.onpointerup=cv.onpointercancel=()=>{ down=false; };
+  cv.onkeydown=e=>{ const st=e.shiftKey?10:1; let used=true;
+    if(e.key==='ArrowLeft') H=(H-st+360)%360; else if(e.key==='ArrowRight') H=(H+st)%360;
+    else if(e.key==='ArrowUp') S=Math.min(100,S+st); else if(e.key==='ArrowDown') S=Math.max(0,S-st); else used=false;
+    if(used){ e.preventDefault(); sync('wheel'); } };
+  hexIn.oninput=()=>{ let v=hexIn.value.trim(); if(v[0]!=='#') v='#'+v; if(/^#[0-9a-f]{3}$/i.test(v)) v='#'+v.slice(1).split('').map(c=>c+c).join(''); if(hexOk(v)){ fromRgbHex(v); sync('hex'); } };
+  const fromRgb=()=>{ fromRgbHex(rgbToHex(rI.value,gI.value,bI.value)); sync('rgb'); };
+  [rI,gI,bI].forEach(i=>i.oninput=fromRgb);
+  const fromSl=()=>{ H=+hS.value; S=+sS.value; L=+lS.value; sync('sliders'); };
+  [hS,sS,lS].forEach(i=>i.oninput=fromSl);
+  reset.onclick=()=>{ fromRgbHex(orig); sync(); };
+  const close=()=>{ document.removeEventListener('keydown',onKey,true); back.remove(); };
+  const doCancel=()=>{ close(); if(onCancel) onCancel(); };
+  const doApply=()=>{ const h=hex(); close(); onApply(h); };
+  cancel.onclick=doCancel; apply.onclick=doApply;
+  const onKey=e=>{ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); doCancel(); }
+    else if(e.key==='Tab'){ const f=[...dlg.querySelectorAll('input,button,canvas')].filter(x=>!x.disabled); if(!f.length) return;
+      const first=f[0], last=f[f.length-1]; if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); } else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); } } };
+  document.addEventListener('keydown',onKey,true);
+  back.onmousedown=e=>{ if(e.target===back) doCancel(); };      // click outside = cancel (the preview is undone)
+  document.body.appendChild(back);
+  sync(); cv.focus();
+}
 function themeEditor(){
   const box=el('div'); box.style.cssText='margin-top:var(--space-5);border-top:1px solid var(--color-border);padding-top:var(--space-4);';
   box.appendChild(el('div','ph','CUSTOM THEME'));
   const help=el('div','muted'); help.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
-  help.textContent='Start from any theme, then change any color by picking it on the color wheel, typing a HEX code, entering RGB numbers, or sliding hue / saturation / lightness. Every change previews on the whole app immediately. Give it a name and SAVE; it then appears above with the other themes. Custom themes are stored in this browser only (use EXPORT / IMPORT to move one).';
+  help.textContent='Start from any theme, then press CUSTOMIZE next to any color. A color dialog opens with a color wheel to click on, plus HEX, RGB and hue / saturation / lightness controls to fine-tune it. Every change previews on the whole app immediately. Give it a name and SAVE; it then appears above with the other themes. Custom themes are stored in this browser only (use EXPORT / IMPORT to move one).';
   box.appendChild(help);
   if(!THEME_EDIT){
     const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;';
@@ -3814,36 +3944,21 @@ function themeEditor(){
   box.appendChild(cbox);
 
   const rows={};
-  const refresh=(v,src)=>{ const hex=E.vars[v], r=rows[v], [R,G,B]=hexToRgb(hex), [H,S,L]=rgbToHsl(R,G,B);
-    r.sw.style.background=hex;
-    if(src!=='wheel') r.wheel.value=hex;
-    if(src!=='hex') r.hex.value=hex;
-    if(src!=='rgb'){ r.r.value=R; r.g.value=G; r.b.value=B; }
-    if(src!=='hsl'){ r.h.value=Math.round(H); r.s.value=Math.round(S); r.l.value=Math.round(L); }
-    r.hl.textContent=Math.round(H)+'°'; r.sl.textContent=Math.round(S)+'%'; r.ll.textContent=Math.round(L)+'%'; };
-  const set=(v,hex,src)=>{ E.vars[v]=hex.toLowerCase(); setInlineTheme(E.vars); refresh(v,src); paintContrast(); };
+  const refresh=v=>{ const r=rows[v]; r.sw.style.background=E.vars[v]; r.hex.textContent=E.vars[v]; };
+  const set=(v,hex)=>{ E.vars[v]=hex.toLowerCase(); setInlineTheme(E.vars); refresh(v); paintContrast(); };
   THEME_VARS.forEach(t=>{
-    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-2) var(--space-3);flex-wrap:wrap;padding:var(--space-1) 0;border-bottom:1px solid var(--color-border);';
-    const lab=el('div'); lab.style.cssText='width:170px;'; const l1=el('div',null,t.label); l1.style.fontSize='var(--font-size-md)'; const l2=el('div','muted',t.hint+' · '+t.v); l2.style.fontSize='var(--font-size-xs)'; lab.appendChild(l1); lab.appendChild(l2); row.appendChild(lab);
-    const sw=el('span'); sw.style.cssText='display:inline-block;width:22px;height:22px;border-radius:3px;border:1px solid var(--color-border-strong);';
-    const wheel=document.createElement('input'); wheel.type='color'; wheel.title='open the color picker'; wheel.style.cssText='width:34px;height:26px;padding:0;border:none;background:none;cursor:pointer;';
-    const hex=document.createElement('input'); hex.maxLength=7; hex.placeholder='#rrggbb'; hex.style.width='76px';
-    const num=()=>{ const i=document.createElement('input'); i.type='number'; i.min=0; i.max=255; i.style.width='52px'; return i; };
-    const rI=num(), gI=num(), bI=num();
-    const sld=(max)=>{ const i=document.createElement('input'); i.type='range'; i.min=0; i.max=max; i.style.width='84px'; return i; };
-    const hI=sld(360), sI=sld(100), lI=sld(100);
-    const hl=el('span','muted'), sl=el('span','muted'), ll=el('span','muted'); [hl,sl,ll].forEach(x=>{ x.style.cssText='font-size:var(--font-size-xs);width:34px;display:inline-block;'; });
-    rows[t.v]={sw,wheel,hex,r:rI,g:gI,b:bI,h:hI,s:sI,l:lI,hl,sl,ll};
-    wheel.oninput=()=>set(t.v,wheel.value,'wheel');
-    hex.oninput=()=>{ let v=hex.value.trim(); if(v[0]!=='#') v='#'+v; if(/^#[0-9a-f]{3}$/i.test(v)) v='#'+v.slice(1).split('').map(c=>c+c).join(''); if(hexOk(v)) set(t.v,v,'hex'); };
-    const fromRgb=()=>set(t.v,rgbToHex(rI.value,gI.value,bI.value),'rgb');
-    [rI,gI,bI].forEach(i=>i.oninput=fromRgb);
-    const fromHsl=()=>{ const [R,G,B]=hslToRgb(+hI.value,+sI.value,+lI.value); set(t.v,rgbToHex(R,G,B),'hsl'); };
-    [hI,sI,lI].forEach(i=>i.oninput=fromHsl);
-    const grp=(label,...els)=>{ const g=el('span'); g.style.cssText='display:inline-flex;align-items:center;gap:3px;'; g.appendChild(el('span','muted',label)); els.forEach(x=>g.appendChild(x)); g.firstChild.style.fontSize='var(--font-size-xs)'; return g; };
-    row.appendChild(sw); row.appendChild(wheel); row.appendChild(hex);
-    row.appendChild(grp('R',rI)); row.appendChild(grp('G',gI)); row.appendChild(grp('B',bI));
-    row.appendChild(grp('HUE',hI,hl)); row.appendChild(grp('SAT',sI,sl)); row.appendChild(grp('LIGHT',lI,ll));
+    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-2) var(--space-3);flex-wrap:wrap;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border);';
+    const lab=el('div'); lab.style.cssText='width:200px;'; const l1=el('div',null,t.label); l1.style.fontSize='var(--font-size-md)'; const l2=el('div','muted',t.hint+' · '+t.v); l2.style.fontSize='var(--font-size-xs)'; lab.appendChild(l1); lab.appendChild(l2); row.appendChild(lab);
+    const sw=el('span'); sw.style.cssText='display:inline-block;width:34px;height:22px;border-radius:3px;border:1px solid var(--color-border-strong);cursor:pointer;'; sw.title='customize this color';
+    const hex=el('span'); hex.style.cssText='font-family:monospace;font-size:var(--font-size-md);width:70px;display:inline-block;';
+    const btn=el('button','mut-btn','CUSTOMIZE…'); btn.style.cssText='font-size:var(--font-size-sm);padding:2px 10px;';
+    const open=()=>openColorDialog(t, E.vars[t.v],
+      hexv=>set(t.v,hexv),                                              // APPLY
+      hexv=>{ setInlineTheme(Object.assign({},E.vars,{[t.v]:hexv})); },   // live preview while the dialog is open
+      ()=>{ setInlineTheme(E.vars); });                                 // CANCEL: back to what it was
+    sw.onclick=open; btn.onclick=open;
+    rows[t.v]={sw,hex};
+    row.appendChild(sw); row.appendChild(hex); row.appendChild(btn);
     box.appendChild(row);
     refresh(t.v);
   });
