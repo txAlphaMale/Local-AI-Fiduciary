@@ -542,9 +542,80 @@ let CHAT_PENDING_IMAGES = [];   // array of base64 strings (data-URL prefix kept
 const THEME_LIST=[{key:'amber',label:'AMBER TERMINAL'},{key:'cobalt',label:'COBALT'},{key:'highcontrast',label:'HIGH CONTRAST'},{key:'daylight',label:'DAYLIGHT'},
   {key:'catppuccin-latte',label:'CATPPUCCIN LATTE'},{key:'catppuccin-frappe',label:'CATPPUCCIN FRAPPÉ'},{key:'catppuccin-macchiato',label:'CATPPUCCIN MACCHIATO'},{key:'catppuccin-mocha',label:'CATPPUCCIN MOCHA'}];
 let THEME='amber'; try{ THEME=localStorage.getItem('fidTheme')||'amber'; }catch(_){ THEME='amber'; }
+// ---- Custom themes (2026-10-21, tester request): the 12 Tier-1 color primitives, edited by hex / RGB / HSL / the browser's
+// color picker, saved under a name in THIS browser (localStorage, sanitized on load; export/import to move them). A custom
+// theme is applied as inline custom properties on <html>, which beat every :root[data-theme] rule, so nothing else changes.
+const THEME_VARS=[
+  {v:'--bg',label:'Page background',hint:'behind everything'},{v:'--panel',label:'Panel / card',hint:'cards and tables'},
+  {v:'--panel2',label:'Panel, alternate',hint:'inset areas, rows'},{v:'--bd',label:'Border',hint:'thin dividers'},
+  {v:'--bd2',label:'Border, strong',hint:'card edges, emphasis'},{v:'--amber',label:'Accent',hint:'active tab, buttons, highlights'},
+  {v:'--txt',label:'Text',hint:'main text'},{v:'--mut',label:'Text, muted',hint:'labels, secondary text'},
+  {v:'--dim',label:'Text, dim',hint:'hints, disabled'},{v:'--grn',label:'Positive',hint:'gains, OK'},
+  {v:'--red',label:'Negative',hint:'losses, alerts'},{v:'--blu',label:'Info',hint:'links, neutral highlights'}];
+const THEME_OVERLAY_VARS=['--overlay-accent-weak','--overlay-accent-weaker','--overlay-positive-weak','--overlay-negative-weak','--overlay-info-weak','--overlay-white-weak'];
+const hexOk=v=>typeof v==='string' && /^#[0-9a-f]{6}$/i.test(v);
+function themeNameOk(n){
+  if(typeof n!=='string' || !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,29}$/.test(n)) return false;
+  return !THEME_LIST.some(t=>t.key===n.toLowerCase() || t.label.toLowerCase()===n.toLowerCase());
+}
+function hexToRgb(h){ return [1,3,5].map(i=>parseInt(h.slice(i,i+2),16)); }
+function rgbToHex(r,g,b){ return '#'+[r,g,b].map(x=>Math.max(0,Math.min(255,Math.round(+x||0))).toString(16).padStart(2,'0')).join(''); }
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b), l=(mx+mn)/2; let h=0, sat=0;
+  if(mx!==mn){ const d=mx-mn; sat=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    h=mx===r?((g-b)/d+(g<b?6:0)):(mx===g?((b-r)/d+2):((r-g)/d+4)); h*=60; }
+  return [h, sat*100, l*100];
+}
+function hslToRgb(h,sat,l){
+  h=((h%360)+360)%360; sat=Math.max(0,Math.min(100,sat))/100; l=Math.max(0,Math.min(100,l))/100;
+  const c=(1-Math.abs(2*l-1))*sat, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2; let r=0,g=0,b=0;
+  if(h<60){r=c;g=x;} else if(h<120){r=x;g=c;} else if(h<180){g=c;b=x;} else if(h<240){g=x;b=c;} else if(h<300){r=x;b=c;} else {r=c;b=x;}
+  return [(r+m)*255,(g+m)*255,(b+m)*255].map(Math.round);
+}
+function relLum(hex){ const [r,g,b]=hexToRgb(hex).map(v=>{ v/=255; return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4); }); return 0.2126*r+0.7152*g+0.0722*b; }
+function contrastRatio(a,b){ const la=relLum(a), lb=relLum(b); return (Math.max(la,lb)+0.05)/(Math.min(la,lb)+0.05); }
+// The translucent overlay tokens are tied to the signal colors, so they are derived from the custom palette
+// (same alphas the built-in themes use) instead of staying on the amber defaults.
+function themeOverlays(vs){
+  const a=(hex,al)=>{ const [r,g,b]=hexToRgb(hex); return `rgba(${r},${g},${b},${al})`; };
+  const light=relLum(vs['--bg'])>0.4;
+  return {'--overlay-accent-weak':a(vs['--amber'],0.13),'--overlay-accent-weaker':a(vs['--amber'],0.07),
+    '--overlay-positive-weak':a(vs['--grn'],0.12),'--overlay-negative-weak':a(vs['--red'],0.12),'--overlay-info-weak':a(vs['--blu'],0.12),
+    '--overlay-white-weak':light?'rgba(0,0,0,0.03)':'rgba(255,255,255,0.02)'};
+}
+function loadCustomThemes(){
+  const out={};
+  try{
+    const raw=JSON.parse(localStorage.getItem('fidCustomThemes')||'{}')||{};
+    Object.keys(raw).forEach(n=>{
+      if(!themeNameOk(n)) return;
+      const vs=(raw[n]&&raw[n].vars)||{}, clean={}; let ok=true;
+      THEME_VARS.forEach(t=>{ if(hexOk(vs[t.v])) clean[t.v]=vs[t.v].toLowerCase(); else ok=false; });
+      if(ok) out[n]=clean;
+    });
+  }catch(_){}
+  return out;
+}
+function saveCustomThemes(all){
+  const o={}; Object.keys(all).forEach(n=>{ o[n]={vars:all[n]}; });
+  try{ localStorage.setItem('fidCustomThemes', JSON.stringify(o)); return true; }catch(_){ return false; }
+}
+function setInlineTheme(vs){
+  const st=document.documentElement.style;
+  THEME_VARS.forEach(t=>{ if(hexOk(vs[t.v])) st.setProperty(t.v, vs[t.v]); });
+  const ov=themeOverlays(vs); Object.keys(ov).forEach(k=>st.setProperty(k, ov[k]));
+}
+function clearInlineTheme(){
+  const st=document.documentElement.style;
+  THEME_VARS.forEach(t=>st.removeProperty(t.v)); THEME_OVERLAY_VARS.forEach(k=>st.removeProperty(k));
+}
 function applyTheme(key){
   THEME=key||'amber';
-  if(THEME==='amber') document.documentElement.removeAttribute('data-theme');
+  clearInlineTheme();
+  let custom=null;
+  if(THEME.slice(0,7)==='custom:'){ custom=loadCustomThemes()[THEME.slice(7)]||null; if(!custom) THEME='amber'; }
+  if(custom){ document.documentElement.removeAttribute('data-theme'); setInlineTheme(custom); }
+  else if(THEME==='amber') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', THEME);
   try{ localStorage.setItem('fidTheme', THEME); }catch(_){}
 }
@@ -1345,9 +1416,9 @@ W('continuity','Planning','Continuity binder + document currency',
   'PLAN → CONTINUITY. The checklist up top is meant to be read first under stress; the document-currency table, account map, and debts below it are the supporting detail. Both sections regenerate from live data/config on every load, so neither can silently drift the way a one-time printed binder or a "I\'ll remember when I last updated my will" mental note would — though a PRINTED copy (🖶 PRINT button) obviously freezes at print time, so reprint after any major change. A stale or never-recorded document also surfaces on the ⚠ ATTENTION header badge (Estate hygiene category) so it doesn\'t require remembering to check this tab.',
   'Fill in the contacts, executor/will-location fields, and each document\'s last-reviewed year once — that\'s the part the app can\'t infer from your accounts. The 3-year cadence is a hygiene reminder, not a legal deadline: the real trigger to re-review any of these is a life event (marriage, divorce, birth, death, home purchase/sale, move to a new state) whenever it happens, cadence or not. Print a copy and put it somewhere a survivor or co-executor would actually find it; this is decision-support, not a substitute for the actual will/POA/trust documents, which still need a licensed attorney.');
 W('theme','Automation','Theme (color palette)',
-  'Eight color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders), DAYLIGHT (light mode), and the four CATPPUCCIN flavors (LATTE, light; FRAPPÉ/MACCHIATO/MOCHA, dark, in increasing darkness/contrast) — swapped by overriding a handful of CSS color variables. Nothing else changes: layout, spacing, and type sizes are identical across all eight, because every one of the app\'s ~700 styled elements reads its color through a shared token instead of a hardcoded value. The Catppuccin flavors use that project\'s official published palette (credited, with license link, at the bottom of this panel and in the CSS source) — see catppuccin.com.',
-  'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices).',
-  'Purely cosmetic — pick whichever is easiest on your eyes/lighting. This also doubles as proof the color system is centralized: if a future palette ever looks wrong somewhere, that\'s a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
+  'Eight built-in color palettes — AMBER TERMINAL (default), COBALT (blue accent, navy-tinted panels), HIGH CONTRAST (brighter text, stronger borders), DAYLIGHT (light mode), and the four CATPPUCCIN flavors (LATTE, light; FRAPPÉ/MACCHIATO/MOCHA, dark) — plus any CUSTOM themes you make. A theme is just 12 colors (page background, panel, alternate panel, two border strengths, accent, three text shades, and positive / negative / info), swapped by overriding CSS variables, so the whole app re-colors at once.',
+  'SETTINGS (⚙ gear) → THEME. Click a card to apply instantly — no reload, and the choice persists locally (this browser only, not synced across devices). To make your own: under CUSTOM THEME pick a theme to start from and press NEW CUSTOM THEME. Each of the 12 colors has a color-picker wheel, a HEX box, R/G/B boxes and HUE / SAT / LIGHT sliders — change any of them and the others follow, and the whole app previews the change live. The READABILITY line shows contrast ratios; 4.5 or higher keeps small text legible, and a ⚠ marks a pair that is hard to read. Name it and press SAVE THEME; it then shows up with a ★ among the theme cards, where you can EDIT, EXPORT (copies it as text) or DELETE it. IMPORT… on another browser pastes an exported theme in.',
+  'Purely cosmetic — pick whichever is easiest on your eyes/lighting. Custom themes live in this browser only; use EXPORT / IMPORT to move one to another device. If a built-in or custom palette ever looks wrong somewhere, that is a real bug (a spot still holding a hardcoded color) rather than something to work around per-theme.');
 W('hedging','Insights & risk','Hedging (covered calls & collars)',
   'Options math on the concentrated names: a COVERED CALL sells the upside above a strike for cash now (income + assignment probability shown); a COLLAR buys a ~10% protective put funded by selling a call (floor and cap shown, often near zero net cost). Chains are delayed Yahoo data; deltas are computed locally from each contract\'s implied volatility.',
   'RISK · EXPOSURE → HEDGING. Cards build for names over the sizing loss-budget plus top direct weights (≥3%), at the ~30-45 day expiration. Yield %/yr on calls, floor/cap on collars; premiums are mid-quotes — verify live before any order. Rebuilds daily or via REFRESH CHAINS.',
@@ -3671,6 +3742,114 @@ function saveSettings(){
     })
     .catch(e=>alert('Save failed: '+e));
 }
+// Unsaved editor state: {name, vars, editing?}. While non-null the editor's colors are previewed live on the whole app.
+let THEME_EDIT=null;
+function currentThemeValues(){            // the 12 values of whatever is on screen right now (preset or custom)
+  const cs=getComputedStyle(document.documentElement), out={};
+  THEME_VARS.forEach(t=>{ let v=cs.getPropertyValue(t.v).trim();
+    if(/^#[0-9a-f]{3}$/i.test(v)) v='#'+v.slice(1).split('').map(c=>c+c).join('');
+    const m=v.match(/^rgb\((\d+)[ ,]+(\d+)[ ,]+(\d+)/i); if(m) v=rgbToHex(+m[1],+m[2],+m[3]);
+    out[t.v]=hexOk(v)?v.toLowerCase():'#808080'; });
+  return out;
+}
+function presetValues(key){                // read a preset's values straight from the stylesheet (no second copy to drift)
+  const root=document.documentElement, prev=root.getAttribute('data-theme');
+  clearInlineTheme();
+  if(key==='amber') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', key);
+  const vals=currentThemeValues();
+  if(prev===null) root.removeAttribute('data-theme'); else root.setAttribute('data-theme', prev);
+  if(THEME_EDIT) setInlineTheme(THEME_EDIT.vars); else if(THEME.slice(0,7)==='custom:'){ const c=loadCustomThemes()[THEME.slice(7)]; if(c) setInlineTheme(c); }
+  return vals;
+}
+function themeEditor(){
+  const box=el('div'); box.style.cssText='margin-top:var(--space-5);border-top:1px solid var(--color-border);padding-top:var(--space-4);';
+  box.appendChild(el('div','ph','CUSTOM THEME'));
+  const help=el('div','muted'); help.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
+  help.textContent='Start from any theme, then change any color by picking it on the color wheel, typing a HEX code, entering RGB numbers, or sliding hue / saturation / lightness. Every change previews on the whole app immediately. Give it a name and SAVE; it then appears above with the other themes. Custom themes are stored in this browser only (use EXPORT / IMPORT to move one).';
+  box.appendChild(help);
+  if(!THEME_EDIT){
+    const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;';
+    const sel=document.createElement('select');
+    THEME_LIST.forEach(t=>{ const o=document.createElement('option'); o.value=t.key; o.textContent=t.label; sel.appendChild(o); });
+    Object.keys(loadCustomThemes()).forEach(n=>{ const o=document.createElement('option'); o.value='custom:'+n; o.textContent=n+' ★'; sel.appendChild(o); });
+    sel.value=THEME;
+    const go=el('button',null,'＋ NEW CUSTOM THEME FROM THIS'); go.onclick=()=>{
+      const k=sel.value; const base=k.slice(0,7)==='custom:'?loadCustomThemes()[k.slice(7)]:presetValues(k);
+      THEME_EDIT={name:'',vars:Object.assign({},base)}; setInlineTheme(THEME_EDIT.vars); render(); };
+    const imp=el('button','mut-btn','IMPORT…'); imp.onclick=()=>{
+      const j=window.prompt('Paste an exported theme:'); if(!j) return;
+      try{ const o=JSON.parse(j), vs=o.vars||{}; const clean={};
+        THEME_VARS.forEach(t=>{ if(!hexOk(vs[t.v])) throw new Error('missing '+t.v); clean[t.v]=vs[t.v].toLowerCase(); });
+        THEME_EDIT={name:themeNameOk(o.fiduciaryTheme)?o.fiduciaryTheme:'',vars:clean}; setInlineTheme(clean); render();
+      }catch(e){ alert('That does not look like an exported theme ('+e.message+').'); } };
+    bar.appendChild(el('span','muted','Start from:')); bar.appendChild(sel); bar.appendChild(go); bar.appendChild(imp);
+    box.appendChild(bar);
+    return box;
+  }
+  const E=THEME_EDIT;
+  const banner=el('div'); banner.style.cssText='background:var(--overlay-accent-weak);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+  banner.textContent='Previewing unsaved colors — nothing is saved until you press SAVE.'; box.appendChild(banner);
+  const nameRow=el('div'); nameRow.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-3);';
+  const nameIn=document.createElement('input'); nameIn.placeholder='Theme name (letters, numbers, space, - _)'; nameIn.maxLength=30; nameIn.value=E.name||''; nameIn.style.width='260px';
+  nameIn.oninput=()=>{ E.name=nameIn.value; };
+  const msg=el('span','muted'); msg.style.fontSize='var(--font-size-sm)';
+  const save=el('button',null,'↳ SAVE THEME'); save.onclick=()=>{
+    const n=(nameIn.value||'').trim();
+    if(!themeNameOk(n)){ msg.className='neg'; msg.textContent='Pick a name: 1–30 letters, numbers, spaces, - or _, and not the name of a built-in theme.'; return; }
+    const all=loadCustomThemes();
+    if(all[n] && E.editing!==n && !confirm('A custom theme named "'+n+'" exists. Replace it?')) return;
+    if(E.editing && E.editing!==n) delete all[E.editing];
+    all[n]=Object.assign({},E.vars);
+    if(!saveCustomThemes(all)){ msg.className='neg'; msg.textContent='Could not save (browser storage is blocked or full).'; return; }
+    THEME_EDIT=null; applyTheme('custom:'+n); render(); };
+  const cancel=el('button','mut-btn','DISCARD'); cancel.onclick=()=>{ THEME_EDIT=null; applyTheme(THEME); render(); };
+  nameRow.appendChild(nameIn); nameRow.appendChild(save); nameRow.appendChild(cancel); nameRow.appendChild(msg); box.appendChild(nameRow);
+
+  // contrast read-out: small 9-12px text needs 4.5:1 (WCAG AA); the built-in light theme took three revisions to get this right
+  const cbox=el('div'); cbox.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-3);';
+  const pairs=[['Text on page','--txt','--bg'],['Text on panel','--txt','--panel'],['Muted text on panel','--mut','--panel'],['Accent on panel','--amber','--panel'],['Positive on panel','--grn','--panel'],['Negative on panel','--red','--panel']];
+  const paintContrast=()=>{ cbox.textContent=''; const h=el('span','muted','Readability (4.5 or more is good for small text):  '); cbox.appendChild(h);
+    pairs.forEach(([lab,a,b])=>{ const r=contrastRatio(E.vars[a],E.vars[b]); const sp=el('span'); sp.style.cssText='margin-right:var(--space-3);white-space:nowrap;';
+      sp.className=r>=4.5?'pos':'neg'; sp.textContent=(r>=4.5?'✓ ':'⚠ ')+lab+' '+r.toFixed(1); cbox.appendChild(sp); }); };
+  box.appendChild(cbox);
+
+  const rows={};
+  const refresh=(v,src)=>{ const hex=E.vars[v], r=rows[v], [R,G,B]=hexToRgb(hex), [H,S,L]=rgbToHsl(R,G,B);
+    r.sw.style.background=hex;
+    if(src!=='wheel') r.wheel.value=hex;
+    if(src!=='hex') r.hex.value=hex;
+    if(src!=='rgb'){ r.r.value=R; r.g.value=G; r.b.value=B; }
+    if(src!=='hsl'){ r.h.value=Math.round(H); r.s.value=Math.round(S); r.l.value=Math.round(L); }
+    r.hl.textContent=Math.round(H)+'°'; r.sl.textContent=Math.round(S)+'%'; r.ll.textContent=Math.round(L)+'%'; };
+  const set=(v,hex,src)=>{ E.vars[v]=hex.toLowerCase(); setInlineTheme(E.vars); refresh(v,src); paintContrast(); };
+  THEME_VARS.forEach(t=>{
+    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-2) var(--space-3);flex-wrap:wrap;padding:var(--space-1) 0;border-bottom:1px solid var(--color-border);';
+    const lab=el('div'); lab.style.cssText='width:170px;'; const l1=el('div',null,t.label); l1.style.fontSize='var(--font-size-md)'; const l2=el('div','muted',t.hint+' · '+t.v); l2.style.fontSize='var(--font-size-xs)'; lab.appendChild(l1); lab.appendChild(l2); row.appendChild(lab);
+    const sw=el('span'); sw.style.cssText='display:inline-block;width:22px;height:22px;border-radius:3px;border:1px solid var(--color-border-strong);';
+    const wheel=document.createElement('input'); wheel.type='color'; wheel.title='open the color picker'; wheel.style.cssText='width:34px;height:26px;padding:0;border:none;background:none;cursor:pointer;';
+    const hex=document.createElement('input'); hex.maxLength=7; hex.placeholder='#rrggbb'; hex.style.width='76px';
+    const num=()=>{ const i=document.createElement('input'); i.type='number'; i.min=0; i.max=255; i.style.width='52px'; return i; };
+    const rI=num(), gI=num(), bI=num();
+    const sld=(max)=>{ const i=document.createElement('input'); i.type='range'; i.min=0; i.max=max; i.style.width='84px'; return i; };
+    const hI=sld(360), sI=sld(100), lI=sld(100);
+    const hl=el('span','muted'), sl=el('span','muted'), ll=el('span','muted'); [hl,sl,ll].forEach(x=>{ x.style.cssText='font-size:var(--font-size-xs);width:34px;display:inline-block;'; });
+    rows[t.v]={sw,wheel,hex,r:rI,g:gI,b:bI,h:hI,s:sI,l:lI,hl,sl,ll};
+    wheel.oninput=()=>set(t.v,wheel.value,'wheel');
+    hex.oninput=()=>{ let v=hex.value.trim(); if(v[0]!=='#') v='#'+v; if(/^#[0-9a-f]{3}$/i.test(v)) v='#'+v.slice(1).split('').map(c=>c+c).join(''); if(hexOk(v)) set(t.v,v,'hex'); };
+    const fromRgb=()=>set(t.v,rgbToHex(rI.value,gI.value,bI.value),'rgb');
+    [rI,gI,bI].forEach(i=>i.oninput=fromRgb);
+    const fromHsl=()=>{ const [R,G,B]=hslToRgb(+hI.value,+sI.value,+lI.value); set(t.v,rgbToHex(R,G,B),'hsl'); };
+    [hI,sI,lI].forEach(i=>i.oninput=fromHsl);
+    const grp=(label,...els)=>{ const g=el('span'); g.style.cssText='display:inline-flex;align-items:center;gap:3px;'; g.appendChild(el('span','muted',label)); els.forEach(x=>g.appendChild(x)); g.firstChild.style.fontSize='var(--font-size-xs)'; return g; };
+    row.appendChild(sw); row.appendChild(wheel); row.appendChild(hex);
+    row.appendChild(grp('R',rI)); row.appendChild(grp('G',gI)); row.appendChild(grp('B',bI));
+    row.appendChild(grp('HUE',hI,hl)); row.appendChild(grp('SAT',sI,sl)); row.appendChild(grp('LIGHT',lI,ll));
+    box.appendChild(row);
+    refresh(t.v);
+  });
+  paintContrast();
+  return box;
+}
 function themeContent(){
   const wrap=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-4);';
@@ -3700,10 +3879,30 @@ function themeContent(){
     const lab=el('div',null,t.label); lab.style.cssText=`font-size:var(--font-size-md);letter-spacing:1px;color:${active?'var(--color-accent)':'var(--color-text)'};`;
     card.appendChild(lab);
     if(active){ const chk=el('div','muted','· active'); chk.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);'; card.appendChild(chk); }
-    card.onclick=()=>{ applyTheme(t.key); render(); };
+    card.onclick=()=>{ THEME_EDIT=null; applyTheme(t.key); render(); };
+    row.appendChild(card);
+  });
+  // ---- saved custom themes: cards (apply / edit / export / delete)
+  const customs=loadCustomThemes();
+  Object.keys(customs).forEach(name=>{
+    const key='custom:'+name, active=THEME===key, vs=customs[name];
+    const card=el('div'); card.style.cssText=`padding:var(--space-3) var(--space-4);border:1px solid ${active?'var(--color-accent)':'var(--color-border)'};border-radius:var(--radius-md);min-width:150px;`;
+    const dots=el('div'); dots.style.cssText='display:flex;gap:var(--space-2);margin-bottom:var(--space-2);';
+    ['--bg','--panel','--amber','--grn','--red','--blu'].forEach(v=>{ const sw=el('span'); sw.style.cssText=`display:inline-block;width:12px;height:12px;border-radius:2px;background:${vs[v]};border:1px solid var(--color-border-strong);`; dots.appendChild(sw); });
+    card.appendChild(dots);
+    const lab=el('div'); lab.textContent=name+' ★'; lab.title='custom theme'; lab.style.cssText=`cursor:pointer;font-size:var(--font-size-md);letter-spacing:1px;color:${active?'var(--color-accent)':'var(--color-text)'};`;
+    lab.onclick=()=>{ THEME_EDIT=null; applyTheme(key); render(); };
+    card.appendChild(lab);
+    const acts=el('div'); acts.style.cssText='display:flex;gap:var(--space-2);margin-top:var(--space-2);font-size:var(--font-size-sm);';
+    const mk=(t,fn)=>{ const b=el('button','mut-btn',t); b.style.cssText='font-size:var(--font-size-sm);padding:1px 6px;'; b.onclick=fn; acts.appendChild(b); };
+    mk('EDIT',()=>{ THEME_EDIT={name:name,vars:Object.assign({},vs),editing:name}; setInlineTheme(THEME_EDIT.vars); render(); });
+    mk('EXPORT',()=>{ const j=JSON.stringify({fiduciaryTheme:name,vars:vs}); try{ navigator.clipboard.writeText(j); alert('Copied to the clipboard. Paste it into IMPORT on another browser.'); }catch(_){ window.prompt('Copy this:',j); } });
+    mk('DELETE',()=>{ if(!confirm('Delete the custom theme "'+name+'"?')) return; const all=loadCustomThemes(); delete all[name]; saveCustomThemes(all); if(THEME===key) applyTheme('amber'); render(); });
+    card.appendChild(acts);
     row.appendChild(card);
   });
   wrap.appendChild(row);
+  wrap.appendChild(themeEditor());
   // Attribution (2026-07-31): the 4 CATPPUCCIN flavors' colors are the official palette from
   // https://catppuccin.com, a community project released under the MIT License
   // (https://github.com/catppuccin/catppuccin/blob/main/LICENSE, Copyright (c) 2021 Catppuccin).
