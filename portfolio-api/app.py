@@ -6057,15 +6057,24 @@ def _news_note(ok, detail=None, where=""):
 
 
 def _news_http_detail(r):
-    d = f"HTTP {r.status_code}"
+    """One readable sentence per failure: what is wrong, then what to do (shown on RESEARCH -> ALERTS and logged).
+    Tester report 2026-10-21: a bare '404 from mcpo ... not registered' did not tell a new user where to look."""
     if r.status_code == 404:
-        d += (" from mcpo /tavily/tavily_news_search -- the mcpo 'tavily' MCP server is not "
-              "registered (it likely failed to start; see `docker logs fiduciary-mcpo` for a Traceback)")
-    elif r.status_code in (401, 403):
-        d += " -- mcpo rejected MCPO_API_KEY"
-    else:
-        d += ": " + (r.text or "")[:160].replace("\n", " ")
-    return d
+        return ("News search is unavailable: mcpo has no running 'tavily' helper (HTTP 404). Usually the Tavily API key has "
+                "not reached mcpo yet or the helper crashed on start. Fix: (1) SETTINGS -> SECRETS & KEYS: check the Tavily key "
+                "shows as saved; (2) run `docker compose up -d mcpo --force-recreate` (a plain restart does NOT load a newly "
+                "saved key); (3) still failing? run `docker logs --tail 50 fiduciary-mcpo` and look for the tavily error.")
+    if r.status_code in (401, 403):
+        return (f"News search is unavailable: mcpo refused the request (HTTP {r.status_code}). MCPO_API_KEY in .env must be the "
+                "same for portfolio-api and mcpo; after changing it run "
+                "`docker compose up -d --force-recreate mcpo portfolio-api`.")
+    if r.status_code == 429:
+        return ("News search is rate-limited (HTTP 429): Tavily or your plan's request limit was reached. It retries "
+                "on the next news pull; check usage in your Tavily dashboard.")
+    body = (r.text or "")[:160].replace("\n", " ")
+    return (f"News search failed (HTTP {r.status_code}): the Tavily helper started but the search errored -- most often an "
+            f"invalid or out-of-credit Tavily key (check it at tavily.com, then re-save it under SECRETS & KEYS and run "
+            f"`docker compose up -d mcpo --force-recreate`). Detail: {body}")
 
 
 def _news(sym, name, with_meta=False):
