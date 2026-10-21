@@ -86,43 +86,25 @@ class TestAppWiring(unittest.TestCase):
             with mock.patch.object(appmod, "_ENV_SECRETS_AT_BOOT", {"TAVILY_API_KEY"}), mock.patch.dict(os.environ, {"TAVILY_API_KEY": "from-env"}):
                 self.assertEqual(appmod._tavily_key(), "from-env")               # a real .env value still wins
 
-    def test_direct_when_a_key_is_visible_and_mcpo_only_otherwise(self):
-        with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value={"ok": True, "articles": [{"title": "A", "url": "u", "content": "c"}], "http": 200, "detail": ""}), \
-             mock.patch.object(appmod, "_tavily_via_mcpo") as legacy:
+    def test_call_goes_direct_and_reports_a_missing_key_clearly(self):
+        with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value={"ok": True, "articles": [{"title": "A", "url": "u", "content": "c"}], "http": 200, "detail": ""}):
             r = appmod._tavily_call("q", 7, 3)
-        self.assertEqual((r["via"], r["ok"]), ("direct", True)); legacy.assert_not_called(); self.assertIn("Title: A", r["text"])
-        with mock.patch.object(tc, "configured", lambda: False), mock.patch.object(appmod, "_tavily_via_mcpo", return_value={"ok": True, "via": "mcpo", "articles": []}) as legacy:
-            self.assertEqual(appmod._tavily_call("q", 7, 3)["via"], "mcpo")
-        legacy.assert_called_once()
-
-    def test_direct_failure_falls_back_to_mcpo_except_for_key_and_plan_errors(self):
-        legacy_ok = {"ok": True, "articles": [{"title": "L"}], "text": "Title: L\n", "http": 200, "detail": "", "via": "mcpo"}
-        for http in (400, 502, None):
-            bad = {"ok": False, "articles": [], "http": http, "detail": "direct broke"}
-            with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
-                 mock.patch.object(appmod, "_tavily_via_mcpo", return_value=dict(legacy_ok)):
-                r = appmod._tavily_call("q", 7, 3)
-            self.assertEqual((r["ok"], r["via"], r["direct_detail"]), (True, "mcpo-fallback", "direct broke"), http)
-        for http in (401, 429, 432, 433):
-            bad = {"ok": False, "articles": [], "http": http, "detail": "key/plan"}
-            with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
-                 mock.patch.object(appmod, "_tavily_via_mcpo") as legacy:
-                r = appmod._tavily_call("q", 7, 3)
-            self.assertEqual((r["ok"], r["via"]), (False, "direct")); legacy.assert_not_called()
-        bad = {"ok": False, "articles": [], "http": 400, "detail": "direct broke"}
-        with mock.patch.object(tc, "configured", lambda: True), mock.patch.object(tc, "search", return_value=bad), \
-             mock.patch.object(appmod, "_tavily_via_mcpo", return_value={"ok": False, "articles": [], "http": 404, "detail": "mcpo 404", "via": "mcpo"}):
+        self.assertEqual((r["via"], r["ok"]), ("direct", True)); self.assertIn("Title: A", r["text"])
+        tc.configure(lambda: "")
+        try:
             r = appmod._tavily_call("q", 7, 3)
-        self.assertEqual((r["ok"], r["detail"]), (False, "direct broke"))        # both failed: report the DIRECT error
+        finally:
+            tc.configure(appmod._tavily_key)
+        self.assertFalse(r["ok"]); self.assertIn("SECRETS & KEYS", r["detail"])
 
-    def test_legacy_mcpo_path_still_parses_text_and_reports_404_clearly(self):
-        text = "Title: Hello\nURL: http://x\nContent: body\n"
-        with mock.patch.object(appmod.requests, "post", return_value=Resp(200, None, text)):
-            r = appmod._tavily_via_mcpo("q", 7, 3)
-        self.assertEqual(r["articles"][0]["title"], "Hello")
-        with mock.patch.object(appmod.requests, "post", return_value=Resp(404, None, "nf")):
-            r = appmod._tavily_via_mcpo("q", 7, 3)
-        self.assertIn("no running 'tavily' helper", r["detail"])
+    def test_the_mcpo_fallback_is_really_gone(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        for gone in ("_tavily_via_mcpo", "_news_http_detail", "_parse_tavily_text", "/tavily/tavily_news_search"):
+            self.assertNotIn(gone, src)
+        for f in ("mcpo/config.json.example",):
+            self.assertNotIn("mcp-tavily", open(os.path.join(_HERE, "..", f), encoding="utf-8").read())
+        key = next(sp for sp in appmod.SECRET_SPECS if sp["key"] == "TAVILY_API_KEY")
+        self.assertEqual(key["scope"], "app")                      # no longer bridged into mcpo.env
 
     def test_results_and_brief_news_use_the_unified_call(self):
         good = {"ok": True, "articles": [{"title": "A"}], "text": "Title: A\n", "http": 200, "detail": "", "via": "direct"}
@@ -157,7 +139,7 @@ class TestAppWiring(unittest.TestCase):
 
     def test_ui_has_test_button_and_no_stale_mcpo_advice_for_tavily(self):
         html = open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8").read()
-        for needle in ("TEST TAVILY NEWS SEARCH", "/api/news-status?probe=1", "applies immediately — the app now calls Tavily directly",
+        for needle in ("TEST TAVILY NEWS SEARCH", "/api/news-status?probe=1", "applies immediately — the app calls Tavily directly (no restart)",
                        "scope==='mcpo-file'&&!(d.applied_live||[]).includes(k)"):
             self.assertIn(needle, html)
 

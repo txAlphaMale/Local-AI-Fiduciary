@@ -56,6 +56,9 @@ locals {
     LLM_API_KEY         = "ANTHROPIC_API_KEY"
     DEMO_ADMIN_PASSWORD = "DEMO_ADMIN_PASSWORD"
     FINNHUB_API_KEY     = "FINNHUB_API_KEY"
+    # 2026-10-21: the app now calls Tavily directly (no mcpo helper), so portfolio-api needs the key itself.
+    # Apply this BEFORE deploying an app image that has the direct client; mcpo_secrets keeps its copy until then.
+    TAVILY_API_KEY = "TAVILY_API_KEY"
   }
   mcpo_secrets = {
     TAVILY_API_KEY = "TAVILY_API_KEY"

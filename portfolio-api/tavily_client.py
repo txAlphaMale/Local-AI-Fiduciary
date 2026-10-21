@@ -11,8 +11,8 @@ results (title, url, content, published_date, score) -- no helper process, no pa
 Same thin-client approach as plaid_integration.py: no SDK, no new dependency.
 
 KEY: read on EVERY call (app.py injects the lookup with configure()), so a key saved in SETTINGS -> SECRETS & KEYS applies
-at once. With no key visible to this process the caller falls back to the legacy mcpo path, so installs that only have the
-key in mcpo's env keep working.
+at once. With no key, search() says exactly where to add it. (The old mcpo fallback was removed 2026-10-21 after the direct
+path was verified live; the `tavily` mcpo entry and its `mcp<2` pin are gone too.)
 
 Nothing here imports app.py. The key is never logged and never appears in an error detail.
 """

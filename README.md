@@ -22,7 +22,7 @@ Two containers via Docker Compose, plus Ollama on the host:
 | Service           | Role |
 |-------------------|------|
 | **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, the built-in chat, **and the built-in job scheduler** (the recurring agent runs — see *Scheduling* below). |
-| **mcpo**          | Bridges MCP servers (time, and optionally the unofficial Monarch integration) to the app over HTTP. Tavily news search no longer needs it: the app calls Tavily's REST API directly (mcpo's `tavily` entry is only a fallback for older setups). |
+| **mcpo**          | Bridges MCP servers (time, and optionally the unofficial Monarch integration) to the app over HTTP. Tavily news search does not use it: the app calls Tavily's REST API directly. |
 | **Ollama** *(host)* | Runs the local LLM that does the analysis & Strategist reasoning. Not a container here — see prerequisites. |
 
 So `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`); Ollama
