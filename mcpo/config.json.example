@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to config.json BEFORE the first `docker compose up` (mcpo crash-loops if the bind-mount source is missing). Fiduciary stack only. 'monarch' is used ONLY when PORTFOLIO_PROVIDER=monarch (its credentials come from the MONARCH_* env vars, not this file). 'tavily' powers the news-discovery agent (needs TAVILY_API_KEY in .env). 'time' is a harmless helper.",
+  "_comment": "Copy to config.json BEFORE the first `docker compose up` (mcpo crash-loops if the bind-mount source is missing). Fiduciary stack only. 'monarch' is used ONLY when PORTFOLIO_PROVIDER=monarch (its credentials come from the MONARCH_* env vars, not this file). 'tavily' is now only a FALLBACK: the app calls Tavily directly (2026-10-21) and uses this entry only when the app itself has no Tavily key (key present only in mcpo's environment). 'time' is a harmless helper.",
   "mcpServers": {
     "time": {
       "command": "uvx",

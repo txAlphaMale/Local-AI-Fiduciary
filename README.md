@@ -22,7 +22,7 @@ Two containers via Docker Compose, plus Ollama on the host:
 | Service           | Role |
 |-------------------|------|
 | **portfolio-api** | The brain: normalizes your holdings, computes everything, serves the dashboard, the REST API, the built-in chat, **and the built-in job scheduler** (the recurring agent runs — see *Scheduling* below). |
-| **mcpo**          | Bridges MCP servers (Tavily, time, and optionally the unofficial Monarch integration) to the app over HTTP. |
+| **mcpo**          | Bridges MCP servers (time, and optionally the unofficial Monarch integration) to the app over HTTP. Tavily news search no longer needs it: the app calls Tavily's REST API directly (mcpo's `tavily` entry is only a fallback for older setups). |
 | **Ollama** *(host)* | Runs the local LLM that does the analysis & Strategist reasoning. Not a container here — see prerequisites. |
 
 So `docker compose up -d` runs just **two** containers (`portfolio-api` + `mcpo`); Ollama
@@ -89,7 +89,7 @@ ollama pull bge-m3             # embeddings for the Fiduciary knowledge RAG
 | Service | Used for | Get a key |
 |---------|----------|-----------|
 | **Finnhub** | Quotes, valuation multiples, trading volume | https://finnhub.io/ |
-| **Tavily**  | News-discovery agent | https://tavily.com/ |
+| **Tavily**  | News-discovery agent (called directly via Tavily's REST API; a key saved in SETTINGS → SECRETS & KEYS applies immediately, and there is a TEST button) | https://tavily.com/ |
 | **SEC EDGAR** | GAAP fundamentals — needs a descriptive User-Agent **with your email** (no signup) | just set `SEC_USER_AGENT` |
 | **Portfolio source** | Your holdings (see below) | A local CSV (no account needed) or SnapTrade; Monarch is optional/unofficial |
 

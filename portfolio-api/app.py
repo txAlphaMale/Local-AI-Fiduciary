@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, List
 
 import edgar   # SEC EDGAR / GAAP fundamentals
+import tavily_client   # Tavily news search, called directly (no mcpo helper)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
@@ -6077,6 +6078,66 @@ def _news_http_detail(r):
             f"`docker compose up -d mcpo --force-recreate`). Detail: {body}")
 
 
+def _tavily_key():
+    """Tavily key, read fresh so a key saved in SETTINGS -> SECRETS & KEYS applies at once. A key set in the real .env
+    wins (same rule as everywhere else); otherwise the encrypted store, then whatever the boot merge put in the env."""
+    if "TAVILY_API_KEY" in _ENV_SECRETS_AT_BOOT:
+        return os.environ.get("TAVILY_API_KEY", "")
+    return _read_secrets().get("TAVILY_API_KEY") or os.environ.get("TAVILY_API_KEY", "")
+
+
+tavily_client.configure(_tavily_key)
+
+
+def _tavily_via_mcpo(query, days, max_results):
+    """LEGACY path (mcpo -> mcp-tavily), used only when this process has no Tavily key of its own (key present only in
+    mcpo's environment). -> same shape as tavily_client.search plus "text" (the raw body)."""
+    try:
+        r = requests.post(f"{MCPO}/tavily/tavily_news_search",
+                          headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+                          json={"query": query, "days": days, "max_results": max_results}, timeout=45)
+    except Exception as e:
+        return {"ok": False, "articles": [], "text": "", "http": None, "detail": f"{type(e).__name__}: {str(e)[:160]}", "via": "mcpo"}
+    if r.status_code >= 400:
+        return {"ok": False, "articles": [], "text": "", "http": r.status_code, "detail": _news_http_detail(r), "via": "mcpo"}
+    try:
+        data = r.json()
+    except ValueError:
+        data = r.text
+    if isinstance(data, str):
+        arts = _parse_tavily_text(data)
+    elif isinstance(data, dict) and isinstance(data.get("results"), list):
+        arts = data["results"]
+    else:
+        found = []
+
+        def walk(o):
+            if found:
+                return
+            if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("title", "url", "content")):
+                found.extend(o)
+            elif isinstance(o, dict):
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        walk(data)
+        arts = found
+    return {"ok": True, "articles": arts, "text": r.text or "", "http": r.status_code, "detail": "", "via": "mcpo"}
+
+
+def _tavily_call(query, days, max_results):
+    """ONE entry point for every Tavily news search: direct to api.tavily.com when a key is visible to this process,
+    else the legacy mcpo helper. -> {"ok","articles","text","http","detail","via"}."""
+    if tavily_client.configured():
+        res = tavily_client.search(query, days, max_results)
+        res["text"] = tavily_client.as_text(res["articles"]) if res["ok"] else ""
+        res["via"] = "direct"
+        return res
+    return _tavily_via_mcpo(query, days, max_results)
+
+
 def _news(sym, name, with_meta=False):
     """Raw Tavily news blob (truncated) for the LLM's research-brief prompt context -- a SEPARATE
     direct call from _tavily_results()/_company_news() (different endpoint usage: raw text, not
@@ -6088,18 +6149,13 @@ def _news(sym, name, with_meta=False):
     query = f"{sym} {name} stock"
 
     def _compute():
-        try:
-            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                              json={"query": query, "days": 7, "max_results": 5}, timeout=45)
-            if r.status_code >= 400:
-                _news_note(False, _news_http_detail(r), "brief-news")
-                return ""
-            _news_note(True)
-            return r.text[:2500]
-        except Exception as e:
-            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "brief-news")
+        res = _tavily_call(query, 7, 5)
+        if not res["ok"]:
+            _news_note(False, res["detail"], "brief-news")
             return ""
+        _news_note(True)
+        # a quiet week must still count as a SUCCESS (cached_fetch treats an empty string as a failure)
+        return (res["text"] or "No recent articles found.")[:2500]
 
     # NOTE the failure signal here is an EMPTY body, which only happens on an HTTP error or an
     # exception -- a 200 with no articles still returns a JSON envelope, so "quiet week" already
@@ -10705,7 +10761,7 @@ def get_secrets(request: Request):
 # Secrets read fresh on every use (see _snaptrade_env / _plaid_creds) -- saving one takes effect at once. A key
 # that is ALSO set in the real .env still wins (reported as staged_behind_env), so it is not "applied live".
 _LIVE_SECRETS = {"SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET",
-                 "PLAID_CLIENT_ID", "PLAID_SECRET"}
+                 "PLAID_CLIENT_ID", "PLAID_SECRET", "TAVILY_API_KEY"}
 
 
 @app.post("/api/secrets")
@@ -12394,7 +12450,7 @@ TAVILY_CACHE_TTL = int(os.environ.get("TAVILY_CACHE_TTL", "7200"))   # ~2h -- ne
 
 
 def _tavily_results(query, days=14, max_results=5, with_meta=False):
-    """Tavily news search via mcpo -> list of article dicts. mcpo returns a TEXT blob (not JSON).
+    """Tavily news search -> list of article dicts (direct to api.tavily.com; legacy mcpo helper only when this process has no key).
     Disk-persisted last-known-good cache (2026-07-30, RESUME-TRACKER "last-known-good cache" item
     -- Tavily previously had NO caching/fallback at all: any error (rate-limit, quota, non-200,
     timeout, exception) returned [] outright, meaning a Tavily outage lost access to PREVIOUSLY
@@ -12404,40 +12460,12 @@ def _tavily_results(query, days=14, max_results=5, with_meta=False):
     caller that wants to surface "data as of" to the user; default False keeps the plain-list
     contract every existing caller (web_search tool, _company_news, discovery) already expects."""
     def _compute():
-        try:
-            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                              json={"query": query, "days": days, "max_results": max_results}, timeout=45)
-            if r.status_code >= 400:
-                _news_note(False, _news_http_detail(r), "search")
-                return []
-            _news_note(True)
-            try:
-                data = r.json()
-            except ValueError:
-                data = r.text
-        except Exception as e:
-            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "search")
+        res = _tavily_call(query, days, max_results)
+        if not res["ok"]:
+            _news_note(False, res["detail"], "search")
             return []
-        if isinstance(data, str):
-            return _parse_tavily_text(data)
-        if isinstance(data, dict) and isinstance(data.get("results"), list):
-            return data["results"]
-        found = []                                  # fallback: first list of article-like dicts
-
-        def walk(o):
-            if found:
-                return
-            if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("title", "url", "content")):
-                found.extend(o)
-            elif isinstance(o, dict):
-                for v in o.values():
-                    walk(v)
-            elif isinstance(o, list):
-                for v in o:
-                    walk(v)
-        walk(data)
-        return found
+        _news_note(True)
+        return res["articles"]
 
     key = f"{query}|{days}|{max_results}"
     results, meta = store.cached_fetch("tavily", key, TAVILY_CACHE_TTL, _compute,
@@ -12578,31 +12606,24 @@ def get_discovery():
 
 
 @app.get("/api/news-status")
-def get_news_status(probe: int = 0):
+def get_news_status(request: Request, probe: int = 0):
     """Health of the Tavily news path (2026-10-19; sibling of /api/edgar-status). Counters are
     since this process started. `?probe=1` makes ONE live, uncached call through mcpo (uses a
     Tavily credit) and reports exactly what came back -- the fastest way to tell 'mcpo's Tavily
     server is down' (HTTP 404) from 'key rejected' from 'working'."""
     out = {}
     if probe:
+        if not _require_admin(request):          # a probe spends a Tavily credit
+            return JSONResponse({"error": "admin only"}, status_code=403)
         t0 = time.time()
-        try:
-            r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                              headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                              json={"query": "SPY stock news", "days": 3, "max_results": 1}, timeout=45)
-            if r.status_code >= 400:
-                _news_note(False, _news_http_detail(r), "probe")
-                out["probe"] = {"ok": False, "detail": _news_http_detail(r)}
-            else:
-                _news_note(True)
-                out["probe"] = {"ok": True, "http": r.status_code, "bytes": len(r.text or "")}
-        except Exception as e:
-            _news_note(False, f"{type(e).__name__}: {str(e)[:160]}", "probe")
-            out["probe"] = {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:160]}"}
+        res = _tavily_call("SPY stock news", 3, 1)
+        _news_note(res["ok"], None if res["ok"] else res["detail"], "probe")
+        out["probe"] = {"ok": res["ok"], "via": res["via"], "http": res["http"],
+                        **({"articles": len(res["articles"])} if res["ok"] else {"detail": res["detail"]})}
         out["probe"]["ms"] = int((time.time() - t0) * 1000)
     with _NEWS_DIAG_LOCK:
         diag = dict(_NEWS_DIAG)
-    return {**diag, **out, "mcpo": MCPO, "cache_ttl_s": TAVILY_CACHE_TTL, "stale_after_s": NEWS_STALE_AFTER}
+    return {**diag, **out, "mcpo": MCPO, "via": "direct" if tavily_client.configured() else "mcpo", "cache_ttl_s": TAVILY_CACHE_TTL, "stale_after_s": NEWS_STALE_AFTER}
 
 
 @app.post("/api/run-discovery")

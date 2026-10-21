@@ -5571,7 +5571,7 @@ function saveSecrets(){
   fetch('/api/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       const specByKey={}; (SECRETS_CFG&&SECRETS_CFG.secrets||[]).forEach(it=>specByKey[it.key]=it);
-      const mcpoRestart=(d.saved||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
+      const mcpoRestart=(d.saved||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file'&&!(d.applied_live||[]).includes(k));
       const live=new Set(d.applied_live||[]);   // SnapTrade/Plaid keys are read on every use — nothing to restart
       const apiRestart=(d.saved||[]).some(k=>!live.has(k)&&(!specByKey[k]||specByKey[k].scope!=='mcpo-file'));
       const stagedMcpo=(d.staged_behind_env||[]).some(k=>specByKey[k]&&specByKey[k].scope==='mcpo-file');
@@ -5894,7 +5894,7 @@ function secretsContent(){
           row.appendChild(lnote);
         } else if(it.scope==='mcpo-file'){
           const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
-          mnote.textContent='· applies on next `docker compose up -d mcpo --force-recreate`, not portfolio-api\'s (plain `up -d mcpo` alone won\'t pick this up)';
+          mnote.textContent=it.key==='TAVILY_API_KEY' ? '· applies immediately — the app now calls Tavily directly (no mcpo restart)' : '· applies on next `docker compose up -d mcpo --force-recreate`, not portfolio-api\'s (plain `up -d mcpo` alone won\'t pick this up)';
           row.appendChild(mnote);
         }
       } else {
@@ -5904,6 +5904,21 @@ function secretsContent(){
       }
       wrap.appendChild(row);
     });
+    if(g==='Market data'){                // Tavily test: one live search through the same path the news features use
+      const u1=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+      if(u1&&u1.role==='admin'){
+        const tr=el('div'); tr.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:6px 0;flex-wrap:wrap;';
+        const tb=el('button',null,'TEST TAVILY NEWS SEARCH'); const res=el('span'); res.style.cssText='font-size:var(--font-size-sm);white-space:pre-line;';
+        const hint=el('span','muted'); hint.style.cssText='font-size:var(--font-size-sm);'; hint.textContent='Runs one live search (uses one Tavily credit) with the SAVED key.';
+        tb.onclick=async()=>{ tb.disabled=true; res.className='muted'; res.textContent='Searching…';
+          try{ const r=await fetch('/api/news-status?probe=1'); const d=await r.json(); const p=d.probe||{};
+            if(p.ok){ res.className='pos'; res.textContent='✓ Tavily answered ('+(p.via==='direct'?'direct':'via the legacy mcpo helper')+', '+(p.articles!=null?p.articles+' article(s), ':'')+p.ms+' ms).'; }
+            else{ res.className='neg'; res.textContent='✗ '+(p.detail||d.error||('HTTP '+r.status)); }
+          }catch(e){ res.className='neg'; res.textContent='✗ '+e; }
+          tb.disabled=false; };
+        tr.appendChild(tb); tr.appendChild(res); tr.appendChild(hint); wrap.appendChild(tr);
+      }
+    }
     if(g==='Notifications (Email)'){      // SMTP test button: uses the SAVED settings
       const u0=(AUTH_STATUS&&AUTH_STATUS.user)||null;
       if(u0&&u0.role==='admin'){

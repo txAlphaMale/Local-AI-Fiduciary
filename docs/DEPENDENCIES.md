@@ -32,7 +32,7 @@ ollama pull bge-m3          # embeddings for the Fiduciary knowledge RAG
 | Service | Env var(s) | Used by | Sign up |
 |---------|-----------|---------|---------|
 | **Finnhub** | `FINNHUB_API_KEY` | quotes, valuation multiples, trading volume (liquidity) | https://finnhub.io/ |
-| **Tavily** | `TAVILY_API_KEY` | news-discovery agent | https://tavily.com/ |
+| **Tavily** | `TAVILY_API_KEY` | news-discovery agent — called directly at `api.tavily.com` (no mcpo helper needed; mcpo's `tavily` entry is only a fallback when this process has no key) | https://tavily.com/ |
 | **SEC EDGAR** | `SEC_USER_AGENT` (your email, no signup) | GAAP fundamentals | — |
 | **Monarch Money** *(optional)* | `MONARCH_EMAIL`, `MONARCH_PASSWORD`, `MONARCH_MFA_SECRET` | live portfolio (only if `PORTFOLIO_PROVIDER=monarch`) | https://www.monarchmoney.com/ |
 | **SnapTrade** *(optional)* | `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` (+ `SNAPTRADE_USER_ID`, `SNAPTRADE_USER_SECRET` for commercial keys only) | live multi-brokerage portfolio, incl. Robinhood (only if `PORTFOLIO_PROVIDER=snaptrade`; link brokerages in SETTINGS → ACCOUNTS → SnapTrade, or run `snaptrade_register.py`). Installs `snaptrade-python-sdk`. | https://snaptrade.com/ |
