@@ -2650,7 +2650,8 @@ function saveHomeBasis(){
 const SCHEDULE_RUN_ENDPOINTS = {
   analysis: '/api/run-analysis', discovery: '/api/run-discovery',
   opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
-  retirement: '/api/run-retirement', strategist: '/api/run-strategist'};
+  retirement: '/api/run-retirement', strategist: '/api/run-strategist',
+  backtest: '/api/run-backtest', narrative: '/api/run-narrative'};
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
   if(!url){ alert('No manual trigger wired for "'+kind+'" yet.'); return; }
@@ -2709,15 +2710,26 @@ function scheduleContent(){
   const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
   info.innerHTML=`Times are 24-hour, in the app timezone (<b>${esc(s.tz||'server local')}</b>). Each job is enqueued into the serial job queue at its time; edits apply within a minute (no restart needed). Every job can also be run on demand — ▸ RUN NOW below.`+
     (s.scheduler_enabled===false?' <span class="neg">⚠ The scheduler is currently DISABLED (INTERNAL_SCHEDULER=0) — these times won\'t fire until it\'s re-enabled.</span>':'');
+  const info2=el('div','muted'); info2.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
+  info2.textContent='LAST RUN is how long the job took the last time it ran; TYPICAL is the median of its last 5 successful runs. Jobs share one queue and run one at a time, so a job that is still running when another is due makes that one wait — a ⚠ appears under a job when its typical runtime would carry past another job\'s start time (checked over the next 14 days). History is kept across restarts and begins with the first run after this feature was added.';
   wrap.appendChild(info);
+  wrap.appendChild(info2);
   const t=el('table'); const h=el('tr');
-  h.innerHTML='<th class="l">JOB</th><th class="l">CADENCE</th><th>TIME (24h)</th><th></th><th></th>'; t.appendChild(h);
+  h.innerHTML='<th class="l">JOB</th><th class="l">CADENCE</th><th>TIME (24h)</th><th class="l" title="how long it took the last time it ran">LAST RUN</th><th title="median of the last 5 successful runs">TYPICAL</th><th></th><th></th>'; t.appendChild(h);
+  const dur=sec=>{ sec=Math.max(0,Math.round(sec)); const hh=Math.floor(sec/3600), mm=Math.floor(sec%3600/60), ss=sec%60; return hh?`${hh}h ${mm}m`:(mm?`${mm}m ${ss}s`:`${ss}s`); };
+  const when=ts=>{ try{ return new Date(ts*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(_){ return ''; } };
   (s.jobs||[]).forEach(j=>{ const tr=el('tr');
     const reset=j.is_default?`<span class="muted" style="font-size:var(--font-size-sm);">default</span>`
       :`<button onclick="resetSchedule('${j.kind}')" style="font-size:var(--font-size-sm);" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
-    tr.innerHTML=`<td class="l sym">${esc(j.label)}</td><td class="l muted">${esc(j.cadence)}</td>`+
+    const lr=j.last_run;
+    const lastCell=lr?`<span class="${lr.status==='done'?'':'neg'}">${dur(lr.seconds)}</span> <span class="muted" style="font-size:var(--font-size-sm);">${esc(when(lr.finished))}${lr.status==='done'?'':' · FAILED'}${lr.source&&lr.source!=='scheduler'?' · manual':''}</span>`
+      :`<span class="muted" style="font-size:var(--font-size-sm);">no history yet</span>`;
+    const typCell=j.typical_seconds!=null?dur(j.typical_seconds):'<span class="muted">—</span>';
+    const warn=(j.conflicts||[]).map(c=>`<div class="neg" style="font-size:var(--font-size-sm);font-weight:normal;">⚠ typically runs until ~${esc(c.ends)}, past when ${esc(c.with_label)} is due (${esc(c.day)} ${esc(c.due)}) — that job will wait in the queue</div>`).join('');
+    tr.innerHTML=`<td class="l sym">${esc(j.label)}${warn}</td><td class="l muted">${esc(j.cadence)}</td>`+
       `<td style="white-space:nowrap;"><input id="sch-h-${j.kind}" type="number" min="0" max="23" value="${j.hour}" style="width:44px;"/> <span class="muted">:</span> `+
       `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
+      `<td class="l" style="white-space:nowrap;">${lastCell}</td><td style="white-space:nowrap;">${typCell}</td>`+
       `<td class="l" style="white-space:nowrap;"><button onclick="saveSchedule('${j.kind}')">↳ SAVE</button> <span style="display:inline-block;min-width:70px;">${reset}</span></td>`+
       `<td style="white-space:nowrap;"><button class="mut-btn" onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></td>`;
     t.appendChild(tr); });
