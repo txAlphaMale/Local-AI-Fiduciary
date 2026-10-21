@@ -6057,27 +6057,6 @@ def _news_note(ok, detail=None, where=""):
             print(f"[news] Tavily call failed ({where}): {detail}", flush=True)
 
 
-def _news_http_detail(r):
-    """One readable sentence per failure: what is wrong, then what to do (shown on RESEARCH -> ALERTS and logged).
-    Tester report 2026-10-21: a bare '404 from mcpo ... not registered' did not tell a new user where to look."""
-    if r.status_code == 404:
-        return ("News search is unavailable: mcpo has no running 'tavily' helper (HTTP 404). Usually the Tavily API key has "
-                "not reached mcpo yet or the helper crashed on start. Fix: (1) SETTINGS -> SECRETS & KEYS: check the Tavily key "
-                "shows as saved; (2) run `docker compose up -d mcpo --force-recreate` (a plain restart does NOT load a newly "
-                "saved key); (3) still failing? run `docker logs --tail 50 fiduciary-mcpo` and look for the tavily error.")
-    if r.status_code in (401, 403):
-        return (f"News search is unavailable: mcpo refused the request (HTTP {r.status_code}). MCPO_API_KEY in .env must be the "
-                "same for portfolio-api and mcpo; after changing it run "
-                "`docker compose up -d --force-recreate mcpo portfolio-api`.")
-    if r.status_code == 429:
-        return ("News search is rate-limited (HTTP 429): Tavily or your plan's request limit was reached. It retries "
-                "on the next news pull; check usage in your Tavily dashboard.")
-    body = (r.text or "")[:160].replace("\n", " ")
-    return (f"News search failed (HTTP {r.status_code}): the Tavily helper started but the search errored -- most often an "
-            f"invalid or out-of-credit Tavily key (check it at tavily.com, then re-save it under SECRETS & KEYS and run "
-            f"`docker compose up -d mcpo --force-recreate`). Detail: {body}")
-
-
 def _tavily_key():
     """Tavily key, read fresh so a key saved in SETTINGS -> SECRETS & KEYS applies at once. A key set in the real .env
     wins (same rule as everywhere else); otherwise the encrypted store, then whatever the boot merge put in the env."""
@@ -6089,64 +6068,13 @@ def _tavily_key():
 tavily_client.configure(_tavily_key)
 
 
-def _tavily_via_mcpo(query, days, max_results):
-    """LEGACY path (mcpo -> mcp-tavily), used only when this process has no Tavily key of its own (key present only in
-    mcpo's environment). -> same shape as tavily_client.search plus "text" (the raw body)."""
-    try:
-        r = requests.post(f"{MCPO}/tavily/tavily_news_search",
-                          headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-                          json={"query": query, "days": days, "max_results": max_results}, timeout=45)
-    except Exception as e:
-        return {"ok": False, "articles": [], "text": "", "http": None, "detail": f"{type(e).__name__}: {str(e)[:160]}", "via": "mcpo"}
-    if r.status_code >= 400:
-        return {"ok": False, "articles": [], "text": "", "http": r.status_code, "detail": _news_http_detail(r), "via": "mcpo"}
-    try:
-        data = r.json()
-    except ValueError:
-        data = r.text
-    if isinstance(data, str):
-        arts = _parse_tavily_text(data)
-    elif isinstance(data, dict) and isinstance(data.get("results"), list):
-        arts = data["results"]
-    else:
-        found = []
-
-        def walk(o):
-            if found:
-                return
-            if isinstance(o, list) and o and isinstance(o[0], dict) and any(k in o[0] for k in ("title", "url", "content")):
-                found.extend(o)
-            elif isinstance(o, dict):
-                for v in o.values():
-                    walk(v)
-            elif isinstance(o, list):
-                for v in o:
-                    walk(v)
-        walk(data)
-        arts = found
-    return {"ok": True, "articles": arts, "text": r.text or "", "http": r.status_code, "detail": "", "via": "mcpo"}
-
-
 def _tavily_call(query, days, max_results):
-    """ONE entry point for every Tavily news search: direct to api.tavily.com when a key is visible to this process,
-    else the legacy mcpo helper. -> {"ok","articles","text","http","detail","via"}."""
-    if tavily_client.configured():
-        res = tavily_client.search(query, days, max_results)
-        res["text"] = tavily_client.as_text(res["articles"]) if res["ok"] else ""
-        res["via"] = "direct"
-        # TRANSITION SAFETY NET: a failure that is NOT about the key/plan (bad request, 5xx, network, odd reply) is
-        # retried through the old mcpo helper, so a surprise in the new path cannot take news down. Key/limit errors
-        # (401/429/432/433) would fail identically there, so they are reported as they are. The direct error is kept
-        # in "direct_detail" so the TEST button and logs still show that the fallback was needed.
-        if not res["ok"] and res.get("http") not in (401, 429, 432, 433):
-            legacy = _tavily_via_mcpo(query, days, max_results)
-            if legacy["ok"]:
-                legacy["via"] = "mcpo-fallback"
-                legacy["direct_detail"] = res["detail"]
-                print(f"[news] direct Tavily call failed ({res['detail'][:120]}); answered via the legacy mcpo helper", flush=True)
-                return legacy
-        return res
-    return _tavily_via_mcpo(query, days, max_results)
+    """ONE entry point for every Tavily news search (direct to api.tavily.com; the old mcpo/mcp-tavily route was removed
+    2026-10-21). -> {"ok","articles","text","http","detail","via"}. With no key the detail says where to add it."""
+    res = tavily_client.search(query, days, max_results)
+    res["text"] = tavily_client.as_text(res["articles"]) if res["ok"] else ""
+    res["via"] = "direct"
+    return res
 
 
 def _news(sym, name, with_meta=False):
@@ -10579,7 +10507,7 @@ SECRET_SPECS = [
     {"key": "MONARCH_EMAIL",         "label": "Monarch email",                   "group": "Portfolio (Monarch)",    "scope": "mcpo-file"},
     {"key": "MONARCH_PASSWORD",      "label": "Monarch password",                "group": "Portfolio (Monarch)",    "scope": "mcpo-file"},
     {"key": "MONARCH_MFA_SECRET",    "label": "Monarch MFA / TOTP secret",       "group": "Portfolio (Monarch)",    "scope": "mcpo-file"},
-    {"key": "TAVILY_API_KEY",        "label": "Tavily API key (news)",           "group": "Market data",            "scope": "mcpo-file"},
+    {"key": "TAVILY_API_KEY",        "label": "Tavily API key (news)",           "group": "Market data",            "scope": "app"},
     # MCPO_API_KEY stays scope="mcpo" (env-only, no UI path) -- unlike the 4 above, it's passed to
     # mcpo via a `--api-key ${MCPO_API_KEY}` CLI flag in docker-compose.yml's `command:`, which
     # Compose resolves ONLY from the top-level .env at compose-parse time -- env_file entries
@@ -10655,7 +10583,7 @@ _write_secrets(_read_secrets())   # one-time-per-boot upgrade pass: re-encrypts 
 
 
 # ---- mcpo-scope secrets bridge (2026-07-24) -----------------------------------------------
-# Writes the "mcpo-file" scope keys (Monarch email/password/MFA secret, Tavily key) out to a
+# Writes the "mcpo-file" scope keys (Monarch email/password/MFA secret) out to a
 # plain KEY=VALUE file on the volume shared with the mcpo container (docker-compose.yml's
 # ./mcpo-secrets bind mount) -- mcpo's OWN compose entry reads that same host path as a second
 # env_file. A key already set in portfolio-api's REAL environment (env_locked, i.e. a real .env
@@ -12434,34 +12362,12 @@ _disc_lock = threading.Lock()
 _disc_state = {"status": "idle", "started": 0}
 
 
-def _parse_tavily_text(text):
-    """mcpo's tavily_news_search returns a TEXT blob: per-article 'Title: ..', 'URL: ..', 'Content: ..',
-    'Published: ..' lines. Parse it into article dicts."""
-    arts, cur = [], {}
-    for line in (text or "").split("\n"):
-        s = line.strip()
-        if s.startswith("Title:"):
-            if cur.get("title"):
-                arts.append(cur)
-                cur = {}
-            cur["title"] = s[6:].strip()
-        elif s.startswith("URL:"):
-            cur["url"] = s[4:].strip()
-        elif s.startswith("Content:"):
-            cur["content"] = s[8:].strip()
-        elif s.startswith("Published:"):
-            cur["published_date"] = s[10:].strip()
-    if cur.get("title"):
-        arts.append(cur)
-    return arts
-
-
 TAVILY_CACHE_TTL = int(os.environ.get("TAVILY_CACHE_TTL", "7200"))   # ~2h -- news moves fast, but
 # an outage should still serve the last successful pull for this exact query, not come up empty.
 
 
 def _tavily_results(query, days=14, max_results=5, with_meta=False):
-    """Tavily news search -> list of article dicts (direct to api.tavily.com; legacy mcpo helper only when this process has no key).
+    """Tavily news search -> list of article dicts (direct to api.tavily.com).
     Disk-persisted last-known-good cache (2026-07-30, RESUME-TRACKER "last-known-good cache" item
     -- Tavily previously had NO caching/fallback at all: any error (rate-limit, quota, non-200,
     timeout, exception) returned [] outright, meaning a Tavily outage lost access to PREVIOUSLY
@@ -12619,9 +12525,9 @@ def get_discovery():
 @app.get("/api/news-status")
 def get_news_status(request: Request, probe: int = 0):
     """Health of the Tavily news path (2026-10-19; sibling of /api/edgar-status). Counters are
-    since this process started. `?probe=1` makes ONE live, uncached call through mcpo (uses a
-    Tavily credit) and reports exactly what came back -- the fastest way to tell 'mcpo's Tavily
-    server is down' (HTTP 404) from 'key rejected' from 'working'."""
+    since this process started. `?probe=1` makes ONE live, uncached call to Tavily (uses a
+    Tavily credit) and reports exactly what came back -- the fastest way to tell 'no key' from
+    'key rejected' from 'plan limit' from 'working'."""
     out = {}
     if probe:
         if not _require_admin(request):          # a probe spends a Tavily credit
@@ -12629,13 +12535,12 @@ def get_news_status(request: Request, probe: int = 0):
         t0 = time.time()
         res = _tavily_call("SPY stock news", 3, 1)
         _news_note(res["ok"], None if res["ok"] else res["detail"], "probe")
-        out["probe"] = {"ok": res["ok"], "via": res["via"], "http": res["http"],
-                        **({"articles": len(res["articles"])} if res["ok"] else {"detail": res["detail"]}),
-                        **({"direct_detail": res["direct_detail"]} if res.get("direct_detail") else {})}
+        out["probe"] = {"ok": res["ok"], "http": res["http"],
+                        **({"articles": len(res["articles"])} if res["ok"] else {"detail": res["detail"]})}
         out["probe"]["ms"] = int((time.time() - t0) * 1000)
     with _NEWS_DIAG_LOCK:
         diag = dict(_NEWS_DIAG)
-    return {**diag, **out, "mcpo": MCPO, "via": "direct" if tavily_client.configured() else "mcpo", "cache_ttl_s": TAVILY_CACHE_TTL, "stale_after_s": NEWS_STALE_AFTER}
+    return {**diag, **out, "configured": tavily_client.configured(), "cache_ttl_s": TAVILY_CACHE_TTL, "stale_after_s": NEWS_STALE_AFTER}
 
 
 @app.post("/api/run-discovery")

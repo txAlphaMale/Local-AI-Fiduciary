@@ -5894,8 +5894,12 @@ function secretsContent(){
           row.appendChild(lnote);
         } else if(it.scope==='mcpo-file'){
           const mnote=el('span','muted'); mnote.style.cssText='font-size:var(--font-size-sm);';
-          mnote.textContent=it.key==='TAVILY_API_KEY' ? '· applies immediately — the app now calls Tavily directly (no mcpo restart)' : '· applies on next `docker compose up -d mcpo --force-recreate`, not portfolio-api\'s (plain `up -d mcpo` alone won\'t pick this up)';
+          mnote.textContent='· applies on next `docker compose up -d mcpo --force-recreate`, not portfolio-api\'s (plain `up -d mcpo` alone won\'t pick this up)';
           row.appendChild(mnote);
+        } else if(it.key==='TAVILY_API_KEY'){
+          const tnote=el('span','muted'); tnote.style.cssText='font-size:var(--font-size-sm);';
+          tnote.textContent='· applies immediately — the app calls Tavily directly (no restart)';
+          row.appendChild(tnote);
         }
       } else {
         const note=el('span','muted'); note.style.cssText='font-size:var(--font-size-sm);';
@@ -5912,8 +5916,7 @@ function secretsContent(){
         const hint=el('span','muted'); hint.style.cssText='font-size:var(--font-size-sm);'; hint.textContent='Runs one live search (uses one Tavily credit) with the SAVED key.';
         tb.onclick=async()=>{ tb.disabled=true; res.className='muted'; res.textContent='Searching…';
           try{ const r=await fetch('/api/news-status?probe=1'); const d=await r.json(); const p=d.probe||{};
-            if(p.ok && p.via==='mcpo-fallback'){ res.className='neg'; res.textContent='⚠ News works, but only through the legacy mcpo helper — the DIRECT call failed: '+(p.direct_detail||'unknown reason')+'\nPlease report this message.'; }
-            else if(p.ok){ res.className='pos'; res.textContent='✓ Tavily answered ('+(p.via==='direct'?'direct':'via the legacy mcpo helper — no key is saved in this app yet')+', '+(p.articles!=null?p.articles+' article(s), ':'')+p.ms+' ms).'; }
+            if(p.ok){ res.className='pos'; res.textContent='✓ Tavily answered ('+(p.articles!=null?p.articles+' article(s), ':'')+p.ms+' ms).'; }
             else{ res.className='neg'; res.textContent='✗ '+(p.detail||d.error||('HTTP '+r.status)); }
           }catch(e){ res.className='neg'; res.textContent='✗ '+e; }
           tb.disabled=false; };

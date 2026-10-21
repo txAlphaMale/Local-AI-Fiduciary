@@ -137,11 +137,11 @@ typed `http://` URL still gets you there automatically instead of a connection e
 > (Finnhub / SEC user-agent / SnapTrade / the AI-provider keys below). Anything already set
 > in `.env` wins and shows read-only.
 >
-> **Tavily (2026-10-21):** the app now calls Tavily directly, so a Tavily key saved in the SECRETS panel
-> applies **immediately** (use the TEST TAVILY NEWS SEARCH button next to it) — no mcpo recreate needed. The
-> mcpo notes below still apply to **Monarch**.
+> **Tavily (2026-10-21):** the app calls Tavily directly (the mcpo helper was removed), so a Tavily key saved in the
+> SECRETS panel applies **immediately** (use the TEST TAVILY NEWS SEARCH button next to it) — no recreate. The mcpo
+> notes below apply to **Monarch** only.
 >
-> Monarch and Tavily credentials (2026-07-24) are ALSO editable from the same SECRETS panel now
+> Monarch credentials (2026-07-24) are ALSO editable from the same SECRETS panel now
 > — portfolio-api writes them to `mcpo-secrets/mcpo.env`, which the mcpo container reads the next
 > time it's **recreated**: `docker compose up -d mcpo --force-recreate` (not `docker compose
 > restart mcpo` — a plain restart reuses the container's existing environment and will NOT pick up

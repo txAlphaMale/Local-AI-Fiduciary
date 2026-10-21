@@ -25,7 +25,7 @@
 name: fiduciary
 
 services:
-  # ---- MCP bridge: exposes MCP servers (Monarch, Tavily, time) over HTTP ------
+  # ---- MCP bridge: exposes MCP servers (Monarch, time) over HTTP ------
   # Only stdio (uvx) servers here, so there are NO streamable-http sidecars and
   # therefore no startup-order race — no depends_on needed. Not published to the
   # host: only portfolio-api (same network) talks to it.
