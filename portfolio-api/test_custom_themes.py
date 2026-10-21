@@ -38,6 +38,11 @@ class TestThemeHelpers(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
+    def js2(self, body):
+        r = subprocess.run(["node", "-e", PRELUDE + _fn("wheelHitToHs") + _fn("wheelHsToXY") + body], capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
     def test_colour_conversions_round_trip_and_known_values(self):
         out = self.js("""
         let bad=0; for(let i=0;i<4000;i++){ const r=Math.floor(Math.random()*256),g=Math.floor(Math.random()*256),b=Math.floor(Math.random()*256);
@@ -81,8 +86,16 @@ class TestThemeHelpers(unittest.TestCase):
         block = HTML[HTML.index(':root[data-theme="cobalt"]'):HTML.index(':root[data-theme="highcontrast"]')]
         self.assertEqual(editable, set(re.findall(r"(--[a-z0-9]+):#", block)))   # a built-in theme sets exactly these
 
+    def test_wheel_geometry_round_trips_and_clamps_to_the_rim(self):
+        out = self.js2("""
+        let bad=0; for(let h=0;h<360;h+=7) for(let s=5;s<=100;s+=19){ const p=wheelHsToXY(h,s,100), q=wheelHitToHs(p.x,p.y,100);
+          if(Math.abs(q.s-s)>0.01 || Math.abs(((q.h-h+540)%360)-180)>0.01) bad++; }
+        const far=wheelHitToHs(500,0,100), left=wheelHitToHs(-50,0,100), down=wheelHitToHs(0,50,100);
+        console.log(JSON.stringify([bad, far.s, far.h, Math.round(left.h), Math.round(left.s), Math.round(down.h)]));""")
+        self.assertEqual(out, [0, 100, 0, 180, 50, 90])
+
     def test_ui_wiring(self):
-        for needle in ("themeEditor()", "type='color'", "NEW CUSTOM THEME FROM THIS", "SAVE THEME", "IMPORT…", "EXPORT", "Readability",
+        for needle in ("themeEditor()", "openColorDialog(", "CUSTOMIZE…", "NEW CUSTOM THEME FROM THIS", "SAVE THEME", "IMPORT…", "EXPORT", "Readability",
                        "THEME_EDIT=null; applyTheme(t.key)", "clearInlineTheme();\n  let custom=null;"):
             self.assertIn(needle, HTML)
         self.assertEqual(len(__import__("re").findall(r"\{v:'--[a-z0-9]+'", HTML.split("const THEME_OVERLAY_VARS")[0].split("const THEME_VARS")[1])), 12)
