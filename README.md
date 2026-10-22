@@ -126,6 +126,11 @@ Then run **`python setup.py`** to validate your config and print any remaining s
 
 The Fiduciary needs your holdings. Set `PORTFOLIO_PROVIDER` in `.env` (default: `csv`).
 
+You can also **mix** them: with a live source (SnapTrade, Plaid or Monarch) active, tick **"Also include my
+manual HOLDINGS list"** in SETTINGS → ACCOUNTS and your hand-entered positions are added alongside the live
+accounts — handy for an institution the aggregator cannot reach. Don't enter anything twice (the app warns when
+the same institution appears in both). Manual loans and credit cards are always included.
+
 ### Data sources — supported paths
 
 - **`csv`** *(most portable — no brokerage account required)*: maintain a simple
