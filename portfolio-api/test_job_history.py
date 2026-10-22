@@ -105,6 +105,15 @@ class TestApiAndUi(unittest.TestCase):
         src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
         self.assertIn('_enqueue("backtest", source="manual")', src.split("def run_backtest_ep")[1][:400])
 
+    def test_schedule_table_fits_its_frame(self):
+        """Tester screenshot 2026-10-22 (Linux): the table ran past the panel because the global nowrap td rule + a one-line warning
+        made the JOB column ~720px wide and the three buttons sat in separate columns."""
+        body = HTML.split("function scheduleContent()")[1].split("function saveSchedule")[0]
+        self.assertIn('class="l sym" style="white-space:normal;min-width:150px;max-width:340px;"', body)      # job name + warnings wrap
+        self.assertIn("overflow-x:auto", body)                                                           # last resort: scroll inside the box
+        self.assertEqual(body.count("<th"), 6)                                                           # 6 columns (was 7): the buttons share one cell
+        self.assertEqual(body.count("saveSchedule('${j.kind}')") + body.count("runScheduleNow('${j.kind}'"), 2)
+
     def test_worker_records_each_finished_run(self):
         src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
         self.assertIn('_record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))',
