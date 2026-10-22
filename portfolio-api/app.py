@@ -3038,6 +3038,13 @@ def _build_csv():
             rows = list(_csv.DictReader(f))
     except FileNotFoundError:
         return _derive([], [], [], [], 0.0, 0.0, 0.0)
+    accounts, positions, by_account, nw = _csv_raw(rows)
+    return _derive(accounts, positions, by_account, accounts, nw, nw, 0.0)
+
+
+def _csv_raw(rows):
+    """holdings.csv rows -> (accounts, positions, by_account, total_value) in the normalized provider shape. Shared by the
+    CSV provider (_build_csv) and by the 'also include my manual holdings' merge (_merge_manual_holdings)."""
     accounts_map, positions = {}, []
     # The same account NAME at two institutions ("Brokerage" at Robinhood and at Fidelity -- the editor's
     # default name) used to collapse into ONE account labelled with the first row's institution and holding
@@ -3088,7 +3095,7 @@ def _build_csv():
                    "holdings": [p for p in positions if p["account"] == a["name"]]}
                   for a in accounts]
     nw = round(sum(p["value"] or 0 for p in positions), 2)
-    return _derive(accounts, positions, by_account, accounts, nw, nw, 0.0)
+    return accounts, positions, by_account, nw
 
 
 def _dig(obj, *keys):
@@ -3178,7 +3185,7 @@ def get_provider(request: Request):
     opts = [{"value": k, "label": v} for k, v in _PROVIDER_LABELS.items() if k != "monarch" or _monarch_ack() is not None]
     active = os.environ.get("PORTFOLIO_PROVIDER", "csv").lower()
     locked = False   # a saved choice beats the .env default at every boot (see the boot override near _boot_merge)
-    return {"active": active, "options": opts, "env_locked": bool(locked)}
+    return {"active": active, "options": opts, "env_locked": bool(locked), "include_manual": _include_manual()}
 
 
 @app.post("/api/integrations/provider")
@@ -3186,7 +3193,16 @@ async def post_provider(req: Request):
     admin = _require_admin(req)
     if not admin:
         return JSONResponse({"error": "admin only"}, status_code=403)
-    prov = str(((await req.json()) or {}).get("provider") or "").lower()
+    body = (await req.json()) or {}
+    if "include_manual" in body and "provider" not in body:          # the "also include my manual holdings" checkbox
+        stored = _read_settings()
+        stored["INCLUDE_MANUAL_HOLDINGS"] = bool(body.get("include_manual"))
+        store.write_json(SETTINGS_FILE, stored)
+        _cache["data"], _cache["ts"] = None, 0
+        audit.emit("integration.provider.changed", request=req, actor=admin["id"], actor_name=admin.get("username"),
+                   resource="/api/integrations/provider", detail={"include_manual": bool(body.get("include_manual"))})
+        return {"ok": True, "include_manual": bool(body.get("include_manual"))}
+    prov = str(body.get("provider") or "").lower()
     if prov not in _PROVIDER_LABELS:
         return JSONResponse({"error": "Unknown data source."}, status_code=400)
     if prov == "monarch" and _monarch_ack() is None:
@@ -3263,6 +3279,75 @@ async def post_snaptrade_portal(request: Request):
     return {"ok": True, "url": url, "expires_in_seconds": 300}
 
 
+# ---- Manual holdings alongside a live source (2026-10-22). The provider setting still picks ONE live source, but the user
+# can also keep a hand-entered HOLDINGS list (an institution the aggregator cannot reach, a private holding, an old 401k)
+# and have it included in the same dashboard. Off by default; stored in settings.json; switched in SETTINGS -> ACCOUNTS.
+def _include_manual():
+    try:
+        return bool(_read_settings().get("INCLUDE_MANUAL_HOLDINGS"))
+    except Exception:
+        return False
+
+
+def _inst_key(s):
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _merge_manual_holdings(d):
+    """Fold the HOLDINGS (holdings.csv) accounts and positions into the portfolio a live provider built, then re-derive so
+    consolidation, weights, allocation and movers all cover both. Manual accounts are flagged manual=True; a manual account
+    whose name matches a live one is renamed '<name> (manual)' so neither hides the other. Institutions that appear in BOTH
+    sources are reported in d["manual_holdings"]["possible_overlap"] (the same money entered twice would be double-counted --
+    the app cannot tell, the user has to decide). Never raises: a failure leaves the live portfolio intact with the error noted."""
+    info = {"included": True, "accounts": 0, "positions": 0, "value": 0.0, "possible_overlap": [], "error": None}
+    d["manual_holdings"] = info
+    try:
+        rows = _read_holdings_csv_rows()
+        if not rows:
+            return d
+        c_accounts, c_positions, c_by_account, c_value = _csv_raw(rows)
+        if not c_accounts:
+            return d
+        taken = {(a.get("name") or "").strip().lower() for a in d.get("accounts") or []}
+        renames = {}
+        for a in c_accounts:
+            old = a["name"]
+            if old.strip().lower() in taken:
+                a["name"] = f"{old} (manual)"
+                renames[old] = a["name"]
+            a["manual"] = True
+            a["institution"] = a.get("institution") or "Manual"
+            a["id"] = "manual:" + a["name"]
+        for p in c_positions:
+            p["account"] = renames.get(p["account"], p["account"])
+            p["institution"] = p.get("institution") or "Manual"
+            p["manual"] = True
+        for b in c_by_account:
+            b["account"] = renames.get(b["account"], b["account"])
+            b["institution"] = b.get("institution") or "Manual"
+            b["manual"] = True
+        live_inst = {_inst_key(a.get("institution")) for a in d.get("accounts") or [] if a.get("is_asset") is not False}
+        live_inst.discard("")
+        for inst in sorted({a["institution"] for a in c_accounts if a["institution"] != "Manual"}):
+            k = _inst_key(inst)
+            if any(k in li or li in k for li in live_inst):
+                info["possible_overlap"].append(inst)
+        bo = [{"name": b.get("account"), "institution": b.get("institution"), "balance": b.get("value"), "type": b.get("type")}
+              for b in d.get("investment_balance_accounts") or []]
+        inv_before = d.get("investment_account_count") or 0
+        new = _derive((d.get("accounts") or []) + c_accounts, (d.get("positions") or []) + c_positions,
+                      (d.get("by_account") or []) + c_by_account, [],
+                      (d.get("net_worth") or 0) + c_value, (d.get("total_assets") or 0) + c_value,
+                      d.get("total_liabilities") or 0, balance_only=bo)
+        new["investment_account_count"] = inv_before + len(c_accounts)
+        d.update(new)                                    # provider-specific extras (snaptrade_notes, plaid errors...) are kept
+        info.update(accounts=len(c_accounts), positions=len(c_positions), value=round(c_value, 2))
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        print(f"[portfolio] manual holdings could not be merged: {info['error']}", flush=True)
+    return d
+
+
 def build():
     """Dispatch to the configured portfolio provider (PORTFOLIO_PROVIDER=monarch|csv|snaptrade).
 
@@ -3295,6 +3380,8 @@ def build():
         notifications.record_integration_result(p, ok=True)
     except Exception:
         pass
+    if p != "csv" and _include_manual():
+        d = _merge_manual_holdings(d)
     d = _apply_manual_liabilities(d)   # 2026-07-30 -- overlay hand-entered loans/credit cards
                                        # (see the "Manual liability accounts" section below)
     d["portfolio_provider"] = p   # 2026-07-24 -- lets the frontend know which provider is active
@@ -3421,6 +3508,7 @@ def get_holdings_csv():
     -> Portfolio provider)."""
     return {"rows": _read_holdings_csv_rows(), "path": _holdings_csv_path(),
             "active_provider": os.environ.get("PORTFOLIO_PROVIDER", "csv").lower(),
+            "include_manual": _include_manual(),
             "type_hints": HOLDINGS_TYPE_HINTS}
 
 
