@@ -156,3 +156,67 @@ def run(weights, sleeve_targets, hist_fn, snapshots, today=None, proxies=None):
                      "mix?', not 'what did my account literally earn' (see the tracked TWR and the "
                      "money-weighted views for that). Excess vs policy > 0 = implementation added "
                      "value over pure allocation.")}
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# HOLDINGS-BASED RETURN (2026-10-23): "what did the holdings I actually owned each day do?" -- the return a contribution cannot inflate.
+# For each day pair (d0 -> d1) the return is  sum(shares_d0 x (close_d1 - close_d0)) / sum(shares_d0 x close_d0)  over the tickers that
+# have price history. Because the shares are those held at the START of the day, buying more shares (a 401(k) deposit) changes the
+# next day's weights but never counts as performance. Price return only (no dividends), and only for names with price history --
+# the caller reports that coverage. This is the cash-flow-aware answer Quicken gets from transactions, built from the daily share log.
+# ---------------------------------------------------------------------------------------------------------------------------
+import bisect
+
+MAX_DAILY_MOVE = 0.25        # a one-day move beyond this is treated as a data glitch (split, bad print), not a return
+
+
+def _closer(series):
+    """series [[date, close], ...] ascending -> price_on(date) = last close on/before date (None before the first)."""
+    dates = [r[0] for r in series or []]
+    closes = [_f(r[1]) for r in series or []]
+
+    def price_on(date):
+        i = bisect.bisect_right(dates, date) - 1
+        return closes[i] if i >= 0 else None
+    return price_on
+
+
+def holdings_return_series(share_rows, hist_fn, spy_series, drop_dates=()):
+    """share_rows: [[date, {ticker: shares}], ...] ascending (the wash-sale share log). Returns
+    {"series": [{date, port, spy}], "covered_tickers": [...], "uncovered_tickers": [...], "glitch_days": n}. Both indexes start at 100 on
+    the first usable day. Rows whose date is in drop_dates (proven-bad snapshots) are skipped."""
+    rows = [r for r in (share_rows or []) if r and r[0] not in set(drop_dates) and (r[1] or {})]
+    rows.sort(key=lambda r: r[0])
+    if len(rows) < 2:
+        return {"series": [], "covered_tickers": [], "uncovered_tickers": [], "glitch_days": 0}
+    tickers = sorted({t for _, q in rows for t in q})
+    price = {}
+    for t in tickers:
+        s = hist_fn(t) or []
+        if s:
+            price[t] = _closer(s)
+    spy_p = _closer(spy_series)
+    port = spy = 100.0
+    out = [{"date": rows[0][0], "port": 100.0, "spy": 100.0}]
+    glitches = 0
+    for (d0, q0), (d1, _q1) in zip(rows, rows[1:]):
+        gain = base = 0.0
+        for t, sh in (q0 or {}).items():
+            pf = price.get(t)
+            if not pf or not sh:
+                continue
+            p0, p1 = pf(d0), pf(d1)
+            if p0 and p1 and p0 > 0:
+                gain += sh * (p1 - p0)
+                base += sh * p0
+        r = (gain / base) if base > 0 else 0.0
+        if abs(r) > MAX_DAILY_MOVE:
+            r = 0.0
+            glitches += 1
+        s0, s1 = spy_p(d0), spy_p(d1)
+        rs = (s1 / s0 - 1.0) if (s0 and s1 and s0 > 0) else 0.0
+        port *= (1.0 + r)
+        spy *= (1.0 + rs)
+        out.append({"date": d1, "port": round(port, 4), "spy": round(spy, 4)})
+    return {"series": out, "covered_tickers": sorted(price), "uncovered_tickers": [t for t in tickers if t not in price],
+            "glitch_days": glitches}

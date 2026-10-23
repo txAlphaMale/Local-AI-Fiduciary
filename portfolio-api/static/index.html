@@ -1068,7 +1068,7 @@ async function load(refresh, bg){
     const [an,ins,ret,ide,dis,str,pscn,tax,txa,fl,exp,lt,rk,sc,inc,acc,setg,secg,kng,vh,gnd,est,rks,ats,szg,rth,lev,avn,ths,rea,biz,alt,sch,btr,insu,hdg,cdb,prf,nrr,ben,con,setp,hcsv,mlia,areg]=await Promise.all([
       gj('/api/analysis'),gj('/api/rebalance'),gj('/api/retirement'),
       gj('/api/opportunities'),gj('/api/discovery'),gj('/api/paper'+(CURRENT_SCENARIO_ID?('?scenario_id='+encodeURIComponent(CURRENT_SCENARIO_ID)):'')),gj('/api/paper/scenarios'),gj('/api/tax'),gj('/api/tax-audit'),gj('/api/fees-liquidity'),gj('/api/exposure'),gj('/api/lookthrough'),gj('/api/risk-metrics'),gj('/api/scorecard'),gj('/api/income-plan'),gj('/api/accounts-config'),gj('/api/settings'),gj('/api/secrets'),gj('/api/knowledge'),gj('/api/value-history'),gj('/api/grounding'),gj('/api/estate'),gj('/api/risk-suite'),gj('/api/attribution'),gj('/api/sizing'),gj('/api/roth'),gj('/api/leverage'),gj('/api/avenues'),gj('/api/theses'),gj('/api/realestate'),gj('/api/business'),gj('/api/alerts'),gj('/api/schedule'),gj('/api/backtest'),gj('/api/insurance'),gj('/api/hedging'),gj('/api/cashdebt'),gj('/api/performance'),gj('/api/narrative'),gj('/api/benefits'),gj('/api/continuity'),gj('/api/setup-progress'),gj('/api/holdings-csv'),gj('/api/manual-liabilities'),gj('/api/account-registry')]);
-    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv; MANLIAB=mlia; ACCTREG=areg;
+    ANALYSIS=an; INSIGHTS=ins; RETIRE=ret; IDEAS=ide; DISCO=dis; STRAT=str; SCENARIOS=pscn; TAX=tax; TAXAUDIT=txa; FL=fl; EXP=exp; LT=lt; RISK=rk; SCORE=sc; INCOME=inc; ACCTCFG=acc; SETTINGS_CFG=setg; SECRETS_CFG=secg; KNOWLEDGE_CFG=kng; VH=vh; refreshReturnSeries(); GROUND=gnd; EST=est; RISKSUITE=rks; ATTRIB=ats; SIZING=szg; ROTH=rth; LEVERAGE=lev; AVENUES=avn; THESES=ths; REALESTATE=rea; BUSINESS=biz; ATTENTION=alt; SCHEDULE=sch; BT=btr; INS=insu; HEDGE=hdg; CASHDEBT=cdb; PERF=prf; NARR=nrr; BEN=ben; CONTIN=con; SETUPPROG=setp; HOLDCSV=hcsv; MANLIAB=mlia; ACCTREG=areg;
     // keep the scenario switcher pointed at a real scenario: adopt the server's resolved default
     // the first time (nothing chosen yet), or if a previously-selected scenario_id was deleted.
     if(STRAT && STRAT.id && (!CURRENT_SCENARIO_ID || (SCENARIOS && SCENARIOS.scenarios && !SCENARIOS.scenarios.some(s=>s.id===CURRENT_SCENARIO_ID)))){
@@ -1177,6 +1177,10 @@ W('allocation','Dashboard','Allocation donuts (institution / asset type)',
   'Two doughnuts split your invested value — one by custodian/institution, one by asset type (stock, ETF, cash).',
   'Each slice is a share of invested value; the legend lists top holdings with percentages. Institution concentration is custodial risk; asset-type mix is your rough stock/bond/cash posture.',
   'Use the asset-type donut for a quick check against your target mix, and the institution donut to notice if too much sits at one custodian.');
+W('perf-chart','Dashboard','Portfolio vs SPY and Value vs Cost Basis charts',
+  'Two charts at the top of the DASHBOARD, sharing one time-window selector (1M, 3M, 6M, 1Y, 3Y, ALL, or CUSTOM dates). PORTFOLIO vs SPY shows growth of 100 against the S&P 500 over the window you pick. PORTFOLIO VALUE vs COST BASIS shows, as bars, what the holdings with a known cost basis are worth and, as a line, what you paid for them.',
+  'RETURN (the default) is the price return of the holdings you owned each day: buying more shares — a 401(k) contribution, say — changes your holdings but is never counted as performance, which is the main thing that separates it from VALUE. VALUE is your total invested value, so deposits and withdrawals move it; it also used to show a few one-day collapses that were half-loaded snapshots (the app now refuses to record those, and the bad days were excluded). RETURN excludes dividends and only covers holdings that have public price history (the chart says what share of your money that is), so it will not match a broker\'s or Quicken\'s figure exactly. The VALUE vs COST BASIS chart records one point a day starting when it was added: a cost basis history cannot be rebuilt for earlier dates without your transactions, so its window starts there and grows. Holdings with no known cost basis (n/r) are left out of both bars and line so the comparison is like for like.',
+  'Pick a window with the buttons; the choice is remembered in this browser. Use RETURN to judge how your picks did against SPY; use VALUE vs COST BASIS to see how far your holdings have moved above what you put in. Long windows are shown weekly or monthly so the bars stay readable.');
 W('mix-pies','Dashboard','Mix pies: holdings, sector, asset class',
   'Three donut charts on the DASHBOARD that show the mix behind the cockpit tiles: MIX · HOLDINGS (your biggest positions as slices, so "XYZ is X% of the portfolio" is something you can see), MIX · SECTOR (how your direct stocks split by sector), and MIX · ASSET CLASS (equity, bonds, cash).',
   'A slice with a RED RING and a ⚠ in the legend is over a limit the cockpit also warns about: a single name above your position cap (the cap you set in your policy; with none set, 20%), or a sector above 35%. HOLDINGS has two views: DIRECT (what you own line by line) and INCL. FUND CONTENTS (adds your share of what is inside your mutual funds and ETFs, from the SEC look-through — a name can be bigger than it looks once your funds are counted). SECTOR does NOT break funds down: the data we have for funds covers asset class only, so every fund and ETF appears as ONE slice, "Mutual funds & ETFs (not sector-classified)". ASSET CLASS comes from the same look-through, so it needs that scan to have run.',
@@ -9054,22 +9058,7 @@ function drawCharts(d){
         borderWidth:m.items.map(i=>i.flag?3:1)}]},
       options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}}));
   });
-  // value-history line: portfolio vs SPY, both normalized to 100 at the first paired day (growth of 100)
-  const c=document.getElementById('c-value');
-  if(c){
-    const pts=((VH&&VH.history)||[]).filter(h=>(h.invested_value||h.net_worth)&&h.spy);
-    if(pts.length>=2){
-      const pv0=pts[0].invested_value||pts[0].net_worth, sp0=pts[0].spy;
-      const norm=(v,b)=>Math.round(v/b*1000)/10;
-      charts.push(new Chart(c,{type:'line',
-        data:{labels:pts.map(p=>p.date),datasets:[
-          {label:'Portfolio',data:pts.map(p=>norm(p.invested_value||p.net_worth,pv0)),borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
-          {label:'SPY',data:pts.map(p=>norm(p.spy,sp0)),borderColor:resolveColor('var(--color-info)'),backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
-        options:{responsive:true,maintainAspectRatio:false,
-          plugins:{legend:{display:true,position:'top',labels:{color:resolveColor('var(--color-text-muted)'),boxWidth:10,font:{size:10}}}},
-          scales:{x:{display:false},y:{ticks:{color:resolveColor('var(--color-text-muted)'),font:{size:9}},grid:{color:resolveColor('var(--color-border)')}}}}}));
-    }
-  }
+  drawPerfCharts();
 }
 function staleStamp(ts, warnHrs){
   warnHrs=warnHrs||30; if(!ts) return '';
@@ -9077,12 +9066,152 @@ function staleStamp(ts, warnHrs){
   const txt=h<1?Math.max(1,Math.round(h*60))+'m':(h<48?Math.round(h)+'h':Math.round(h/24)+'d');
   return `<span style="color:${col}">updated ${txt} ago${h>warnHrs?' ⚠ stale':''}</span>`;
 }
+// ---- Performance charts (2026-10-23). Two panels share one time-window selector (1M / 3M / 6M / 1Y / 3Y / ALL / custom):
+//  1) PORTFOLIO vs SPY -- mode RETURN (default): price return of the holdings you owned each day, so a contribution never counts as performance
+//     (from /api/portfolio-return); mode VALUE: your total invested value, contributions included (the original chart).
+//  2) PORTFOLIO VALUE vs COST BASIS -- bars = market value of the holdings whose cost basis is known, line = that cost basis; recorded daily,
+//     so it starts the day this feature was deployed (a cost basis history cannot be reconstructed without transactions).
+// The three helpers below are pure (unit-tested): window -> [start,end], rebase to 100, and bucketing long windows into weeks / months.
+const CH_WINDOWS=[['1m','1M'],['3m','3M'],['6m','6M'],['1y','1Y'],['3y','3Y'],['all','ALL'],['custom','CUSTOM']];
+let CH_WIN='3m', CH_MODE='return', CH_FROM='', CH_TO='';
+try{ CH_WIN=localStorage.getItem('fidChWin')||'3m'; CH_MODE=localStorage.getItem('fidChMode')||'return'; CH_FROM=localStorage.getItem('fidChFrom')||''; CH_TO=localStorage.getItem('fidChTo')||''; }catch(_){}
+let RET=null;     // /api/portfolio-return
+const _isoMinus=(iso,days)=>{ const d=new Date(iso+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-days); return d.toISOString().slice(0,10); };
+function chartWindowRange(win, from, to, firstDate, lastDate){
+  const DAYS={'1m':30,'3m':91,'6m':182,'1y':365,'3y':1095};
+  let start, end=lastDate;
+  if(win==='custom'){ start=from||firstDate; end=to||lastDate; }
+  else if(win==='all'||!DAYS[win]) start=firstDate;
+  else start=_isoMinus(lastDate, DAYS[win]);
+  if(start<firstDate) start=firstDate;
+  if(end>lastDate) end=lastDate;
+  return [start,end];
+}
+function sliceRebase(rows, start, end, keys){      // rows [{date,...}] -> rows within [start,end], each key rebased to 100 at the first row
+  const sel=rows.filter(r=>r.date>=start && r.date<=end);
+  if(!sel.length) return [];
+  const base={}; keys.forEach(k=>{ base[k]=sel[0][k]; });
+  return sel.map(r=>{ const o={date:r.date}; keys.forEach(k=>{ o[k]=base[k]?Math.round(r[k]/base[k]*1000)/10:null; }); return o; });
+}
+function bucketRows(rows, start, end){             // keep the LAST row of each day / ISO week / month depending on the window length
+  if(rows.length<2) return rows;
+  const span=(new Date(end)-new Date(start))/86400000;
+  const keyOf=span<=100 ? (d=>d) : (span<=400 ? (d=>{ const t=new Date(d+'T00:00:00Z'); const day=(t.getUTCDay()+6)%7; t.setUTCDate(t.getUTCDate()-day); return t.toISOString().slice(0,10); }) : (d=>d.slice(0,7)));
+  const out=[]; let lastKey=null;
+  rows.forEach(r=>{ const k=keyOf(r.date); if(k===lastKey) out[out.length-1]=r; else { out.push(r); lastKey=k; } });
+  return out;
+}
+function perfToolbar(){
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;margin:var(--space-2) 0 var(--space-1);font-size:var(--font-size-sm);';
+  const set=(k,v)=>{ try{ localStorage.setItem(k,v); }catch(_){} };
+  CH_WINDOWS.forEach(([k,lb])=>{
+    const b=el('span',null,lb), on=CH_WIN===k;
+    b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+    b.onclick=()=>{ CH_WIN=k; set('fidChWin',k); render(); };
+    bar.appendChild(b);
+  });
+  if(CH_WIN==='custom'){
+    const f=document.createElement('input'); f.type='date'; f.value=CH_FROM; f.title='from';
+    const t=document.createElement('input'); t.type='date'; t.value=CH_TO; t.title='to';
+    const go=el('button','mut-btn','APPLY'); go.style.cssText='font-size:var(--font-size-sm);padding:1px 8px;';
+    go.onclick=()=>{ CH_FROM=f.value||''; CH_TO=t.value||''; set('fidChFrom',CH_FROM); set('fidChTo',CH_TO); render(); };
+    bar.appendChild(f); bar.appendChild(el('span','muted','to')); bar.appendChild(t); bar.appendChild(go);
+  }
+  return bar;
+}
+function perfSeries(){            // -> {rows:[{date,port,spy}], mode, note, range:[s,e]|null}
+  const vh=((VH&&VH.history)||[]).filter(h=>(h.invested_value||h.net_worth)&&h.spy).map(h=>({date:h.date, port:h.invested_value||h.net_worth, spy:h.spy}));
+  const haveRet=!!(RET && RET.series && RET.series.length>=2);
+  const mode=(CH_MODE==='return' && haveRet)?'return':'value';
+  const rows=mode==='return'?RET.series:vh;
+  if(rows.length<2) return {rows:[], mode, range:null, note:''};
+  const range=chartWindowRange(CH_WIN, CH_FROM, CH_TO, rows[0].date, rows[rows.length-1].date);
+  return {rows:sliceRebase(rows, range[0], range[1], ['port','spy']), mode, range, wantReturn:CH_MODE==='return', haveRet};
+}
 function valuePanel(){
-  const n=((VH&&VH.history)||[]).filter(h=>(h.invested_value||h.net_worth)&&h.spy).length;
+  const wrap=el('div');
+  const ps=perfSeries();
   const p=el('div','panel');
-  p.innerHTML=`<div class="ph">PORTFOLIO vs SPY <span class="muted" style="font-size:var(--font-size-sm);">(growth of 100${n<2?' — accrues daily; need ≥2 days of history':''})</span></div>`;
-  const box=el('div'); box.style.cssText='height:150px;position:relative;margin-top:var(--space-2);'; box.innerHTML='<canvas id="c-value"></canvas>';
-  p.appendChild(box); return p;
+  const h=el('div','ph','PORTFOLIO vs SPY '); h.appendChild(wikiLink('perf-chart'));
+  const modes=el('span'); modes.style.cssText='margin-left:var(--space-3);font-size:var(--font-size-sm);';
+  [['return','RETURN'],['value','VALUE']].forEach(([k,lb])=>{ const b=el('span',null,lb); const on=CH_MODE===k;
+    b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+    b.onclick=()=>{ CH_MODE=k; try{ localStorage.setItem('fidChMode',k); }catch(_){} render(); }; modes.appendChild(b); });
+  h.appendChild(modes); p.appendChild(h);
+  p.appendChild(perfToolbar());
+  const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-xs);line-height:1.45;';
+  if(ps.wantReturn===true && !ps.haveRet){ cap.textContent=(RET&&RET.computing)?'Return series is being built (it fetches price history for your holdings) — showing VALUE for now.':'Return series not available yet — showing VALUE.'; }
+  else if(ps.mode==='return'){ cap.textContent='Growth of 100: price return of the holdings you owned each day — contributions do not count as performance. Excludes dividends. '+(RET.coverage_pct!=null?'Covers '+RET.coverage_pct+'% of your invested value (holdings with price history). ':'')+(RET.glitch_days?RET.glitch_days+' day(s) with a >25% move ignored as bad data. ':'')+'Window start = 100 for both lines.'; }
+  else { cap.textContent='Growth of 100: your total invested value, so deposits and withdrawals move it (the RETURN view removes that).'; }
+  p.appendChild(cap);
+  if(ps.rows.length<2){ p.appendChild(el('div','muted','Accruing daily — need at least 2 days of history in this window.')); }
+  else { const box=el('div'); box.style.cssText='height:170px;position:relative;margin-top:var(--space-2);'; box.innerHTML='<canvas id="c-value"></canvas>'; p.appendChild(box); }
+  wrap.appendChild(p);
+  wrap.appendChild(costPanel());
+  return wrap;
+}
+function costRows(){
+  const rows=((VH&&VH.history)||[]).filter(h=>h.total_cost!=null && h.cost_covered_value!=null && h.total_cost>0 && h.cost_covered_value>0);
+  if(rows.length<2) return {rows:[], all:rows};
+  const range=chartWindowRange(CH_WIN, CH_FROM, CH_TO, rows[0].date, rows[rows.length-1].date);
+  const sel=rows.filter(r=>r.date>=range[0] && r.date<=range[1]);
+  return {rows:bucketRows(sel, range[0], range[1]), all:rows, range};
+}
+function costPanel(){
+  const p=el('div','panel'); p.style.marginTop='10px';
+  const h=el('div','ph','PORTFOLIO VALUE vs COST BASIS '); h.appendChild(wikiLink('perf-chart')); p.appendChild(h);
+  const cr=costRows();
+  const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-xs);line-height:1.45;margin-bottom:var(--space-1);';
+  const d=DATA||{}, covered=((d.positions||[]).filter(x=>x.cost_total!=null&&!x.suspect).reduce((t,x)=>t+(x.value||0),0)), pct=d.invested_value?Math.round(covered/d.invested_value*100):null;
+  cap.textContent='Bars: market value of the holdings whose cost basis is known · line: that cost basis'+(pct!=null?' · covers '+pct+'% of your invested value today (holdings without a known basis are left out of both)':'')+'. Recorded daily from the day this chart was added, so the window starts there.';
+  p.appendChild(cap);
+  if(cr.rows.length<2){
+    const first=(cr.all&&cr.all[0])?cr.all[0].date:null;
+    p.appendChild(el('div','muted',first?'Only '+cr.all.length+' day(s) recorded so far in this window (since '+first+') — it fills in daily.':'Cost-basis history starts accruing with the next daily snapshot, then fills in day by day. (It cannot be reconstructed for earlier dates: that needs your transaction history.)'));
+    return p;
+  }
+  const box=el('div'); box.style.cssText='height:190px;position:relative;'; box.innerHTML='<canvas id="c-cost"></canvas>'; p.appendChild(box);
+  return p;
+}
+function drawPerfCharts(){
+  const muted=resolveColor('var(--color-text-muted)'), grid=resolveColor('var(--color-border)');
+  const c=document.getElementById('c-value');
+  if(c){
+    const ps=perfSeries();
+    if(ps.rows.length>=2){
+      charts.push(new Chart(c,{type:'line',
+        data:{labels:ps.rows.map(p=>p.date),datasets:[
+          {label:'Portfolio',data:ps.rows.map(p=>p.port),borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
+          {label:'SPY',data:ps.rows.map(p=>p.spy),borderColor:resolveColor('var(--color-info)'),backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
+        options:{responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:true,position:'top',labels:{color:muted,boxWidth:10,font:{size:10}}}},
+          scales:{x:{display:false},y:{ticks:{color:muted,font:{size:9}},grid:{color:grid}}}}}));
+    }
+  }
+  const cc=document.getElementById('c-cost');
+  if(cc){
+    const cr=costRows();
+    if(cr.rows.length>=2){
+      const fmt=v=>v>=1e6?'$'+(v/1e6).toFixed(2)+'M':'$'+Math.round(v/1000)+'k';
+      charts.push(new Chart(cc,{type:'bar',
+        data:{labels:cr.rows.map(r=>r.date),datasets:[
+          {type:'bar',label:'Portfolio value',data:cr.rows.map(r=>r.cost_covered_value),backgroundColor:resolveColor('var(--color-accent)'),borderWidth:0,order:2},
+          {type:'line',label:'Cost basis',data:cr.rows.map(r=>r.total_cost),borderColor:resolveColor('var(--color-info)'),backgroundColor:resolveColor('var(--color-info)'),borderWidth:2,pointRadius:3,tension:0,order:1}]},
+        options:{responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:true,position:'top',labels:{color:muted,boxWidth:10,font:{size:10}}},tooltip:{callbacks:{label:t=>t.dataset.label+': '+fmt(t.parsed.y)}}},
+          scales:{x:{ticks:{color:muted,font:{size:9},maxTicksLimit:12},grid:{display:false}},y:{beginAtZero:true,ticks:{color:muted,font:{size:9},callback:v=>fmt(v)},grid:{color:grid}}}}}));
+    }
+  }
+}
+// fetch the holdings-based return series (cached server-side, built in the background) without blocking the dashboard; re-render only when it changed
+async function refreshReturnSeries(){
+  try{
+    const r=await fetch('/api/portfolio-return'); if(!r.ok) return; const j=await r.json();
+    const changed=!RET || RET.generated_at!==j.generated_at || !!RET.computing!==!!j.computing;
+    RET=j;
+    if(changed && TAB==='dashboard' && typeof userBusy==='function' && !userBusy()) render();
+    if(j.computing) setTimeout(refreshReturnSeries, 20000);
+  }catch(_){}
 }
 
 // ============================================================================
