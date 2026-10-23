@@ -279,19 +279,19 @@
   .msg.asst .msg-body pre{background:#0b0d10;border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2);overflow:auto;font-size:var(--font-size-md);}
   .msg.asst .msg-body code{background:#0b0d10;padding:var(--space-1) var(--space-1);border-radius:var(--radius-md);font-size:var(--font-size-md);}
   .msg.asst .msg-body pre code{background:none;padding:0;}
-  .msg.asst .msg-body table{margin:6px 0;border-collapse:collapse;table-layout:fixed;width:100%;} .msg.asst .msg-body th,.msg.asst .msg-body td{text-align:left;border:1px solid var(--color-border-strong);padding:var(--space-1) var(--space-2);overflow-wrap:break-word;word-break:break-word;}
-  /* GRC document viewer (2026-07-27 fix -- Jason caught right-aligned/overflowing tables in the
-     rendered DPIA doc, e.g. the Likelihood/Impact/Measures table). #posture-doc-viewer (SETTINGS ->
-     SECURITY POSTURE -> GRC DOCUMENTS) renders 7 different .md files through the same mdToHtml()/
-     marked.js path chat already uses -- but only chat's own container (.msg.asst .msg-body above)
-     ever got matching table CSS. Without it, every markdown table in every one of those 7 documents
-     fell back to the app's GLOBAL td default (text-align:right, white-space:nowrap, ~line 182),
-     which is right for numeric data tables elsewhere but wrong for prose-heavy compliance tables --
-     hence the right-aligned, unwrapped, horizontally-scrolling text in the screenshot. Same
-     table-layout:fixed + left-align + wrap treatment as the chat rule above, applied once here so
-     it covers all 7 documents through this one shared container rather than needing a fix per doc. */
-  #posture-doc-viewer table{margin:6px 0;border-collapse:collapse;table-layout:fixed;width:100%;}
-  #posture-doc-viewer th,#posture-doc-viewer td{text-align:left;border:1px solid var(--color-border-strong);padding:var(--space-1) var(--space-2);overflow-wrap:break-word;word-break:break-word;white-space:normal;}
+  /* MARKDOWN TABLES -- one rule set for every place markdown is rendered (chat replies, the GRC documents, anything added later).
+     mdToHtml() wraps each markdown <table> in <div class="md-table-wrap">, so these rules follow the TABLE, not whichever container
+     it happens to sit in. History: the app's GLOBAL table rules above (td nowrap + right-aligned, th nowrap) are right for numeric
+     data tables but wrong for prose; the chat container and the posture-document viewer each got their own copy of a fix, and every
+     other (or newly added) place kept overflowing -- the chat fix even omitted white-space:normal, so cells still would not wrap
+     (tester screenshot 2026-10-23). Cells wrap and left-align; a table with too many columns scrolls inside its own box instead of
+     spilling out of the frame. */
+  .md-table-wrap{max-width:100%;overflow-x:auto;margin:6px 0;}
+  .md-table-wrap table{width:100%;border-collapse:collapse;table-layout:auto;margin:0;font-variant-numeric:normal;}
+  .md-table-wrap th,.md-table-wrap td{text-align:left;vertical-align:top;white-space:normal;overflow-wrap:anywhere;word-break:normal;max-width:none;
+    border:1px solid var(--color-border-strong);padding:var(--space-1) var(--space-2);}
+  .md-table-wrap th{cursor:default;user-select:text;color:var(--color-text-muted);}
+  .md-table-wrap th:hover{color:var(--color-text-muted);}
   .msg-tools{display:flex;flex-wrap:wrap;gap:var(--space-1);margin-bottom:var(--space-1);}
   .tool-chip{font-size:var(--font-size-sm);letter-spacing:.5px;color:var(--color-text-muted);border:1px solid var(--color-border-strong);border-radius:10px;padding:var(--space-1) var(--space-2);}
   .chat-bar{display:flex;gap:var(--space-2);align-items:flex-end;border-top:1px solid var(--color-border);padding-top:var(--space-2);margin-top:var(--space-1);}
@@ -1724,6 +1724,7 @@ function render(){
   }
   p.appendChild(tabBar);
   const tc=el('div');
+  if(TAB!=='chat') tc.style.cssText='max-width:100%;overflow-x:auto;';   // safety net: an over-wide DATA table scrolls inside the panel instead of spilling past its frame (chat manages its own scrolling)
   const hrule=()=>{ const s=el('div'); s.style.cssText='border-top:1px solid var(--color-border);margin:18px 0 4px;'; return s; };
   if(TAB==='dashboard'){
     tc.appendChild(dashboardContent());
@@ -8973,8 +8974,16 @@ function valuePanel(){
 //  EventSource is GET-only, so we stream with fetch()+ReadableStream and parse
 //  the SSE frames (events: session, token, tool, tool_done, done, error).
 // ============================================================================
+let _mdRenderer=null;
 function mdToHtml(t){
-  try{ if(window.marked) return marked.parse(t||'', {breaks:true}); }catch(_){}
+  try{
+    if(window.marked){
+      if(!_mdRenderer){ _mdRenderer=new marked.Renderer();
+        // every markdown table gets the same wrapper, so the .md-table-wrap CSS (wrapping, left-align, own scrollbar) applies wherever it renders
+        _mdRenderer.table=(header,body)=>'<div class="md-table-wrap"><table><thead>'+header+'</thead>'+(body?'<tbody>'+body+'</tbody>':'')+'</table></div>'; }
+      return marked.parse(t||'', {breaks:true, renderer:_mdRenderer});
+    }
+  }catch(_){}
   return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
 }
 function chatScroll(){ const s=document.getElementById('chat-scroll'); if(s) s.scrollTop=s.scrollHeight; }
