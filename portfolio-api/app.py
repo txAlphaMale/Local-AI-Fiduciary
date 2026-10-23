@@ -2827,6 +2827,23 @@ def _is_cit(s):
     return no_real_id or name_hit
 
 
+def _hold_price(h):
+    """(price, source) for a Monarch holding. Monarch's security.currentPrice is null for some mutual funds / plan
+    funds (BTEKX, UPOZ, an employer-plan index fund, 2026-10-23 raw dump) even though Monarch DISPLAYS a price: the
+    closing price sits on the security or on the account-level holding. Order: current -> closing (security, then
+    holding) -> value/quantity (derived, flagged). `source` lets the UI say where the number came from."""
+    s = h.get("security") or {}
+    if s.get("currentPrice") is not None:
+        return s["currentPrice"], "current"
+    for cand in (s.get("closingPrice"), ((h.get("holdings") or [{}])[0] or {}).get("closingPrice")):
+        if cand is not None:
+            return cand, "closing"
+    qty, val = h.get("quantity"), h.get("totalValue")
+    if qty and val and qty > 0 and val > 0:
+        return round(val / qty, 4), "derived"
+    return None, None
+
+
 def _hold(h, conv="per_share"):
     s = h.get("security") or {}
     qty = h.get("quantity")
@@ -2849,7 +2866,8 @@ def _hold(h, conv="per_share"):
         "name": s.get("name"),
         "type": s.get("typeDisplay") or s.get("type") or "Other",
         "quantity": qty,
-        "price": s.get("currentPrice"),
+        "price": _hold_price(h)[0],
+        "price_source": _hold_price(h)[1],
         "value": round(val, 2) if val is not None else 0,
         "cost_total": cost_total,
         "gain": gain,
@@ -2878,8 +2896,9 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         key = p["ticker"] or p["name"] or "?"
         c = cons.setdefault(key, {"ticker": p["ticker"], "name": p["name"], "type": p["type"],
                                   "quantity": 0.0, "value": 0.0, "cost_total": 0.0,
-                                  "price": p["price"], "day_pct": p["day_pct"],
-                                  "accounts": [], "suspect": False, "is_cit": False})
+                                  "price": p["price"], "price_source": p.get("price_source"), "day_pct": p["day_pct"],
+                                  "accounts": [], "institutions": [], "suspect": False, "is_cit": False})
+        c["institutions"].append(p.get("institution"))
         c["quantity"] = round(c["quantity"] + (p["quantity"] or 0), 4)
         c["value"] = round(c["value"] + (p["value"] or 0), 2)
         if p.get("suspect") or p["cost_total"] is None:
@@ -2892,6 +2911,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     consolidated = []
     for c in cons.values():
         c["accounts"] = sorted(set(a for a in c["accounts"] if a))
+        c["institutions"] = sorted(set(i for i in c["institutions"] if i))
         c["account_count"] = len(c["accounts"])
         if c["suspect"] or not c["cost_total"]:
             c["cost_total"] = c["gain"] = c["gain_pct"] = None
@@ -2984,7 +3004,17 @@ def _build_monarch():
             "holdings_count": a.get("holdingsCount") or 0,
             "is_asset": a.get("isAsset"),
             "include_nw": a.get("includeBalanceInNetWorth"),
+            "data_provider": a.get("dataProvider") or (a.get("credential") or {}).get("dataProvider"),
+            "needs_reauth": bool((a.get("credential") or {}).get("updateRequired")),
         })
+    # Connections Monarch itself says need the user to log in again (credential.updateRequired) -- already in the
+    # get_accounts payload, no new call. Shown in the ATTENTION digest so a stale 401(k) feed is not silent.
+    _need = {}
+    for a, raw_a in zip(accounts, accts_raw):
+        if a["needs_reauth"] and not raw_a.get("deactivatedAt") and not raw_a.get("syncDisabled"):
+            k = a.get("institution") or "A connected institution"
+            _need[k] = _need.get(k, 0) + 1
+    connections_needing_login = [{"institution": k, "accounts": n} for k, n in sorted(_need.items())]
 
     inv = [a for a in accounts if a["holdings_count"] > 0]
     positions, by_account = [], []
@@ -3022,8 +3052,10 @@ def _build_monarch():
                     and a.get("is_asset") is not False
                     and round(a.get("balance") or 0) != 0
                     and _account_tax_status(a.get("name"), a.get("type")) != "na"]
-    return _derive(accounts, positions, by_account, inv, net_worth, total_assets,
-                   total_liabilities, balance_only=balance_only)
+    d = _derive(accounts, positions, by_account, inv, net_worth, total_assets,
+                total_liabilities, balance_only=balance_only)
+    d["connections_needing_login"] = connections_needing_login
+    return d
 
 
 def _build_csv():
@@ -5295,6 +5327,13 @@ def _alerts_digest():
                 if _pi.get("status") == "login_required":
                     add("action", "Plaid", f"{_pi.get('institution') or 'A connected institution'} needs you to log in "
                         "again (SETTINGS → ACCOUNTS → Plaid → RECONNECT) — its balances are not updating", "settings.accounts")
+    except Exception:
+        pass
+    # TASK-007: Monarch says a connected institution needs a fresh login (e.g. "MFA required") -- its holdings stop updating
+    try:
+        for _c in ((_data() or {}).get("connections_needing_login") or []):
+            add("action", "Monarch", f"{_c['institution']} needs you to log in again in Monarch ({_c['accounts']} account(s)) "
+                "— its balances and holdings are not updating until you do", "settings.accounts")
     except Exception:
         pass
     # TASK-002: emergency kit staleness + an open emergency request (visible from the cockpit)
@@ -12183,6 +12222,25 @@ def _macro_stress(invested, positions):
                     "bonds hedge. Round-number planning stresses, not forecasts."}
 
 
+def _fund_mix(ticker):
+    """Asset-class mix of a fund from the CACHED SEC N-PORT look-through (no network): {"label","as_of","mix"} or None.
+    N-PORT assetCat gives the class (equity / debt / cash-like), not the country, so the label says "Equity", not "US equity"."""
+    fh = edgar.fund_holdings_cached(ticker)
+    if not fh or not fh.get("resolved") or not fh.get("holdings"):
+        return None
+    tot = fh.get("total_pct") or 0
+    scale = (100.0 / tot) if tot > 100 else 1.0
+    acc = {"equity": 0.0, "bond": 0.0, "cash": 0.0, "other": 0.0}
+    for h in fh["holdings"]:
+        acc[_assetcat_bucket(h.get("asset_cat"))] += (h.get("pct") or 0) * scale
+    names = {"equity": "Equity", "bond": "Bonds", "cash": "Cash & equivalents", "other": "Other"}
+    parts = [f"{names[k]} {round(v)}%" for k, v in sorted(acc.items(), key=lambda kv: -kv[1]) if round(v) >= 1]
+    if not parts:
+        return None
+    return {"label": " · ".join(parts), "as_of": fh.get("as_of"), "series": fh.get("series_name"),
+            "mix": {k: round(v, 1) for k, v in acc.items()}}
+
+
 def _exposure():
     """True sector allocation, value-weighted portfolio beta, and concentration metrics.
     Direct stocks are classified by sector; funds are bucketed (look-through is a later upgrade)."""
@@ -12209,9 +12267,14 @@ def _exposure():
         if beta is not None:
             beta_num += val * beta
             beta_den += val
-        positions.append({"ticker": tkr, "value": round(val, 2),
-                          "weight_pct": round(val / invested * 100, 2) if invested else None,
-                          "sector": sector, "beta": beta})
+        row = {"ticker": tkr, "value": round(val, 2),
+               "weight_pct": round(val / invested * 100, 2) if invested else None,
+               "sector": sector, "beta": beta}
+        if typ in ("Mutual Fund", "ETF"):                 # TASK-007: what the HOLDINGS table shows instead of blanks
+            row["fund_mix"] = _fund_mix(tkr)
+            er = edgar.fund_expense_ratio(tkr)
+            row["expense_ratio_pct"] = er
+        positions.append(row)
     sectors = sorted(({"sector": s, "value": v,
                        "weight_pct": round(v / invested * 100, 2) if invested else None}
                       for s, v in by_sector.items()), key=lambda x: -(x["value"] or 0))
