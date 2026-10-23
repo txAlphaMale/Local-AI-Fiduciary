@@ -2701,7 +2701,10 @@ def _monarch_guard():
                               f"{int(wait)}s to avoid load on their service.")
 
 
-def _post(op, payload):
+def _post(op, payload, trip=True):
+    """POST one Monarch tool call through mcpo. `trip=False` is for OPTIONAL lookups (get_cashflow): a failure there must not start the
+    300 s hold-down that blocks every Monarch call -- on 2026-10-23 a single slow cashflow query took the whole dashboard down for five
+    minutes while the holdings calls beside it were succeeding."""
     _monarch_guard()
     url = f"{MCPO}/{ROUTE}/{op}"
     headers = {"Content-Type": "application/json"}
@@ -2712,8 +2715,9 @@ def _post(op, payload):
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        _monarch_state["fail_ts"] = time.time()
-        _monarch_state["err"] = f"{type(e).__name__}"
+        if trip:
+            _monarch_state["fail_ts"] = time.time()
+            _monarch_state["err"] = f"{type(e).__name__}"
         raise
 
 
@@ -3497,7 +3501,48 @@ def build():
                                   # (e.g. to badge the HOLDINGS panel as live vs. staged-but-inactive)
     _snapshot_value(d)          # record today's value for the accruing risk-metrics history
     _snapshot_shares(d)         # record today's per-ticker shares for the wash-sale ledger (GAP-4)
+    _save_last_good(d)          # so a later outage/restart can show this instead of an error page
     return d
+
+
+# ---- Last-good portfolio (2026-10-23). Every successful build is saved (encrypted, in the store); when a refresh fails -- Monarch's
+# hold-down, SnapTrade down, a restart during an outage -- /api/portfolio serves the newest good copy marked `stale` instead of an error
+# page, and retries about once a minute. Only used when it was built by the CURRENT provider (never another source's numbers).
+LAST_GOOD_FILE = os.environ.get("LAST_GOOD_FILE", "/data/portfolio_last_good.json")
+_LAST_GOOD_SAVE_EVERY_S = 60
+_STALE_RETRY_S = 60
+_last_good_saved = {"ts": 0.0}
+
+
+def _save_last_good(d):
+    """Throttled, never raises: a failed save must not fail a good build."""
+    now = time.time()
+    if now - _last_good_saved["ts"] < _LAST_GOOD_SAVE_EVERY_S:
+        return
+    try:
+        clean = {k: v for k, v in d.items() if k != "stale"}
+        store.write_json(LAST_GOOD_FILE, {"saved_at": int(now), "provider": d.get("portfolio_provider"), "data": clean})
+        _last_good_saved["ts"] = now
+    except Exception as e:
+        print(f"[portfolio] could not save the last-good copy: {type(e).__name__}", flush=True)
+
+
+def _load_last_good():
+    try:
+        rec = store.read_json_strict(LAST_GOOD_FILE)
+    except Exception:
+        return None
+    if not isinstance(rec, dict) or not isinstance(rec.get("data"), dict):
+        return None
+    cur = os.environ.get("PORTFOLIO_PROVIDER", "csv").lower()
+    if (rec.get("provider") or "") != cur:
+        return None
+    return rec
+
+
+def _mark_stale(d, err, since, from_disk):
+    reason = str(err).strip().replace("\n", " ")[:220] or type(err).__name__
+    return {**d, "stale": {"since": int(since or 0), "reason": reason, "from_disk": bool(from_disk), "retry_in_s": _STALE_RETRY_S}}
 
 
 @app.get("/api/portfolio")
@@ -3509,7 +3554,15 @@ def portfolio(refresh: int = 0):
             _cache["ts"] = now
         except Exception as e:
             if _cache["data"] is None:
-                return JSONResponse({"error": f"Could not load portfolio: {e}"}, status_code=502)
+                rec = _load_last_good()
+                if rec is None:
+                    return JSONResponse({"error": f"Could not load portfolio: {e}"}, status_code=502)
+                _cache["data"] = _mark_stale(rec["data"], e, rec.get("saved_at"), True)
+            else:
+                prior = _cache["data"]
+                _cache["data"] = _mark_stale(prior, e, (prior.get("stale") or {}).get("since") or prior.get("generated_at"),
+                                             bool((prior.get("stale") or {}).get("from_disk")))
+            _cache["ts"] = now - TTL + _STALE_RETRY_S           # keep serving it, but retry the live build in about a minute
     return {"cached_age_s": int(now - _cache["ts"]), **_cache["data"]}
 
 
@@ -9526,7 +9579,7 @@ def _cashflow_annual():
     end = datetime.date.today()
     start = end.replace(year=end.year - 1)
     try:
-        data = _post("get_cashflow", {"start_date": start.isoformat(), "end_date": end.isoformat()})
+        data = _post("get_cashflow", {"start_date": start.isoformat(), "end_date": end.isoformat()}, trip=False)
     except Exception:
         return None, None
     cf = (data or {}).get("cashflow") or data or {}

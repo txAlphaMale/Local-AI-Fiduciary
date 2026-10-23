@@ -1631,7 +1631,7 @@ function render(){
     ` · ${d.investment_account_count} brokerage accts · ${d.position_count} positions`;
   const age = d.cached_age_s||0;
   document.getElementById('updated').textContent =
-    'as of '+new Date(d.generated_at*1000).toLocaleString()+(age>60?` (${Math.round(age/60)}m old)`:'');
+    'as of '+new Date(d.generated_at*1000).toLocaleString()+((age>60 && !d.stale)?` (${Math.round(age/60)}m old)`:'')+(d.stale?' · STALE':'');
   // top stats
   const stats=[
     ['NET WORTH', usd(d.net_worth), ''],
@@ -1648,6 +1648,7 @@ function render(){
 
   if(TAB!=='chat' && TAB!=='wiki'){   // CHAT and WIKI use the full panel; skip the cockpit strip above them
     body.appendChild(emergencyBannerNode());   // TASK-002: red banner while an emergency request is pending (admin)
+    body.appendChild(staleBannerNode());       // last-good portfolio shown while the live refresh is failing
     body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip + tile router
   }
   // NOTE: the Dashboard visuals (allocation donuts · accounts · gainers/losers/day-movers ·
@@ -2216,6 +2217,17 @@ function costBasisPanel(){
       body.appendChild(tb);
     }
   }).catch(err=>{ body.textContent='Could not load: '+err.message; });
+  return box;
+}
+// Shown while /api/portfolio is serving the newest good copy because the live refresh failed (Monarch hold-down, an outage, a restart during one).
+function staleBannerNode(){
+  const box=el('div'), s=(typeof DATA!=='undefined' && DATA && DATA.stale)||null;
+  if(!s) return box;
+  box.id='stale-banner'; box.setAttribute('role','status');
+  box.style.cssText='background:var(--overlay-accent-weak);border:1px solid var(--color-accent);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-sm);line-height:1.55;';
+  const when=s.since?new Date(s.since*1000).toLocaleString():'an earlier refresh';
+  const b=el('b'); b.textContent='⚠ Showing your last good portfolio from '+when+(s.from_disk?' (the saved copy)':'')+'.'; box.appendChild(b);
+  box.appendChild(document.createTextNode(' The live refresh failed — '+(s.reason||'unknown reason')+' — so these numbers may be out of date. It retries automatically about once a minute and this notice disappears when it succeeds.'));
   return box;
 }
 function positionsTable(positions){
