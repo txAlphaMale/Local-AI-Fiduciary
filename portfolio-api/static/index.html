@@ -2130,7 +2130,10 @@ function noBasisCell(p, provider, text){      // 'n/r' = not reported; never a s
 function manualCostCell(p){                   // a user-entered cost: marked, and flagged an estimate when the share count moved
   const e=p.basis_entry||{}, tip='entered by you'+(e.as_of?' on '+e.as_of:'')+(e.qty_at_entry!=null?', quantity at entry '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4}):'');
   const est=p.basis_stale?` <span class="neg" title="${attrEsc('estimate — shares changed since entry (entered '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4})+', now '+(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:4})+'). The entered average cost is applied to all current shares.')}">est.</span>`:'';
-  return `${usd(p.cost_total)} <span title="${attrEsc(tip)}">✎</span>${est}`+basisPen(p,'edit or clear your entered cost basis');
+  // ONE pencil: for an admin the marker IS the edit control (tooltip: where it came from + click to edit); a viewer sees the same
+  // marker with no click action. (Two pencils appeared in 2026-10-23's first build: one plain marker, one clickable.)
+  const pen=basisPen(p, tip+' — click to edit or clear');
+  return `${usd(p.cost_total)}${pen||` <span title="${attrEsc(tip)}">✎</span>`}${est}`;
 }
 const costCell = (p, PROV) => p.cost_source==='manual' ? manualCostCell(p) : (p.cost_total!=null ? usd(p.cost_total) : noBasisCell(p,PROV));
 // ---- TASK-008: user-entered cost basis. Editor dialog (per ticker, one block per eligible account line) and the settings panel.
