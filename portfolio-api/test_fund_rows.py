@@ -137,7 +137,7 @@ class TestUi(unittest.TestCase):
                 d += HTML[k] == "{"; d -= HTML[k] == "}"; k += 1
                 if d == 0: return HTML[i:k]
         src = ("const attrEsc = x => (x==null?'':String(x)).replace(/\"/g,'&quot;').replace(/</g,'&lt;');\n"
-               + fn("fundSectorCell") + fn("fundAnalystCell") + fn("noBasisCell") + """
+               + "const isViewer=()=>false;\n" + fn("fundSectorCell") + fn("fundAnalystCell") + fn("basisPen") + fn("noBasisCell") + """
         const FI={FXAIX:{fund_mix:{label:'Equity 99% · Cash & equivalents 1%',as_of:'2026-08-31'},expense_ratio_pct:0.015},NOPE:{}};
         console.log(JSON.stringify([fundSectorCell({ticker:'FXAIX'},FI), fundSectorCell({ticker:'NOPE'},FI), fundAnalystCell({ticker:'FXAIX'},FI),
           fundAnalystCell({ticker:'NOPE'},FI), fundSectorCell({ticker:'LATE'},FI), noBasisCell({type:'Mutual Fund',institutions:['Principal','Fidelity']},'monarch'),

@@ -189,6 +189,8 @@ EVENT_TYPES = (
     # TASK-005: Plaid connections (never the tokens).
     "integration.plaid.link_started", "integration.plaid.item_added", "integration.plaid.item_removed",
     "integration.snaptrade.portal_link", "integration.provider.changed", "integration.snaptrade.test",
+    # TASK-008: user-entered cost basis (institution/account/ticker/count only -- never dollar amounts).
+    "holdings.basis_set", "holdings.basis_cleared", "holdings.basis_imported",
 )
 
 

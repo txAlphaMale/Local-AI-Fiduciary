@@ -2878,6 +2878,69 @@ def _hold(h, conv="per_share"):
     }
 
 
+# ---- TASK-008: user-entered cost basis, ONLY where the provider reports none (basis missing/null/0 -> cost_total None).
+# A register of per-account-line entries {institution, account, ticker, avg_cost, qty_at_entry, as_of, note}. Applied at the very
+# top of _derive so every provider (csv, monarch, plaid, snaptrade) and every downstream view sees the same numbers. Provider basis
+# always wins (the entry is then "superseded", never deleted); Cash never gets one; a line whose share count moved more than 1% since
+# entry keeps the entered average but is flagged an estimate (401(k) contributions keep buying shares).
+COST_BASIS_FILE = os.environ.get("COST_BASIS_FILE", "/data/cost_basis.json")
+BASIS_STALE_PCT = 1.0
+
+
+def _nk(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _basis_key(inst, acct, tkr):
+    """Identity of a position LINE: normalized (institution, account name, ticker). Never the provider's account id (can change)."""
+    return f"{_nk(inst)}|{_nk(acct)}|{(tkr or '').upper().strip()}"
+
+
+def _read_basis_entries():
+    try:
+        rows = store.read_json_strict(COST_BASIS_FILE) or []
+    except Exception:
+        rows = []
+    return [r for r in rows if isinstance(r, dict) and r.get("ticker") and (r.get("avg_cost") or 0) > 0] if isinstance(rows, list) else []
+
+
+def _apply_manual_basis(positions, by_account):
+    """Overlay user-entered basis on position lines whose provider basis is missing. Mutates the dicts in place (idempotent: a line
+    already stamped is skipped) and returns (positions, by_account). Sets on EVERY non-cash line `basis_missing` (provider reported
+    none) so the editor can list eligible lines; on applied lines: cost_total/gain/gain_pct, cost_source='manual', basis_stale,
+    basis_entry {as_of, qty_at_entry, drift_pct}."""
+    entries = {}
+    for e in _read_basis_entries():
+        entries[_basis_key(e.get("institution"), e.get("account"), e.get("ticker"))] = e
+
+    def one(h, inst, acct):
+        if h.get("cost_source") == "manual" or "basis_missing" in h:
+            return
+        if (h.get("type") or "") == "Cash":
+            h["basis_missing"] = False
+            return
+        h["basis_missing"] = h.get("cost_total") is None
+        e = entries.get(_basis_key(inst, acct, h.get("ticker"))) if h["basis_missing"] else None
+        qty = h.get("quantity")
+        if not e or not qty or qty <= 0:
+            return
+        cost = round(e["avg_cost"] * qty, 2)
+        val = h.get("value")
+        gain = round(val - cost, 2) if val is not None else None
+        qe = e.get("qty_at_entry") or 0
+        drift = abs(qty - qe) / qe * 100.0 if qe else 0.0
+        h.update(cost_total=cost, gain=gain, gain_pct=(round(gain / cost * 100, 2) if (gain is not None and cost) else None),
+                 suspect=False, cost_source="manual", basis_stale=drift > BASIS_STALE_PCT,
+                 basis_entry={"as_of": e.get("as_of"), "qty_at_entry": qe, "drift_pct": round(drift, 2)})
+
+    for p in positions:
+        one(p, p.get("institution"), p.get("account"))
+    for b in by_account:
+        for h in b.get("holdings") or []:
+            one(h, b.get("institution"), b.get("account"))
+    return positions, by_account
+
+
 def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total_liabilities,
             balance_only=None):
     """Source-agnostic derivation: given normalized accounts + positions (from ANY provider),
@@ -2886,6 +2949,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     into the institution/type allocation and surfaced as accounts, but kept out of `positions` so
     per-security analysis is unaffected. See _build_monarch for how they're identified."""
     balance_only = balance_only or []
+    positions, by_account = _apply_manual_basis(positions, by_account)      # TASK-008: before ANY aggregation
     invested = round(sum(p["value"] or 0 for p in positions), 2)
     total_gain = round(sum(p["gain"] or 0 for p in positions if p["gain"] is not None), 2)
     total_cost = round(sum(p["cost_total"] or 0 for p in positions if p["cost_total"] is not None), 2)
@@ -2897,8 +2961,15 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         c = cons.setdefault(key, {"ticker": p["ticker"], "name": p["name"], "type": p["type"],
                                   "quantity": 0.0, "value": 0.0, "cost_total": 0.0,
                                   "price": p["price"], "price_source": p.get("price_source"), "day_pct": p["day_pct"],
-                                  "accounts": [], "institutions": [], "suspect": False, "is_cit": False})
+                                  "accounts": [], "institutions": [], "suspect": False, "is_cit": False,
+                                  "basis_lines": 0, "basis_known": 0, "cost_source": None, "basis_stale": False})
         c["institutions"].append(p.get("institution"))
+        c["basis_lines"] += 1
+        if p.get("cost_total") is not None and not p.get("suspect"):
+            c["basis_known"] += 1                       # partial knowledge keeps the cost hidden (existing rule) -- X of Y is shown
+        if p.get("cost_source") == "manual":
+            c["cost_source"] = "manual"
+            c["basis_stale"] = c["basis_stale"] or bool(p.get("basis_stale"))
         c["quantity"] = round(c["quantity"] + (p["quantity"] or 0), 4)
         c["value"] = round(c["value"] + (p["value"] or 0), 2)
         if p.get("suspect") or p["cost_total"] is None:
@@ -2950,6 +3021,11 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
          "value": a.get("balance"), "type": a.get("type")}
         for a in sorted(balance_only, key=lambda a: -(a.get("balance") or 0))]
 
+    _mp = [p for p in positions if p.get("cost_source") == "manual"]
+    _mcost = round(sum(p["cost_total"] or 0 for p in _mp), 2)
+    manual_basis = {"lines": len(_mp), "cost": _mcost, "share_pct": (round(_mcost / total_cost * 100, 1) if total_cost else None),
+                    "stale_lines": sum(1 for p in _mp if p.get("basis_stale"))}
+
     # gainers / losers / movers consolidated by security (one row per ticker)
     have_gain = [c for c in consolidated if c["gain"] is not None]
     have_day = [c for c in consolidated if c["day_pct"] is not None]
@@ -2963,6 +3039,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
         "total_gain_pct": round(total_gain / total_cost * 100, 2) if total_cost else None,
+        "manual_basis": manual_basis,
         "account_count": len(accounts),
         "investment_account_count": len(inv),
         "position_count": len(positions),
@@ -8969,6 +9046,198 @@ def _apply_manual_liabilities(d):
     return d
 
 
+
+# ---- TASK-008 endpoints. All admin-only and each checks for itself (the global gate lets viewers do every GET); the writes are
+# also absent from the viewer write allowlist. Viewers see the EFFECT (cost/gain with a manual marker) in the dashboard payload they
+# already read, but not the register, the editor lines, the template or the import. Audit detail: institution/account/ticker/count
+# only -- never a dollar amount.
+def _basis_lines(d):
+    """Position lines the editor can act on, from the current portfolio: every non-cash line whose PROVIDER reported no basis
+    (a manual entry may already be applied to it) -> list of dicts."""
+    out = []
+    for b in d.get("by_account") or []:
+        for h in b.get("holdings") or []:
+            if not h.get("basis_missing") or not h.get("ticker"):
+                continue
+            out.append({"institution": b.get("institution"), "account": b.get("account"), "ticker": h.get("ticker"),
+                        "name": h.get("name"), "quantity": h.get("quantity"), "value": h.get("value"),
+                        "applied": h.get("cost_source") == "manual", "stale": bool(h.get("basis_stale")),
+                        "entry": h.get("basis_entry")})
+    return out
+
+
+def _basis_status(d):
+    """-> (lines, entries_with_status). Status per saved entry: active (applied) | superseded (provider now reports basis)
+    | unmatched (no current line: account renamed/closed or ticker sold)."""
+    lines = _basis_lines(d)
+    have = {_basis_key(l["institution"], l["account"], l["ticker"]) for l in lines}
+    provider = set()
+    for b in d.get("by_account") or []:
+        for h in b.get("holdings") or []:
+            if h.get("ticker") and not h.get("basis_missing"):
+                provider.add(_basis_key(b.get("institution"), b.get("account"), h.get("ticker")))
+    ents = []
+    for e in _read_basis_entries():
+        k = _basis_key(e.get("institution"), e.get("account"), e.get("ticker"))
+        st = "active" if k in have else ("superseded" if k in provider else "unmatched")
+        ents.append(dict(e, status=st))
+    return lines, ents
+
+
+def _basis_find_line(d, inst, acct, tkr):
+    k = _basis_key(inst, acct, tkr)
+    return next((l for l in _basis_lines(d) if _basis_key(l["institution"], l["account"], l["ticker"]) == k), None)
+
+
+def _basis_save(entries):
+    store.write_json(COST_BASIS_FILE, entries)
+    _cache["data"], _cache["ts"] = None, 0
+
+
+def _basis_parse_amount(v):
+    try:
+        x = float(str(v).replace(",", "").replace("$", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return x if (x == x and x not in (float("inf"), float("-inf")) and x > 0) else None
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _basis_clean_note(n):
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(n or "")).strip()[:200]
+
+
+def _basis_make_entry(line, mode, amount, as_of, note):
+    qty = line["quantity"]
+    avg = amount / qty if mode == "total" else amount
+    return {"institution": line["institution"], "account": line["account"], "ticker": line["ticker"],
+            "avg_cost": round(avg, 6), "qty_at_entry": qty, "as_of": as_of, "note": _basis_clean_note(note),
+            "entered_at": int(time.time())}
+
+
+@app.get("/api/cost-basis")
+def get_cost_basis(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    d = _data()
+    lines, ents = _basis_status(d)
+    return {"lines": lines, "entries": ents, "summary": d.get("manual_basis") or {},
+            "stale_pct": BASIS_STALE_PCT, "today": datetime.date.today().isoformat()}
+
+
+@app.post("/api/cost-basis")
+async def post_cost_basis(req: Request):
+    """Set or clear ONE entry. Body: {institution, account, ticker, mode: 'total'|'per_share', amount, as_of?, note?}
+    or {institution, account, ticker, clear: true}."""
+    admin = _require_admin(req)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    body = (await req.json()) or {}
+    inst, acct, tkr = body.get("institution"), body.get("account"), str(body.get("ticker") or "").upper().strip()
+    key = _basis_key(inst, acct, tkr)
+    entries = _read_basis_entries()
+    if body.get("clear"):
+        kept = [e for e in entries if _basis_key(e.get("institution"), e.get("account"), e.get("ticker")) != key]
+        if len(kept) == len(entries):
+            return JSONResponse({"error": "No entry to clear for that line."}, status_code=404)
+        _basis_save(kept)
+        audit.emit("holdings.basis_cleared", request=req, actor=admin["id"], actor_name=admin.get("username"),
+                   resource="/api/cost-basis", detail={"institution": inst, "account": acct, "ticker": tkr})
+        return {"ok": True}
+    mode = body.get("mode")
+    amount = _basis_parse_amount(body.get("amount"))
+    if mode not in ("total", "per_share") or amount is None:
+        return JSONResponse({"error": "Enter a positive number, as a total cost or a cost per share."}, status_code=400)
+    as_of = str(body.get("as_of") or datetime.date.today().isoformat())
+    if not _DATE_RE.match(as_of):
+        return JSONResponse({"error": "The as-of date must look like 2026-10-23."}, status_code=400)
+    line = _basis_find_line(_data(), inst, acct, tkr)
+    if not line or not line.get("quantity") or line["quantity"] <= 0:
+        return JSONResponse({"error": "That line was not found, or its provider already reports a cost basis (provider basis always wins)."},
+                            status_code=404)
+    entry = _basis_make_entry(line, mode, amount, as_of, body.get("note"))
+    entries = [e for e in entries if _basis_key(e.get("institution"), e.get("account"), e.get("ticker")) != key] + [entry]
+    _basis_save(entries)
+    audit.emit("holdings.basis_set", request=req, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/cost-basis", detail={"institution": inst, "account": acct, "ticker": tkr})
+    return {"ok": True}
+
+
+_BASIS_TEMPLATE_COLS = ["institution", "account", "ticker", "name", "current_quantity", "current_value",
+                        "total_cost_basis", "avg_cost_per_share", "as_of", "note"]
+
+
+@app.get("/api/cost-basis/template")
+def get_cost_basis_template(request: Request):
+    """CSV of every eligible line with the two cost columns left blank, for fast bulk entry."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    import csv as _csv, io as _io
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(_BASIS_TEMPLATE_COLS)
+    for l in _basis_lines(_data()):
+        w.writerow([l["institution"] or "", l["account"] or "", l["ticker"], l["name"] or "", l["quantity"] if l["quantity"] is not None else "",
+                    l["value"] if l["value"] is not None else "", "", "", "", ""])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="cost_basis_template.csv"'})
+
+
+@app.post("/api/cost-basis/import")
+async def post_cost_basis_import(req: Request):
+    """Bulk entry from the template (raw CSV text as the body, like /api/holdings-csv/upload). ALL-OR-NOTHING: any bad row rejects the
+    whole file and nothing is written. A row with both cost columns blank is skipped; entries not in the file are left alone."""
+    admin = _require_admin(req)
+    if not admin:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    import csv as _csv, io as _io
+    raw = (await req.body()).decode("utf-8-sig", errors="replace")
+    if not raw.strip():
+        return JSONResponse({"error": "Uploaded file is empty."}, status_code=400)
+    try:
+        rows = list(_csv.DictReader(_io.StringIO(raw)))
+    except Exception as e:
+        return JSONResponse({"error": f"Could not parse CSV: {e}"}, status_code=400)
+    need = {"institution", "account", "ticker"}
+    if not rows or not need <= set(rows[0].keys()):
+        return JSONResponse({"error": "CSV must have the template's header row (institution, account, ticker, total_cost_basis, avg_cost_per_share ...)."},
+                            status_code=400)
+    d = _data()
+    errors, new = [], {}
+    for i, r in enumerate(rows, start=2):                        # row 1 is the header
+        tot_s, avg_s = (r.get("total_cost_basis") or "").strip(), (r.get("avg_cost_per_share") or "").strip()
+        if not tot_s and not avg_s:
+            continue
+        tkr = (r.get("ticker") or "").upper().strip()
+        label = f"{tkr} in {r.get('account') or '?'}"
+        if tot_s and avg_s:
+            errors.append({"row": i, "message": f"{label}: fill in total_cost_basis OR avg_cost_per_share, not both."}); continue
+        amount = _basis_parse_amount(tot_s or avg_s)
+        if amount is None:
+            errors.append({"row": i, "message": f"{label}: cost must be a positive number."}); continue
+        as_of = (r.get("as_of") or "").strip() or datetime.date.today().isoformat()
+        if not _DATE_RE.match(as_of):
+            errors.append({"row": i, "message": f"{label}: as_of must look like 2026-10-23."}); continue
+        line = _basis_find_line(d, r.get("institution"), r.get("account"), tkr)
+        if not line:
+            errors.append({"row": i, "message": f"{label}: no such line, or its provider already reports a cost basis."}); continue
+        if not line.get("quantity") or line["quantity"] <= 0:
+            errors.append({"row": i, "message": f"{label}: the current quantity is not positive."}); continue
+        new[_basis_key(r.get("institution"), r.get("account"), tkr)] = _basis_make_entry(
+            line, "total" if tot_s else "per_share", amount, as_of, r.get("note"))
+    if errors:
+        return JSONResponse({"ok": False, "errors": errors}, status_code=400)
+    if not new:
+        return {"ok": True, "entries_written": 0}
+    kept = [e for e in _read_basis_entries() if _basis_key(e.get("institution"), e.get("account"), e.get("ticker")) not in new]
+    _basis_save(kept + list(new.values()))
+    audit.emit("holdings.basis_imported", request=req, actor=admin["id"], actor_name=admin.get("username"),
+               resource="/api/cost-basis/import", detail={"count": len(new)})
+    return {"ok": True, "entries_written": len(new)}
+
+
 @app.get("/api/manual-liabilities")
 def get_manual_liabilities():
     """Manually-entered liability accounts (loans/credit cards) -- most useful for csv/snaptrade
@@ -11814,7 +12083,9 @@ def _tax_audit():
             if gain is not None and gain <= -_knob("tlh_min_loss"):
                 harvest.append({"ticker": tkr, "account": name, "value": round(val, 2),
                                 "cost": h.get("cost_total"), "loss": round(gain, 2),
-                                "loss_pct": h.get("gain_pct")})
+                                "loss_pct": h.get("gain_pct"),
+                                # TASK-008: a loss built on a cost basis the user typed (possibly stale) is labelled, not presented as exact
+                                "cost_source": h.get("cost_source"), "basis_stale": bool(h.get("basis_stale"))})
                 if drip_on:
                     _tlh_drip_tickers.add(tkr)
             if yld is not None and yld >= _knob("loc_min_yield") and val > 0:
@@ -12148,6 +12419,9 @@ def run_fees_liquidity():
 # ---------------- Exposure: sector allocation + portfolio beta + concentration ----------------
 EXP_FILE = os.environ.get("EXP_FILE", "/data/exposure.json")
 EXP_TTL = int(os.environ.get("EXP_TTL", "43200"))    # cache exposure ~12h
+# Bump when the cached payload gains fields the UI depends on: a cache written by an older build is then treated as stale on the
+# first load after a deploy (so the refresh starts at once) instead of showing "..." for up to EXP_TTL (CoWork RETEST-007 finding).
+EXP_SCHEMA = 2     # 2 = positions carry fund_mix / expense_ratio_pct (TASK-007)
 _exp_lock = threading.Lock()
 # 2026-07-30: company-profile caching moved onto store.cached_fetch() -- see _profile().
 
@@ -12314,7 +12588,7 @@ def _exposure():
                "est_portfolio_pct": round(pbeta * s["market_pct"], 1) if pbeta is not None else None,
                "est_dollar_impact": round(invested * pbeta * s["market_pct"] / 100.0) if (pbeta is not None and invested) else None}
               for s in STRESS_SCENARIOS]
-    return {"generated_at": int(time.time()),
+    return {"generated_at": int(time.time()), "schema": EXP_SCHEMA,
             # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): when the sector
             # classification data underlying `by_sector` was actually fetched (oldest across every
             # ticker profiled, so any one stale profile flags the whole panel) -- distinct from
@@ -12359,7 +12633,8 @@ def _do_exp():
 def get_exposure():
     """Sector allocation + portfolio beta + concentration, CACHED (Finnhub call per holding)."""
     cached = _read_exp()
-    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < EXP_TTL)
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < EXP_TTL) \
+        and (cached.get("schema") or 0) >= EXP_SCHEMA
     if not fresh and not _exp_lock.locked():
         threading.Thread(target=_do_exp, daemon=True).start()
     if cached:
