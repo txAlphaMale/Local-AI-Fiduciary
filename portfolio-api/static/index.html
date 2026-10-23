@@ -1177,6 +1177,10 @@ W('allocation','Dashboard','Allocation donuts (institution / asset type)',
   'Two doughnuts split your invested value — one by custodian/institution, one by asset type (stock, ETF, cash).',
   'Each slice is a share of invested value; the legend lists top holdings with percentages. Institution concentration is custodial risk; asset-type mix is your rough stock/bond/cash posture.',
   'Use the asset-type donut for a quick check against your target mix, and the institution donut to notice if too much sits at one custodian.');
+W('mix-pies','Dashboard','Mix pies: holdings, sector, asset class',
+  'Three donut charts on the DASHBOARD that show the mix behind the cockpit tiles: MIX · HOLDINGS (your biggest positions as slices, so "XYZ is X% of the portfolio" is something you can see), MIX · SECTOR (how your direct stocks split by sector), and MIX · ASSET CLASS (equity, bonds, cash).',
+  'A slice with a RED RING and a ⚠ in the legend is over a limit the cockpit also warns about: a single name above your position cap (the cap you set in your policy; with none set, 20%), or a sector above 35%. HOLDINGS has two views: DIRECT (what you own line by line) and INCL. FUND CONTENTS (adds your share of what is inside your mutual funds and ETFs, from the SEC look-through — a name can be bigger than it looks once your funds are counted). SECTOR does NOT break funds down: the data we have for funds covers asset class only, so every fund and ETF appears as ONE slice, "Mutual funds & ETFs (not sector-classified)". ASSET CLASS comes from the same look-through, so it needs that scan to have run.',
+  'Use them to see at a glance what a CONCENTRATION or OVER CAP tile is talking about. The sector pie understates fund-heavy portfolios (that big fund slice is not a sector); lean on ASSET CLASS and the fund-contents holdings view for those. Numbers are as of the last portfolio load and the last exposure / look-through scans.');
 W('cost-basis','Dashboard','Cost basis: n/r, ✎ and estimates',
   'COST, UNREAL and P/L% need a cost basis (what you paid). Your provider supplies it for most brokerage accounts but often NOT for workplace plans (401(k) funds, for example): it reports zero or nothing. Those cells show "n/r" (not reported). The app never guesses a cost basis for you.',
   'Hover "n/r" to see who did not report it. Where a ticker is held in several accounts, the combined cost shows only when EVERY account\'s basis is known; otherwise the tooltip says "basis known for X of Y accounts". A ✎ beside a number means YOU entered it (hover for the date and the share count at entry); "est." beside it means your share count has moved more than 1% since you entered it (401(k) contributions keep buying shares), so the entered average is applied to today\'s shares and the figure is an estimate, not exact.',
@@ -1956,6 +1960,91 @@ let _cockpitPruning=false;
 function _cockpitPrune(ids){ if(_cockpitPruning) return; _cockpitPruning=true; const m=Object.assign({},COCKPIT_DISM||{}); ids.forEach(i=>delete m[i]); COCKPIT_DISM=m;
   fetch('/api/cockpit/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}).catch(()=>{}).finally(()=>{ _cockpitPruning=false; }); }
 
+// ---- Dashboard MIX pies (2026-10-23): the cockpit warns about a sector or a single name being too big; these show the mix behind it.
+// Pure builders (data in, {items, total, note} out) so they are unit-tested; drawCharts() paints them. A slice is FLAGGED when it breaches the
+// same limits the cockpit uses: over your single-name cap (INSIGHTS.concentration), or a sector above 35% (the exposure scan's own rule).
+const FUNDS_SECTOR = 'Mutual funds & ETFs (not sector-classified)';
+const SECTOR_CAP_PCT = 35;
+function mixTopN(rows, n){                         // rows: [{label,value,flag?}] -> top n by value + one "Other" slice
+  const sorted=rows.filter(r=>r.value>0).sort((a,b)=>b.value-a.value);
+  const top=sorted.slice(0,n), rest=sorted.slice(n);
+  if(rest.length) top.push({label:'Other ('+rest.length+')', value:rest.reduce((t,r)=>t+r.value,0), flag:false, other:true});
+  return top;
+}
+function mixHoldings(d, lt, ins, includeFunds){
+  const capped=new Set(((ins&&ins.concentration)||[]).map(c=>c.ticker));
+  let rows, total, note='';
+  if(includeFunds && lt && lt.true_exposure && lt.true_exposure.length){
+    const unres={label:'Fund contents not itemized', value:0, flag:false}; rows=[];
+    lt.true_exposure.forEach(r=>{
+      const t=(r.ticker||'');
+      if(t.startsWith('FUND')||t.startsWith('RESID')){ unres.value+=r.total_value||0; return; }
+      rows.push({label:r.ticker||r.name||'?', value:r.total_value||0, flag:capped.has(r.ticker)});
+    });
+    if(unres.value>0) rows.push(unres);
+    const itemised=rows.reduce((t,r)=>t+r.value,0);
+    total=lt.invested_value||itemised;
+    if(total>itemised+1) rows.push({label:'Smaller holdings', value:total-itemised, flag:false});
+    note='Includes what is inside your funds (SEC look-through, top names).';
+  } else {
+    rows=(d.consolidated||[]).map(c=>({label:c.ticker||c.name||'?', value:c.value||0, flag:capped.has(c.ticker)}));
+    total=rows.reduce((t,r)=>t+r.value,0);
+    if(includeFunds) note='Fund look-through is not available yet — showing direct positions.';
+  }
+  if(!(ins&&ins.concentration)){                    // no policy loaded: fall back to the exposure scan's own single-name rule (20%)
+    rows.forEach(r=>{ if(total && r.value/total*100>20 && !r.other) r.flag=true; });
+  }
+  return {items:mixTopN(rows,8), total, note, available: total>0};
+}
+function mixSector(exp){
+  if(!exp || exp.error || !(exp.by_sector||[]).length) return {items:[], total:0, available:false, note:'Sector data is still being computed — it refreshes in the background.'};
+  const rows=exp.by_sector.map(s=>{
+    let label=s.sector||'Other'; if(/no look-through/i.test(label)) label=FUNDS_SECTOR; else if(label==='Other') label='Other / unclassified';
+    return {label, value:s.value||0, flag:false};
+  });
+  const total=rows.reduce((t,r)=>t+r.value,0);
+  rows.forEach(r=>{ if(total && r.value/total*100>SECTOR_CAP_PCT && !['Cash',FUNDS_SECTOR,'Other / unclassified'].includes(r.label)) r.flag=true; });
+  return {items:mixTopN(rows,8), total, available:total>0,
+          note:'Funds are not broken out by sector (look-through covers asset class only), so they show as one slice. Sector cap '+SECTOR_CAP_PCT+'%.'};
+}
+function mixAssetClass(lt){
+  const acv=(lt&&lt.asset_class_value)||null;
+  if(!acv) return {items:[], total:0, available:false, note:'Asset-class mix needs the fund look-through — run it under RISK · EXPOSURE → LOOK-THROUGH.'};
+  const rows=Object.keys(acv).map(k=>({label:k, value:acv[k]||0, flag:false}));
+  const total=rows.reduce((t,r)=>t+r.value,0);
+  const part=lt.funds_total?(lt.funds_resolved||0)+' of '+lt.funds_total+' funds looked through':'';
+  return {items:mixTopN(rows,8), total, available:total>0, note:'Equity / bonds / cash from the SEC look-through of your funds'+(part?' ('+part+')':'')+'.'};
+}
+let MIX_VIEW='direct'; try{ MIX_VIEW=localStorage.getItem('fidMixView')||'direct'; }catch(_){ MIX_VIEW='direct'; }
+let MIXCHARTS=[];            // [{id, items}] filled while the panels are built, painted by drawCharts()
+function mixPanel(title, cid, mix, wikiId, toggle){
+  const p=el('div','panel'); const h=el('div','ph',title); if(wikiId) h.appendChild(wikiLink(wikiId)); p.appendChild(h);
+  if(toggle) p.appendChild(toggle);
+  if(!mix.available){ const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-sm);line-height:1.5;padding:var(--space-3) 0;'; m.textContent=mix.note; p.appendChild(m); return p; }
+  p.appendChild(el('div','chartbox','<canvas id="'+cid+'"></canvas>'));
+  MIXCHARTS.push({id:cid, items:mix.items});
+  const lg=el('div','legend');
+  mix.items.forEach((it,i)=>{
+    const pc=mix.total?(it.value/mix.total*100).toFixed(1):'0';
+    const sp=el('span'); sp.className=it.flag?'neg':'';
+    sp.innerHTML=`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>`+attrEsc(shortInst(it.label))+' '+pc+'%'+(it.flag?' ⚠':'');
+    if(it.flag) sp.title='over your limit — the cockpit flags this';
+    lg.appendChild(sp);
+  });
+  p.appendChild(lg);
+  if(mix.note){ const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-xs);line-height:1.4;margin-top:var(--space-2);'; n.textContent=mix.note; p.appendChild(n); }
+  return p;
+}
+function mixToggle(){
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);margin:0 0 var(--space-2);font-size:var(--font-size-sm);';
+  [['direct','DIRECT'],['funds','INCL. FUND CONTENTS']].forEach(([k,lb])=>{
+    const b=el('span',null,lb); const on=MIX_VIEW===k;
+    b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+    b.onclick=()=>{ MIX_VIEW=k; try{ localStorage.setItem('fidMixView',k); }catch(_){} render(); };
+    bar.appendChild(b);
+  });
+  return bar;
+}
 function allocPanel(title,cid,items,total){
   const p=el('div','panel');
   p.appendChild(el('div','ph',title));
@@ -2091,6 +2180,10 @@ function dashboardContent(){
   const small=el('div','grid cols');
   small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value));
   small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
+  MIXCHARTS=[];
+  small.appendChild(mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()));
+  small.appendChild(mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP), 'mix-pies'));
+  small.appendChild(mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT), 'mix-pies'));
   small.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
   small.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
   small.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
@@ -8952,6 +9045,15 @@ function drawCharts(d){
   };
   mk('c-inst', d.by_institution.slice(0,8));
   mk('c-type', d.by_type.slice(0,8));
+  MIXCHARTS.forEach(m=>{                          // flagged slices (over a limit) get a red ring so they read as the cockpit's warning
+    const c=document.getElementById(m.id); if(!c) return;
+    charts.push(new Chart(c,{type:'doughnut',
+      data:{labels:m.items.map(i=>i.label),datasets:[{data:m.items.map(i=>i.value),
+        backgroundColor:m.items.map((_,i)=>resolveColor(PIE[i%PIE.length])),
+        borderColor:m.items.map(i=>i.flag?resolveColor('var(--color-negative)'):resolveColor('var(--color-panel)')),
+        borderWidth:m.items.map(i=>i.flag?3:1)}]},
+      options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}}));
+  });
   // value-history line: portfolio vs SPY, both normalized to 100 at the first paired day (growth of 100)
   const c=document.getElementById('c-value');
   if(c){
