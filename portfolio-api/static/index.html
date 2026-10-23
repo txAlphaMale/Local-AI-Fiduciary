@@ -1177,6 +1177,10 @@ W('allocation','Dashboard','Allocation donuts (institution / asset type)',
   'Two doughnuts split your invested value — one by custodian/institution, one by asset type (stock, ETF, cash).',
   'Each slice is a share of invested value; the legend lists top holdings with percentages. Institution concentration is custodial risk; asset-type mix is your rough stock/bond/cash posture.',
   'Use the asset-type donut for a quick check against your target mix, and the institution donut to notice if too much sits at one custodian.');
+W('cost-basis','Dashboard','Cost basis: n/r, ✎ and estimates',
+  'COST, UNREAL and P/L% need a cost basis (what you paid). Your provider supplies it for most brokerage accounts but often NOT for workplace plans (401(k) funds, for example): it reports zero or nothing. Those cells show "n/r" (not reported). The app never guesses a cost basis for you.',
+  'Hover "n/r" to see who did not report it. Where a ticker is held in several accounts, the combined cost shows only when EVERY account\'s basis is known; otherwise the tooltip says "basis known for X of Y accounts". A ✎ beside a number means YOU entered it (hover for the date and the share count at entry); "est." beside it means your share count has moved more than 1% since you entered it (401(k) contributions keep buying shares), so the entered average is applied to today\'s shares and the figure is an estimate, not exact.',
+  'To enter a basis, click the ✎ beside an n/r (or go to SETTINGS → ACCOUNTS → COST BASIS): enter a TOTAL cost or an AVERAGE per share, per account line. For many lines, download the template, fill in the two cost columns, and upload it (a bad row rejects the whole file and nothing is saved). A cost basis your provider reports always wins over yours; your entry is then marked superseded, not deleted. Clear an entry any time. In a 401(k), IRA or HSA a cost basis has no tax meaning and is never used as a taxable loss; in a taxable account a loss built on your own entry is labelled in TAX · TLH so you can confirm it with your brokerage. Portfolio P/L totals include your entries; hover the totals to see how much is user-entered.');
 W('accounts-panel','Dashboard','Accounts — holdings plus other assets and liabilities',
   'A list of every account: brokerage/holdings accounts first, then an Other assets and liabilities section for cash, the home, and debts that move net worth but hold no securities. An investment account whose provider syncs only a balance (no line-item holdings — some 401(k)s do this) is shown with the accounts and marked "balance only", and is counted in the Institution donut; it just can\'t appear in per-security views (exposure, drift, tax) because there are no holdings to analyze.',
   'Holdings accounts show market value; the other section shows assets in normal color and liabilities in red. Together they reconcile to net worth. The Institution donut includes balance-only investment accounts (its total is invested holdings + those balances); the Asset-type donut stays holdings-only, since a balance without holdings has no known asset type.',
@@ -1635,8 +1639,9 @@ function render(){
     ['UNREAL P/L', sgn(d.total_unrealized_gain), cls(d.total_unrealized_gain)],
     ['P/L %', pct(d.total_gain_pct), cls(d.total_gain_pct)],
   ];
-  document.getElementById('stats').innerHTML = stats.map(s=>
-    `<div class="ts"><span class="l">${s[0]}</span><span class="v ${s[2]}">${s[1]}</span></div>`).join('');
+  const mb=d.manual_basis||{}, mbTip=mb.lines?`Includes ${usd(mb.cost)} (${mb.share_pct==null?'—':mb.share_pct+'%'} of total cost) of cost basis entered by you on ${mb.lines} line(s)${mb.stale_lines?', '+mb.stale_lines+' flagged as estimates (share count changed since entry)':''}.`:'';
+  document.getElementById('stats').innerHTML = stats.map((s,i)=>
+    `<div class="ts"${(mbTip&&i>=2)?` title="${mbTip.replace(/"/g,'&quot;')}"`:''}><span class="l">${s[0]}${(mbTip&&i>=2)?' ✎':''}</span><span class="v ${s[2]}">${s[1]}</span></div>`).join('');
 
   const body=document.getElementById('body'); body.innerHTML='';
   charts.forEach(c=>c.destroy()); charts=[];
@@ -2110,11 +2115,104 @@ function fundAnalystCell(p, FI){
   if(er!=null) return `<span class="muted" title="expense ratio (funds have no analyst consensus)">ER ${(+er).toFixed(er<0.1?3:2)}%</span>`;
   return `<span class="muted" title="funds have no analyst consensus; this fund's expense ratio is not in the app's fund map">n/a</span>`;
 }
+function basisPen(p, tip){                     // admin-only entry point; a delegated click handler (below) opens the editor
+  if(isViewer() || !p.ticker || p.type==='Cash') return '';
+  return ` <span class="basis-pen" data-bt="${attrEsc(p.ticker)}" data-ba="${attrEsc(p.account||'')}" style="cursor:pointer;" title="${attrEsc(tip||'enter your own cost basis')}">✎</span>`;
+}
 function noBasisCell(p, provider, text){      // 'n/r' = not reported; never a silent dash, never an estimate
   if(p.type==='Cash') return '<span class="muted">—</span>';
   const insts=(p.institutions&&p.institutions.length?p.institutions:(p.institution?[p.institution]:[])).join(' / ');
   const prov=provider?(' via '+provider.charAt(0).toUpperCase()+provider.slice(1)):'';
-  return `<span class="muted" title="${attrEsc('not reported by '+(insts||'your provider')+prov+' — the app does not estimate cost basis')}">n/r</span>`;
+  const partial=(p.basis_lines>1 && p.basis_known>0)?` Basis is known for ${p.basis_known} of ${p.basis_lines} accounts, so no combined figure is shown.`:'';
+  return `<span class="muted" title="${attrEsc('not reported by '+(insts||'your provider')+prov+' — the app does not estimate cost basis.'+partial+' Click ✎ to enter your own.')}">n/r</span>`+basisPen(p);
+}
+function manualCostCell(p){                   // a user-entered cost: marked, and flagged an estimate when the share count moved
+  const e=p.basis_entry||{}, tip='entered by you'+(e.as_of?' on '+e.as_of:'')+(e.qty_at_entry!=null?', quantity at entry '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4}):'');
+  const est=p.basis_stale?` <span class="neg" title="${attrEsc('estimate — shares changed since entry (entered '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4})+', now '+(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:4})+'). The entered average cost is applied to all current shares.')}">est.</span>`:'';
+  return `${usd(p.cost_total)} <span title="${attrEsc(tip)}">✎</span>${est}`+basisPen(p,'edit or clear your entered cost basis');
+}
+const costCell = (p, PROV) => p.cost_source==='manual' ? manualCostCell(p) : (p.cost_total!=null ? usd(p.cost_total) : noBasisCell(p,PROV));
+// ---- TASK-008: user-entered cost basis. Editor dialog (per ticker, one block per eligible account line) and the settings panel.
+document.addEventListener('click', e=>{ const t=e.target.closest&&e.target.closest('.basis-pen'); if(t){ e.preventDefault(); openBasisEditor(t.dataset.bt, t.dataset.ba||''); } });
+async function basisFetch(){ const r=await fetch('/api/cost-basis'); if(!r.ok) throw new Error(r.status===403?'admin only':('HTTP '+r.status)); return r.json(); }
+async function basisPost(body){ const r=await fetch('/api/cost-basis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }
+function openBasisEditor(ticker, onlyAcct){
+  const prior=document.getElementById('basis-dialog'); if(prior) prior.remove();
+  const back=el('div'); back.id='basis-dialog'; back.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;';
+  const dlg=el('div'); dlg.setAttribute('role','dialog'); dlg.setAttribute('aria-modal','true');
+  dlg.style.cssText='background:var(--color-panel);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:8px;padding:16px 18px;width:min(640px,100%);box-shadow:0 10px 40px rgba(0,0,0,0.6);font-size:var(--font-size-md);';
+  const close=()=>{ document.removeEventListener('keydown',onKey,true); back.remove(); };
+  const onKey=e=>{ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); close(); } };
+  document.addEventListener('keydown',onKey,true);
+  back.onmousedown=e=>{ if(e.target===back) close(); };
+  const h=el('div'); h.style.cssText='font-size:var(--font-size-xl);letter-spacing:1px;margin-bottom:4px;'; h.textContent='Your cost basis: '+ticker; dlg.appendChild(h);
+  const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
+  sub.textContent='Only where your provider reports none. Enter a total cost or an average cost per share. The app multiplies the average by your CURRENT shares; if the share count later moves more than 1%, the line is marked an estimate. A cost basis the provider reports always wins.';
+  dlg.appendChild(sub);
+  const body=el('div'); dlg.appendChild(body); body.textContent='Loading…';
+  const foot=el('div'); foot.style.cssText='display:flex;justify-content:flex-end;margin-top:var(--space-3);'; const cb=el('button','mut-btn','CLOSE'); cb.onclick=close; foot.appendChild(cb); dlg.appendChild(foot);
+  back.appendChild(dlg); document.body.appendChild(back);
+  const render=async()=>{
+    let data; try{ data=await basisFetch(); }catch(err){ body.textContent='Could not load: '+err.message; return; }
+    const lines=(data.lines||[]).filter(l=>l.ticker===ticker && (!onlyAcct || l.account===onlyAcct));
+    body.textContent='';
+    if(!lines.length){ body.appendChild(el('div','muted','No editable line for this holding — its provider already reports a cost basis, or it is cash.')); return; }
+    lines.forEach(l=>{
+      const box=el('div'); box.style.cssText='border:1px solid var(--color-border);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-2);';
+      const t=el('div'); t.textContent=(l.institution||'?')+' · '+(l.account||'?'); t.style.fontWeight='bold'; box.appendChild(t);
+      const q=el('div','muted'); q.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+      q.textContent=(+l.quantity).toLocaleString(undefined,{maximumFractionDigits:4})+' shares · value '+usd(l.value)+(l.applied?(' · entered '+((l.entry||{}).as_of||'')+(l.stale?' · ESTIMATE: shares changed since entry':'')):' · no basis entered'); box.appendChild(q);
+      const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+      const mode=document.createElement('select'); [['total','total cost ($)'],['per_share','average per share ($)']].forEach(([v,lb])=>{ const o=document.createElement('option'); o.value=v; o.textContent=lb; mode.appendChild(o); });
+      const amt=document.createElement('input'); amt.type='number'; amt.min='0'; amt.step='any'; amt.placeholder='amount'; amt.style.width='120px';
+      const asof=document.createElement('input'); asof.type='date'; asof.value=data.today||''; asof.title='as-of date';
+      const note=document.createElement('input'); note.placeholder='note (optional)'; note.maxLength=200; note.style.width='170px';
+      const msg=el('span','muted'); msg.style.fontSize='var(--font-size-sm)';
+      const save=el('button',null,'↳ SAVE'); const clr=el('button','mut-btn','CLEAR'); clr.disabled=!l.applied;
+      const key={institution:l.institution,account:l.account,ticker:l.ticker};
+      save.onclick=async()=>{ msg.className='muted'; msg.textContent='Saving…'; try{ await basisPost(Object.assign({},key,{mode:mode.value,amount:amt.value,as_of:asof.value,note:note.value})); load(true); await render(); }catch(err){ msg.className='neg'; msg.textContent=err.message; } };
+      clr.onclick=async()=>{ if(!confirm('Clear the entered cost basis for this line?')) return; try{ await basisPost(Object.assign({},key,{clear:true})); load(true); await render(); }catch(err){ msg.className='neg'; msg.textContent=err.message; } };
+      [mode,amt,asof,note,save,clr,msg].forEach(x=>row.appendChild(x)); box.appendChild(row); body.appendChild(box);
+    });
+  };
+  render();
+}
+function costBasisPanel(){
+  const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
+  const box=el('div'); box.style.cssText='border:1px solid var(--border,#555);border-radius:6px;padding:var(--space-3);margin-bottom:var(--space-3);';
+  if(!u||u.role!=='admin') return box;
+  box.appendChild(el('div','ph','COST BASIS · ENTERED BY YOU'));
+  const body=el('div'); box.appendChild(body); body.textContent='Loading…';
+  basisFetch().then(data=>{
+    body.textContent='';
+    const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-2);';
+    n.textContent='Where your provider reports no cost basis (workplace-plan funds, for example) the tables show n/r. Click the ✎ beside it to enter one, or fill in many at once with the template below. A cost basis the provider reports always wins; nothing is ever estimated for you. In a 401(k)/IRA a cost basis has no tax effect and is never used as a taxable loss.';
+    body.appendChild(n);
+    const lines=data.lines||[], ents=data.entries||[], sm=data.summary||{};
+    const st=el('div'); st.style.cssText='margin-bottom:var(--space-2);';
+    st.textContent=lines.length+' line(s) without a provider cost basis · '+ents.filter(e=>e.status==='active').length+' with your entry'+(sm.stale_lines?(' · '+sm.stale_lines+' flagged estimate (share count changed)'):'')+(sm.lines?(' · '+usd(sm.cost)+' of total cost is user-entered ('+(sm.share_pct==null?'—':sm.share_pct+'%')+')'):''); body.appendChild(st);
+    const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2);';
+    const dl=el('a',null,'⬇ DOWNLOAD TEMPLATE'); dl.href='/api/cost-basis/template'; dl.setAttribute('download','cost_basis_template.csv'); dl.style.fontSize='var(--font-size-sm)'; bar.appendChild(dl);
+    const fi=document.createElement('input'); fi.type='file'; fi.accept='.csv,text/csv'; fi.style.display='none';
+    const up=el('button','mut-btn','⬆ UPLOAD FILLED TEMPLATE'); up.onclick=()=>fi.click();
+    const msg=el('div'); msg.style.cssText='font-size:var(--font-size-sm);white-space:pre-line;margin-bottom:var(--space-2);';
+    fi.onchange=()=>{ const f=fi.files&&fi.files[0]; if(!f) return; const rd=new FileReader(); rd.onload=()=>{
+      fetch('/api/cost-basis/import',{method:'POST',headers:{'Content-Type':'text/csv'},body:rd.result}).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(({ok,j})=>{
+        if(!ok){ msg.className='neg'; msg.textContent=((j.errors||[]).map(e=>'Row '+e.row+': '+e.message).join('\n'))||j.error||'Upload failed — nothing was saved.'; return; }
+        msg.className='pos'; msg.textContent='✓ '+j.entries_written+' cost basis entr'+(j.entries_written===1?'y':'ies')+' saved.'; load(true); }).catch(e=>{ msg.className='neg'; msg.textContent=String(e); }); }; rd.readAsText(f); fi.value=''; };
+    bar.appendChild(up); bar.appendChild(fi); body.appendChild(bar); body.appendChild(msg);
+    if(ents.length){
+      const tb=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">HOLDING</th><th class="l">ACCOUNT</th><th>AVG / SH</th><th>QTY AT ENTRY</th><th class="l">AS OF</th><th class="l">STATUS</th><th></th>'; tb.appendChild(hr);
+      ents.forEach(e=>{ const tr=el('tr');
+        const stx={active:'<span class="pos">active</span>',superseded:'<span class="muted" title="your provider now reports a cost basis, which wins; your entry is kept, not applied">superseded</span>',unmatched:'<span class="neg" title="no current line matches (account renamed or closed, or the holding was sold)">unmatched</span>'}[e.status]||e.status;
+        tr.innerHTML=`<td class="l sym">${attrEsc(e.ticker)}</td><td class="l muted" style="white-space:normal;">${attrEsc((e.institution||'?')+' · '+(e.account||'?'))}</td><td>${(+e.avg_cost).toFixed(4)}</td><td>${(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4})}</td><td class="l muted">${attrEsc(e.as_of||'')}</td><td class="l">${stx}</td><td></td>`;
+        const clr=el('button','mut-btn','CLEAR'); clr.style.cssText='font-size:var(--font-size-sm);padding:1px 8px;';
+        clr.onclick=async()=>{ if(!confirm('Clear this entry?')) return; try{ await basisPost({institution:e.institution,account:e.account,ticker:e.ticker,clear:true}); load(true); }catch(err){ alert(err.message); } };
+        tr.lastChild.appendChild(clr); tb.appendChild(tr); });
+      body.appendChild(tb);
+    }
+  }).catch(err=>{ body.textContent='Could not load: '+err.message; });
+  return box;
 }
 function positionsTable(positions){
   positions.forEach(p=>p._analyst=analystRating(p.ticker));
@@ -2147,9 +2245,9 @@ function positionsTable(positions){
       `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
       `<td>${p.price!=null?'$'+(+p.price).toFixed(2)+(p.price_source==='closing'?'<span class="muted" title="last closing price — the provider has no live price for this security">¢</span>':(p.price_source==='derived'?'<span class="muted" title="derived: value ÷ quantity — the provider reported no price for this security">≈</span>':'')):'—'}</td>`+
       `<td>${usd(p.value)}</td>`+
-      `<td class="muted">${p.cost_total!=null?usd(p.cost_total):noBasisCell(p,PROV)}</td>`+
-      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):noBasisCell(p,PROV)}</td>`+
-      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):noBasisCell(p,PROV)}</td>`+
+      `<td class="muted">${costCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):'<span class="muted">n/r</span>'}</td>`+
+      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):'<span class="muted">n/r</span>'}</td>`+
       `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`;
     tbl.appendChild(tr);
   });
@@ -2186,9 +2284,9 @@ function consolidatedTable(items){
       `<td class="l">${isFundType(p.type)?fundAnalystCell(p,FI):ratingBadge(p._analyst)}</td>`+
       `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
       `<td>${usd(p.value)}</td>`+
-      `<td class="muted">${p.cost_total!=null?usd(p.cost_total):noBasisCell(p,PROV)}</td>`+
-      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):noBasisCell(p,PROV)}</td>`+
-      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):noBasisCell(p,PROV)}</td>`+
+      `<td class="muted">${costCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):'<span class="muted">n/r</span>'}</td>`+
+      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):'<span class="muted">n/r</span>'}</td>`+
       `<td>${p.weight_pct!=null?p.weight_pct.toFixed(1)+'%':'—'}</td>`+
       `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`+
       `<td title="${(p.accounts||[]).join(', ').replace(/"/g,'')}">${p.account_count}</td>`;
@@ -3757,7 +3855,7 @@ function accountRegistryContent(){
     'With no YES anywhere, the gauge falls back to guessing from account names, which counts checking/savings/money-market only and is blind to a reserve you deliberately parked somewhere that earns a return. '+
     'Tax-deferred accounts are blocked: an early withdrawal costs income tax plus a 10% penalty, so they aren\'t emergency money. A Roth is allowed but should carry a cap equal to your contribution basis — only contributions come out free.';
   wrap.appendChild(sub);
-  const _integ=el('div'); _integ.id='integrations-panel'; _integ.appendChild(providerPanel()); _integ.appendChild(plaidPanel()); _integ.appendChild(snaptradePanel()); _integ.appendChild(monarchPanel()); wrap.appendChild(_integ);
+  const _integ=el('div'); _integ.id='integrations-panel'; _integ.appendChild(providerPanel()); _integ.appendChild(plaidPanel()); _integ.appendChild(snaptradePanel()); _integ.appendChild(monarchPanel()); wrap.appendChild(_integ); wrap.appendChild(costBasisPanel());
   if(ACCTREG && ACCTREG.ef_stress_drawdown_pct!=null){
     const k=el('div','muted'); k.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
     k.textContent='EF target '+ACCTREG.ef_target_months+' months · stress test assumes a '+ACCTREG.ef_stress_drawdown_pct+'% equity drawdown on market-risk sources (both adjustable under ADVANCED KNOBS).';
@@ -8461,7 +8559,7 @@ function taxContent(bracket, audit){
       const tb=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>COST</th><th>LOSS</th><th>LOSS%</th><th class="l">WASH-SALE</th>'; tb.appendChild(hr);
       const wv=v=>v==='clear'?'<span class="pos">✓ clear</span>':(v==='blocked'?'<span class="neg">✗ BLOCKED</span>':(v==='caution-drip'?'<span style="color:var(--color-accent)">⚠ DRIP</span>':'<span class="muted">?</span>'));
       tlh.candidates.forEach(c=>{ const w=c.wash||{}; const tr=el('tr');
-        tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td>${c.cost!=null?usd(c.cost):'—'}</td><td class="neg">${sgn(c.loss)}</td><td class="neg">${pct(c.loss_pct)}</td>`+
+        tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td>${c.cost!=null?usd(c.cost):'—'}${c.cost_source==='manual'?` <span title="${c.basis_stale?'cost basis entered by you — ESTIMATE: your share count changed since entry; confirm with your brokerage before relying on this loss':'cost basis entered by you, not reported by your provider; confirm with your brokerage'}">✎${c.basis_stale?' est.':''}</span>`:''}</td><td class="neg">${sgn(c.loss)}</td><td class="neg">${pct(c.loss_pct)}</td>`+
           `<td class="l" style="font-size:var(--font-size-sm);" title="${((w.msg||'')+'').replace(/"/g,'&quot;')}">${wv(w.verdict)}${w.window_opens?` <span class="muted">reopens ${w.window_opens}</span>`:''}</td>`;
         tb.appendChild(tr);
         const rp=w.replacement;
