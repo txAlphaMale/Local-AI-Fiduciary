@@ -324,6 +324,19 @@ def fund_series(ticker):
     return _mf_map().get((ticker or "").upper().strip())
 
 
+def fund_holdings_cached(ticker):
+    """The last stored look-through result for a fund, WITHOUT any network call (None if never fetched). For display paths
+    that must not trigger SEC requests (HOLDINGS table)."""
+    try:
+        hit = store.ext_cache_get("edgar_fund_holdings", (ticker or "").upper().strip())
+    except Exception:
+        return None
+    if not hit:
+        return None
+    fetched_at, val = hit
+    return dict(val, _cache_fetched_at=fetched_at) if isinstance(val, dict) else None
+
+
 def _nport_by_series(series_id):
     """Fetch the latest NPORT-P for a specific fund SERIES directly via EDGAR browse-edgar
     (which accepts an S000... series id in the CIK field). One request, resolves the exact series

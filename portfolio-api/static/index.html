@@ -2093,10 +2093,34 @@ function dashboardContent(){
   return wrap;
 }
 
+// ---- TASK-007: fund rows. Funds have no analyst consensus, no sector, and often no cost basis from the provider. Instead of
+// bare dashes, say what we DO know (asset-class mix from the cached SEC look-through, expense ratio) and explain each blank.
+const isFundType = t => t==='Mutual Fund' || t==='ETF';
+const attrEsc = x => (x==null?'':String(x)).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+function fundInfoMap(){ return (EXP&&EXP.positions) ? Object.fromEntries(EXP.positions.filter(p=>'fund_mix' in p||'expense_ratio_pct' in p).map(p=>[p.ticker,p])) : {}; }
+function fundSectorCell(p, FI){
+  if(!(p.ticker in FI)) return `<span class="muted" title="exposure data for this fund is still being computed (it refreshes in the background)">…</span>`;
+  const f=FI[p.ticker], m=f.fund_mix;
+  if(m && m.label) return `<span title="${attrEsc('asset-class mix from the fund\'s SEC N-PORT filing'+(m.as_of?' (as of '+m.as_of+')':'')+(m.series?' · '+m.series:'')+' — class only, not country')}">${attrEsc(m.label)}</span>`;
+  return `<span class="muted" title="${attrEsc('No SEC look-through is stored for this fund yet. Run RISK · EXPOSURE → LOOK-THROUGH to fetch it (it is not fetched when this table loads).')}">look-through unavailable</span>`;
+}
+function fundAnalystCell(p, FI){
+  if(!(p.ticker in FI)) return `<span class="muted" title="exposure data for this fund is still being computed">…</span>`;
+  const er=FI[p.ticker].expense_ratio_pct;
+  if(er!=null) return `<span class="muted" title="expense ratio (funds have no analyst consensus)">ER ${(+er).toFixed(er<0.1?3:2)}%</span>`;
+  return `<span class="muted" title="funds have no analyst consensus; this fund's expense ratio is not in the app's fund map">n/a</span>`;
+}
+function noBasisCell(p, provider, text){      // 'n/r' = not reported; never a silent dash, never an estimate
+  if(p.type==='Cash') return '<span class="muted">—</span>';
+  const insts=(p.institutions&&p.institutions.length?p.institutions:(p.institution?[p.institution]:[])).join(' / ');
+  const prov=provider?(' via '+provider.charAt(0).toUpperCase()+provider.slice(1)):'';
+  return `<span class="muted" title="${attrEsc('not reported by '+(insts||'your provider')+prov+' — the app does not estimate cost basis')}">n/r</span>`;
+}
 function positionsTable(positions){
   positions.forEach(p=>p._analyst=analystRating(p.ticker));
+  const FI=fundInfoMap(), PROV=(DATA&&DATA.portfolio_provider)||'';
   const cols=[
-    ['ticker','SYM','l'],['name','NAME','l'],['account','ACCT','l'],['_analyst','ANALYST','l'],
+    ['ticker','SYM','l'],['name','NAME','l'],['account','ACCT','l'],['_analyst','ANALYST · ER','l'],
     ['quantity','QTY'],['price','PX'],['value','VALUE'],
     ['cost_total','COST'],['gain','UNREAL'],['gain_pct','P/L%'],['day_pct','DAY%']
   ];
@@ -2119,13 +2143,13 @@ function positionsTable(positions){
       `<td class="sym">${p.ticker}</td>`+
       `<td class="name" title="${(p.name||'').replace(/"/g,'')}">${p.name||''}</td>`+
       `<td class="l muted">${shortInst(p.institution)}</td>`+
-      `<td class="l">${ratingBadge(p._analyst)}</td>`+
+      `<td class="l">${isFundType(p.type)?fundAnalystCell(p,FI):ratingBadge(p._analyst)}</td>`+
       `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
-      `<td>${p.price!=null?'$'+(+p.price).toFixed(2):'—'}</td>`+
+      `<td>${p.price!=null?'$'+(+p.price).toFixed(2)+(p.price_source==='closing'?'<span class="muted" title="last closing price — the provider has no live price for this security">¢</span>':(p.price_source==='derived'?'<span class="muted" title="derived: value ÷ quantity — the provider reported no price for this security">≈</span>':'')):'—'}</td>`+
       `<td>${usd(p.value)}</td>`+
-      `<td class="muted">${usd(p.cost_total)}</td>`+
-      `<td class="${cls(p.gain)}">${sgn(p.gain)}</td>`+
-      `<td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`+
+      `<td class="muted">${p.cost_total!=null?usd(p.cost_total):noBasisCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):noBasisCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):noBasisCell(p,PROV)}</td>`+
       `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`;
     tbl.appendChild(tr);
   });
@@ -2134,8 +2158,9 @@ function positionsTable(positions){
 
 function consolidatedTable(items){
   const SECMAP=(EXP&&EXP.positions)?Object.fromEntries(EXP.positions.map(p=>[p.ticker,p.sector])):{};
+  const FI=fundInfoMap(), PROV=(DATA&&DATA.portfolio_provider)||'';
   items.forEach(p=>{ p._analyst=analystRating(p.ticker); p._sector=SECMAP[p.ticker]||''; });
-  const cols=[['ticker','SYM','l'],['name','NAME','l'],['type','TYPE','l'],['_sector','SECTOR','l'],['_analyst','ANALYST','l'],
+  const cols=[['ticker','SYM','l'],['name','NAME','l'],['type','TYPE','l'],['_sector','SECTOR · MIX','l'],['_analyst','ANALYST · ER','l'],
     ['quantity','QTY'],['value','VALUE'],['cost_total','COST'],['gain','UNREAL'],['gain_pct','P/L%'],
     ['weight_pct','WT%'],['day_pct','DAY%'],['account_count','ACCTS']];
   const tbl=el('table'); const thead=el('tr');
@@ -2155,13 +2180,15 @@ function consolidatedTable(items){
       `<td class="sym">${p.ticker||''}</td>`+
       `<td class="name" title="${(p.name||'').replace(/"/g,'')}">${p.name||''}</td>`+
       `<td class="l muted">${p.type||''}</td>`+
-      `<td class="l muted" title="${(p._sector||'').replace(/"/g,'')}" style="font-size:var(--font-size-sm);">${p._sector||'—'}</td>`+
-      `<td class="l">${ratingBadge(p._analyst)}</td>`+
+      (isFundType(p.type)
+        ? `<td class="l muted" style="font-size:var(--font-size-sm);">${fundSectorCell(p,FI)}</td>`
+        : `<td class="l muted" title="${(p._sector||'').replace(/"/g,'')}" style="font-size:var(--font-size-sm);">${p._sector||'—'}</td>`)+
+      `<td class="l">${isFundType(p.type)?fundAnalystCell(p,FI):ratingBadge(p._analyst)}</td>`+
       `<td>${p.quantity!=null?(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:2}):'—'}</td>`+
       `<td>${usd(p.value)}</td>`+
-      `<td class="muted">${usd(p.cost_total)}</td>`+
-      `<td class="${cls(p.gain)}">${sgn(p.gain)}</td>`+
-      `<td class="${cls(p.gain_pct)}">${pct(p.gain_pct)}</td>`+
+      `<td class="muted">${p.cost_total!=null?usd(p.cost_total):noBasisCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain)}">${p.gain!=null?sgn(p.gain):noBasisCell(p,PROV)}</td>`+
+      `<td class="${cls(p.gain_pct)}">${p.gain_pct!=null?pct(p.gain_pct):noBasisCell(p,PROV)}</td>`+
       `<td>${p.weight_pct!=null?p.weight_pct.toFixed(1)+'%':'—'}</td>`+
       `<td class="${cls(p.day_pct)}">${pct(p.day_pct)}</td>`+
       `<td title="${(p.accounts||[]).join(', ').replace(/"/g,'')}">${p.account_count}</td>`;
