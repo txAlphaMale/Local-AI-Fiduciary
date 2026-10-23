@@ -292,6 +292,37 @@ class TestExposureCacheSchema(unittest.TestCase):
         self.assertFalse(r["refreshing"]); self.assertEqual(started, [])
 
 
+class TestSinglePencil(unittest.TestCase):
+    """Tester screenshot 2026-10-23: manual-basis rows showed TWO pencils (one clickable, one not)."""
+    def render(self, viewer):
+        import shutil, subprocess
+        if not shutil.which("node"): self.skipTest("node not installed")
+        def fn(name):
+            i = HTML.index(f"function {name}(")
+            d, k = 0, HTML.index("{", i)
+            while True:
+                d += HTML[k] == "{"; d -= HTML[k] == "}"; k += 1
+                if d == 0: return HTML[i:k]
+        src = ("const attrEsc = x => (x==null?'':String(x)).replace(/\"/g,'&quot;').replace(/</g,'&lt;');\nconst usd=n=>'$'+Math.round(n).toLocaleString();\n"
+               f"const isViewer=()=>{str(viewer).lower()};\n" + fn("basisPen") + fn("manualCostCell") + """
+        const p={ticker:'FXAIX',account:'Plan',type:'Mutual Fund',cost_total:1500,quantity:12,basis_stale:true,basis_entry:{as_of:'2026-10-01',qty_at_entry:10}};
+        console.log(JSON.stringify([manualCostCell(p), manualCostCell(Object.assign({},p,{basis_stale:false}))]));""")
+        r = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_admin_sees_exactly_one_clickable_pencil_and_it_carries_the_info(self):
+        for html in self.render(False):
+            self.assertEqual(html.count("✎"), 1)
+            self.assertEqual(html.count('class="basis-pen"'), 1)
+            self.assertIn("entered by you on 2026-10-01", html); self.assertIn("click to edit or clear", html)
+        self.assertIn("est.", self.render(False)[0]); self.assertNotIn("est.", self.render(False)[1])
+
+    def test_viewer_sees_one_plain_marker_and_nothing_clickable(self):
+        for html in self.render(True):
+            self.assertEqual(html.count("✎"), 1); self.assertNotIn("basis-pen", html); self.assertIn("entered by you on 2026-10-01", html)
+
+
 class TestUi(unittest.TestCase):
     def test_wiring(self):
         for needle in ("function openBasisEditor", "function costBasisPanel", "/api/cost-basis/import", "/api/cost-basis/template", "basis-pen",
