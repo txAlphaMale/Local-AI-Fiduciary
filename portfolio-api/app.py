@@ -38,6 +38,7 @@ from typing import Optional, Dict, List
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
+import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
@@ -3785,7 +3786,8 @@ def _snapshot_shares(d):
                 q[t] = q.get(t, 0.0) + float(c["quantity"])
         if not q:
             return
-        log = washsale.append_snapshot(_read_sharelog(), q)
+        # keep_days: the share log now doubles as the history behind the holdings-based return chart, so it is kept for years (it was 120 days)
+        log = washsale.append_snapshot(_read_sharelog(), q, keep_days=3650)
         store.write_json(SHARELOG_FILE, log)
     except Exception:
         pass
@@ -3809,7 +3811,16 @@ def _snapshot_value(d):
                 spy = _price(os.environ.get("BENCHMARK_TICKER", "SPY"))
             except Exception:
                 spy = None
-        store.value_history_upsert_today(today, d.get("net_worth"), d.get("invested_value"), spy)
+        # TASK (2026-10-23): never record a half-loaded portfolio (see valuehist.py) -- keep the day's last good row instead
+        prev = next((r for r in reversed(store.value_history_read_all()) if r.get("date") != today), None)
+        bad, why = valuehist.snapshot_incomplete(d, prev)
+        if bad:
+            print(f"[history] today's value snapshot skipped: {why}", flush=True)
+            return
+        covered = sum((p.get("value") or 0) for p in (d.get("positions") or [])
+                      if p.get("cost_total") is not None and not p.get("suspect"))
+        store.value_history_upsert_today(today, d.get("net_worth"), d.get("invested_value"), spy,
+                                         d.get("total_cost"), round(covered, 2), d.get("position_count"))
     except Exception:
         pass
 
@@ -8109,6 +8120,61 @@ def get_performance():
         return {**cached, "cached": True, "refreshing": (not fresh)}
     return {"status": "computing", "computing": True,
             "note": "First performance build is fetching price history — refresh in a moment."}
+
+
+# ---- Holdings-based return series for the dashboard chart (performance.holdings_return_series). Fetches price history per ticker, so it is a
+# cached background build like the other heavy analytics; POST /api/run-portfolio-return forces it.
+RETURN_FILE = os.environ.get("RETURN_FILE", "/data/portfolio_return.json")
+RETURN_TTL = int(os.environ.get("RETURN_TTL", "21600"))          # 6h
+_ret_lock = threading.Lock()
+
+
+def _do_return_series():
+    if not _ret_lock.acquire(blocking=False):
+        return
+    try:
+        rows = ((_read_sharelog() or {}).get("rows")) or []
+        bad = {r["date"] for r in store.value_history_read_all(include_excluded=True) if r.get("excluded")}
+        spy = _stooq_daily(os.environ.get("BENCHMARK_TICKER", "SPY"))
+        res = performance.holdings_return_series(rows, _stooq_daily, spy, drop_dates=bad)
+        d = _data()
+        tot = cov = 0.0
+        covered = set(res["covered_tickers"])
+        for c in d.get("consolidated") or []:
+            if c.get("ticker") and (c.get("type") or "") != "Cash":
+                v = c.get("value") or 0
+                tot += v
+                cov += v if c["ticker"] in covered else 0
+        res.update(generated_at=int(time.time()), coverage_pct=(round(cov / tot * 100, 1) if tot else None),
+                   share_days=len(rows),
+                   note="Price return of the holdings you owned each day (what you bought later does not count as performance). Excludes dividends, "
+                        "and only covers holdings with public price history; days with a move over 25% are treated as bad data.")
+        store.write_json(RETURN_FILE, res)
+    except Exception as e:
+        print(f"[return-series] build failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+    finally:
+        _ret_lock.release()
+
+
+@app.get("/api/portfolio-return")
+def get_portfolio_return():
+    try:
+        cached = store.read_json_strict(RETURN_FILE)
+    except Exception:
+        cached = None
+    fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < RETURN_TTL)
+    if not fresh and not _ret_lock.locked():
+        threading.Thread(target=_do_return_series, daemon=True).start()
+    if cached:
+        return {**cached, "cached": True, "refreshing": (not fresh)}
+    return {"status": "computing", "computing": True, "series": [],
+            "note": "First build is fetching price history for your holdings — refresh in a moment."}
+
+
+@app.post("/api/run-portfolio-return")
+def run_portfolio_return_ep():
+    threading.Thread(target=_do_return_series, daemon=True).start()
+    return {"status": "started"}
 
 
 @app.post("/api/run-performance")

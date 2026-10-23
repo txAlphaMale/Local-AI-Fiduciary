@@ -164,6 +164,12 @@ def init_db():
                 spy REAL,
                 funded_ratio REAL
             )""")
+            # 2026-10-23: cost-basis history + completeness metadata. total_cost = sum of KNOWN cost bases; cost_covered_value = the
+            # market value of exactly those lines (so value-vs-cost compares like with like); positions = line count that day (used to
+            # reject a half-loaded snapshot); excluded = 1 hides a row proven bad (a one-day dip from an incomplete load) from every reader.
+            for _col, _decl in (("total_cost", "REAL"), ("cost_covered_value", "REAL"), ("positions", "REAL"),
+                                ("excluded", "INTEGER DEFAULT 0")):
+                _ensure_column(c, "value_history", _col, _decl)
             c.execute("""CREATE TABLE IF NOT EXISTS strategist_runs(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts INTEGER NOT NULL,
@@ -497,19 +503,30 @@ def ensure_paper_migrated(legacy_path):
 # time series -- one of the more sensitive tables in the app). `date` stays plaintext -- it's the
 # primary key and used in every WHERE/ORDER BY, and a bare date with no dollar figure attached
 # isn't independently sensitive.
-def value_history_read_all():
+def value_history_read_all(include_excluded=False):
     """Ascending by date -- same shape (list of dicts: date/net_worth/invested_value/spy/
-    funded_ratio) every existing consumer (_risk_metrics, _vol_regime_signal, performance.py,
-    the Portfolio-vs-SPY chart) already expects, so none of them need to change."""
+    funded_ratio, plus total_cost/cost_covered_value/positions and `excluded`) every existing consumer (_risk_metrics, _vol_regime_signal,
+    performance.py, the Portfolio-vs-SPY chart) already expects. Rows marked excluded (proven-bad snapshots) are hidden unless asked for."""
     with _conn() as c:
-        rows = c.execute("SELECT date, net_worth, invested_value, spy, funded_ratio "
+        rows = c.execute("SELECT date, net_worth, invested_value, spy, funded_ratio, total_cost, cost_covered_value, positions, excluded "
                          "FROM value_history ORDER BY date ASC").fetchall()
     out = []
     for r in rows:
+        if r["excluded"] and not include_excluded:
+            continue
         out.append({"date": r["date"], "net_worth": _dec_float(r["net_worth"]),
                     "invested_value": _dec_float(r["invested_value"]), "spy": _dec_float(r["spy"]),
-                    "funded_ratio": _dec_float(r["funded_ratio"])})
+                    "funded_ratio": _dec_float(r["funded_ratio"]), "total_cost": _dec_float(r["total_cost"]),
+                    "cost_covered_value": _dec_float(r["cost_covered_value"]), "positions": _dec_float(r["positions"]),
+                    "excluded": bool(r["excluded"])})
     return out
+
+
+def value_history_exclude(dates, flag=1):
+    """Mark rows excluded (flag=1) or restore them (flag=0). Never deletes -- reversible."""
+    with _conn() as c:
+        for d in dates:
+            c.execute("UPDATE value_history SET excluded=? WHERE date=?", (1 if flag else 0, d))
 
 
 def value_history_today_spy(date):
@@ -521,14 +538,16 @@ def value_history_today_spy(date):
     return _dec_float(row["spy"]) if row else None
 
 
-def value_history_upsert_today(date, net_worth, invested_value, spy):
+def value_history_upsert_today(date, net_worth, invested_value, spy, total_cost=None, cost_covered_value=None, positions=None):
     """Insert today's row, or overwrite it in place if called again the same day -- same
     idempotent-per-day behavior as the original `hist[-1]=row if same date else append`."""
     with _conn() as c:
-        c.execute("""INSERT INTO value_history(date, net_worth, invested_value, spy) VALUES(?,?,?,?)
+        c.execute("""INSERT INTO value_history(date, net_worth, invested_value, spy, total_cost, cost_covered_value, positions)
+                     VALUES(?,?,?,?,?,?,?)
                      ON CONFLICT(date) DO UPDATE SET net_worth=excluded.net_worth,
-                        invested_value=excluded.invested_value, spy=excluded.spy""",
-                  (date, _enc(net_worth), _enc(invested_value), _enc(spy)))
+                        invested_value=excluded.invested_value, spy=excluded.spy, total_cost=excluded.total_cost,
+                        cost_covered_value=excluded.cost_covered_value, positions=excluded.positions""",
+                  (date, _enc(net_worth), _enc(invested_value), _enc(spy), _enc(total_cost), _enc(cost_covered_value), _enc(positions)))
 
 
 def value_history_set_funded_ratio(date, funded_ratio):
