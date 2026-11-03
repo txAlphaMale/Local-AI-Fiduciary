@@ -27,7 +27,17 @@ import store
 # EMPTY STRING inside the container rather than leaving it absent -- and os.environ.get(k, default)
 # returns "" in that case, because the key exists. The app then sent `User-Agent: ""`, SEC replied
 # 403, and every EDGAR feature died silently. Confirmed live via /api/edgar-status.
-SEC_UA = (os.environ.get("SEC_USER_AGENT") or "").strip() or "Local AI Fiduciary admin@example.com"
+_PLACEHOLDER_UA = "Local AI Fiduciary admin@example.com"
+SEC_UA = (os.environ.get("SEC_USER_AGENT") or "").strip() or _PLACEHOLDER_UA
+
+
+def refresh_ua():
+    """Re-read SEC_USER_AGENT from the environment. This module is imported BEFORE app.py merges the secrets saved in
+    the Settings UI (stored in the DB) into os.environ, so SEC_UA above is frozen at the placeholder unless the app calls
+    this once the merge is done. Returns the UA now in effect."""
+    global SEC_UA
+    SEC_UA = (os.environ.get("SEC_USER_AGENT") or "").strip() or _PLACEHOLDER_UA
+    return SEC_UA
 
 
 def ua_is_placeholder(ua=None):

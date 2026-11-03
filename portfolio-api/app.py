@@ -157,6 +157,7 @@ def _boot_merge(_path, _only=None, _decrypt=False):
 
 _boot_merge(SECRETS_FILE, _decrypt=True)           # secrets (all keys) — values are encrypted at rest
 _boot_merge(_SETTINGS_FILE_BOOT, _CONFIG_ENV_KEYS)  # restart-class non-secret config only
+edgar.refresh_ua()   # `import edgar` ran before the merge above, so it saw only the placeholder UA, not the saved one
 # The data-source selector (SETTINGS -> ACCOUNTS) is the user's explicit choice and must survive a restart even
 # though docker-compose always injects PORTFOLIO_PROVIDER (default csv) -- which a gap-fill merge would never
 # override. A value saved in settings.json therefore wins over that env default; with nothing saved, env/.env rules.
