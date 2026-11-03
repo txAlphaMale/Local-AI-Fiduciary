@@ -2397,8 +2397,9 @@ def _job_worker():
         rec["status"] = "running"; rec["started"] = int(time.time())
         fn = _JOB_KINDS[rec["kind"]][2]
         try:
-            fn()
-            rec["status"] = "done"
+            # A job that found its single-flight lock already held returns "skipped" -- it did NOT run, so
+            # it must not be recorded as a (suspiciously fast) success.
+            rec["status"] = "skipped" if fn() == "skipped" else "done"
         except Exception as e:
             rec["status"] = "error"; rec["error"] = str(e)[:300]
         finally:
@@ -2406,6 +2407,7 @@ def _job_worker():
             _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
 
 threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
+
 
 
 def _job_typical_seconds(kind, jobs, exclude_id=None, n=5):
@@ -5667,8 +5669,9 @@ _backtest_lock = threading.Lock()
 
 
 def _do_backtest():
+    """Raises on failure (the job queue records it as "error"); returns "skipped" if a run is already in flight."""
     if not _backtest_lock.acquire(blocking=False):
-        return
+        return "skipped"
     try:
         try:
             log = store.read_json_strict(RATING_LOG_FILE) or []
@@ -5676,8 +5679,6 @@ def _do_backtest():
             log = []
         res = backtest_mod.run(log, _read_paper(), _stooq_daily)
         store.write_json(BACKTEST_FILE, res)
-    except Exception:
-        pass
     finally:
         _backtest_lock.release()
 
@@ -5690,8 +5691,8 @@ def get_backtest():
     except Exception:
         cached = None
     fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < BACKTEST_TTL)
-    if not fresh and not _backtest_lock.locked():
-        threading.Thread(target=_do_backtest, daemon=True).start()
+    if not fresh:
+        _enqueue("backtest", source="auto")            # stale-cache refresh: same queue + history as every other run
     if cached:
         return {**cached, "cached": True, "refreshing": (not fresh)}
     return {"status": "computing", "note": "First decision-backtest build is running (fetching "
@@ -12102,14 +12103,13 @@ def _read_opps():
 
 
 def _do_opportunities():
-    """Recompute the (slow) live scan and cache it to disk. Single-flight."""
+    """Recompute the (slow) live scan and cache it to disk. Single-flight. Raises on failure (the job queue records
+    it as "error"); returns "skipped" if a scan is already in flight."""
     if not _opp_lock.acquire(blocking=False):
-        return
+        return "skipped"
     try:
         res = _opportunities()
         store.write_json(OPPORTUNITIES_FILE, res)
-    except Exception:
-        pass
     finally:
         _opp_lock.release()
 
@@ -12120,8 +12120,8 @@ def get_opportunities():
     background when stale, so the dashboard never blocks on the live EDGAR/Finnhub scan."""
     cached = _read_opps()
     fresh = bool(cached) and (time.time() - (cached.get("generated_at") or 0) < OPP_TTL)
-    if not fresh and not _opp_lock.locked():
-        threading.Thread(target=_do_opportunities, daemon=True).start()
+    if not fresh:
+        _enqueue("opportunities", source="auto")       # stale-cache refresh: same queue + history as every other run
     if cached:
         return {**cached, "cached": True, "refreshing": (not fresh)}
     # nothing cached yet — return an error-shaped placeholder so the dashboard hides the
@@ -12133,10 +12133,10 @@ def get_opportunities():
 @app.post("/api/run-opportunities")
 def run_opportunities():
     """Recompute + cache the opportunity scan (the weekly scheduled scan). Token-guarded."""
-    if _opp_lock.locked():
-        return {"ok": True, "status": "already running"}
-    threading.Thread(target=_do_opportunities, daemon=True).start()
-    return {"ok": True, "status": "started"}
+    # Through the serial job queue (like the scheduled run) so a manual run is serialized, deduped, visible in
+    # /api/jobs and recorded in the run history that TASK SCHEDULE reports.
+    jid, created = _enqueue("opportunities", source="manual")
+    return {"ok": True, "status": "started" if created else "already queued or running", "job_id": jid}
 
 
 # ---------------- Tax: loss-harvesting + asset-location (read-only audits) ----------------

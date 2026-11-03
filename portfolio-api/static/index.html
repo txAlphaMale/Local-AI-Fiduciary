@@ -2963,7 +2963,7 @@ function scheduleContent(){
     const reset=j.is_default?`<span class="muted" style="font-size:var(--font-size-sm);">default</span>`
       :`<button onclick="resetSchedule('${j.kind}')" style="font-size:var(--font-size-sm);" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
     const lr=j.last_run;
-    const lastCell=lr?`<span class="${lr.status==='done'?'':'neg'}">${dur(lr.seconds)}</span><br><span class="muted" style="font-size:var(--font-size-sm);">${esc(when(lr.finished))}${lr.status==='done'?'':' · FAILED'}${lr.source&&lr.source!=='scheduler'?' · manual':''}</span>`
+    const lastCell=lr?`<span class="${lr.status==='done'?'':'neg'}">${dur(lr.seconds)}</span><br><span class="muted" style="font-size:var(--font-size-sm);">${esc(when(lr.finished))}${lr.status==='done'?'':(lr.status==='skipped'?' · SKIPPED (already running)':' · FAILED')}${lr.source==='auto'?' · auto-refresh':(lr.source&&lr.source!=='scheduler'?' · manual':'')}</span>`
       :`<span class="muted" style="font-size:var(--font-size-sm);">no history yet</span>`;
     const typCell=j.typical_seconds!=null?dur(j.typical_seconds):'<span class="muted">—</span>';
     const warn=(j.conflicts||[]).map(c=>`<div class="neg" style="font-size:var(--font-size-sm);font-weight:normal;">⚠ typically runs until ~${esc(c.ends)}, past when ${esc(c.with_label)} is due (${esc(c.day)} ${esc(c.due)}) — that job will wait in the queue</div>`).join('');

@@ -120,5 +120,41 @@ class TestApiAndUi(unittest.TestCase):
                       src.split("def _job_worker():")[1].split("threading.Thread(target=_job_worker")[0])
 
 
+
+class TestSilentFailures(unittest.TestCase):
+    """The backtest / opportunity jobs used to swallow every exception and so were always recorded as 'done'."""
+    def test_backtest_failure_propagates(self):
+        with mock.patch.object(appmod.backtest_mod, "run", side_effect=RuntimeError("boom")), \
+             mock.patch.object(appmod.store, "read_json_strict", lambda p: None):
+            with self.assertRaises(RuntimeError):
+                appmod._do_backtest()
+        self.assertFalse(appmod._backtest_lock.locked())
+
+    def test_opportunities_failure_propagates(self):
+        with mock.patch.object(appmod, "_opportunities", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                appmod._do_opportunities()
+        self.assertFalse(appmod._opp_lock.locked())
+
+    def test_lock_held_reports_skipped(self):
+        with appmod._backtest_lock:
+            self.assertEqual(appmod._do_backtest(), "skipped")
+        with appmod._opp_lock:
+            self.assertEqual(appmod._do_opportunities(), "skipped")
+
+    def test_every_trigger_goes_through_the_queue(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        self.assertNotIn("target=_do_opportunities", src)
+        self.assertNotIn("target=_do_backtest", src)
+        self.assertNotIn("_run_quietly", src)
+        for k in ("opportunities", "backtest"):
+            self.assertIn(f'_enqueue("{k}", source="manual")', src)
+            self.assertIn(f'_enqueue("{k}", source="auto")', src)
+
+    def test_worker_and_ui_know_skipped(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        self.assertIn('"skipped" if fn() == "skipped" else "done"', src)
+        self.assertIn("SKIPPED", HTML)
+
 if __name__ == "__main__":
     unittest.main()
