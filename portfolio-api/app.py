@@ -12022,10 +12022,14 @@ def _opportunities():
     ideas = []
     for t in tickers[:25]:
         try:
-            ideas.append({**_screen_one(t, crit), "already_held": t in held,
-                          "user_added": t in user_added})
+            one = _screen_one(t, crit)
+            # "unsupported" = the lookup worked but there is nothing to look up (mutual funds, 401k fund share
+            # classes and other non-SEC securities have no public fundamentals) -- permanent and NOT a fault.
+            # "error" = the lookup itself blew up (network, rate limit, bug) -- unexpected and fixable.
+            ideas.append({**one, "status": "ok" if one.get("available") else "unsupported",
+                          "already_held": t in held, "user_added": t in user_added})
         except Exception as e:
-            ideas.append({"ticker": t, "available": False, "error": str(e),
+            ideas.append({"ticker": t, "available": False, "status": "error", "error": str(e),
                           "user_added": t in user_added})
     # Rank by the quality-weighted forward return (opportunity_score), then raw fit, then
     # expected return — replaces the old "fit then revenue-growth" order so the best
@@ -12064,8 +12068,9 @@ def _opportunities():
         if not i.get("user_added") or i.get("ticker") in kept:
             continue
         if not i.get("available"):
-            unavailable_watchlist.append({"ticker": i.get("ticker"),
-                                          "reason": i.get("error") or "no data returned for this symbol"})
+            unavailable_watchlist.append({"ticker": i.get("ticker"), "status": i.get("status") or "unsupported",
+                                          "reason": i.get("error") or "unsupported: no public SEC fundamentals for this "
+                                                    "symbol (mutual fund, 401k fund share class or other non-SEC security)"})
             continue
         why = []
         if not _price_ok(i):
@@ -12079,7 +12084,9 @@ def _opportunities():
     return {"generated_at": int(time.time()), "criteria": crit, "strategy": cfg.get("strategy_description"),
             "watchlist": cfg.get("watchlist") or [], "include_holding_peers": bool(cfg.get("include_holding_peers")),
             "discovery_queries": cfg.get("discovery_queries") or [], "alert_holdings_limit": cfg.get("alert_holdings_limit"),
-            "screened": screened, "count": len(ideas), "min_fit": OPP_MIN_FIT, "ideas": ideas,
+            "screened": screened, "count": len(ideas),
+            "unsupported_count": sum(1 for i in all_ideas if i.get("status") == "unsupported"),
+            "error_count": sum(1 for i in all_ideas if i.get("status") == "error"), "min_fit": OPP_MIN_FIT, "ideas": ideas,
             "unscreened_watchlist": unscreened_watchlist,
             "unavailable_watchlist": unavailable_watchlist,
             "note": f"Top {len(ideas)} of {screened} screened — only names scoring >= {OPP_MIN_FIT}/4 within your "
@@ -12109,6 +12116,10 @@ def _do_opportunities():
         return "skipped"
     try:
         res = _opportunities()
+        # Unsupported symbols (funds, 401k holdings) are expected and never fail the job. But if EVERY ticker raised,
+        # the scan itself is broken (network / key / bug): fail loudly and keep the last good cached scan.
+        if res.get("screened") and res.get("error_count") == res.get("screened"):
+            raise RuntimeError(f"all {res['screened']} ticker lookups failed")
         store.write_json(OPPORTUNITIES_FILE, res)
     finally:
         _opp_lock.release()

@@ -136,6 +136,26 @@ class TestSilentFailures(unittest.TestCase):
                 appmod._do_opportunities()
         self.assertFalse(appmod._opp_lock.locked())
 
+    def test_unsupported_symbols_are_not_errors(self):
+        fund = {"ticker": "VTSAX", "available": False}
+        with mock.patch.object(appmod, "_screen_one", return_value=fund), \
+             mock.patch.object(appmod, "_read_scanner", return_value={"watchlist": ["VTSAX"], "criteria": {}}), \
+             mock.patch.object(appmod, "_data", return_value={"consolidated": []}):
+            res = appmod._opportunities()
+        self.assertEqual((res["unsupported_count"], res["error_count"]), (1, 0))
+        self.assertEqual(res["unavailable_watchlist"][0]["status"], "unsupported")
+        with mock.patch.object(appmod, "_opportunities", return_value=res), \
+             mock.patch.object(appmod.store, "write_json", lambda p, v: None):
+            self.assertIsNone(appmod._do_opportunities())          # job still "done"
+
+    def test_all_lookups_raising_fails_the_job(self):
+        res = {"screened": 3, "error_count": 3}
+        with mock.patch.object(appmod, "_opportunities", return_value=res), \
+             mock.patch.object(appmod.store, "write_json") as w:
+            with self.assertRaises(RuntimeError):
+                appmod._do_opportunities()
+            w.assert_not_called()
+
     def test_lock_held_reports_skipped(self):
         with appmod._backtest_lock:
             self.assertEqual(appmod._do_backtest(), "skipped")

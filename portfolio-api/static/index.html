@@ -2655,7 +2655,7 @@ function scannerContent(){
       `<td class="l">${ana}</td>`+
       `<td class="l"><button onclick="researchIdea('${i.ticker}')" style="font-size:var(--font-size-sm);padding:var(--space-1) var(--space-2);">▸ analyze</button>`+
         `${why?` <span class="muted" style="font-size:var(--font-size-xs)" title="${why.replace(/"/g,'&quot;')}">why?</span>`:''}`+
-        `${(i.error||!i.available)?` <span class="muted" style="font-size:var(--font-size-xs)">${i.error?'err':'no SEC data'}</span>`:''}</td>`;
+        `${(i.error||!i.available)?` <span class="muted" style="font-size:var(--font-size-xs)">${i.error?'err':'unsupported'}</span>`:''}</td>`;
     return tr;
   };
   const mkTable=rows=>{
