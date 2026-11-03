@@ -176,6 +176,13 @@ class TestChartHelpers(unittest.TestCase):
         self.assertEqual(out[8], ["2026-09-01", "2026-10-31"])                              # a window longer than the data is clamped to the data
         self.assertEqual(out[9], ["2023-10-01", "2026-10-31"])
 
+    def test_x_axis_tick_labels(self):
+        src = self.fn("perfTickLabel")
+        r = subprocess.run(["node", "-e", src + """console.log(JSON.stringify([perfTickLabel('2026-10-23',91), perfTickLabel('2026-11-03',30), perfTickLabel('2026-01-05',365),
+          perfTickLabel('2024-03-09',1095), perfTickLabel('bad',10), perfTickLabel('2026-13-01',10), perfTickLabel(null,10)]));"""], capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), ["Oct 23", "Nov 3", "Jan 5", "Mar '24", "bad", "2026-13-01", ""])
+
     def test_rebase_to_100_at_the_window_start(self):
         out = self.js("""const rows=[{date:'2026-01-01',port:50,spy:200},{date:'2026-01-02',port:55,spy:210},{date:'2026-01-03',port:60,spy:190}];
           console.log(JSON.stringify([sliceRebase(rows,'2026-01-02','2026-01-03',['port','spy']), sliceRebase(rows,'2027-01-01','2027-02-01',['port','spy'])]));""")
@@ -197,6 +204,8 @@ class TestUi(unittest.TestCase):
         for needle in ("const CH_WINDOWS=[['1m','1M'],['3m','3M'],['6m','6M'],['1y','1Y'],['3y','3Y'],['all','ALL'],['custom','CUSTOM']]", "function drawPerfCharts()",
                        "PORTFOLIO VALUE vs COST BASIS", "id=\"c-cost\"", "refreshReturnSeries()", "/api/portfolio-return", "W('perf-chart'", "RETURN", "VALUE"):
             self.assertIn(needle, HTML)
+        i = HTML.index("const c=document.getElementById('c-value')")
+        self.assertNotIn("x:{display:false}", HTML[i:i + 2500])            # the PORTFOLIO vs SPY chart labels its time axis
         self.assertNotIn("const pts=((VH&&VH.history)||[]).filter(h=>(h.invested_value||h.net_worth)&&h.spy);\n    if(pts.length>=2){", HTML)   # the old inline chart is gone
 
 

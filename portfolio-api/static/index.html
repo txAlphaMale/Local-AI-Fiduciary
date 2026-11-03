@@ -9101,6 +9101,12 @@ function bucketRows(rows, start, end){             // keep the LAST row of each 
   rows.forEach(r=>{ const k=keyOf(r.date); if(k===lastKey) out[out.length-1]=r; else { out.push(r); lastKey=k; } });
   return out;
 }
+function perfTickLabel(iso, spanDays){           // x-axis tick text: "Oct 23" up to ~a year, "Oct '24" for longer windows (string math, no timezone shift)
+  const M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const p=String(iso||'').split('-'); if(p.length<3) return iso||'';
+  const mon=M[(+p[1])-1]; if(!mon) return iso;
+  return spanDays>400 ? mon+" '"+p[0].slice(2) : mon+' '+(+p[2]);
+}
 function perfToolbar(){
   const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;margin:var(--space-2) 0 var(--space-1);font-size:var(--font-size-sm);';
   const set=(k,v)=>{ try{ localStorage.setItem(k,v); }catch(_){} };
@@ -9145,7 +9151,7 @@ function valuePanel(){
   else { cap.textContent='Growth of 100: your total invested value, so deposits and withdrawals move it (the RETURN view removes that).'; }
   p.appendChild(cap);
   if(ps.rows.length<2){ p.appendChild(el('div','muted','Accruing daily — need at least 2 days of history in this window.')); }
-  else { const box=el('div'); box.style.cssText='height:170px;position:relative;margin-top:var(--space-2);'; box.innerHTML='<canvas id="c-value"></canvas>'; p.appendChild(box); }
+  else { const box=el('div'); box.style.cssText='height:190px;position:relative;margin-top:var(--space-2);'; box.innerHTML='<canvas id="c-value"></canvas>'; p.appendChild(box); }
   wrap.appendChild(p);
   wrap.appendChild(costPanel());
   return wrap;
@@ -9179,13 +9185,17 @@ function drawPerfCharts(){
   if(c){
     const ps=perfSeries();
     if(ps.rows.length>=2){
+      const spanDays=ps.range?Math.round((new Date(ps.range[1])-new Date(ps.range[0]))/86400000):0;
       charts.push(new Chart(c,{type:'line',
         data:{labels:ps.rows.map(p=>p.date),datasets:[
           {label:'Portfolio',data:ps.rows.map(p=>p.port),borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.2},
           {label:'SPY',data:ps.rows.map(p=>p.spy),borderColor:resolveColor('var(--color-info)'),backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,borderDash:[4,3],tension:0.2}]},
         options:{responsive:true,maintainAspectRatio:false,
+          interaction:{mode:'index',intersect:false},       // hover anywhere along the line -> tooltip shows that day's date + both values
           plugins:{legend:{display:true,position:'top',labels:{color:muted,boxWidth:10,font:{size:10}}}},
-          scales:{x:{display:false},y:{ticks:{color:muted,font:{size:9}},grid:{color:grid}}}}}));
+          scales:{x:{ticks:{color:muted,font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:8,
+                           callback:function(v){ return perfTickLabel(this.getLabelForValue(v), spanDays); }},grid:{color:grid}},
+                  y:{ticks:{color:muted,font:{size:9}},grid:{color:grid}}}}}));
     }
   }
   const cc=document.getElementById('c-cost');
