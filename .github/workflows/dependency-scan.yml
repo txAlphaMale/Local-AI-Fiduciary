@@ -103,7 +103,7 @@ jobs:
         # being deprecated" warning in a failed run's log was this, not the actual failure); v4 is
         # GitHub's current stable release (Node 24), first-party action so the tag-hijack risk
         # profile here is not the same as the third-party aquasecurity/trivy-action incident above.
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26  # v4.39.2
         with:
           sarif_file: "trivy-results.sarif"
           token: ${{ secrets.GITHUB_TOKEN }}
