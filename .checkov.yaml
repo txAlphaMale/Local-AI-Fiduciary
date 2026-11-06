@@ -9,9 +9,9 @@ skip-check:
   # --- GitHub Actions
   - CKV_GHA_7      # manual workflows take an optional image TAG input; it is passed via env and validated against a strict regex (no injection path)
   # --- AWS demo (infra/terraform): public, synthetic-data showcase, cost-minimised. Not applied to the live home instance.
-  - CKV_AWS_336    # ECS read-only root FS: needs writable mounts for /tmp, the ACME dir and the data path; untestable without redeploying the demo. TODO: try on the demo.
-  - CKV_AWS_338    # log retention >= 1 year: demo logs are disposable; cost
-  - CKV_AWS_158    # log group KMS CMK: AWS-managed encryption is on; CMK adds cost/ops
+  - CKV_AWS_336    # ECS read-only root FS (3 task defs: app + backup/restore jobs; readonlyRootFilesystem is not set anywhere): needs writable mounts for /tmp, the ACME dir and the data path; untestable without redeploying the demo. TODO: try on the demo.
+  - CKV_AWS_338    # log retention >= 1 year: ECS log group keeps var.log_retention_days (default 30); the WAF log group keeps 90 days and also has its own inline skip in persistent/main.tf. Demo logs are disposable; cost
+  - CKV_AWS_158    # log group KMS CMK: default CloudWatch Logs encryption is on; CMK adds cost/ops (the WAF log group has an inline skip too)
   - CKV_AWS_184    # EFS CMK: same
   - CKV_AWS_297    # EventBridge scheduler CMK: same
   - CKV_AWS_136    # ECR KMS: same
@@ -19,6 +19,6 @@ skip-check:
   - CKV_AWS_144    # S3 cross-region replication: single-region demo
   - CKV2_AWS_62    # S3 event notifications: nothing consumes them
   - CKV_AWS_150    # ALB deletion protection: the demo is torn down on purpose
-  - CKV2_AWS_28    # WAF on the public ALB: cost; the demo holds no real data
+  - CKV2_AWS_28    # FALSE POSITIVE, not a cost decision: demo-env/edge.tf DOES define aws_wafv2_web_acl.main and attaches it to the ALB (aws_wafv2_web_acl_association.alb, with WAF logging). Checkov cannot follow the association because its ARNs go through time_sleep.waf_propagation.triggers; pointing resource_arn straight at aws_lb.main.arn makes the check pass (verified 2026-11-06). Drop this skip if the time_sleep indirection is removed.
   - CKV2_AWS_38    # Route53 DNSSEC: registrar-level setting, out of scope for the demo
   - CKV2_AWS_39    # Route53 query logging: cost
