@@ -246,6 +246,10 @@ what to fill in and where, ranked by how much it unlocks.
   `holdings.csv`, and the runtime `data/` are git-ignored — verify with `git status` before pushing,
   and keep any repository that holds your own configuration private.
 - Your portfolio data and API keys never leave your machine.
+- **Live security pipeline:** [txalphamale.github.io/Local-AI-Fiduciary](https://txalphamale.github.io/Local-AI-Fiduciary/)
+  shows the current scan status (pip-audit, Trivy, Checkov, CodeQL), the checks required to change `main`, the patch
+  policy, documented exceptions and a remediation log. It is regenerated from the scanners' own output on every push
+  to `main` and weekly. See also [SECURITY.md](SECURITY.md).
 
 ## License
 
