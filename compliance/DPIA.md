@@ -20,7 +20,7 @@ credentials the household supplies. Full detail: `compliance/ROPA.md`.
   collected "just in case" or for a purpose unrelated to financial planning (no advertising,
   analytics-for-sale, or third-party data brokering exists anywhere in this app).
 - External calls are opt-in per feature (SETTINGS → SECRETS) — a household that never configures
-  SnapTrade/Monarch/Tavily/a cloud LLM simply never sends data to those providers; a fully
+  SnapTrade/Plaid/Monarch/Tavily/a cloud LLM simply never sends data to those providers; a fully
   local-only configuration (CSV import + Ollama) is possible and processes nothing outside the host.
 - Chat/knowledge data sent to an LLM/embeddings provider is limited to what the household's own
   query/documents require — the app does not proactively push the full financial dataset into
@@ -36,6 +36,7 @@ credentials the household supplies. Full detail: `compliance/ROPA.md`.
 | Chat transcripts persisting indefinitely with no automatic expiry | Medium | Medium | **Real, disclosed gap** — see `compliance/DATA-RETENTION-SCHEDULE.md`'s flagged-gaps section; not yet remediated |
 | Host compromise exposing everything at once | Low | High | Explicitly out of scope for application-layer controls to fully prevent — disclosed in `compliance/RISK-REGISTER.md` R-7 and `compliance/IR-RUNBOOK.md`'s chain-integrity caveat, not hidden behind a false sense of completeness |
 | Document vault / emergency access: an unintended disclosure of estate and identity documents, or a designated contact obtaining access the owner did not intend | Low | High | Mitigated by per-item visibility enforced on every read, encryption at rest, a mandatory minimum 24-hour wait with always-on notification and deny/revoke, MFA for takeover, audit and detections — residual: depends on the owner being reachable (see risk register "Admin reachability") and a compromised host defeats server-side encryption |
+| Plaid connection (optional): Plaid credentials or per-institution access tokens stolen, or the household's account data exposed through the third-party aggregator | Low | High | Mitigated by design: institution logins are entered only on Plaid's own hosted page and never reach this server; the app requests balances, investment holdings and liabilities only — **no transactions**; the Plaid client ID/secret and access tokens sit in the encrypted store (Fernet at rest) and tokens are never returned to the browser, logged or audited; all Plaid endpoints are admin-only; removing an institution calls Plaid's `/item/remove` first, which revokes the token and stops Plaid's processing for it (`compliance/ROPA.md` P-15). Residual: a compromised host yields live tokens (same class as `compliance/RISK-REGISTER.md` R-7), and Plaid, Inc. holds the linked account data as a processor under its own terms — a disclosed trade-off of enabling this feature, not removable by this app |
 
 ## 4. Measures to address the risks
 
@@ -44,19 +45,20 @@ hashing, RBAC with logged denials, a tamper-evident audit log with an active det
 encrypted backups with an evidenced restore test, and a written IR runbook.
 
 Queued, not yet built: automatic expiry for chat transcripts (would close the one row above marked
-"real, disclosed gap"); a formal per-provider data-retention review for external LLM/market-data
-services (currently assessed at the feature-configuration level, not per-provider-contract level).
+"real, disclosed gap"); a formal per-provider data-retention review for external LLM/market-data/
+aggregation services including Plaid (currently assessed at the feature-configuration level, not per-provider-contract level).
 
 ## 5. Residual risk and conclusion
 
 After the controls above, residual risk is assessed as **Low-to-Medium** for a household that uses
 only local/CSV-based features, and **Medium** for a household that opts into cloud LLM/brokerage-
-aggregation features — the increase in the latter case is an inherent, disclosed trade-off of
+aggregation features (SnapTrade, Plaid, Monarch) — the increase in the latter case is an inherent, disclosed trade-off of
 using those specific features, not an application defect. This is judged proportionate to the
 processing's purpose (the household's own financial planning, at the household's own informed
 choice of which optional features to enable).
 
 **Sign-off:** Jason Bentley, as the operator/data controller of this deployment, 2026-07-25.
+**Revision 2026-11-06 (Plaid):** the Plaid integration, added after that sign-off, is now assessed above (the section 2 provider list, a Plaid row in section 3, section 4-5 wording). Pending the operator's re-sign-off; the 2026-07-25 sign-off does not cover it.
 This DPIA should be revisited if: a new category of sensitive data is added, a new external
 provider integration is introduced, or this app is ever adapted for multi-tenant/public use beyond
 a single household (which would also require revisiting the DSAR scope decision in
