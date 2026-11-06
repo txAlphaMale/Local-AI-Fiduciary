@@ -1,0 +1,13 @@
+{
+  "_note": "Curated, public-safe record of security findings and how they were closed. Add an entry whenever a finding is fixed or accepted. No secrets, hostnames or personal data.",
+  "entries": [
+    {"found": "2026-10-26", "fixed": "2026-11-06", "severity": "HIGH", "source": "pip-audit / Trivy (scheduled scan)", "summary": "pypdf 6.21.1: 10 CVEs with fixes in 6.21.2 to 6.21.4. First caught by the weekly scan; fixed by Dependabot PR #40, deployed the same day.", "ref": "PR #40 (145bc30)"},
+    {"found": "2026-11-06", "fixed": "2026-11-06", "severity": "CRITICAL", "source": "Trivy (audit)", "summary": "Base-image packages with Debian fixes available (libbrotli1 CRITICAL; openssl, apt HIGH). Cleared by rebuilding the image with --pull.", "ref": "deploy of 2026-11-06"},
+    {"found": "2026-11-06", "fixed": "2026-11-06", "severity": "MEDIUM", "source": "CI audit", "summary": "Scans were not required checks, and a failed scheduled scan notified nobody. Main now requires a PR plus pip-audit, Trivy and Checkov; failures open an alert issue.", "ref": "PR #42"},
+    {"found": "2026-11-06", "fixed": "2026-11-06", "severity": "LOW", "source": "Checkov review", "summary": "A Checkov exception was documented as a cost decision but was a false positive (the WAF is attached; Checkov cannot follow the association). Reasons corrected.", "ref": "PR #42"},
+    {"found": "2026-10-20", "fixed": "2026-10-20", "severity": "MEDIUM", "source": "Checkov", "summary": "Dockerfiles lacked HEALTHCHECK and USER (CKV_DOCKER_2/3). Both added.", "ref": "210eb1b"},
+    {"found": "2026-10-20", "fixed": "2026-10-20", "severity": "MEDIUM", "source": "Trivy", "summary": "pip and its vendored libraries flagged in the final image. pip removed from the runtime image.", "ref": "6377478"},
+    {"found": "2026-07-27", "fixed": "2026-07-27", "severity": "HIGH", "source": "Supply-chain advisory", "summary": "trivy-action tags were hijacked in a public supply-chain compromise. The workflow is pinned to the known-clean release by full commit SHA; Dependabot is told not to move it.", "ref": "dependency-scan.yml"},
+    {"found": "2026-07-27", "fixed": "2026-07-27", "severity": "CRITICAL", "source": "Trivy", "summary": "Floating python:3.12-slim tag had drifted to a newer, largely unpatched Debian release. Pinned to the -bookworm base.", "ref": "3dd81f0"}
+  ]
+}

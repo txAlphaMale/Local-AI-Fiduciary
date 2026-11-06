@@ -1,0 +1,117 @@
+name: Security report page
+
+# Builds the public "Security pipeline" page (scripts/security_report.py) from the scanners' own output:
+# Trivy on the built image (all findings, and fixable-only), pip-audit, Checkov, recent workflow runs and the
+# required-check list. Informational: it never gates a change (the scan workflows do that). On a PR it only
+# builds and uploads the page as an artifact; publishing to GitHub Pages happens only from main.
+# Counts only for open findings -- no per-package list of unfixed vulnerabilities is published.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 12 * * 3"   # Wednesdays, after Monday's dependency scan and Tuesday's Checkov scan
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build security report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read   # list recent workflow runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Build portfolio-api image (scan target, not published)
+        run: docker build -t fiduciary-portfolio-api:report ./portfolio-api
+      - name: Trivy, everything CRITICAL/HIGH
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0 (pinned; see dependency-scan.yml)
+        with:
+          image-ref: "fiduciary-portfolio-api:report"
+          format: "json"
+          output: "trivy-all.json"
+          severity: "CRITICAL,HIGH"
+          scanners: "vuln"
+          exit-code: "0"
+      - name: Trivy, only findings with a vendor fix
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+        with:
+          image-ref: "fiduciary-portfolio-api:report"
+          format: "json"
+          output: "trivy-fixable.json"
+          severity: "CRITICAL,HIGH"
+          scanners: "vuln"
+          ignore-unfixed: "true"
+          exit-code: "0"
+      - name: pip-audit and Checkov (results recorded, not gating here)
+        run: |
+          pip install --quiet pip-audit checkov==3.3.29
+          pip-audit -r portfolio-api/requirements.txt -f json -o pip-audit.json || true
+          checkov --config-file .checkov.yaml -o json > checkov.json || true
+      - name: Collect recent runs and required checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/${GH_REPO}/actions/runs?branch=main&per_page=50" \
+            --jq '[.workflow_runs[]|{name,conclusion,created_at,event}]' > runs.json || echo '[]' > runs.json
+          gh api "repos/${GH_REPO}/rules/branches/main" \
+            --jq '[.[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]' > required.json || echo '[]' > required.json
+      - name: Render the page
+        run: |
+          python scripts/security_report.py \
+            --trivy-all trivy-all.json --trivy-fixable trivy-fixable.json --pip-audit pip-audit.json \
+            --checkov checkov.json --runs runs.json --required required.json \
+            --trivyignore .trivyignore --checkov-yaml .checkov.yaml --remediation security/remediation-log.json \
+            --commit "${GITHUB_SHA}" --out-dir site \
+            --show-workflows "Dependency & container vulnerability scan" "IaC & Dockerfile scan (Checkov)" "CodeQL"
+      - name: Upload the page for review
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: security-report
+          path: site
+      - name: Package for GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
+
+  notify-on-failure:
+    name: Open an alert issue when the report fails outside a PR
+    needs: [build, deploy]
+    if: ${{ always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="ALERT: security-report failed"
+          body="security-report failed (trigger: ${{ github.event_name }}, ref: ${{ github.ref_name }}). Run: ${RUN_URL}"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
