@@ -171,7 +171,7 @@ code{{background:var(--card);padding:1px 5px;border-radius:4px}}
 <h2>Where things stand</h2>
 <div class="tiles">
 <div class="t"><b>{fix_c['CRITICAL'] + fix_c['HIGH']}</b><span>container CRITICAL/HIGH with a vendor fix (the gate fails on these)</span></div>
-<div class="t"><b>{unfixed['CRITICAL'] + unfixed['HIGH']}</b><span>container CRITICAL/HIGH with no vendor fix yet (tracked, not gating)</span></div>
+<div class="t"><b>{unfixed['CRITICAL'] + unfixed['HIGH']}</b><span>container CRITICAL/HIGH with no vendor fix yet (tracked, not gating); excludes {len(ti)} documented exception(s) listed below, which Trivy hides via .trivyignore</span></div>
 <div class="t"><b>{pip_n}</b><span>known vulnerabilities in pinned Python dependencies</span></div>
 <div class="t"><b>{sum(v['failed'] for v in ck.values())}</b><span>Checkov failures ({len(cs)} documented exceptions)</span></div>
 </div>
