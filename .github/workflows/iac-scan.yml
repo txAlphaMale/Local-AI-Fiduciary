@@ -7,10 +7,8 @@ name: IaC & Dockerfile scan (Checkov)
 on:
   push:
     branches: [main]
-    paths: ["**/Dockerfile*", "infra/**", ".github/workflows/**", ".checkov.yaml"]
   pull_request:
     branches: [main]
-    paths: ["**/Dockerfile*", "infra/**", ".github/workflows/**", ".checkov.yaml"]
   schedule:
     - cron: "0 9 * * 2"     # Tuesdays: new Checkov rules land over time
   workflow_dispatch: {}
@@ -20,6 +18,7 @@ permissions:
 
 jobs:
   checkov:
+    name: Checkov (IaC and Dockerfile scan)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -30,3 +29,22 @@ jobs:
         run: pip install checkov==3.3.29
       - name: Scan
         run: checkov --config-file .checkov.yaml
+
+  notify-on-failure:
+    name: Open an alert issue when a scan fails outside a PR
+    needs: [checkov]
+    if: ${{ always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write   # only this job; it opens/updates one GitHub issue so a red scheduled scan reaches Jason's notifications
+    steps:
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="ALERT: iac-scan (Checkov) failed"
+          body="iac-scan (Checkov) failed (trigger: ${{ github.event_name }}, ref: ${{ github.ref_name }}). Run: ${RUN_URL}"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
