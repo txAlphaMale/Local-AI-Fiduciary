@@ -1,45 +1,26 @@
 # Trivy risk-acceptance ignore list -- SEC-7b (Dependency & Container Vulnerability Management) /
-# RISK-REGISTER.md (R-10) -- renamed 2026-07-27 from the old shared "SEC-7" label, see
-# dependency-scan.yml's matching header comment.
+# RISK-REGISTER.md (R-10). Originally six CRITICAL findings accepted by Jason on 2026-07-27.
 #
-# NOTE (2026-10-20): the blocking CI step now uses `ignore-unfixed`, so findings with no vendor fix no longer
-# fail the run on their own. The entries below remain as the documented, expiring record of what was
-# formally accepted; renew one only if it ever gains a fix that cannot be applied. See dependency-scan.yml.
-#
-# Every entry below is a CRITICAL finding from the 2026-07-27 scan of the bookworm-pinned
-# portfolio-api image that has NO available vendor fix (or an explicit permanent will_not_fix),
-# confirmed via a real local Trivy 0.69.3 run against the actual built image -- not assumed.
-# Formally risk-accepted per Jason's decision on 2026-07-27, rather than leaving CI red
-# indefinitely for issues outside this project's control (essential Debian packages / upstream
-# Perl / zlib maintainers, not anything in our Dockerfile or requirements.txt).
-#
-# `exp:` dates force an automatic re-check: once the date passes, Trivy stops ignoring the CVE
-# and CI will fail again on the next push or the existing weekly Monday 09:00 UTC scheduled run
-# (see dependency-scan.yml's `schedule:` trigger) -- no manual tracking required to notice the
-# deadline. At that point, check the "Full report" step's Fixed Version column: if a fix now
-# exists, rebuild the image (Docker won't auto-pull a newer base layer on its own) and drop the
-# entry; if not, renew the exp: date with a fresh justification line.
-#
-# Review cadence: all six set to the same 90-day window (2026-10-25) so this is one quarterly
-# review, not six staggered ones. Do not extend past 90 days without updating
-# compliance/RISK-REGISTER.md (R-10) to reflect the renewed acceptance.
+# STATE AS OF 2026-11-06 (re-verified against a scratch build of the current image, Trivy 0.69.3):
+#   * The blocking CI step uses `ignore-unfixed` (policy change 2026-10-20), so unfixed findings do not fail
+#     the run whether or not they are listed here. This file is a documented record, not a gate input.
+#   * Four of the six original entries (CVE-2026-13221, CVE-2026-42496, CVE-2026-57433, CVE-2026-8376; all perl-base)
+#     are no longer reported against the bookworm image at any severity, so they were removed.
+#   * The two below are still reported with no vendor fix. Renewed by Jason on 2026-11-06 for 90 days (exp 2027-02-04).
+#     RENEWAL RULE: renew again ONLY if the upstream authority (Debian) still offers no fix at that date; if a fix
+#     exists, apply it (rebuild with --pull) and delete the entry. Mirror any renewal in compliance/RISK-REGISTER.md (R-10).
+#     CI outcome is unchanged either way (ignore-unfixed).
+#   * The "Full report" CI step deliberately does not apply this file, so both stay visible in the log.
 
-# libsqlite3-0 -- SQLite integer overflow. No Fixed Version available as of 2026-07-27.
-CVE-2025-7458 exp:2026-10-25
-
-# perl-base -- upstream Perl bug (versions "through 5.43.9"), silently-incorrect regex results.
-# NOT Debian-release-specific -- confirmed present on both trixie and bookworm scans.
-CVE-2026-13221 exp:2026-10-25
-
-# perl-base (Archive::Tar) -- path traversal via crafted symlinks. Status: fix_deferred.
-CVE-2026-42496 exp:2026-10-25
-
-# perl-base (Storable) -- signed integer overflow, versions before 3.41. Status: affected, no fix yet.
-CVE-2026-57433 exp:2026-10-25
-
-# perl-base -- heap buffer overflow compiling regular expressions on 32-bit builds. No fix yet.
-CVE-2026-8376 exp:2026-10-25
+# libsqlite3-0 -- SQLite integer overflow. Status "affected", no fixed version (re-checked 2026-11-06).
+# Renewed 2026-11-06. Debian bookworm may still ship a fix before the next review; check first.
+CVE-2025-7458 exp:2027-02-04
 
 # zlib1g -- integer overflow / heap buffer overflow in zipOpenNewFileInZip4_6.
-# Status: will_not_fix -- Debian has permanently declined to patch this one.
-CVE-2023-45853 exp:2026-10-25
+# Status: will_not_fix -- Debian has permanently declined to patch this one (re-checked 2026-11-06).
+# NOT REACHABLE in this image (checked 2026-11-06 on the built image): the flaw is in zlib's contrib MiniZip, which is
+# not a supported part of zlib and is absent here -- libz.so.1 has no zipOpenNewFileInZip* symbol, no libminizip package
+# and no zip/unzip tools are installed; Python's zlib module only uses the core compression library. The scanner matches
+# on the source package name. Re-check these facts at renewal; zlib1g is essential and cannot be removed or swapped out.
+# Renewed 2026-11-06.
+CVE-2023-45853 exp:2027-02-04

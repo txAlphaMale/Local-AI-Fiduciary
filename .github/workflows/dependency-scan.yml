@@ -12,7 +12,7 @@ name: Dependency & container vulnerability scan
 #      file) -- catches OS-package CVEs from the python:3.12-slim base + curl/tar/socat/
 #      ca-certificates installed in the Dockerfile, which pip-audit alone would miss entirely.
 #
-# Runs on every push/PR touching dependency-relevant files, AND on a weekly schedule -- CVEs are
+# Runs on EVERY push to main and EVERY PR (no path filter, so the checks can be made required), AND on a weekly schedule -- CVEs are
 # disclosed against code that hasn't changed, so "only scan on change" would miss newly-disclosed
 # vulnerabilities in already-merged pinned versions.
 #
@@ -32,15 +32,8 @@ name: Dependency & container vulnerability scan
 on:
   push:
     branches: [main]
-    paths:
-      - "portfolio-api/requirements.txt"
-      - "portfolio-api/Dockerfile"
-      - ".github/workflows/dependency-scan.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "portfolio-api/requirements.txt"
-      - "portfolio-api/Dockerfile"
   schedule:
     # Every Monday 09:00 UTC -- catches newly-disclosed CVEs against unchanged pinned versions.
     - cron: "0 9 * * 1"
@@ -99,9 +92,10 @@ jobs:
           ignore-unfixed: "true"   # gate only on findings a patch exists for (see GATE POLICY above)
           limit-severities-for-sarif: "true"   # without this the action ignores the severity input for SARIF output and gates on EVERY severity (found 2026-10-20)
           exit-code: "1"   # fail the job -- fixable CRITICAL/HIGH are inside the 7/30-day SLA above
-          # 2026-07-27: 6 genuine CRITICALs (essential Debian/perl/zlib packages, no vendor fix,
-          # one permanent will_not_fix) formally risk-accepted per Jason -- see .trivyignore at
-          # repo root for the CVE list, justification, and 90-day exp: re-review dates.
+          # .trivyignore is now only a historical record of the 2026-07-27 risk acceptance: the gate uses
+          # ignore-unfixed, so unfixed findings never fail the run whether or not they are listed there.
+          # Of the six originally accepted CVEs, only CVE-2025-7458 (libsqlite3-0) and CVE-2023-45853 (zlib1g,
+          # will_not_fix) were still reported by Trivy on 2026-11-06; both entries have expired (2026-10-25).
           trivyignores: ".trivyignore"
       - name: Upload SARIF to GitHub Security tab
         if: always()
@@ -124,3 +118,22 @@ jobs:
           # Deliberately NOT applying .trivyignore here -- this step is informational only
           # (exit-code 0) and exists so the risk-accepted CVEs stay visible in the log for the
           # 90-day review, rather than silently disappearing from the report entirely.
+
+  notify-on-failure:
+    name: Open an alert issue when a scan fails outside a PR
+    needs: [pip-audit, trivy-image-scan]
+    if: ${{ always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write   # only this job; it opens/updates one GitHub issue so a red scheduled scan reaches Jason's notifications
+    steps:
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="ALERT: dependency-scan failed"
+          body="dependency-scan failed (trigger: ${{ github.event_name }}, ref: ${{ github.ref_name }}). Run: ${RUN_URL}"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
