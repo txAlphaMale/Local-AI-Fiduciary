@@ -331,5 +331,43 @@ class TestUi(unittest.TestCase):
             self.assertIn(needle, HTML)
 
 
+class TestConsolidatedTooltips(unittest.TestCase):
+    """TASK-009 retest bugs: (A) a consolidated row with only some accounts known showed '—' instead of n/r + X-of-Y;
+    (B) the consolidated est. tooltip read 'entered NaN, now 17'."""
+    def test_partial_basis_goes_to_the_n_r_cell(self):
+        self.assertIn("(p.cost_source==='manual' && p.cost_total!=null) ? manualCostCell(p)", HTML)
+
+    def test_consolidated_stale_tooltip_has_no_nan_source(self):
+        self.assertIn("const estWhy=(e.qty_at_entry!=null)?", HTML)
+        self.assertIn("shares changed since entry on at least one account", HTML)
+
+    @unittest.skipUnless(__import__("shutil").which("node"), "node not installed")
+    def test_behaviour_in_node(self):
+        import re, subprocess, textwrap
+        def fn(name):
+            m = re.search(r"^function %s\(.*?^}" % name, HTML, re.S | re.M)
+            return m.group(0)
+        src = "\n".join([
+            "const usd=v=>'$'+v; const attrEsc=x=>String(x).replace(/\"/g,'&quot;'); const isViewer=()=>false;",
+            fn("basisPen"), fn("noBasisCell"), fn("manualCostCell"),
+            re.search(r"^const costCell = .*$", HTML, re.M).group(0),
+            textwrap.dedent("""
+            const partial={ticker:'FXAIX',type:'Fund',cost_source:'manual',cost_total:null,basis_lines:2,basis_known:1,institutions:['Principal','Fidelity']};
+            const a=costCell(partial,'csv');
+            const stale={ticker:'FXAIX',type:'Fund',cost_source:'manual',cost_total:2700,basis_stale:true,quantity:17,account:''};
+            const b=costCell(stale,'csv');
+            console.log(JSON.stringify({a,b}));"""),
+        ])
+        out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        import json
+        r = json.loads(out.stdout)
+        self.assertIn("n/r", r["a"])
+        self.assertIn("known for 1 of 2 accounts", r["a"])
+        self.assertIn("basis-pen", r["a"])
+        self.assertNotIn("NaN", r["b"])
+        self.assertIn("est.", r["b"])
+
+
 if __name__ == "__main__":
     unittest.main()

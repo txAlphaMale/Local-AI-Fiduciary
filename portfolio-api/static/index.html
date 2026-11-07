@@ -2227,13 +2227,16 @@ function noBasisCell(p, provider, text){      // 'n/r' = not reported; never a s
 }
 function manualCostCell(p){                   // a user-entered cost: marked, and flagged an estimate when the share count moved
   const e=p.basis_entry||{}, tip='entered by you'+(e.as_of?' on '+e.as_of:'')+(e.qty_at_entry!=null?', quantity at entry '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4}):'');
-  const est=p.basis_stale?` <span class="neg" title="${attrEsc('estimate — shares changed since entry (entered '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4})+', now '+(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:4})+'). The entered average cost is applied to all current shares.')}">est.</span>`:'';
+  // A consolidated (multi-account) row has no single basis_entry: its quantity is the sum over accounts, so 'entered X, now Y' would be wrong (and NaN).
+  const estWhy=(e.qty_at_entry!=null)?('estimate — shares changed since entry (entered '+(+e.qty_at_entry).toLocaleString(undefined,{maximumFractionDigits:4})+', now '+(+p.quantity).toLocaleString(undefined,{maximumFractionDigits:4})+'). The entered average cost is applied to all current shares.')
+    :'estimate — shares changed since entry on at least one account (see the by-position rows for entered vs current). The entered average cost is applied to all current shares of that account.';
+  const est=p.basis_stale?` <span class="neg" title="${attrEsc(estWhy)}">est.</span>`:'';
   // ONE pencil: for an admin the marker IS the edit control (tooltip: where it came from + click to edit); a viewer sees the same
   // marker with no click action. (Two pencils appeared in 2026-10-23's first build: one plain marker, one clickable.)
   const pen=basisPen(p, tip+' — click to edit or clear');
   return `${usd(p.cost_total)}${pen||` <span title="${attrEsc(tip)}">✎</span>`}${est}`;
 }
-const costCell = (p, PROV) => p.cost_source==='manual' ? manualCostCell(p) : (p.cost_total!=null ? usd(p.cost_total) : noBasisCell(p,PROV));
+const costCell = (p, PROV) => (p.cost_source==='manual' && p.cost_total!=null) ? manualCostCell(p) : (p.cost_total!=null ? usd(p.cost_total) : noBasisCell(p,PROV));
 // ---- TASK-008: user-entered cost basis. Editor dialog (per ticker, one block per eligible account line) and the settings panel.
 document.addEventListener('click', e=>{ const t=e.target.closest&&e.target.closest('.basis-pen'); if(t){ e.preventDefault(); openBasisEditor(t.dataset.bt, t.dataset.ba||''); } });
 async function basisFetch(){ const r=await fetch('/api/cost-basis'); if(!r.ok) throw new Error(r.status===403?'admin only':('HTTP '+r.status)); return r.json(); }
