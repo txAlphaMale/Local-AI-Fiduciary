@@ -1,5 +1,10 @@
 # Fiduciary demo: Terraform
 
+> **STATUS (checked 2026-11-08): the live AWS demo has NOT been migrated to Terraform.** Its ECR repo is still `MUTABLE`, there is
+> no state bucket and no `backend.hcl`, so the stacks below describe the **target** state, not what is deployed today. Until the
+> migration is done, deploy with `scripts/aws-demo/deploy.sh` (it detects LEGACY vs MIGRATED and refuses to guess in between;
+> `--check` is read-only). Do not run `up.sh`, `down.sh` or `terraform apply` against the live demo before the one-time migration.
+
 This replaces the copy-and-paste CLI runbook in `AWS-DEMO-HOSTING-GUIDE.md` §1–§11, §14a, §14c and
 §14d, and the delete sequence in `teardown.sh`. The guide is still the reference for why each piece
 exists. Terraform now owns how each piece is built.
