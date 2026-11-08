@@ -59,7 +59,8 @@ have_backend=no; [ -f "$BACKEND" ] && have_backend=yes
 bucket=no; aws s3api head-bucket --bucket "$STATE_BUCKET" --region "$REGION" >/dev/null 2>&1 && bucket=yes
 state_objs=no
 if [ "$bucket" = yes ]; then
-  aws s3 ls "s3://$STATE_BUCKET/" --recursive --region "$REGION" 2>/dev/null | grep -Eq 'persistent|demo-env' && state_objs=yes
+  # the ENVIRONMENT stack's state is what a deploy needs; persistent/ alone (migration half-way) is not enough
+  aws s3 ls "s3://$STATE_BUCKET/" --recursive --region "$REGION" 2>/dev/null | grep -q 'demo-env/' && state_objs=yes
 fi
 tfver=$(terraform version 2>/dev/null | head -1 || true)
 svc_active=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
@@ -71,7 +72,7 @@ if [ "$svc_active" = 1 ]; then
 fi
 say "ECR tag mutability     : $mut"
 say "state bucket exists    : $bucket"
-say "state objects present  : $state_objs"
+say "demo-env state present  : $state_objs"
 say "backend.hcl present    : $have_backend"
 say "terraform              : ${tfver:-not found}"
 say "ECS service ACTIVE     : $svc_active (desired/running: $svc_counts)"
