@@ -70,6 +70,7 @@ Run these with `export AWS_PROFILE=fiduciary-demo`. Terraform must be version 1.
 2. **Bootstrap the state bucket:**
    - `terraform -chdir=infra/terraform/bootstrap init && terraform -chdir=infra/terraform/bootstrap apply`
    - Then: `terraform -chdir=infra/terraform/bootstrap output -raw backend_hcl > infra/terraform/backend.hcl`
+2b. **Inventory first, adopt existing resources before applying (read-only):** `./scripts/aws-demo/migration-inventory.sh` lists what already exists and prints the exact `terraform import` commands. This repo has NO import blocks: applying `persistent/` without importing creates a SECOND Route 53 zone with the same name (different name servers), which breaks the registrar delegation and ACM validation.
 3. **Apply the persistent resources (state bucket consumers, backups, ECR, DNS zone):**
    - `cd infra/terraform/persistent && terraform init -backend-config=../backend.hcl`
    - `terraform plan`, review it, then `terraform apply`. (If you are adopting resources that were first
