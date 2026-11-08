@@ -1552,7 +1552,8 @@ def get_audit_events(limit: int = 200, unmask: bool = False, request: Request = 
     if unmask and not demo_seed.DEMO_MODE and request is not None and _require_admin(request):
         do_unmask = True
     is_admin = bool(request is not None and _require_admin(request))
-    return {"events": audit.present_events(audit.read_recent(limit=limit, redact_ip=not do_unmask), is_admin),
+    known = [u.get("username") for u in (auth.list_users() or []) if u.get("username")]
+    return {"events": audit.present_events(audit.read_recent(limit=limit, redact_ip=not do_unmask), is_admin, known),
             "unmasked": do_unmask}
 
 

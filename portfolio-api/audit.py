@@ -485,11 +485,19 @@ def name_is_suspicious(name):
     return len(n) > 64 or bool(_SUSPICIOUS_NAME_RE.search(n))
 
 
-def present_events(events, is_admin):
+def _scrub_text(text, name, token):
+    return text.replace(name, "#" + token) if isinstance(text, str) and name else text
+
+
+def present_events(events, is_admin, known_names=()):
     """Role-aware view of audit events for the API. Events whose actor could not be matched to an account (failed
-    logins) carry the ATTEMPTED name, which is attacker-controlled and may be a mistyped password. The raw value stays
-    in the log (forensics) and is shown only to admins; everyone else gets a stable token instead. Admins also get a
-    `suspicious` flag. Returns new dicts; the input is not modified."""
+    logins, and the detection alerts raised about them) carry the ATTEMPTED name, which is attacker-controlled and may be a
+    mistyped password. The raw value stays in the log (forensics) and is shown to admins, together with a `suspicious` flag
+    and a short keyed token. Everyone else gets only the token, in the name field AND wherever the detection engine copied
+    the name (the alert's resource key and its detail.username). A name that equals a real household account name
+    (`known_names`, lower-case) is not secret from household members and is shown as is. Returns new dicts; the input is
+    not modified."""
+    known = {str(k).lower() for k in (known_names or ())}
     out = []
     for e in events:
         e = dict(e)
@@ -497,10 +505,15 @@ def present_events(events, is_admin):
         if e.get("actor") is None and name:
             e["name_token"] = attempted_name_token(name)
             e["suspicious"] = name_is_suspicious(name)
-            if not is_admin:
+            if not is_admin and str(name).lower() not in known:
+                tok = e["name_token"]
                 e["actor_name"] = None
                 e["actor_name_hidden"] = True
                 e["suspicious"] = False      # the flag itself would hint at content; viewers only get the token
+                e["resource"] = _scrub_text(e.get("resource"), name, tok)
+                d = e.get("detail")
+                if isinstance(d, dict):
+                    e["detail"] = {k: (("#" + tok) if v == name else _scrub_text(v, name, tok)) for k, v in d.items()}
         out.append(e)
     return out
 

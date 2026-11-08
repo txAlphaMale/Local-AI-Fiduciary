@@ -81,9 +81,39 @@ class TestPresentEvents(unittest.TestCase):
         self.assertEqual(src[0]["actor_name"], "alice")
 
 
+
+class TestDetectionAlertsAndKnownNames(unittest.TestCase):
+    def _alert(self, name):
+        return {"seq": 2, "ts": "t", "actor": None, "actor_name": name, "event_type": "detection.alert", "outcome": "denied",
+                "src_ip": None, "resource": "detection:failed_login_burst:" + name, "corr_id": None,
+                "detail": {"rule": "failed_login_burst", "username": name, "count": 5, "source_ips": ["10.0.0.x"]}}
+
+    def test_viewer_gets_no_raw_name_from_detection_alerts(self):
+        out = audit.present_events([self._alert("hunter2-typed")], is_admin=False)[0]
+        blob = json.dumps(out)
+        self.assertNotIn("hunter2", blob)
+        tok = audit.attempted_name_token("hunter2-typed")
+        self.assertEqual(out["resource"], "detection:failed_login_burst:#" + tok)
+        self.assertEqual(out["detail"]["username"], "#" + tok)
+        self.assertEqual(out["detail"]["count"], 5)
+
+    def test_admin_keeps_alert_fields_as_logged(self):
+        out = audit.present_events([self._alert("hunter2-typed")], is_admin=True)[0]
+        self.assertEqual(out["resource"], "detection:failed_login_burst:hunter2-typed")
+        self.assertEqual(out["detail"]["username"], "hunter2-typed")
+
+    def test_real_household_account_names_stay_visible(self):
+        ev = _ev("Jason")          # failed login against a real account: not secret from the household
+        out = audit.present_events([ev, _ev("stranger")], is_admin=False, known_names=["jason"])
+        self.assertEqual(out[0]["actor_name"], "Jason")
+        self.assertNotIn("actor_name_hidden", out[0])
+        self.assertTrue(out[1]["actor_name_hidden"])
+
+
 class TestWiring(unittest.TestCase):
     def test_endpoint_uses_the_presenter(self):
         self.assertIn("audit.present_events(audit.read_recent(", APP)
+        self.assertIn("auth.list_users()", APP)
 
     def test_ui_uses_who_helper_and_escapes(self):
         for needle in ("function _auditWho(e)", "${_auditWho(e)}", "escHtml(e.name_token)", "⚠ suspicious", "e.actor_name_hidden"):
