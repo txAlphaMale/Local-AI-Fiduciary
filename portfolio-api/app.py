@@ -1551,7 +1551,9 @@ def get_audit_events(limit: int = 200, unmask: bool = False, request: Request = 
     do_unmask = False
     if unmask and not demo_seed.DEMO_MODE and request is not None and _require_admin(request):
         do_unmask = True
-    return {"events": audit.read_recent(limit=limit, redact_ip=not do_unmask), "unmasked": do_unmask}
+    is_admin = bool(request is not None and _require_admin(request))
+    return {"events": audit.present_events(audit.read_recent(limit=limit, redact_ip=not do_unmask), is_admin),
+            "unmasked": do_unmask}
 
 
 @app.get("/api/audit/verify")

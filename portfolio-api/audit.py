@@ -468,6 +468,43 @@ def read_recent(limit=200, redact_ip=False):
     return out
 
 
+_SUSPICIOUS_NAME_RE = re.compile(r"[<>\"`\\\x00-\x1f\x7f]|javascript:|%3c|%3e", re.I)
+
+
+def attempted_name_token(name):
+    """Short, stable, KEYED token for an attempted login name: the same name always gives the same token (so repeated or
+    sprayed names can be correlated), but the token reveals nothing about the text (HMAC under the audit key)."""
+    msg = b"attempted-name|" + str(name).strip().lower().encode("utf-8", "replace")
+    return _hmac_mod.new(_HMAC_KEY, msg, hashlib.sha256).hexdigest()[:8]
+
+
+def name_is_suspicious(name):
+    """True for names that look like injection/probing rather than a mistyped username: markup or control characters,
+    script-scheme or encoded-bracket strings, or an unreasonable length."""
+    n = str(name or "")
+    return len(n) > 64 or bool(_SUSPICIOUS_NAME_RE.search(n))
+
+
+def present_events(events, is_admin):
+    """Role-aware view of audit events for the API. Events whose actor could not be matched to an account (failed
+    logins) carry the ATTEMPTED name, which is attacker-controlled and may be a mistyped password. The raw value stays
+    in the log (forensics) and is shown only to admins; everyone else gets a stable token instead. Admins also get a
+    `suspicious` flag. Returns new dicts; the input is not modified."""
+    out = []
+    for e in events:
+        e = dict(e)
+        name = e.get("actor_name")
+        if e.get("actor") is None and name:
+            e["name_token"] = attempted_name_token(name)
+            e["suspicious"] = name_is_suspicious(name)
+            if not is_admin:
+                e["actor_name"] = None
+                e["actor_name_hidden"] = True
+                e["suspicious"] = False      # the flag itself would hint at content; viewers only get the token
+        out.append(e)
+    return out
+
+
 def query_core(event_type=None, resource_prefix=None, since_ts=None, limit=2000):
     """SEC-4 (2026-07-25) -- read-only helper for the detection engine (detections.py) and any
     future consumer that needs to scan the CORE plaintext columns (ts/actor/actor_name/src_ip/
