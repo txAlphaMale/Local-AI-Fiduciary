@@ -324,6 +324,8 @@ def emit(event_type, outcome="success", *, actor=None, actor_name=None, src_ip=N
     JSON-serializable dict; it is encrypted at rest and OMITTED from the SIEM mirror.
     """
     try:
+        if actor_name is not None:
+            actor_name = str(actor_name)[:128]   # an unauthenticated login attempt controls this string: bound its size
         if request is not None and src_ip is None and xff is None:
             src_ip, xff = request_source(request)
         ts = _now_iso()
