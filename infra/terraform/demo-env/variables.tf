@@ -85,7 +85,7 @@ variable "alb_idle_timeout" {
 # ------------------------------------------------------------------------------------ schedules
 
 variable "business_hours_schedules_enabled" {
-  description = "Scale-up 08:00 / scale-down 17:00 America/New_York, Mon-Fri (§14a). false = pause the automation without deleting it."
+  description = "Scale-up 08:00 / scale-down 20:00 America/New_York, Mon-Fri (§14a). false = pause the automation without deleting it."
   type        = bool
   default     = true
 }

@@ -180,7 +180,7 @@ resource "aws_ecs_service" "app" {
 locals {
   scale_schedules = {
     "scale-up"   = { cron = "cron(0 8 ? * MON-FRI *)", count = 1 }
-    "scale-down" = { cron = "cron(0 17 ? * MON-FRI *)", count = 0 }
+    "scale-down" = { cron = "cron(0 20 ? * MON-FRI *)", count = 0 }
   }
 }
 
@@ -212,7 +212,7 @@ resource "aws_scheduler_schedule" "scale" {
 # any "scheduled-*" prefixes -- if there are none, the daily backup has never actually worked.
 resource "aws_scheduler_schedule" "backup_daily" {
   name                         = "${local.name}-backup-daily"
-  schedule_expression          = "cron(0 8 * * ? *)" # 08:00 UTC, outside the 8-5 Eastern window
+  schedule_expression          = "cron(0 8 * * ? *)" # 08:00 UTC (3-4 am Eastern), outside the 8am-8pm Eastern window
   schedule_expression_timezone = "UTC"
   state                        = var.daily_backup_enabled ? "ENABLED" : "DISABLED"
 
