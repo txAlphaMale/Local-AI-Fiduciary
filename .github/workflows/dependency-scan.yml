@@ -118,22 +118,3 @@ jobs:
           # Deliberately NOT applying .trivyignore here -- this step is informational only
           # (exit-code 0) and exists so the risk-accepted CVEs stay visible in the log for the
           # 90-day review, rather than silently disappearing from the report entirely.
-
-  notify-on-failure:
-    name: Open an alert issue when a scan fails outside a PR
-    needs: [pip-audit, trivy-image-scan]
-    if: ${{ always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure') }}
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write   # only this job; it opens/updates one GitHub issue so a red scheduled scan reaches Jason's notifications
-    steps:
-      - name: Open or update the alert issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          title="ALERT: dependency-scan failed"
-          body="dependency-scan failed (trigger: ${{ github.event_name }}, ref: ${{ github.ref_name }}). Run: ${RUN_URL}"
-          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
