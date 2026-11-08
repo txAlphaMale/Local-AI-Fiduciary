@@ -80,7 +80,7 @@ aws iam put-role-policy --role-name fiduciary-demo-scheduler \
 # actually starts, not when this schedule is created), so every scheduled run gets a fresh,
 # distinct S3 prefix -- exactly like backup.sh's manual run does.
 #
-# TIME CHOSEN: 08:00 UTC daily -- outside the demo's 8am-5pm Eastern (12:00-21:00 UTC) business
+# TIME CHOSEN: 08:00 UTC daily -- outside the demo's 8am-8pm Eastern (12:00-00:00/01:00 UTC) business
 # window from §14a, so it never competes with the scale-up transition, and EFS is reachable
 # regardless of whether portfolio-api itself is scaled to 0 or 1 (EFS persists independent of the
 # service's desired count -- this is a separate one-off task, not the portfolio-api service).

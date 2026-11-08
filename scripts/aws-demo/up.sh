@@ -90,4 +90,4 @@ aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count
 log "Waiting for the service to stabilize (a few minutes)..."
 aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
 log "Up: $(terraform -chdir="$TF_DIR" output -raw url)"
-log "Note: outside 08:00-17:00 ET Mon-Fri the scale-down schedule will set it back to 0 at the next 17:00."
+log "Note: outside 08:00-20:00 ET Mon-Fri the scale-down schedule will set it back to 0 at the next 20:00 ET weekday run."
