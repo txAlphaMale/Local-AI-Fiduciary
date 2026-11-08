@@ -27,12 +27,12 @@ class TestUsernameValidation(unittest.TestCase):
 
 class TestUiEscaping(unittest.TestCase):
     def test_no_unescaped_attacker_controlled_fields(self):
-        for raw in ("${a.username}", "${e.actor_name||'—'}", "${e.resource||''}", "${e.event_type||''}", "${u.username}",
+        for raw in ("${a.username}", "${e.actor_name||'—'}", "${escHtml(e.actor_name)||'—'}", "${e.resource||''}", "${e.event_type||''}", "${u.username}",
                     "${_pendingLoginCreds.username}", "onclick=\"accountsDeleteUser(", "onclick=\"accountsTransferAdmin("):
             self.assertNotIn(raw, HTML, raw)
 
     def test_escaped_forms_present(self):
-        for needle in ("const escHtml =", "${escHtml(a.username)}", "${escHtml(e.actor_name)||'—'}", "${escHtml(detailShort)}",
+        for needle in ("const escHtml =", "${escHtml(a.username)}", "${_auditWho(e)}", "${escHtml(detailShort)}",
                        "class=\"acct-del\"", "b.dataset.un"):
             self.assertIn(needle, HTML, needle)
 

@@ -5060,7 +5060,7 @@ function _auditEventBadgeClass(outcome){
 function _auditPanel(){
   const box=el('div');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);';
-  sub.textContent='Every security-relevant action this deployment has recorded — logins, MFA/recovery use, config and secret changes, TLS/certificate changes, and denied requests. Append-only and tamper-evident (HMAC hash chain, verified below); IPs are masked. A daily background job automatically retires events past the retention window; that disposal is itself logged as an event.';
+  sub.textContent='Every security-relevant action this deployment has recorded — logins, MFA/recovery use, config and secret changes, TLS/certificate changes, and denied requests. Append-only and tamper-evident (HMAC hash chain, verified below); IPs are masked, and names typed at failed logins are shown to view-only accounts as a token (#xxxxxxxx; the same name always gives the same token). A daily background job automatically retires events past the retention window; that disposal is itself logged as an event.';
   box.appendChild(sub);
 
   // Chain-integrity status line — the control that makes this log trustworthy as evidence, not
@@ -5208,13 +5208,22 @@ function _auditApplyFilter(){
   if(!c) return;
   c.replaceChildren(_auditBuildTable(AUDIT_LOG||[]));
 }
+// Who an audit row is about. Failed logins carry the ATTEMPTED name (attacker-controlled; may even be a mistyped password):
+// admins see it escaped, with a token that is the same for the same name and a flag for markup-like names; view-only accounts
+// get only the token. Everything is escaped here; nothing from the event is ever inserted as HTML.
+function _auditWho(e){
+  if(e.actor_name_hidden) return `<span class="muted" title="Attempted names are hidden from view-only accounts. The same token means the same name was tried.">(attempted name hidden) #${escHtml(e.name_token)}</span>`;
+  const n=escHtml(e.actor_name)||'—';
+  if(e.suspicious) return `${n} <span class="muted">#${escHtml(e.name_token)}</span> <span class="neg" title="Contains markup or control characters, or is very long: looks like an injection or probing attempt.">⚠ suspicious</span>`;
+  return e.name_token ? `${n} <span class="muted">#${escHtml(e.name_token)}</span>` : n;
+}
 function _auditFilterEvents(events){
   const q=(AUDIT_FILTER.q||'').trim().toLowerCase();
   return events.filter(e=>{
     if(AUDIT_FILTER.alertsOnly && e.event_type!=='detection.alert') return false;
     if(AUDIT_FILTER.outcome && AUDIT_FILTER.outcome!=='All' && e.outcome!==AUDIT_FILTER.outcome) return false;
     if(q){
-      const hay=[e.event_type,e.actor_name,e.resource,e.detail?JSON.stringify(e.detail):''].join(' ').toLowerCase();
+      const hay=[e.event_type,e.actor_name,e.name_token,e.resource,e.detail?JSON.stringify(e.detail):''].join(' ').toLowerCase();
       if(!hay.includes(q)) return false;
     }
     return true;
@@ -5256,7 +5265,7 @@ function _auditBuildTable(allEvents){
       `<td style="padding:4px 8px;white-space:nowrap;">${escHtml(ts)}</td>`+
       `<td style="padding:4px 8px;white-space:nowrap;"><code>${escHtml(e.event_type)}</code></td>`+
       `<td style="padding:4px 8px;"><span class="${escHtml(_auditEventBadgeClass(e.outcome))}">${escHtml(e.outcome)}</span></td>`+
-      `<td style="padding:4px 8px;">${escHtml(e.actor_name)||'—'}</td>`+
+      `<td style="padding:4px 8px;">${_auditWho(e)}</td>`+
       `<td style="padding:4px 8px;">${escHtml(e.src_ip)||'—'}</td>`+
       `<td style="padding:4px 8px;"><code>${escHtml(e.resource)}</code></td>`+
       `<td style="padding:4px 8px;" title="${escHtml(detailStr)}"><span class="muted">${escHtml(detailShort)}</span></td>`;

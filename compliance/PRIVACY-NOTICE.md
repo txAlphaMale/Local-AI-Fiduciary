@@ -14,7 +14,7 @@ word: they operate the server, hold the encryption keys, and are responsible for
 | Category | Examples | Why |
 |---|---|---|
 | Account identity | username, password (hashed, never stored in plain text), MFA status | So you can log in and so the app can tell admin vs. viewer accounts apart |
-| Security/session history | login success/failure, source IP (masked in the viewer), MFA/recovery events, config changes you made | So the household can see what happened to its own accounts and detect suspicious activity (see the SECURITY AUDIT LOG panel) |
+| Security/session history | login success/failure, source IP (masked in the viewer), and for failed logins the name that was typed (shown in full to the admin; view-only accounts see only a short keyed token, because a mistyped password can end up in that field), MFA/recovery events, config changes you made | So the household can see what happened to its own accounts and detect suspicious activity (see the SECURITY AUDIT LOG panel) |
 | Household financial data | holdings, account balances, retirement assumptions, insurance/estate documents, budget/scenario config | This is the core purpose of the app — financial planning and analysis for the household |
 | Chat transcripts | conversations with the in-app AI assistant | So you can review past advice and so the assistant has conversational context |
 | Knowledge/reference documents | anything you drop into the Knowledge folder (e.g. your own Investment Policy Statement) | So the AI assistant can answer questions grounded in documents you chose to provide |

@@ -468,6 +468,56 @@ def read_recent(limit=200, redact_ip=False):
     return out
 
 
+_SUSPICIOUS_NAME_RE = re.compile(r"[<>\"`\\\x00-\x1f\x7f]|javascript:|%3c|%3e", re.I)
+
+
+def attempted_name_token(name):
+    """Short, stable, KEYED token for an attempted login name: the same name always gives the same token (so repeated or
+    sprayed names can be correlated), but the token reveals nothing about the text (HMAC under the audit key)."""
+    msg = b"attempted-name|" + str(name).strip().lower().encode("utf-8", "replace")
+    return _hmac_mod.new(_HMAC_KEY, msg, hashlib.sha256).hexdigest()[:8]
+
+
+def name_is_suspicious(name):
+    """True for names that look like injection/probing rather than a mistyped username: markup or control characters,
+    script-scheme or encoded-bracket strings, or an unreasonable length."""
+    n = str(name or "")
+    return len(n) > 64 or bool(_SUSPICIOUS_NAME_RE.search(n))
+
+
+def _scrub_text(text, name, token):
+    return text.replace(name, "#" + token) if isinstance(text, str) and name else text
+
+
+def present_events(events, is_admin, known_names=()):
+    """Role-aware view of audit events for the API. Events whose actor could not be matched to an account (failed
+    logins, and the detection alerts raised about them) carry the ATTEMPTED name, which is attacker-controlled and may be a
+    mistyped password. The raw value stays in the log (forensics) and is shown to admins, together with a `suspicious` flag
+    and a short keyed token. Everyone else gets only the token, in the name field AND wherever the detection engine copied
+    the name (the alert's resource key and its detail.username). A name that equals a real household account name
+    (`known_names`, lower-case) is not secret from household members and is shown as is. Returns new dicts; the input is
+    not modified."""
+    known = {str(k).lower() for k in (known_names or ())}
+    out = []
+    for e in events:
+        e = dict(e)
+        name = e.get("actor_name")
+        if e.get("actor") is None and name:
+            e["name_token"] = attempted_name_token(name)
+            e["suspicious"] = name_is_suspicious(name)
+            if not is_admin and str(name).lower() not in known:
+                tok = e["name_token"]
+                e["actor_name"] = None
+                e["actor_name_hidden"] = True
+                e["suspicious"] = False      # the flag itself would hint at content; viewers only get the token
+                e["resource"] = _scrub_text(e.get("resource"), name, tok)
+                d = e.get("detail")
+                if isinstance(d, dict):
+                    e["detail"] = {k: (("#" + tok) if v == name else _scrub_text(v, name, tok)) for k, v in d.items()}
+        out.append(e)
+    return out
+
+
 def query_core(event_type=None, resource_prefix=None, since_ts=None, limit=2000):
     """SEC-4 (2026-07-25) -- read-only helper for the detection engine (detections.py) and any
     future consumer that needs to scan the CORE plaintext columns (ts/actor/actor_name/src_ip/
