@@ -2182,12 +2182,14 @@ function dashboardContent(){
   // on the wide column prevents the nested grid from overflowing on narrow viewports.
   const body=el('div'); body.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:10px;margin-top:10px;align-items:start;';
   const small=el('div','grid cols');
-  small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value));
-  small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
   MIXCHARTS=[];
-  small.appendChild(mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()));
-  small.appendChild(mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP), 'mix-pies'));
-  small.appendChild(mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT), 'mix-pies'));
+  if(graphOn('pies')){                                // ALLOCATION & MIX graphs can be hidden as a group (graph toggle bar above the charts)
+    small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value));
+    small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
+    small.appendChild(mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()));
+    small.appendChild(mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP), 'mix-pies'));
+    small.appendChild(mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT), 'mix-pies'));
+  }
   small.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
   small.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
   small.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
@@ -9152,6 +9154,16 @@ function perfSeries(){            // -> {rows:[{date,port,spy}], mode, note, ran
 }
 function valuePanel(){
   const wrap=el('div');
+  wrap.appendChild(graphToggleBar());
+  let needBar=true;                 // the shared window picker (1M..ALL, custom) rides on the first chart that is shown
+  const takeBar=()=>{ const b=needBar; needBar=false; return b; };
+  if(graphOn('cost')===false && graphOn('spy')===false && graphOn('networth')===false) wrap.appendChild(el('div','muted','All charts are hidden. Use the buttons above to show them.'));
+  if(graphOn('spy')){ wrap.appendChild(spyPanel(takeBar())); }
+  if(graphOn('cost')){ wrap.appendChild(costPanel(takeBar())); }
+  if(graphOn('networth')){ wrap.appendChild(netWorthPanel(takeBar())); }
+  return wrap;
+}
+function spyPanel(withBar){
   const ps=perfSeries();
   const p=el('div','panel');
   const h=el('div','ph','PORTFOLIO vs SPY '); h.appendChild(wikiLink('perf-chart'));
@@ -9160,7 +9172,7 @@ function valuePanel(){
     b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
     b.onclick=()=>{ CH_MODE=k; try{ localStorage.setItem('fidChMode',k); }catch(_){} render(); }; modes.appendChild(b); });
   h.appendChild(modes); p.appendChild(h);
-  p.appendChild(perfToolbar());
+  if(withBar) p.appendChild(perfToolbar());
   const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-xs);line-height:1.45;';
   if(ps.wantReturn===true && !ps.haveRet){ cap.textContent=(RET&&RET.computing)?'Return series is being built (it fetches price history for your holdings) — showing VALUE for now.':'Return series not available yet — showing VALUE.'; }
   else if(ps.mode==='return'){ cap.textContent='Growth of 100: price return of the holdings you owned each day — contributions do not count as performance. Excludes dividends. '+(RET.coverage_pct!=null?'Covers '+RET.coverage_pct+'% of your invested value (holdings with price history). ':'')+(RET.glitch_days?RET.glitch_days+' day(s) with a >25% move ignored as bad data. ':'')+'Window start = 100 for both lines.'; }
@@ -9168,9 +9180,7 @@ function valuePanel(){
   p.appendChild(cap);
   if(ps.rows.length<2){ p.appendChild(el('div','muted','Accruing daily — need at least 2 days of history in this window.')); }
   else { const box=el('div'); box.style.cssText='height:190px;position:relative;margin-top:var(--space-2);'; box.innerHTML='<canvas id="c-value"></canvas>'; p.appendChild(box); }
-  wrap.appendChild(p);
-  wrap.appendChild(costPanel());
-  return wrap;
+  return p;
 }
 function costRows(){
   const rows=((VH&&VH.history)||[]).filter(h=>h.total_cost!=null && h.cost_covered_value!=null && h.total_cost>0 && h.cost_covered_value>0);
@@ -9179,9 +9189,10 @@ function costRows(){
   const sel=rows.filter(r=>r.date>=range[0] && r.date<=range[1]);
   return {rows:bucketRows(sel, range[0], range[1]), all:rows, range};
 }
-function costPanel(){
+function costPanel(withBar){
   const p=el('div','panel'); p.style.marginTop='10px';
   const h=el('div','ph','PORTFOLIO VALUE vs COST BASIS '); h.appendChild(wikiLink('perf-chart')); p.appendChild(h);
+  if(withBar) p.appendChild(perfToolbar());
   const cr=costRows();
   const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-xs);line-height:1.45;margin-bottom:var(--space-1);';
   const d=DATA||{}, covered=((d.positions||[]).filter(x=>x.cost_total!=null&&!x.suspect).reduce((t,x)=>t+(x.value||0),0)), pct=d.invested_value?Math.round(covered/d.invested_value*100):null;
@@ -9193,6 +9204,52 @@ function costPanel(){
     return p;
   }
   const box=el('div'); box.style.cssText='height:190px;position:relative;'; box.innerHTML='<canvas id="c-cost"></canvas>'; p.appendChild(box);
+  return p;
+}
+// ---- Net worth tracker + per-graph show/hide (2026-11-08, Jason) ----
+const GRAPH_KEYS=[['spy','PORTFOLIO vs SPY'],['cost','VALUE vs COST BASIS'],['networth','NET WORTH'],['pies','ALLOCATION & MIX']];
+function graphPrefsParse(raw){              // never throws: anything unreadable means every graph is shown
+  const o={}; GRAPH_KEYS.forEach(([k])=>{ o[k]=true; });
+  try{ const j=JSON.parse(raw||'null'); if(j && typeof j==='object') GRAPH_KEYS.forEach(([k])=>{ if(j[k]===false) o[k]=false; }); }catch(_){}
+  return o;
+}
+let GRAPHS=graphPrefsParse((()=>{ try{ return localStorage.getItem('fidGraphs'); }catch(_){ return null; } })());
+const graphOn=k=>GRAPHS[k]!==false;
+function graphToggleBar(){
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;margin:var(--space-1) 0;font-size:var(--font-size-sm);';
+  bar.appendChild(el('span','muted','GRAPHS'));
+  GRAPH_KEYS.forEach(([k,lb])=>{
+    const on=graphOn(k), b=el('span',null,(on?'● ':'○ ')+lb);
+    b.title=(on?'Hide ':'Show ')+lb;
+    b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+    b.onclick=()=>{ GRAPHS[k]=!on; try{ localStorage.setItem('fidGraphs',JSON.stringify(GRAPHS)); }catch(_){} render(); };
+    bar.appendChild(b);
+  });
+  return bar;
+}
+function bucketMode(span){ return span<=100?'daily':(span<=400?'weekly':'monthly'); }   // mirrors bucketRows(): bars compress as the window grows
+function netWorthRows(hist, win, from, to){
+  const rows=(hist||[]).filter(h=>h && h.date && h.net_worth!=null && isFinite(h.net_worth) && h.net_worth!==0).map(h=>({date:h.date, nw:+h.net_worth}));
+  if(rows.length<2) return {rows:[], all:rows, mode:null, range:null};
+  const range=chartWindowRange(win, from, to, rows[0].date, rows[rows.length-1].date);
+  const sel=rows.filter(r=>r.date>=range[0] && r.date<=range[1]);
+  const span=(new Date(range[1])-new Date(range[0]))/86400000;
+  return {rows:bucketRows(sel, range[0], range[1]), all:rows, mode:bucketMode(span), range};
+}
+function netWorthPanel(withBar){
+  const p=el('div','panel'); p.style.marginTop='10px';
+  p.appendChild(el('div','ph','NET WORTH '));
+  if(withBar) p.appendChild(perfToolbar());
+  const nr=netWorthRows((VH&&VH.history)||[], CH_WIN, CH_FROM, CH_TO);
+  const cap=el('div','muted'); cap.style.cssText='font-size:var(--font-size-xs);line-height:1.45;margin-bottom:var(--space-1);';
+  if(nr.rows.length<2){
+    cap.textContent=nr.all.length?('Only '+nr.all.length+' day(s) of net-worth history in this window so far (since '+nr.all[0].date+') — it fills in daily.'):'Net-worth history starts accruing with the next daily snapshot.';
+    p.appendChild(cap); return p;
+  }
+  const unit={daily:'day',weekly:'week',monthly:'month'}[nr.mode];
+  cap.textContent='Bars: your net worth (assets minus debts) at the end of each '+unit+' · bars compress from daily to weekly to monthly as the window grows · same window as the charts above.';
+  p.appendChild(cap);
+  const box=el('div'); box.style.cssText='height:190px;position:relative;'; box.innerHTML='<canvas id="c-networth"></canvas>'; p.appendChild(box);
   return p;
 }
 function drawPerfCharts(){
@@ -9226,6 +9283,22 @@ function drawPerfCharts(){
         options:{responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:true,position:'top',labels:{color:muted,boxWidth:10,font:{size:10}}},tooltip:{callbacks:{label:t=>t.dataset.label+': '+fmt(t.parsed.y)}}},
           scales:{x:{ticks:{color:muted,font:{size:9},maxTicksLimit:12},grid:{display:false}},y:{beginAtZero:true,ticks:{color:muted,font:{size:9},callback:v=>fmt(v)},grid:{color:grid}}}}}));
+    }
+  }
+  const cn=document.getElementById('c-networth');
+  if(cn){
+    const nr=netWorthRows((VH&&VH.history)||[], CH_WIN, CH_FROM, CH_TO);
+    if(nr.rows.length>=2){
+      const fmt=v=>Math.abs(v)>=1e6?'$'+(v/1e6).toFixed(2)+'M':'$'+Math.round(v/1000)+'k';
+      const spanDays=Math.round((new Date(nr.range[1])-new Date(nr.range[0]))/86400000);
+      charts.push(new Chart(cn,{type:'bar',
+        data:{labels:nr.rows.map(r=>r.date),datasets:[{label:'Net worth',data:nr.rows.map(r=>r.nw),
+          backgroundColor:nr.rows.map(r=>r.nw>=0?resolveColor('var(--color-accent)'):resolveColor('var(--color-negative)')),borderWidth:0}]},
+        options:{responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label+' ('+nr.mode+')',label:t=>'Net worth: $'+Math.round(t.parsed.y).toLocaleString()}}},
+          scales:{x:{ticks:{color:muted,font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:12,
+                           callback:function(v){ return perfTickLabel(this.getLabelForValue(v), spanDays); }},grid:{display:false}},
+                  y:{ticks:{color:muted,font:{size:9},callback:v=>fmt(v)},grid:{color:grid}}}}}));
     }
   }
 }
