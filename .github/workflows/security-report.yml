@@ -4,6 +4,7 @@ name: Security report page
 # Trivy on the built image (all findings, and fixable-only), pip-audit, Checkov, recent workflow runs and the
 # required-check list. Informational: it never gates a change (the scan workflows do that). On a PR it only
 # builds and uploads the page as an artifact; publishing to GitHub Pages happens only from main.
+# A failed run emails the owner (GitHub Actions failed-workflow notifications); there is no alert-issue job because Issues are disabled on this repo.
 # Counts only for open findings -- no per-package list of unfixed vulnerabilities is published.
 
 on:
@@ -96,22 +97,3 @@ jobs:
       name: github-pages
     steps:
       - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
-
-  notify-on-failure:
-    name: Open an alert issue when the report fails outside a PR
-    needs: [build, deploy]
-    if: ${{ always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure') }}
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Open or update the alert issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          title="ALERT: security-report failed"
-          body="security-report failed (trigger: ${{ github.event_name }}, ref: ${{ github.ref_name }}). Run: ${RUN_URL}"
-          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi

@@ -180,7 +180,7 @@ code{{background:var(--card);padding:1px 5px;border-radius:4px}}
 <table><tr><th>Workflow</th><th>Result</th><th>Date</th><th>Trigger</th></tr>{run_rows}</table>
 
 <h2>What blocks a change from reaching main</h2>
-<p class="s">A pull request is required, with these checks passing. Force-push and branch deletion are blocked. Failed scans outside a PR open an alert issue.</p>
+<p class="s">A pull request is required, with these checks passing. Force-push and branch deletion are blocked. A failed scan on main or on the schedule emails the owner through GitHub Actions notifications.</p>
 <ul>{req}</ul>
 
 <h2>Policy</h2>
