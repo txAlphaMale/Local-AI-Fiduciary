@@ -41,14 +41,35 @@ class TestSri(unittest.TestCase):
 class TestBoundedNames(unittest.TestCase):
     def test_clean_name_is_fast_on_hostile_input(self):
         t = time.time()
-        out = _load('_NAME_JUNK_RE', '_clean_name')['_clean_name'](" " * 200000 + "x")
+        out = _load('_NAME_JUNK_RE', '_NAME_STATE_RE', '_clean_name')['_clean_name'](" " * 200000 + "x")
         self.assertLess(time.time() - t, 1.0)
         self.assertIsInstance(out, str)
 
     def test_clean_name_still_works(self):
-        f = _load("_NAME_JUNK_RE", "_clean_name")["_clean_name"]
+        f = _load("_NAME_JUNK_RE", "_NAME_STATE_RE", "_clean_name")["_clean_name"]
         self.assertEqual(f("Acme Corp Isin CA92X Sedol BL9"), "Acme Corp")
         self.assertEqual(f("Foo Inc /DE/"), "Foo Inc")
+
+
+class TestCleanNameEquivalence(unittest.TestCase):
+    """The linear rewrite must give the same answers as the original regex version on single-line names. (Only difference: a
+    name containing a line break after the label, where the old '.*$' stopped matching; the new code cuts there, which is the
+    intended behaviour and cannot occur in a real security name.)"""
+    @staticmethod
+    def _old(n):
+        n = re.sub(r"\s+(isin|sedol|cusip|figi)\b.*$", "", (n or "").strip()[:200], flags=re.I)
+        return re.sub(r"\s*/[A-Za-z]{1,5}/?$", "", n).strip()
+
+    def test_same_results_on_many_inputs(self):
+        import random
+        f = _load("_NAME_JUNK_RE", "_NAME_STATE_RE", "_clean_name")["_clean_name"]
+        rnd = random.Random(7)
+        words = ["Acme", "Corp", "Inc", "Isin", "ISIN", "Sedol", "Cusip", "Figi", "CA92X", "/DE", "/NEW/", "/", "  ", "\t", "x", "isinx", ""]
+        for _ in range(4000):
+            s = "".join(rnd.choice(words) + rnd.choice(["", " ", "  ", "\t"]) for _ in range(rnd.randint(0, 7)))
+            self.assertEqual(f(s), self._old(s), repr(s))
+        for s in (None, "", "Isin only", "Foo /DE/", "Foo Inc Isin US1 Sedol B", "A  /NEW/  "):
+            self.assertEqual(f(s), self._old(s), repr(s))
 
 
 class TestErrRef(unittest.TestCase):

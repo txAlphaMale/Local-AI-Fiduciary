@@ -6945,16 +6945,24 @@ def _errmsg(e):
     return str(e) if isinstance(e, (RuntimeError, ValueError)) else _errref(e)
 
 
-_NAME_JUNK_RE = re.compile(r"\s+(isin|sedol|cusip|figi)\b.*$", re.I)
+_NAME_JUNK_RE = re.compile(r"(?<=\s)(?:isin|sedol|cusip|figi)\b", re.I)   # first identifier label that follows whitespace
+_NAME_STATE_RE = re.compile(r"/[A-Za-z]{1,5}/?$")                      # SEC state suffix: '/DE', '/NEW/'
 _NAME_STOP = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "plc", "llc",
               "lp", "the", "de", "nv", "sa", "ag", "holdings", "holding", "group", "new"}
 
 
 def _clean_name(n):
     """Strip brokerage/aggregator identifier junk (' Isin CA92... Sedol BL9...') and SEC state
-    suffixes ('/DE', '/NEW/') so a company name reads as a name."""
-    n = _NAME_JUNK_RE.sub("", (n or "").strip()[:200])   # bounded first: the patterns below are quadratic on long whitespace runs
-    return re.sub(r"\s*/[A-Za-z]{1,5}/?$", "", n).strip()
+    suffixes ('/DE', '/NEW/') so a company name reads as a name. Written with a search plus a slice
+    (not a '\\s+...' pattern) so the work is linear in the input length."""
+    n = (n or "").strip()[:200]
+    m = _NAME_JUNK_RE.search(n)
+    if m:
+        n = n[:m.start()].rstrip()
+    m = _NAME_STATE_RE.search(n)
+    if m:
+        n = n[:m.start()].rstrip()
+    return n.strip()
 
 
 def _name_tokens(n):
