@@ -2201,6 +2201,9 @@ function dashboardContent(){
 // bare dashes, say what we DO know (asset-class mix from the cached SEC look-through, expense ratio) and explain each blank.
 const isFundType = t => t==='Mutual Fund' || t==='ETF';
 const attrEsc = x => (x==null?'':String(x)).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+// Full HTML escape for text AND attribute contexts. Usernames and audit-log fields (a failed login's attempted username is stored verbatim by an
+// UNAUTHENTICATED request) are attacker-controlled: never put them in innerHTML unescaped.
+const escHtml = x => (x==null?'':String(x)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 function fundInfoMap(){ return (EXP&&EXP.positions) ? Object.fromEntries(EXP.positions.filter(p=>'fund_mix' in p||'expense_ratio_pct' in p).map(p=>[p.ticker,p])) : {}; }
 function fundSectorCell(p, FI){
   if(!(p.ticker in FI)) return `<span class="muted" title="exposure data for this fund is still being computed (it refreshes in the background)">…</span>`;
@@ -4753,7 +4756,7 @@ function iamContent(){
   wrap.appendChild(el('div','ph','ACCOUNT'));
   const acctRow=el('div'); acctRow.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-2);';
   const roleBadge=u.role==='viewer'?' · <span class="muted">view-only account</span>':'';
-  acctRow.innerHTML=`Signed in as <b>${u.username}</b> (${u.role||'admin'})${roleBadge} · account created ${u.created?new Date(u.created*1000).toLocaleDateString():'—'}`;
+  acctRow.innerHTML=`Signed in as <b>${escHtml(u.username)}</b> (${escHtml(u.role||'admin')})${roleBadge} · account created ${u.created?new Date(u.created*1000).toLocaleDateString():'—'}`;
   wrap.appendChild(acctRow);
   const logoutBtn=el('button',null,'LOG OUT'); logoutBtn.style.marginBottom='var(--space-4)'; logoutBtn.onclick=authLogout; wrap.appendChild(logoutBtn);
 
@@ -4762,7 +4765,7 @@ function iamContent(){
   wrap.appendChild(el('div','ph','RENAME ACCOUNT'));
   const renWrap=el('div'); renWrap.style.cssText='margin-bottom:var(--space-4);';
   renWrap.innerHTML=
-    `<div style="margin-bottom:6px;">New username <input id="sec-newuser" type="text" style="width:220px;" value="${u.username}" autocomplete="username"/></div>`+
+    `<div style="margin-bottom:6px;">New username <input id="sec-newuser" type="text" style="width:220px;" value="${escHtml(u.username)}" autocomplete="username"/></div>`+
     `<div style="margin-bottom:6px;">Current password <input id="sec-renpass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
     `<div id="sec-ren-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
     `<button onclick="securityRenameAccount()">↳ RENAME</button>`;
@@ -4815,7 +4818,7 @@ function iamContent(){
   resetWrap.innerHTML=
     `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Deletes ONLY the login/MFA record in <code>auth.db</code> and returns this app to the first-run account-creation screen. Your financial config, chat history, and knowledge index are NOT touched by this — this is for re-testing onboarding, or starting over with a fresh account. This cannot be undone from here.</div>`+
     `<div style="margin-bottom:6px;">Current password <input id="sec-reset-pass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
-    `<div style="margin-bottom:6px;">Type your username (<code>${u.username}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
+    `<div style="margin-bottom:6px;">Type your username (<code>${escHtml(u.username)}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
     `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
     `<button onclick="securityResetAccount()">⚠ DELETE ACCOUNT &amp; RESET</button>`;
   wrap.appendChild(resetWrap);
@@ -5250,13 +5253,13 @@ function _auditBuildTable(allEvents){
     const detailStr=e.detail?JSON.stringify(e.detail):'';
     const detailShort=detailStr.length>60?detailStr.slice(0,57)+'…':detailStr;
     tr.innerHTML=
-      `<td style="padding:4px 8px;white-space:nowrap;">${ts}</td>`+
-      `<td style="padding:4px 8px;white-space:nowrap;"><code>${e.event_type||''}</code></td>`+
-      `<td style="padding:4px 8px;"><span class="${_auditEventBadgeClass(e.outcome)}">${e.outcome||''}</span></td>`+
-      `<td style="padding:4px 8px;">${e.actor_name||'—'}</td>`+
-      `<td style="padding:4px 8px;">${e.src_ip||'—'}</td>`+
-      `<td style="padding:4px 8px;"><code>${e.resource||''}</code></td>`+
-      `<td style="padding:4px 8px;" title="${detailStr.replace(/"/g,'&quot;')}"><span class="muted">${detailShort}</span></td>`;
+      `<td style="padding:4px 8px;white-space:nowrap;">${escHtml(ts)}</td>`+
+      `<td style="padding:4px 8px;white-space:nowrap;"><code>${escHtml(e.event_type)}</code></td>`+
+      `<td style="padding:4px 8px;"><span class="${escHtml(_auditEventBadgeClass(e.outcome))}">${escHtml(e.outcome)}</span></td>`+
+      `<td style="padding:4px 8px;">${escHtml(e.actor_name)||'—'}</td>`+
+      `<td style="padding:4px 8px;">${escHtml(e.src_ip)||'—'}</td>`+
+      `<td style="padding:4px 8px;"><code>${escHtml(e.resource)}</code></td>`+
+      `<td style="padding:4px 8px;" title="${escHtml(detailStr)}"><span class="muted">${escHtml(detailShort)}</span></td>`;
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
@@ -5318,6 +5321,8 @@ async function accountsCreateViewer(){
     HOUSEHOLD_ACCOUNTS=null; _accountsRefresh();
   }catch(e){ err.textContent='Request failed: '+e; }
 }
+document.addEventListener('click', ev=>{ const b=ev.target.closest&&ev.target.closest('.acct-del,.acct-xfer'); if(!b) return;
+  if(b.classList.contains('acct-del')) accountsDeleteUser(b.dataset.uid, b.dataset.un); else accountsTransferAdmin(b.dataset.uid, b.dataset.un); });
 async function accountsDeleteUser(uid, username){
   if(!confirm(`Remove the viewer account "${username}"? This cannot be undone from here.`)) return;
   try{
@@ -5364,13 +5369,12 @@ function _accountsPanel(){
   accts.forEach(a=>{
     const tr=el('tr'); tr.style.cssText='border-top:1px solid var(--border-color, #333);';
     const created=a.created?new Date(a.created*1000).toLocaleDateString():'—';
-    const safeUser=a.username.replace(/'/g,"\\'");
     const delCell=a.role==='admin'?'<span class="muted">—</span>':
-      `<button onclick="accountsDeleteUser('${a.id}','${safeUser}')">✕ REMOVE</button> `+
-      `<button onclick="accountsTransferAdmin('${a.id}','${safeUser}')" title="Hand the admin role to this account — you become a viewer">⇄ MAKE ADMIN</button>`;
+      `<button class="acct-del" data-uid="${escHtml(a.id)}" data-un="${escHtml(a.username)}">✕ REMOVE</button> `+
+      `<button class="acct-xfer" data-uid="${escHtml(a.id)}" data-un="${escHtml(a.username)}" title="Hand the admin role to this account — you become a viewer">⇄ MAKE ADMIN</button>`;
     tr.innerHTML=
-      `<td style="padding:4px 8px;">${a.username}</td>`+
-      `<td style="padding:4px 8px;">${a.role}</td>`+
+      `<td style="padding:4px 8px;">${escHtml(a.username)}</td>`+
+      `<td style="padding:4px 8px;">${escHtml(a.role)}</td>`+
       `<td style="padding:4px 8px;">${a.mfa_enabled?'<span class="pos">on</span>':'<span class="muted">off</span>'}</td>`+
       `<td style="padding:4px 8px;">${created}</td>`+
       `<td style="padding:4px 8px;text-align:right;">${delCell}</td>`;
@@ -10584,7 +10588,7 @@ function renderLogin(mfaRequired){
   const form=el('div');
   if(mfaRequired && _pendingLoginCreds){
     form.innerHTML=
-      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-3);">Signed in as <b>${_pendingLoginCreds.username}</b> — enter your authenticator code to continue.</div>`+
+      `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-3);">Signed in as <b>${escHtml(_pendingLoginCreds.username)}</b> — enter your authenticator code to continue.</div>`+
       `<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="li-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`+
       `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
       `<button onclick="authLoginSubmit()" style="width:100%;">VERIFY &amp; SIGN IN</button>`;

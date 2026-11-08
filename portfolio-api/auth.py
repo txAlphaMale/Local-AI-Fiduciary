@@ -29,6 +29,7 @@ import json
 import base64
 import io
 import secrets
+import re
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHash
@@ -143,6 +144,18 @@ def public_user(user):
 # ---------------------------------------------------------------------------
 # Passwords
 # ---------------------------------------------------------------------------
+_BAD_USERNAME_CHARS = re.compile(r"[<>\"\\\x00-\x1f\x7f]")
+
+
+def _check_username(username):
+    """Usernames are shown in the admin UI and written to the audit log; refuse markup/control characters
+    (defence in depth: the UI also escapes everything it renders)."""
+    if len(username) > 64:
+        raise ValueError("username must be 64 characters or fewer")
+    if _BAD_USERNAME_CHARS.search(username):
+        raise ValueError("username may not contain < > \" \\ or control characters")
+
+
 def create_user(username, password, role="admin"):
     """Returns (uid, recovery_key) -- the recovery key (2026-07-24, Account Recovery Tier 2) is
     generated immediately so every NEW account has one from day one; the caller is responsible
@@ -160,6 +173,7 @@ def create_user(username, password, role="admin"):
     username = (username or "").strip()
     if not username:
         raise ValueError("username required")
+    _check_username(username)
     if not password or len(password) < 8:
         raise ValueError("password must be at least 8 characters")
     if role not in ("admin", "viewer"):
@@ -272,8 +286,7 @@ def set_username(uid, new_username):
     new_username = (new_username or "").strip()
     if not new_username:
         raise ValueError("username required")
-    if len(new_username) > 64:
-        raise ValueError("username must be 64 characters or fewer")
+    _check_username(new_username)
     with _conn() as c:
         clash = c.execute("SELECT id FROM users WHERE username=? AND id<>?", (new_username, uid)).fetchone()
         if clash:
