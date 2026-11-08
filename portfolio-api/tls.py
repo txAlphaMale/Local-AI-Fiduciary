@@ -41,6 +41,7 @@ internet, which no local dev/sandbox environment can provide — that leg can on
 the owner's real deployment.
 """
 import os
+import re
 import sys
 import time
 import shutil
@@ -362,6 +363,9 @@ def _acme_install(domain, challenge, dns_provider, staging):
     return status()
 
 
+_HOSTNAME_RE = re.compile(r"^(\*\.)?(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
+
+
 def acme_enroll(domain, challenge="http-01", dns_provider=None, dns_creds=None,
                  extra_domains=None, staging=None):
     """Requests a Let's Encrypt (or whatever ACME CA acme.sh is configured for) certificate for
@@ -381,6 +385,9 @@ def acme_enroll(domain, challenge="http-01", dns_provider=None, dns_creds=None,
     domain = (domain or "").strip()
     if not domain:
         raise ValueError("domain is required")
+    for _d in [domain] + [d.strip() for d in (extra_domains or []) if d and d.strip()]:
+        if not _HOSTNAME_RE.match(_d):   # also keeps the domain safe to use as a directory name under ACME_HOME
+            raise ValueError(f"not a valid host name: {_d[:80]!r}")
     _ensure_dir()
     os.makedirs(ACME_HOME, exist_ok=True)
     try:

@@ -27,6 +27,7 @@ import datetime
 import threading
 import queue
 import uuid
+import traceback
 
 import requests
 from fastapi import FastAPI, Request
@@ -2039,7 +2040,7 @@ def get_compliance_controls():
         return JSONResponse({"error": f"controls.json not found at {path} — is the compliance/ "
                                        "folder mounted? (see docker-compose.yml)"}, status_code=404)
     except Exception as e:
-        return JSONResponse({"error": f"failed to read controls.json: {e}"}, status_code=500)
+        return JSONResponse({"error": f"failed to read controls.json: {_errref(e)}"}, status_code=500)
 
 
 # 2026-07-26 — Jason: the Security Posture page showed the controls.json-derived table but nothing
@@ -2226,7 +2227,7 @@ def get_backup_status():
     try:
         files = backup.list_backups(BACKUP_OUTPUT_DIR)
     except Exception as e:
-        return {"passphrase_configured": configured, "files": [], "error": str(e)}
+        return {"passphrase_configured": configured, "files": [], "error": _errref(e)}
     return {"passphrase_configured": configured, "files": files, "output_dir": BACKUP_OUTPUT_DIR}
 
 
@@ -3560,7 +3561,7 @@ def portfolio(refresh: int = 0):
             if _cache["data"] is None:
                 rec = _load_last_good()
                 if rec is None:
-                    return JSONResponse({"error": f"Could not load portfolio: {e}"}, status_code=502)
+                    return JSONResponse({"error": f"Could not load portfolio: {_errmsg(e)}"}, status_code=502)
                 _cache["data"] = _mark_stale(rec["data"], e, rec.get("saved_at"), True)
             else:
                 prior = _cache["data"]
@@ -4685,7 +4686,7 @@ def get_roth():
     try:
         return _roth_plan()
     except Exception as e:
-        return JSONResponse({"error": f"roth/marginal-curve engine failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"roth/marginal-curve engine failed: {_errref(e)}"}, status_code=500)
 
 
 # ============ G6: asset-backed borrowing — RUIN-MODEL-FIRST ============
@@ -4863,7 +4864,7 @@ def get_avenues():
     try:
         return _avenues()
     except Exception as e:
-        return JSONResponse({"error": f"avenues engine failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"avenues engine failed: {_errref(e)}"}, status_code=500)
 
 
 # ============ G14: thesis & exit-trigger registry — exit-discipline-as-code ============
@@ -5806,7 +5807,7 @@ def get_estate():
                 "note": "Educational decision-support, not legal/tax advice — estate documents need "
                         "a licensed attorney; confirm figures with a CPA."}
     except Exception as e:
-        return JSONResponse({"error": f"estate view unavailable: {e}"}, status_code=502)
+        return JSONResponse({"error": f"estate view unavailable: {_errref(e)}"}, status_code=502)
 
 
 @app.get("/api/continuity")
@@ -5940,7 +5941,7 @@ def get_continuity():
                         "stale. Educational decision-support, not legal advice; the will/POA/trust "
                         "documents themselves still need a licensed attorney."}
     except Exception as e:
-        return JSONResponse({"error": f"continuity binder unavailable: {e}"}, status_code=502)
+        return JSONResponse({"error": f"continuity binder unavailable: {_errref(e)}"}, status_code=502)
 
 
 # --- Calibration memory (N13 candidate 2): feed the model its OWN scored track record into the brief
@@ -6022,7 +6023,7 @@ def raw_holdings(account_id: str = "", limit: int = 2):
     except MonarchDisabled as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:
-        return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {e}"},
+        return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {_errref(e)}"},
                             status_code=502)
     if account_id:
         accts = [a for a in accts if str(a.get("id")) == str(account_id)]
@@ -6055,7 +6056,7 @@ def raw_accounts():
     except MonarchDisabled as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:
-        return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {e}"},
+        return JSONResponse({"error": f"upstream unavailable (mcpo/monarch not ready?): {_errref(e)}"},
                             status_code=502)
     for a in accts_raw:
         out.append({
@@ -6191,7 +6192,7 @@ def get_research(ticker: str):
         _save_research_result(t, result)   # persist so navigating away/reloading can recover it
         return result
     except Exception as e:
-        return JSONResponse({"error": f"research failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"research failed: {_errref(e)}"}, status_code=500)
 
 
 @app.get("/api/knowledge")
@@ -6200,7 +6201,7 @@ def get_knowledge():
     try:
         return knowledge.status()
     except Exception as e:
-        return JSONResponse({"error": f"knowledge status failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"knowledge status failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/knowledge/reindex")
@@ -6214,7 +6215,7 @@ def post_knowledge_reindex():
         return {"ok": True, "status": "queued" if created else "already queued/running",
                 "job_id": jid, **knowledge.status()}
     except Exception as e:
-        return JSONResponse({"error": f"reindex failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"reindex failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/knowledge/delete")
@@ -6925,6 +6926,25 @@ def _reverse_dcf(valuation, fundamentals):
                     "compare implied vs actual growth to judge how demanding the price is. Not advice."}
 
 
+def _errref(e):
+    """Server-side failure detail for an API reply: log the full exception (type, message, traceback) with a short
+    reference and return only 'internal error (ref xxxxxx)'. Raw exception text can carry file paths, library
+    internals or upstream response bodies, and every logged-in user (viewers included) can call the GETs that report
+    it. Used for server-side failures; deliberate user-facing validation messages are left as they are."""
+    ref = uuid.uuid4().hex[:6]
+    try:
+        print(f"[error ref={ref}] {type(e).__name__}: {str(e)[:500]}\n{traceback.format_exc()[-1500:]}", flush=True)
+    except Exception:
+        pass
+    return f"internal error (ref {ref})"
+
+
+def _errmsg(e):
+    """Like _errref, but keeps the message of exceptions WE raise on purpose for the user (RuntimeError/ValueError, e.g. a
+    provider's 'not enabled' / 'no connected institutions' guidance) and masks everything else (network, library, KeyError...)."""
+    return str(e) if isinstance(e, (RuntimeError, ValueError)) else _errref(e)
+
+
 _NAME_JUNK_RE = re.compile(r"\s+(isin|sedol|cusip|figi)\b.*$", re.I)
 _NAME_STOP = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited", "plc", "llc",
               "lp", "the", "de", "nv", "sa", "ag", "holdings", "holding", "group", "new"}
@@ -6933,7 +6953,7 @@ _NAME_STOP = {"inc", "incorporated", "corp", "corporation", "co", "company", "lt
 def _clean_name(n):
     """Strip brokerage/aggregator identifier junk (' Isin CA92... Sedol BL9...') and SEC state
     suffixes ('/DE', '/NEW/') so a company name reads as a name."""
-    n = _NAME_JUNK_RE.sub("", (n or "").strip())
+    n = _NAME_JUNK_RE.sub("", (n or "").strip()[:200])   # bounded first: the patterns below are quadratic on long whitespace runs
     return re.sub(r"\s*/[A-Za-z]{1,5}/?$", "", n).strip()
 
 
@@ -7562,7 +7582,7 @@ def get_rebalance():
     try:
         return _rebalance()
     except Exception as e:
-        return JSONResponse({"error": f"could not compute (portfolio unavailable?): {e}"}, status_code=502)
+        return JSONResponse({"error": f"could not compute (portfolio unavailable?): {_errref(e)}"}, status_code=502)
 
 
 @app.post("/api/run-rebalance")
@@ -8675,7 +8695,7 @@ def get_calc_liabilities():
     try:
         return {"liabilities": _whatif_liabilities()}
     except Exception as e:
-        return {"liabilities": [], "error": f"Couldn't load liabilities: {e}"}
+        return {"liabilities": [], "error": f"Couldn't load liabilities: {_errref(e)}"}
 
 
 # ============ P0-3: insurance & risk-transfer (insurance.py) ============
@@ -9514,7 +9534,7 @@ def get_tax(gross_ordinary: float = 0.0, ltcg: float = 0.0, magi: float = None):
         res["state_of_residence_source"] = sinfo["source"]
         return res
     except Exception as e:
-        return JSONResponse({"error": f"tax engine failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"tax engine failed: {_errref(e)}"}, status_code=500)
 
 
 def _aca_ctx(cfg=None):
@@ -9562,7 +9582,7 @@ def get_aca(magi: float = None, household_size: int = None, slcsp_annual: float 
         res["state_of_residence_source"] = sinfo["source"]
         return res
     except Exception as e:
-        return JSONResponse({"error": f"aca estimator failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"aca estimator failed: {_errref(e)}"}, status_code=500)
 
 
 # ---- Social Security wiring (G2) --------------------------------------------
@@ -9628,7 +9648,7 @@ def get_ss(claim_age: float = None, other_income: float = None):
         return ss.summary(retire_age=cfg.get("target_age"), status=tctx["status"],
                           other_income=oi, self_kwargs=self_kwargs, spouse=ctx["spouse"])
     except Exception as e:
-        return JSONResponse({"error": f"ss estimate failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"ss estimate failed: {_errref(e)}"}, status_code=500)
 
 
 def _investable_assets(d, exclude_types):
@@ -10381,7 +10401,7 @@ def get_retirement():
     try:
         return _retirement()
     except Exception as e:
-        return JSONResponse({"error": f"could not compute (portfolio/cashflow unavailable?): {e}"}, status_code=502)
+        return JSONResponse({"error": f"could not compute (portfolio/cashflow unavailable?): {_errref(e)}"}, status_code=502)
 
 
 @app.post("/api/run-retirement")
@@ -10470,7 +10490,7 @@ def get_income_plan():
     try:
         return _income_glide()
     except Exception as e:
-        return JSONResponse({"error": f"could not compute: {e}"}, status_code=502)
+        return JSONResponse({"error": f"could not compute: {_errref(e)}"}, status_code=502)
 
 
 # ---------------- Opportunity Scanner (proactive, read-only, research ideas only) ----------------
@@ -12427,7 +12447,7 @@ def get_tax_audit():
     try:
         return _tax_audit()
     except Exception as e:
-        return JSONResponse({"error": f"tax audit failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"tax audit failed: {_errref(e)}"}, status_code=500)
 
 
 # ---------------- Fees + Liquidity (read-only audit) ----------------
@@ -15046,7 +15066,7 @@ async def post_prompts(req: Request):
     try:
         _write_prompts_store(pd)
     except Exception as e:
-        return JSONResponse({"error": f"could not save prompts: {e}"}, status_code=500)
+        return JSONResponse({"error": f"could not save prompts: {_errref(e)}"}, status_code=500)
     # Logged in FULL (not summarized) — a persona system-prompt override changes AI behavior, and
     # being able to see exactly what changed is the point of auditing this endpoint (AI-governance/
     # model-risk angle, not just generic config hygiene).
