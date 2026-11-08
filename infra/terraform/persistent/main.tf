@@ -126,16 +126,23 @@ resource "aws_route53_zone" "demo" {
 # always names exactly one image. Every push uses a unique tag (git short SHA / timestamp); nothing
 # pushes :latest any more. Changing this on an existing repo is an in-place update
 # (PutImageTagMutability), not a replacement. See README "Image tags".
+locals {
+  # Static list: BOTH for_each blocks below key off it. The lifecycle policy used to iterate
+  # `aws_ecr_repository.repo`, which Terraform treats as unknown while `terraform import` runs, so
+  # every import failed with "Invalid for_each argument" (found 2026-11-08 during the migration).
+  ecr_repos = ["fiduciary/portfolio-api-demo", "fiduciary/mcpo-demo"]
+}
+
 resource "aws_ecr_repository" "repo" {
-  for_each             = toset(["fiduciary/portfolio-api-demo", "fiduciary/mcpo-demo"])
+  for_each             = toset(local.ecr_repos)
   name                 = each.key
   image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
 }
 
 resource "aws_ecr_lifecycle_policy" "repo" {
-  for_each   = aws_ecr_repository.repo
-  repository = each.value.name
+  for_each   = toset(local.ecr_repos)
+  repository = aws_ecr_repository.repo[each.key].name
   policy = jsonencode({
     rules = [{
       rulePriority = 1
