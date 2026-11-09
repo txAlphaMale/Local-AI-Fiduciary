@@ -1370,7 +1370,7 @@ async def tls_self_signed(req: Request):
         audit.emit("tls.cert.self_signed_generated", outcome="error", request=req,
                    actor=req.session.get("uid"), resource="/api/tls/self-signed",
                    detail={"hostnames": hosts, "error": str(e)})
-        return JSONResponse({"error": f"self-signed generation failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"self-signed generation failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/tls/csr")
@@ -1393,7 +1393,7 @@ async def tls_csr(req: Request):
                         "certificate back, POST it to /api/tls/import-cert to install it — the "
                         "private key never leaves this server."}
     except Exception as e:
-        return JSONResponse({"error": f"CSR generation failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"CSR generation failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/tls/import-cert")
@@ -1413,7 +1413,7 @@ async def tls_import_cert(req: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": f"certificate import failed: {e}"}, status_code=400)
+        return JSONResponse({"error": f"certificate import failed: {_errref(e)}"}, status_code=400)
 
 
 @app.post("/api/tls/acme/enroll")
@@ -1448,7 +1448,7 @@ async def tls_acme_enroll(req: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": f"ACME enrollment failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"ACME enrollment failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/tls/acme/renew")
@@ -1464,7 +1464,7 @@ def tls_acme_renew(request: Request):
     except tls.AcmeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     except Exception as e:
-        return JSONResponse({"error": f"renew failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"renew failed: {_errref(e)}"}, status_code=500)
 
 
 @app.post("/api/tls/auto-renew")
@@ -2095,7 +2095,7 @@ def _compliance_doc_data(name):
         return {"error": f"{name} not found at {path} — is the compliance/ folder mounted? (see "
                           "docker-compose.yml)", "_status": 404}
     except Exception as e:
-        return {"error": f"failed to read {name}: {e}", "_status": 500}
+        return {"error": f"failed to read {name}: {_errref(e)}", "_status": 500}
 
 
 @app.get("/api/compliance/doc")
@@ -2249,7 +2249,7 @@ def post_backup_run(request: Request):
     except Exception as e:
         audit.emit("backup.run", outcome="failure", request=request, actor=request.session.get("uid"),
                    resource="/api/backup/run", detail={"error": str(e)})
-        return JSONResponse({"error": f"backup failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"backup failed: {_errref(e)}"}, status_code=500)
     audit.emit("backup.run", request=request, actor=request.session.get("uid"),
                resource="/api/backup/run",
                detail={"file": result["file"], "size_bytes": result["size_bytes"],
@@ -2278,7 +2278,7 @@ async def post_backup_restore_stage(req: Request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": f"restore staging failed: {e}"}, status_code=500)
+        return JSONResponse({"error": f"restore staging failed: {_errref(e)}"}, status_code=500)
     audit.emit("backup.restore_staged", request=req, actor=req.session.get("uid"),
                resource="/api/backup/restore-stage",
                detail={"file": fname, "file_count": len(result["files"])})
@@ -2406,7 +2406,7 @@ def _job_worker():
             # it must not be recorded as a (suspiciously fast) success.
             rec["status"] = "skipped" if fn() == "skipped" else "done"
         except Exception as e:
-            rec["status"] = "error"; rec["error"] = str(e)[:300]
+            rec["status"] = "error"; rec["error"] = _errref(e)
         finally:
             rec["finished"] = int(time.time())
             _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
@@ -3115,7 +3115,7 @@ def _build_monarch():
             comp = [c for c in comp if (c.get("quantity") or 0) > 0]   # exclude sold-out (0-share) positions
         except Exception as e:  # one bad account shouldn't sink the whole dashboard
             by_account.append({"account": a["name"], "institution": a["institution"],
-                               "value": a["balance"], "error": str(e), "holdings": []})
+                               "value": a["balance"], "error": _errref(e), "holdings": []})
             continue
         tv = round(sum((c["value"] or 0) for c in comp), 2)
         by_account.append({"account": a["name"], "institution": a["institution"],
@@ -3464,7 +3464,7 @@ def _merge_manual_holdings(d):
         d.update(new)                                    # provider-specific extras (snaptrade_notes, plaid errors...) are kept
         info.update(accounts=len(c_accounts), positions=len(c_positions), value=round(c_value, 2))
     except Exception as e:
-        info["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        info["error"] = f"{type(e).__name__}: {_errref(e)}"
         print(f"[portfolio] manual holdings could not be merged: {info['error']}", flush=True)
     return d
 
@@ -3732,7 +3732,7 @@ async def post_holdings_csv_upload(req: Request):
     try:
         rows = list(_csv.DictReader(_io.StringIO(raw)))
     except Exception as e:
-        return JSONResponse({"error": f"Could not parse CSV: {e}"}, status_code=400)
+        return JSONResponse({"error": f"Could not parse CSV: {_errmsg(e)}"}, status_code=400)
     if not rows or "ticker" not in (rows[0].keys() if rows else []):
         got = list(rows[0].keys()) if rows else []
         return JSONResponse({"error": "CSV must have a header row including at least 'ticker' and "
@@ -5121,7 +5121,7 @@ async def post_realestate(req: Request):
     try:
         result = realestate.underwrite(inp)
     except Exception as e:
-        return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
+        return JSONResponse({"error": f"underwrite failed: {_errmsg(e)}"}, status_code=400)
     rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
     try:
         store.write_json(REALESTATE_FILE, rec)
@@ -5166,7 +5166,7 @@ async def post_business(req: Request):
     try:
         result = bizacq.underwrite(inp)
     except Exception as e:
-        return JSONResponse({"error": f"underwrite failed: {e}"}, status_code=400)
+        return JSONResponse({"error": f"underwrite failed: {_errmsg(e)}"}, status_code=400)
     rec = {"inputs": inp, "result": result, "generated_at": int(time.time())}
     try:
         store.write_json(BUSINESS_FILE, rec)
@@ -6036,7 +6036,7 @@ def raw_holdings(account_id: str = "", limit: int = 2):
         try:
             nodes = _holds(_post("get_account_holdings", {"account_id": a.get("id")}))
         except Exception as e:
-            out.append({"account": a.get("displayName"), "id": a.get("id"), "error": str(e)})
+            out.append({"account": a.get("displayName"), "id": a.get("id"), "error": _errref(e)})
             continue
         out.append({"account": a.get("displayName"), "id": a.get("id"),
                     "institution": (a.get("institution") or {}).get("name"),
@@ -6582,7 +6582,7 @@ def _insider_signal(sym):
                     "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}
         except Exception as e:
             return {"ticker": t, "available": False, "error": True,
-                    "reason": f"insider fetch error: {e}"}
+                    "reason": f"insider fetch error: {_errref(e)}"}
 
     res, meta = store.cached_fetch(
         "insider_signal", t, INSIDER_TTL, _compute,
@@ -6636,7 +6636,7 @@ def get_edgar_status():
         try:
             probe = {"ticker": "AAPL", "cik": edgar.get_cik("AAPL")}
         except Exception as e:
-            probe = {"ticker": "AAPL", "error": f"{type(e).__name__}: {e}"}
+            probe = {"ticker": "AAPL", "error": f"{type(e).__name__}: {_errref(e)}"}
     raw = os.environ.get("SEC_USER_AGENT")
     return {"cik_map": st, "probe": probe,
             "user_agent": edgar.SEC_UA,
@@ -9352,7 +9352,7 @@ async def post_cost_basis_import(req: Request):
     try:
         rows = list(_csv.DictReader(_io.StringIO(raw)))
     except Exception as e:
-        return JSONResponse({"error": f"Could not parse CSV: {e}"}, status_code=400)
+        return JSONResponse({"error": f"Could not parse CSV: {_errmsg(e)}"}, status_code=400)
     need = {"institution", "account", "ticker"}
     if not rows or not need <= set(rows[0].keys()):
         return JSONResponse({"error": "CSV must have the template's header row (institution, account, ticker, total_cost_basis, avg_cost_per_share ...)."},
@@ -10316,7 +10316,7 @@ def _retirement():
                      "annual_ss_offset": round(mc_expenses - w, 2)} for s, w in (sched or [])]
                 social_security = _ssum
         except Exception as e:
-            social_security = {"available": False, "error": f"ss floor failed: {e}"}
+            social_security = {"available": False, "error": f"ss floor failed: {_errref(e)}"}
             ss_schedule = None
 
         # G3: precompute the success grid for the risk-based policy (cached; coarse inner MC).
@@ -10999,7 +10999,9 @@ def get_plaid_status(request: Request):
 
 
 def _plaid_err(e):
-    return JSONResponse({"error": str(e), "code": getattr(e, "code", None)},
+    code = getattr(e, "code", None)
+    msg = str(e) if code in ("NOT_CONFIGURED", "BAD_KIND", "NO_SUCH_ITEM") else _errref(e)   # upstream detail stays in the log
+    return JSONResponse({"error": msg, "code": code},
                         status_code=502 if getattr(e, "code", "") not in ("NOT_CONFIGURED", "BAD_KIND", "NO_SUCH_ITEM") else 400)
 
 
@@ -12062,7 +12064,7 @@ def _opportunities():
             ideas.append({**one, "status": "ok" if one.get("available") else "unsupported",
                           "already_held": t in held, "user_added": t in user_added})
         except Exception as e:
-            ideas.append({"ticker": t, "available": False, "status": "error", "error": str(e),
+            ideas.append({"ticker": t, "available": False, "status": "error", "error": _errref(e),
                           "user_added": t in user_added})
     # Rank by the quality-weighted forward return (opportunity_score), then raw fit, then
     # expected return — replaces the old "fit then revenue-growth" order so the best
@@ -12892,7 +12894,7 @@ def _lookthrough():
             try:
                 fh = edgar.fund_holdings(tkr, name=c.get("name"))
             except Exception as e:
-                fh = {"resolved": False, "reason": "look-through error: " + str(e)[:80]}
+                fh = {"resolved": False, "reason": "look-through error: " + _errref(e)}
             if fh and fh.get("resolved"):
                 # the fund's equity "home" sleeve (assetCat lacks country) — keeps intl detection
                 equity_home = "Intl Equity" if _sleeve(c) == "Intl Equity" else "US Equity"
@@ -13146,7 +13148,7 @@ def _discover(d, crit, _tavily_meta_acc=None):
             sc["grounded"] = g
             sc["llm"] = _llm(t, nm, None, None, g, _news(t, nm), fund, val)
         except Exception as e:
-            sc["llm"] = {"error": str(e)}
+            sc["llm"] = {"error": _errref(e)}
     return out
 
 
@@ -14245,7 +14247,7 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None):
                                                max_results=int(args.get("max_results") or 5))}
         return {"error": f"unknown tool {name}"}
     except Exception as e:
-        return {"error": f"{name} failed: {e}"}
+        return {"error": f"{name} failed: {_errref(e)}"}
 
 
 def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moderate", goal=None):
@@ -14303,8 +14305,8 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                     return telem
             except Exception as e:
                 telem["ended"] = "exception"
-                telem["error"] = str(e)[:200]
-                _strat_state.update(status=f"error: {e}", finished=int(time.time()))
+                telem["error"] = _errref(e)
+                _strat_state.update(status=f"error: {_errref(e)}", finished=int(time.time()))
                 return telem
             tcs = res.tool_calls
             asst = {"role": "assistant", "content": res.content}
@@ -14531,7 +14533,7 @@ def _do_advice(amount, question, max_iter=None):
                     _advice_state.update(status=f"error: {res.error}", finished=int(time.time()))
                     return
             except Exception as e:
-                _advice_state.update(status=f"error: {e}", finished=int(time.time()))
+                _advice_state.update(status=f"error: {_errref(e)}", finished=int(time.time()))
                 return
             tcs = res.tool_calls
             asst = {"role": "assistant", "content": res.content}
@@ -14953,7 +14955,7 @@ def _fiduciary_dispatch(name, args):
         if name == "get_liabilities":          return {"liabilities": _whatif_liabilities()}
         return {"error": f"unknown tool {name}"}
     except Exception as e:
-        return {"error": f"{name} failed: {e}"}
+        return {"error": f"{name} failed: {_errref(e)}"}
 
 
 # ---- Strategist persona for chat: advisory, conversational, no trading ----
@@ -15139,7 +15141,7 @@ def _vision_identify_tickers(images, user_msg):
         tickers = [str(t).upper().strip() for t in (parsed.get("tickers") or []) if t and str(t).strip()][:10]
         return {"tickers": tickers, "note": (parsed.get("note") or "").strip(), "error": False}
     except Exception as e:
-        return {"tickers": [], "note": f"vision call failed: {e}", "error": True}
+        return {"tickers": [], "note": f"vision call failed: {_errref(e)}", "error": True}
 
 
 # Cooperative cancellation for /api/chat: keyed by a client-generated req_id so the Stop button
@@ -15291,7 +15293,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                     if chunk.get("done"):
                         break
             except Exception as e:
-                yield _sse("error", {"error": f"generation failed: {e}"})
+                yield _sse("error", {"error": f"generation failed: {_errref(e)}"})
                 return
             finally:
                 _gpu_release_visible()
@@ -15445,7 +15447,7 @@ def _chat_run_bg(gen, persona, session_id, message, req_id, images):
             gen.emit(chunk)
     except Exception as e:
         try:
-            gen.emit(_sse("error", {"error": f"generation failed: {e}"}))
+            gen.emit(_sse("error", {"error": f"generation failed: {_errref(e)}"}))
         except Exception:
             pass
     finally:
