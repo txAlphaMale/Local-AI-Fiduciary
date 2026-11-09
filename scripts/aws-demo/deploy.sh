@@ -156,14 +156,19 @@ else
   PREV=$(terraform -chdir="$TFDIR" output -raw image_tag) || die "cannot read the current image_tag from Terraform state"
   MCPO=$(terraform -chdir="$TFDIR" output -raw mcpo_image_tag) || die "cannot read the current mcpo_image_tag"
   say "current image tag (for rollback): $PREV"
+  # The saved plan lives in the (git-ignored) *.tfplan namespace and is removed on exit, so a declined or failed run can
+  # never leave an untracked file behind that makes the next run refuse ("working tree has uncommitted changes").
+  PLANFILE="$TFDIR/deploy.tfplan"
+  trap 'rm -f "$PLANFILE"' EXIT
+  rm -f "$PLANFILE"
   set +e
-  terraform -chdir="$TFDIR" plan -input=false -out=tfplan -detailed-exitcode -var "image_tag=$TAG" -var "mcpo_image_tag=$MCPO"
+  terraform -chdir="$TFDIR" plan -input=false -out=deploy.tfplan -detailed-exitcode -var "image_tag=$TAG" -var "mcpo_image_tag=$MCPO"
   rc=$?
   set -e
   [ "$rc" = 1 ] && die "terraform plan failed; nothing was changed"
   [ "$rc" = 0 ] && { say "terraform reports no changes (tag $TAG is already deployed)."; exit 0; }
   confirm "Apply exactly this plan?" || die "not applied; nothing was changed"
-  terraform -chdir="$TFDIR" apply -input=false tfplan
+  terraform -chdir="$TFDIR" apply -input=false deploy.tfplan
   aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION"
   say "done: the demo runs code $TAG. Roll back by re-running with the previous code, or: terraform apply -var image_tag=$PREV"
 fi
