@@ -28,6 +28,7 @@ import threading
 import queue
 import uuid
 import traceback
+import collections
 
 import requests
 from fastapi import FastAPI, Request
@@ -6940,10 +6941,38 @@ def _errref(e):
     it. Used for server-side failures; deliberate user-facing validation messages are left as they are."""
     ref = uuid.uuid4().hex[:6]
     try:
-        print(f"[error ref={ref}] {type(e).__name__}: {str(e)[:500]}\n{traceback.format_exc()[-1500:]}", flush=True)
+        tb = traceback.format_exc()[-1500:]
+        print(f"[error ref={ref}] {type(e).__name__}: {str(e)[:500]}\n{tb}", flush=True)
+        _RECENT_ERRORS.appendleft({"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                                   "ref": ref, "type": type(e).__name__,
+                                   "message": _redact_secrets(str(e))[:300], "trace": _redact_secrets(tb)})
     except Exception:
         pass
     return f"internal error (ref {ref})"
+
+
+# In-memory list of the most recent server-side failures (newest first), shown to ADMINS only in SETTINGS -> SECURITY ->
+# RECENT ERRORS so a failed job can be diagnosed without shell access. It is lost on restart; the full history stays in
+# `docker compose logs portfolio-api`. Text is passed through _redact_secrets because exception messages can quote URLs.
+_RECENT_ERRORS = collections.deque(maxlen=50)
+_BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._\-~+/=]+")
+_SECRET_KV_RE = re.compile(r"(?i)((?:token|api[_-]?key|apikey|key|secret|password|passwd|authorization|signature)\s*[=:]\s*)[^\s&,;\"']+")
+
+
+def _redact_secrets(text):
+    t = _BEARER_RE.sub(lambda m: m.group(1) + " [redacted]", text or "")
+    return _SECRET_KV_RE.sub(lambda m: m.group(1) + "[redacted]", t)
+
+
+@app.get("/api/errors/recent")
+def get_recent_errors(request: Request):
+    """Admin-only (a viewer can call every other GET, so this checks the role itself): the last server-side failures with
+    their reference, type, short message and traceback. Hidden entirely on the public demo."""
+    if demo_seed.DEMO_MODE:
+        return JSONResponse({"error": "not available on the demo"}, status_code=404)
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    return {"errors": list(_RECENT_ERRORS), "note": "In memory, newest first, cleared on restart. Full history: docker compose logs portfolio-api"}
 
 
 def _errmsg(e):

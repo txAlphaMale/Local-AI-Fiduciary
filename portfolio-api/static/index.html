@@ -4826,6 +4826,16 @@ function iamContent(){
   wrap.appendChild(resetWrap);
   return wrap;
 }
+function _errorsRefresh(){
+  const w=document.getElementById('sec-errors-wrap'); if(!w) return;
+  fetch('/api/errors/recent').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+    const rows=(d.errors||[]).map(e=>'<tr><td style="white-space:nowrap">'+escHtml(e.ts)+'</td><td><code>'+escHtml(e.ref)+'</code></td><td>'+escHtml(e.type)+'</td><td>'+escHtml(e.message)+
+      '<details><summary class="muted" style="cursor:pointer">traceback</summary><pre style="white-space:pre-wrap;font-size:var(--font-size-sm);margin:4px 0 0">'+escHtml(e.trace)+'</pre></details></td></tr>').join('');
+    w.innerHTML='<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px">'+escHtml(d.note||'')+' <button id="sec-errors-refresh">REFRESH</button></div>'+
+      (rows?'<table class="t"><tr><th>When</th><th>Ref</th><th>Type</th><th>Message</th></tr>'+rows+'</table>':'<div class="muted">No errors recorded since the last restart.</div>');
+    const b=document.getElementById('sec-errors-refresh'); if(b) b.onclick=_errorsRefresh;
+  }).catch(()=>{ w.textContent='Could not load recent errors.'; });
+}
 function securityContent(){
   const wrap=el('div');
   const u=(AUTH_STATUS&&AUTH_STATUS.user)||null;
@@ -4848,6 +4858,13 @@ function securityContent(){
   if(!AUDIT_LOG){ auditWrap.appendChild(el('div','muted','Loading audit log…')); _auditRefresh(); }
   else { auditWrap.appendChild(_auditPanel()); }
   wrap.appendChild(auditWrap);
+
+  // Admin-only: recent server-side failures (job errors etc.) so a failed run can be diagnosed without shell access.
+  if(u.role==='admin' && !(DEMO_STATUS&&DEMO_STATUS.demo_mode)){
+    wrap.appendChild(el('div','ph','RECENT ERRORS'));
+    const errWrap=el('div'); errWrap.id='sec-errors-wrap'; errWrap.style.cssText='margin-bottom:var(--space-4);';
+    errWrap.appendChild(el('div','muted','Loading…')); wrap.appendChild(errWrap); _errorsRefresh();
+  }
 
   // SEC-8 (2026-07-25) — privacy / "your data" panel: a self-service DSAR-style export (right to
   // access/portability) plus links to the written privacy notice and a pointer to the existing
