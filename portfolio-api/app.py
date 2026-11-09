@@ -14663,6 +14663,11 @@ def _chat_init():
         c.execute("CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, "
                   "session_id TEXT, role TEXT, content TEXT, tool_json TEXT, ts INTEGER)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)")
+        for col in ("summary TEXT", "summary_upto INTEGER"):          # rolling summary of turns older than the model's window
+            try:
+                c.execute("ALTER TABLE sessions ADD COLUMN " + col)
+            except sqlite3.OperationalError:
+                pass                                                  # column already there
 
 
 def _chat_enc(v):
@@ -14736,6 +14741,70 @@ def _chat_delete_session(sid):
 
 
 _chat_init()
+
+
+# ---- Rolling summary of older turns (2026-11-09). Only the last CHAT_MAX_HISTORY turns reach the model; anything older used to
+# vanish silently. After a reply, if turns have scrolled out of the window, a short summary of them (merged with the previous
+# summary) is stored with the session and handed back as a second system message. Best-effort and off the reply's critical path:
+# it runs in a background thread, waits briefly for the GPU, and any failure just leaves the old summary in place.
+CHAT_SUMMARY_MIN_OLD = int(os.environ.get("CHAT_SUMMARY_MIN_OLD", "4"))     # summarise once this many turns are outside the window
+CHAT_SUMMARY_MAX_CHARS = 12000
+_chat_summarising = set()
+
+
+def _chat_summary_get(sid):
+    with _chat_conn() as c:
+        r = c.execute("SELECT summary, summary_upto FROM sessions WHERE id=?", (sid,)).fetchone()
+    if not r or not r["summary"]:
+        return "", 0
+    return _chat_dec(r["summary"]) or "", int(r["summary_upto"] or 0)
+
+
+def _chat_summary_set(sid, text, upto):
+    with _chat_conn() as c:
+        c.execute("UPDATE sessions SET summary=?, summary_upto=? WHERE id=?", (_chat_enc(text), int(upto), sid))
+
+
+def _chat_summarise_old(sid):
+    """Fold the turns that fell out of the model's window into the session's stored summary. Never raises."""
+    if sid in _chat_summarising:
+        return
+    _chat_summarising.add(sid)
+    try:
+        with _chat_conn() as c:
+            rows = c.execute("SELECT id, role, content FROM messages WHERE session_id=? AND role IN ('user','assistant') "
+                             "ORDER BY id ASC", (sid,)).fetchall()
+        old = rows[:-CHAT_MAX_HISTORY] if CHAT_MAX_HISTORY > 0 else rows
+        prev, upto = _chat_summary_get(sid)
+        fresh = [r for r in old if r["id"] > upto]
+        if len(old) < CHAT_SUMMARY_MIN_OLD or not fresh:
+            return
+        lines, used = [], 0
+        for r in fresh:
+            t = ((_chat_dec(r["content"]) or "").strip())[:1800]
+            line = ("USER: " if r["role"] == "user" else "ASSISTANT: ") + t
+            if used + len(line) > CHAT_SUMMARY_MAX_CHARS:
+                break
+            lines.append(line)
+            used += len(line)
+        prompt = ("You maintain a running summary of a private financial-planning chat so it can continue after older turns drop out "
+                  "of view. Merge the PREVIOUS SUMMARY with the NEW TURNS into one summary of at most 300 words. Keep: the user's "
+                  "questions, every number and assumption they gave, decisions reached, what was recommended and why, and open "
+                  "items. Do not add advice or facts that are not in the text. Plain text, no preamble.\n\n"
+                  f"PREVIOUS SUMMARY:\n{prev or '(none)'}\n\nNEW TURNS:\n" + "\n".join(lines))
+        with _gpu_slot():
+            res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(), temperature=0.2,
+                                num_ctx=ANALYSIS_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, timeout=180)
+        if not res.ok:
+            return
+        text = (res.content or "").strip()
+        if len(text) < 20:
+            return
+        _chat_summary_set(sid, text[:3000], max(r["id"] for r in fresh[:len(lines)]))
+    except Exception as e:
+        print(f"[chat] summary skipped: {type(e).__name__}", flush=True)
+    finally:
+        _chat_summarising.discard(sid)
 
 
 def _chat_search(query, limit=5):
@@ -15358,6 +15427,10 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         # Resolve the system prompt at request time: the user's override (if any) with the {user}
         # reference substituted, falling back to the coded default. See _resolve_persona_prompt.
         messages = [{"role": "system", "content": _sys(_resolve_persona_prompt(persona_key))}]
+        _summ, _ = _chat_summary_get(session_id)
+        if _summ and len(_chat_messages(session_id)) > CHAT_MAX_HISTORY:
+            messages.append({"role": "system", "content": "Summary of the earlier part of this conversation (those turns are no "
+                             "longer shown; the figures may be out of date, so re-check them with your tools):\n" + _summ})
         for m in history:
             if m["role"] in ("user", "assistant"):
                 messages.append({"role": m["role"], "content": m["content"] or ""})
@@ -15454,6 +15527,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             return
 
         _chat_add_message(session_id, "assistant", final_content)
+        threading.Thread(target=_chat_summarise_old, args=(session_id,), daemon=True, name="chat-summary").start()
         _chat_touch_session(session_id)
         yield _sse("done", {"session_id": session_id})
     finally:
