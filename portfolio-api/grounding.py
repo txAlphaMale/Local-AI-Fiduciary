@@ -23,6 +23,8 @@ Pure arithmetic + attribute reads: zero network, zero GPU, read-only.
 """
 
 import datetime
+import json
+import os
 
 import tax
 import aca
@@ -165,11 +167,38 @@ def alerts(today=None):
     return out
 
 
+UPDATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tax_updates")
+_NEXT_STATUS_ORDER = {"pending": 0, "secondary": 1, "primary": 2, "statutory": 3}
+
+
+def next_year(today=None):
+    """The researched-but-NOT-YET-ACTIVE figures for next calendar year (tax_updates/<year>.json), joined to the registry's labels.
+    Shown in AUDITS > GROUNDING so you can see what is coming, how it was verified, and what is still pending. The tax engines do
+    not read this file: switching a year on is a deliberate, tested change. Returns None when no file exists for next year."""
+    today = today or datetime.date.today()
+    path = os.path.join(UPDATES_DIR, f"{today.year + 1}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    labels = {s["key"]: s["label"] for s in PARAM_SPECS}
+    items = []
+    for it in d.get("items") or []:
+        items.append(dict(it, label=labels.get(it.get("key"), it.get("key"))))
+    items.sort(key=lambda i: (_NEXT_STATUS_ORDER.get(i.get("status"), 9), i.get("label") or ""))
+    counts = {}
+    for it in items:
+        counts[it.get("status")] = counts.get(it.get("status"), 0) + 1
+    return {"year": d.get("year"), "compiled": d.get("compiled"), "how": d.get("how"), "items": items, "counts": counts,
+            "active": False}
+
+
 def summary(today=None):
     today = today or datetime.date.today()
     al = alerts(today)
     n_stale = sum(1 for a in al if a["level"] == "stale")
-    return {"params": registry(), "alerts": al, "stale_count": n_stale,
+    return {"params": registry(), "alerts": al, "stale_count": n_stale, "next_year": next_year(today),
             "status": "stale" if n_stale else "current",
             "note": ("Every dated constant the tax/ACA/SS engines compute with, read live from the code, "
                      "with its primary source and verification date. Indexed figures re-publish every year "

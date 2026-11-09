@@ -2550,6 +2550,8 @@ def _scheduler_loop():
             # Only enqueues when something's actually due, unlike the generic loop above.
             if now.hour == 8 and now.minute == 10:
                 _notes_reminder_sweep()
+            if now.hour == 8 and now.minute == 20:
+                _tax_tables_reminder_sweep()
             if now.hour == 8 and now.minute == 15:
                 try:
                     if _earnings_due_tickers():
@@ -15817,6 +15819,41 @@ def notes_delete(nid: int, request: Request):
         return JSONResponse({"error": "no such note"}, status_code=404)
     audit.emit("notes.deleted", request=request, actor=request.session.get("uid"), resource=f"/api/notes/{nid}")
     return {"ok": True}
+
+
+TAX_REMINDER_FILE = os.environ.get("TAX_REMINDER_FILE", "/data/tax_tables_notified.json")
+
+
+def _tax_tables_reminder_sweep(today=None):
+    """Once a month (Oct-Jan, 08:20 local) nudge the owner when the tax figures need attention: stale constants, or next-year figures
+    that exist but still have pending items. At most one message per month per kind; it only reminds, it never changes a figure."""
+    today = today or datetime.date.today()
+    try:
+        if today.month not in (10, 11, 12, 1):
+            return None
+        g = grounding.summary(today)
+        parts = []
+        if g.get("stale_count"):
+            parts.append(f"{g['stale_count']} tax figure(s) are for a past year and need re-verifying")
+        ny = g.get("next_year")
+        if ny and (ny["counts"].get("pending") or ny["counts"].get("secondary")):
+            parts.append(f"{ny['year']} figures: {ny['counts'].get('primary', 0)} verified, {ny['counts'].get('secondary', 0)} to confirm by hand, "
+                         f"{ny['counts'].get('pending', 0)} not published yet")
+        if not parts:
+            return None
+        stamp = today.strftime("%Y-%m")
+        try:
+            sent = json.load(open(TAX_REMINDER_FILE, encoding="utf-8"))
+        except (OSError, ValueError):
+            sent = {}
+        if sent.get("last") == stamp:
+            return None
+        notifications.notify_reminder("Tax tables: time to review", "; ".join(parts) + ". See AUDITS > GROUNDING.")
+        store.atomic_write_text(TAX_REMINDER_FILE, json.dumps({"last": stamp}))
+        return parts
+    except Exception as e:
+        print(f"[grounding] tax reminder skipped: {_errref(e)}", flush=True)
+        return None
 
 
 def _notes_reminder_sweep():
