@@ -79,6 +79,7 @@ import backup        # SEC-7a (2026-07-27) — UI-triggered encrypted backup/sta
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
+import notes  # decision notes: the household's saved Q&A with a revisit date
 import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
 import vault          # TASK-001 — encrypted document vault
 import vault_api      # TASK-001 — /api/vault/* handlers
@@ -2547,6 +2548,8 @@ def _scheduler_loop():
             # edit in TASK SCHEDULE (there's no "time" to set — either a print is out or it isn't),
             # so it's checked once daily at a fixed anchor rather than added to _SCHEDULE_DEFAULTS.
             # Only enqueues when something's actually due, unlike the generic loop above.
+            if now.hour == 8 and now.minute == 10:
+                _notes_reminder_sweep()
             if now.hour == 8 and now.minute == 15:
                 try:
                     if _earnings_due_tickers():
@@ -14735,6 +14738,59 @@ def _chat_delete_session(sid):
 _chat_init()
 
 
+def _chat_search(query, limit=5):
+    """Read-only search across ALL chat sessions (both personas). Messages are encrypted at rest, so this decrypts the most
+    recent ones in Python and matches every word of the query (case-insensitive). Returns short snippets, newest first."""
+    words = [w for w in re.findall(r"[a-z0-9$%.']+", str(query or "").lower()) if len(w) > 1][:8]
+    if not words:
+        return {"error": "give a few words to search for"}
+    limit = max(1, min(int(limit or 5), 10))
+    hits = []
+    with _chat_conn() as c:
+        rows = c.execute("SELECT m.session_id, m.role, m.content, m.ts, s.title, s.persona FROM messages m "
+                         "LEFT JOIN sessions s ON s.id = m.session_id WHERE m.role IN ('user','assistant') "
+                         "ORDER BY m.id DESC LIMIT 4000").fetchall()
+    for r in rows:
+        text = _chat_dec(r["content"]) or ""
+        low = text.lower()
+        if all(w in low for w in words):
+            i = low.find(words[0])
+            snip = text[max(0, i - 120): i + 280].replace("\n", " ")
+            hits.append({"session_id": r["session_id"], "session_title": _chat_dec(r["title"]) if r["title"] else "",
+                         "persona": r["persona"], "role": r["role"],
+                         "when": datetime.datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d"), "snippet": snip})
+            if len(hits) >= limit:
+                break
+    return {"query": query, "matches": hits, "note": "Past conversations, newest first. Quote them as 'earlier chat on <date>'; "
+                                                      "they may be out of date, so re-check against today's data."}
+
+
+def _notes_snapshot():
+    """Headline figures stored with a saved note, so a later reader can see what changed since."""
+    try:
+        d = _data()
+        return {"saved_on": datetime.date.today().isoformat(), "net_worth": d.get("net_worth"),
+                "invested_value": d.get("invested_value"), "cash_value": d.get("cash_value"),
+                "total_liabilities": d.get("total_liabilities"), "holdings_count": d.get("unique_securities")}
+    except Exception:
+        return {"saved_on": datetime.date.today().isoformat()}
+
+
+def _notes_for_chat(status="open"):
+    """get_notes tool body: saved notes with their saved-day snapshot next to today's, so changes are visible."""
+    items = notes.list_notes(status=status if status in notes.STATUSES else None, with_body=True, limit=30)
+    now = _notes_snapshot()
+    out = []
+    for n in items:
+        out.append({"id": n["id"], "title": n["title"], "saved": datetime.datetime.fromtimestamp(n["created"]).strftime("%Y-%m-%d"),
+                    "revisit_on": n["revisit_on"], "revisit_event": n["revisit_event"], "status": n["status"],
+                    "question": (n.get("question") or "")[:1500], "answer": (n.get("body") or "")[:6000],
+                    "figures_when_saved": n.get("snapshot") or {}})
+    return {"notes": out, "figures_today": now,
+            "note": "These are the household's own saved notes. The figures can be stale: compare figures_when_saved with "
+                    "figures_today and re-run the relevant tools before relying on an old answer."}
+
+
 # ---- Fiduciary persona: full read-only analytics + web, no mutation ----
 # Default persona system prompts. `{user}` is substituted at request time with the configured
 # user reference (SETTINGS → PERSONA PROMPTS, default "the user") — see _resolve_persona_prompt.
@@ -14771,6 +14827,11 @@ FIDUCIARY_PROMPT = (
     "list_compliance_docs / get_compliance_doc (the Risk Register, Statement of Applicability, IR "
     "Runbook, Privacy Notice, Retention Schedule, ROPA, DPIA), NOT search_knowledge (that's external "
     "tax/investing/estate reference material, a different corpus entirely). Cite the specific document.\n"
+    "MEMORY: you have no memory of your own between chats. Earlier decisions live in {user}'s SAVED NOTES (get_notes) and in past "
+    "conversations (search_past_chats): call them when {user} says 'earlier', 'last time', 'we decided', 'revisit' or asks about a "
+    "question that may have come up before, and say where the information came from and when. Old answers can be stale; compare the "
+    "figures saved with the note to today's and re-run the tools before relying on one. You cannot save notes; if an answer is worth "
+    "keeping, tell {user} to press SAVE NOTE under it (they can add a revisit date).\n"
     "ARITHMETIC: never compute loan payments, payoff timelines, interest saved, mortgage total cost, "
     "future/present values, implied rates, DRIP projections, rent-vs-buy, or NPV/IRR in your head — call "
     "run_calculator and quote its figures (it is the same engine as the CALCULATORS tab, so you can point "
@@ -14937,6 +14998,18 @@ FIDUCIARY_TOOLS = [
                        "about one of their actual debts, then pass the figures to run_calculator "
                        "(calculator='whatif').",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_notes",
+        "description": "The household's own SAVED DECISION NOTES (a question they asked earlier, the answer they chose to keep, "
+                       "and an optional revisit date or event), each with the key figures from the day it was saved next to "
+                       "today's. Call this when the user refers to something decided or discussed before, or asks to revisit "
+                       "an earlier question. status: open (default), done or all.",
+        "parameters": {"type": "object", "properties": {"status": {"type": "string", "enum": ["open", "done", "all"]}}}}},
+    {"type": "function", "function": {"name": "search_past_chats",
+        "description": "Search the user's PAST chat conversations (all sessions) for a few key words, newest first, returning "
+                       "short snippets with the date. Use it when the user says 'we talked about...' or asks what was said "
+                       "earlier and no saved note covers it.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                       "required": ["query"]}}},
 ]
 
 
@@ -14989,6 +15062,8 @@ def _fiduciary_dispatch(name, args):
             return calculators.run(args.get("calculator"), args.get("inputs") or {},
                                    include_schedule=False)
         if name == "get_liabilities":          return {"liabilities": _whatif_liabilities()}
+        if name == "get_notes":                return _notes_for_chat(str(args.get("status") or "open"))
+        if name == "search_past_chats":        return _chat_search(args.get("query"), args.get("limit") or 5)
         return {"error": f"unknown tool {name}"}
     except Exception as e:
         return {"error": f"{name} failed: {_errref(e)}"}
@@ -15595,6 +15670,66 @@ def chat_session(sid: str):
 def chat_session_delete(sid: str):
     _chat_delete_session(sid)
     return {"ok": True}
+
+
+# ---- Decision notes (see notes.py). Writes are admin-only by the global gate (a viewer's POST/PATCH/DELETE is refused
+# before these run); reads are household-visible like the chat transcripts they come from. Audit events carry the id only.
+@app.get("/api/notes")
+def notes_list(status: str = "all"):
+    return {"notes": notes.list_notes(status=None if status == "all" else status, with_body=False)}
+
+
+@app.get("/api/notes/{nid}")
+def notes_get(nid: int):
+    n = notes.get(nid)
+    return n if n else JSONResponse({"error": "no such note"}, status_code=404)
+
+
+@app.post("/api/notes")
+async def notes_create(request: Request):
+    body = await request.json()
+    try:
+        nid = notes.add(body.get("title"), body.get("body"), question=body.get("question") or "",
+                        session_id=body.get("session_id") or "", snapshot=_notes_snapshot(),
+                        revisit_on=body.get("revisit_on") or "", revisit_event=body.get("revisit_event") or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    audit.emit("notes.created", request=request, actor=request.session.get("uid"), resource=f"/api/notes/{nid}")
+    return {"ok": True, "id": nid}
+
+
+@app.post("/api/notes/{nid}/update")
+async def notes_update(nid: int, request: Request):
+    body = await request.json()
+    fields = {k: body[k] for k in ("title", "revisit_on", "revisit_event", "status") if k in body}
+    try:
+        ok = notes.update(nid, **fields)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if not ok:
+        return JSONResponse({"error": "no such note"}, status_code=404)
+    audit.emit("notes.updated", request=request, actor=request.session.get("uid"), resource=f"/api/notes/{nid}",
+               detail={"fields": sorted(fields)})
+    return {"ok": True}
+
+
+@app.delete("/api/notes/{nid}")
+def notes_delete(nid: int, request: Request):
+    if not notes.delete(nid):
+        return JSONResponse({"error": "no such note"}, status_code=404)
+    audit.emit("notes.deleted", request=request, actor=request.session.get("uid"), resource=f"/api/notes/{nid}")
+    return {"ok": True}
+
+
+def _notes_reminder_sweep():
+    """Once a day (08:10 local): push/email a reminder for each open note whose revisit date has arrived."""
+    try:
+        for n in notes.due():
+            body = (n.get("revisit_event") or "A note you saved is ready to revisit.")
+            notifications.notify_reminder("Revisit: " + (n.get("title") or "saved note"), body)
+            notes.mark_reminded(n["id"])
+    except Exception as e:
+        print(f"[notes] reminder sweep failed: {_errref(e)}", flush=True)
 
 
 @app.get("/health")

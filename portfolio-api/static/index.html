@@ -9582,6 +9582,84 @@ async function chatSend(){
     }
   }
 }
+// ---- Decision notes (2026-11-09): SAVE NOTE under an answer, a NOTES list in the chat sidebar, a viewer in the main pane.
+// The chat model can READ notes (get_notes tool) but never writes them; only this UI does, and only for an admin account.
+let NOTES=null, NOTE_OPEN=null, NOTE_FORM=null;
+const _isAdminUser=()=>!!(AUTH_STATUS&&AUTH_STATUS.user&&AUTH_STATUS.user.role==='admin');
+function notesLoad(){
+  fetch('/api/notes').then(r=>r.json()).then(d=>{ NOTES=d.notes||[]; if(TAB==='chat') render(); }).catch(()=>{ NOTES=NOTES||[]; });
+}
+function noteOpen(id){
+  fetch('/api/notes/'+id).then(r=>r.json()).then(n=>{ NOTE_OPEN=n&&n.id?n:null; render(); }).catch(()=>{});
+}
+function noteFormOpen(idx){
+  const cs=CS(CHAT_PERSONA), m=cs.msgs[idx]; if(!m) return;
+  let q=''; for(let i=idx-1;i>=0;i--){ if(cs.msgs[i].role==='user'){ q=cs.msgs[i].content||''; break; } }
+  NOTE_FORM={idx, question:q, title:(q||'Saved answer').replace(/\s+/g,' ').slice(0,80)};
+  render();
+}
+async function noteSave(){
+  const cs=CS(CHAT_PERSONA), f=NOTE_FORM; if(!f) return; const m=cs.msgs[f.idx]; if(!m) return;
+  const g=id=>(document.getElementById(id)||{}).value||'';
+  const body={title:g('note-title'), body:m.content, question:f.question, session_id:cs.sid||'', revisit_on:g('note-date'), revisit_event:g('note-event')};
+  const r=await fetch('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){ const s=document.getElementById('note-msg'); if(s) s.textContent=d.error||'Could not save.'; return; }
+  NOTE_FORM=null; NOTES=null; notesLoad(); render();
+}
+async function noteUpdate(id,fields){
+  await fetch('/api/notes/'+id+'/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(fields)});
+  NOTES=null; notesLoad(); noteOpen(id);
+}
+async function noteDelete(id){
+  if(!confirm('Delete this saved note? This cannot be undone.')) return;
+  await fetch('/api/notes/'+id,{method:'DELETE'}); NOTE_OPEN=null; NOTES=null; notesLoad(); render();
+}
+function noteFormEl(){
+  const f=el('div','note-form'); f.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-md);padding:var(--space-2);margin:var(--space-2) 0;font-size:var(--font-size-base);';
+  f.innerHTML='<div class="muted" style="margin-bottom:4px">SAVE AS A NOTE (the Fiduciary can read it in later chats)</div>'+
+    '<div style="margin-bottom:4px">Title <input id="note-title" type="text" maxlength="160" style="width:70%" value="'+escHtml(NOTE_FORM.title)+'"/></div>'+
+    '<div style="margin-bottom:4px">Revisit on <input id="note-date" type="date"/> <span class="muted">(optional: you get a reminder that morning)</span></div>'+
+    '<div style="margin-bottom:6px">Or when <input id="note-event" type="text" maxlength="300" style="width:60%" placeholder="e.g. when the new employer plan details arrive"/></div>';
+  const ok=el('button',null,'SAVE NOTE'); ok.onclick=noteSave; const no=el('button',null,'CANCEL'); no.onclick=()=>{ NOTE_FORM=null; render(); };
+  const msg=el('span','muted'); msg.id='note-msg'; msg.style.marginLeft='8px';
+  f.appendChild(ok); f.appendChild(document.createTextNode(' ')); f.appendChild(no); f.appendChild(msg); return f;
+}
+function notesSidebarEl(){
+  const box=el('div'); box.style.cssText='margin-top:var(--space-3);border-top:1px solid var(--color-border);padding-top:var(--space-2);';
+  const h=el('div','muted'); h.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:4px;';
+  h.textContent='NOTES'+(NOTES?` · ${NOTES.filter(n=>n.status==='open').length} open`:''); h.title='Answers you saved, with an optional revisit date'; box.appendChild(h);
+  if(NOTES===null){ notesLoad(); const m=el('div','muted','Loading…'); box.appendChild(m); return box; }
+  if(!NOTES.length){ const m=el('div','muted'); m.style.fontSize='var(--font-size-sm)'; m.textContent='None yet. Press SAVE NOTE under an answer.'; box.appendChild(m); return box; }
+  const today=new Date().toISOString().slice(0,10);
+  NOTES.forEach(n=>{
+    const it=el('div','chat-sess'+(NOTE_OPEN&&NOTE_OPEN.id===n.id?' on':''));
+    const due=n.status==='open'&&n.revisit_on&&n.revisit_on<=today;
+    const t=el('span','chat-sess-t'); t.textContent=(n.status==='done'?'✓ ':'')+(due?'🔔 ':'')+n.title+(n.revisit_on?' · '+n.revisit_on:''); t.title=n.title+(n.revisit_event?' — '+n.revisit_event:'');
+    it.appendChild(t); it.onclick=()=>noteOpen(n.id); box.appendChild(it);
+  });
+  return box;
+}
+function noteViewEl(){
+  const n=NOTE_OPEN, v=el('div'); v.style.cssText='padding:var(--space-3);';
+  const h=el('div'); h.style.cssText='font-size:var(--font-size-md);color:var(--color-accent);margin-bottom:4px;'; h.textContent=n.title; v.appendChild(h);
+  const meta=el('div','muted'); meta.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+  meta.textContent='Saved '+new Date(n.created*1000).toLocaleDateString()+' · '+n.status+(n.revisit_on?' · revisit '+n.revisit_on:'')+(n.revisit_event?' · '+n.revisit_event:''); v.appendChild(meta);
+  const sn=n.snapshot||{}; if(sn.net_worth!=null){ const s=el('div','muted'); s.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);';
+    s.textContent='Figures that day: net worth '+usd(sn.net_worth)+(sn.invested_value!=null?' · holdings '+usd(sn.invested_value):'')+(sn.cash_value!=null?' · cash '+usd(sn.cash_value):'')+(sn.total_liabilities!=null?' · debts '+usd(sn.total_liabilities):''); v.appendChild(s); }
+  if(n.question){ const q=el('div'); q.style.cssText='border-left:3px solid var(--color-border-strong);padding-left:var(--space-2);margin-bottom:var(--space-2);white-space:pre-wrap;'; q.textContent='Q: '+n.question; v.appendChild(q); }
+  const b=el('div','msg-body'); b.innerHTML=mdToHtml(n.body); v.appendChild(b);
+  if(_isAdminUser()){
+    const bar=el('div'); bar.style.cssText='margin-top:var(--space-3);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+    const d=el('input'); d.type='date'; d.value=n.revisit_on||''; d.id='note-redate';
+    const sd=el('button',null,'SET REVISIT DATE'); sd.onclick=()=>noteUpdate(n.id,{revisit_on:(document.getElementById('note-redate')||{}).value||''});
+    const st=el('button',null,n.status==='open'?'MARK DONE':'REOPEN'); st.onclick=()=>noteUpdate(n.id,{status:n.status==='open'?'done':'open'});
+    const de=el('button',null,'DELETE'); de.onclick=()=>noteDelete(n.id);
+    bar.appendChild(d); bar.appendChild(sd); bar.appendChild(st); bar.appendChild(de); v.appendChild(bar);
+  }
+  const cl=el('button',null,'← BACK TO CHAT'); cl.style.marginTop='var(--space-3)'; cl.onclick=()=>{ NOTE_OPEN=null; render(); }; v.appendChild(cl);
+  return v;
+}
 function chatContent(){
   if(CHAT_SESSIONS===null) chatLoadSessions();
   const cs=CS(CHAT_PERSONA);
@@ -9611,6 +9689,7 @@ function chatContent(){
     });
   }
   side.appendChild(list);
+  side.appendChild(notesSidebarEl());
   wrap.appendChild(side);
   // ---- main: transcript + input ----
   const main=el('div','chat-main');
@@ -9623,7 +9702,8 @@ function chatContent(){
       +'<br><span style="font-size:var(--font-size-sm)">read-only · no orders · informational, not advice</span>';
     scroll.appendChild(hint);
   }
-  cs.msgs.forEach(m=>{
+  if(NOTE_OPEN){ scroll.appendChild(noteViewEl()); }
+  else cs.msgs.forEach((m,mi)=>{
     const row=el('div','msg '+(m.role==='user'?'user':'asst'));
     if(m.role==='assistant'){
       const tools=el('div','msg-tools'); if(m.streaming) tools.id='chat-live-tools';
@@ -9632,11 +9712,13 @@ function chatContent(){
       // responses") -- only once a message has finished streaming; copies the raw markdown
       // (m.content), not the rendered HTML, so pasting elsewhere doesn't carry formatting noise.
       if(!m.streaming && m.content) tools.appendChild(copyBtn(m.content, 'Copy this response'));
+      if(!m.streaming && m.content && _isAdminUser() && CHAT_PERSONA==='fiduciary'){ const sv=el('button',null,'📌 SAVE NOTE'); sv.title='Keep this answer as a note you (and the Fiduciary) can come back to'; sv.onclick=()=>noteFormOpen(mi); tools.appendChild(sv); }
       row.appendChild(tools);
       const c=el('div','msg-body');
       if(m.streaming){ c.id='chat-live-content'; c.textContent = m.content || (m.think ? '💭 thinking… '+m.think.slice(-400) : '▍ working…'); }
       else c.innerHTML=mdToHtml(m.content);
       row.appendChild(c);
+      if(NOTE_FORM && NOTE_FORM.idx===mi) row.appendChild(noteFormEl());
     } else {
       if(m.images && m.images.length){   // RESUME-TRACKER 2026-07-18j: show what was attached, transcript-side
         const ir=el('div'); ir.style.cssText='display:flex;gap:var(--space-2);margin-bottom:var(--space-1);';
