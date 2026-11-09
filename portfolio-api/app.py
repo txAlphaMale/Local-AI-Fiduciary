@@ -3826,6 +3826,7 @@ def _snapshot_value(d):
             return
         covered = sum((p.get("value") or 0) for p in (d.get("positions") or [])
                       if p.get("cost_total") is not None and not p.get("suspect"))
+        demo_seed.anchor_history(today, d.get("net_worth"), d.get("invested_value"), spy, d.get("total_cost"), round(covered, 2))   # demo only: no-op elsewhere
         store.value_history_upsert_today(today, d.get("net_worth"), d.get("invested_value"), spy,
                                          d.get("total_cost"), round(covered, 2), d.get("position_count"))
     except Exception:

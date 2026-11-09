@@ -117,6 +117,117 @@ class TestSeedAll(unittest.TestCase):
         self.assertNotIn("vault", body)
 
 
+_ANCHOR_SCRIPT = r"""
+import datetime, glob, json, os, re, sys, tempfile
+here = sys.argv[1]
+tmp = tempfile.mkdtemp(prefix="demo-anchor-iso-")
+for f in glob.glob(os.path.join(here, "*.py")):
+    if os.path.basename(f).startswith("test_"):
+        continue
+    for m in re.finditer(r'environ\.get\(\s*"([A-Z_0-9]+)"\s*,\s*"(/data[^"]*)"', open(f).read()):
+        os.environ[m.group(1)] = os.path.join(tmp, m.group(2)[len("/data"):].lstrip("/"))
+os.environ["INTERNAL_SCHEDULER"] = "0"
+sys.path.insert(0, here)
+import app as appmod, demo_seed, store
+demo_seed.DEMO_MODE = True
+demo_seed.EXTRAS_MARKER_FILE = os.path.join(tmp, "extras")
+demo_seed.ANCHOR_MARKER_FILE = os.path.join(tmp, "anchored")
+open(demo_seed.EXTRAS_MARKER_FILE, "w").write(demo_seed.EXTRAS_VERSION + "\n")
+today = datetime.date(2026, 11, 9)
+demo_seed._seed_history(today)
+before = store.value_history_read_all()
+first1, last1 = dict(before[0]), dict(before[-1])
+did1 = demo_seed.anchor_history("2026-11-09", 250000.0, 280000.0, 700.0, 150000.0, 260000.0)
+after = store.value_history_read_all()
+first2, last2 = dict(after[0]), dict(after[-1])
+did2 = demo_seed.anchor_history("2026-11-09", 1.0, 1.0, 1.0, 1.0, 1.0)        # second call: marker present, no change
+again = store.value_history_read_all()[-1]
+os.remove(demo_seed.ANCHOR_MARKER_FILE)                                          # a reset re-arms it
+did3 = demo_seed.anchor_history("2026-11-09", 500000.0, None, 700.0, 150000.0, 260000.0)   # None is skipped, not crashed on
+final = store.value_history_read_all()[-1]
+print(json.dumps({"did": [did1, did2, did3], "rows": [len(before), len(after)], "last_after": last2,
+                  "ratio_first": [first2["net_worth"] / first1["net_worth"], last2["net_worth"] / last1["net_worth"]],
+                  "unchanged_on_second": again == last2, "final_nw": final["net_worth"], "final_inv_same": final["invested_value"] == last2["invested_value"]}))
+"""
+
+
+class TestAnchor(unittest.TestCase):
+    """The synthetic history must join the first REAL snapshot exactly, whatever prices the demo sees (isolated process)."""
+    @classmethod
+    def setUpClass(cls):
+        import json
+        import subprocess
+        out = subprocess.run([sys.executable, "-c", _ANCHOR_SCRIPT, _HERE], capture_output=True, text=True, timeout=120)
+        assert out.returncode == 0, out.stderr[-2000:]
+        cls.r = json.loads(out.stdout.strip().splitlines()[-1])
+
+    def test_last_synthetic_day_equals_the_real_snapshot(self):
+        la = self.r["last_after"]
+        self.assertAlmostEqual(la["net_worth"], 250000.0, delta=0.05)
+        self.assertAlmostEqual(la["invested_value"], 280000.0, delta=0.05)
+        self.assertAlmostEqual(la["spy"], 700.0, delta=0.05)
+        self.assertAlmostEqual(la["total_cost"], 150000.0, delta=0.05)
+        self.assertAlmostEqual(la["cost_covered_value"], 260000.0, delta=0.05)
+
+    def test_it_rescales_the_whole_series_by_one_factor_so_the_shape_is_kept(self):
+        a, b = self.r["ratio_first"]
+        self.assertAlmostEqual(a, b, delta=0.002)
+        self.assertEqual(self.r["rows"][0], self.r["rows"][1])          # no rows added or lost
+
+    def test_runs_once_per_seed_and_survives_missing_values(self):
+        self.assertEqual(self.r["did"], [True, False, True])
+        self.assertTrue(self.r["unchanged_on_second"])
+        self.assertAlmostEqual(self.r["final_nw"], 500000.0, delta=0.05)  # net worth re-anchored
+        self.assertTrue(self.r["final_inv_same"])                          # the None invested value was skipped, not zeroed
+
+
+class TestCostBasisTotals(unittest.TestCase):
+    def test_cost_basis_is_the_total_cost_of_the_line_not_per_share(self):
+        expect = {("VTI", "Brokerage"): 25200, ("VXUS", "Brokerage"): 11600, ("BND", "Brokerage"): 10800, ("AAPL", "Brokerage"): 6000,
+                  ("MSFT", "Brokerage"): 7000, ("VOO", "Roth IRA"): 22800, ("QQQ", "Roth IRA"): 9900, ("VTI", "401(k)"): 15600,
+                  ("VBTLX", "401(k)"): 5100, ("SCHD", "HSA"): 6120}
+        got = {(h["ticker"], h["account"]): h["cost_basis"] for h in demo_seed.SYNTHETIC_HOLDINGS if h["cost_basis"] not in ("", None) and h["type"] != "Cash"}
+        self.assertEqual(got, expect)
+        for h in demo_seed.SYNTHETIC_HOLDINGS:
+            if h["type"] != "Cash" and h["cost_basis"] not in ("", None):
+                self.assertGreater(h["cost_basis"] / h["quantity"], 5)          # per-share values here would be tiny totals
+
+
+class TestStaleReleaseStartsFresh(unittest.TestCase):
+    def setUp(self):
+        self.saved = {k: getattr(demo_seed, k) for k in ("DEMO_MODE", "_APP", "_FRESH", "DEMO_MARKER_FILE", "EXTRAS_MARKER_FILE", "reset_and_reseed", "_seed_all")}
+        demo_seed.DEMO_MODE = True
+        demo_seed._APP = object()
+        demo_seed.DEMO_MARKER_FILE = os.path.join(_TMP, "stale-demo-marker")
+        demo_seed.EXTRAS_MARKER_FILE = os.path.join(_TMP, "stale-extras-marker")
+        open(demo_seed.DEMO_MARKER_FILE, "w").write("x")
+        if os.path.exists(demo_seed.EXTRAS_MARKER_FILE):
+            os.remove(demo_seed.EXTRAS_MARKER_FILE)
+        self.calls = []
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(demo_seed, k, v)
+        for f in (os.path.join(_TMP, "stale-demo-marker"), os.path.join(_TMP, "stale-extras-marker")):
+            if os.path.exists(f):
+                os.remove(f)
+
+    def test_an_older_release_demo_is_reset_not_layered(self):
+        demo_seed._FRESH = False
+        demo_seed.reset_and_reseed = lambda: self.calls.append("reset") or {"extras": {"seeded": True}}
+        demo_seed._seed_all = lambda app: self.calls.append("seed") or {}
+        self.assertEqual(demo_seed.seed_extras(), {"seeded": True})
+        self.assertEqual(self.calls, ["reset"])                     # reset_and_reseed seeds the extras itself
+
+    def test_a_freshly_created_demo_just_seeds_the_extras(self):
+        demo_seed._FRESH = True
+        demo_seed.reset_and_reseed = lambda: self.calls.append("reset") or {}
+        demo_seed._seed_all = lambda app: self.calls.append("seed") or {"history_days": 1, "liabilities": 0}
+        res = demo_seed.seed_extras()
+        self.assertTrue(res["seeded"])
+        self.assertEqual(self.calls, ["seed"])
+
+
 class TestHoldings(unittest.TestCase):
     def test_csv_rows_parse_with_blank_basis_and_cash(self):
         import io

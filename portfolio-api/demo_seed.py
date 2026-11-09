@@ -43,19 +43,20 @@ DEMO_RESET_INTERVAL_S = int(os.environ.get("DEMO_RESET_INTERVAL_S", str(24 * 360
 HOLDINGS_CSV = os.environ.get("HOLDINGS_CSV", "/data/holdings.csv")
 
 # Real, liquid tickers (so Finnhub/market-data calls resolve to something real-looking) with
-# invented quantities/cost-bases spread across account types, for a portfolio that exercises most
+# invented quantities/cost-bases spread across account types. cost_basis is the TOTAL cost of the line (as in
+# holdings.csv.example), NOT per share: until 2026-11-09 these were per-share numbers, which made every gain absurd. for a portfolio that exercises most
 # of the dashboard's analysis surface (diversification, sector concentration, tax lots, dividends).
 SYNTHETIC_HOLDINGS = [
-    {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 120, "cost_basis": 210.00, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
-    {"ticker": "VXUS", "name": "Vanguard Total Intl Stock ETF",   "quantity": 200, "cost_basis": 58.00,  "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
-    {"ticker": "BND",  "name": "Vanguard Total Bond Market ETF",  "quantity": 150, "cost_basis": 72.00,  "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
-    {"ticker": "AAPL", "name": "Apple Inc.",                      "quantity": 40,  "cost_basis": 150.00, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "Stock"},
-    {"ticker": "MSFT", "name": "Microsoft Corp.",                 "quantity": 25,  "cost_basis": 280.00, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "Stock"},
-    {"ticker": "VOO",  "name": "Vanguard S&P 500 ETF",            "quantity": 60,  "cost_basis": 380.00, "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "ETF"},
-    {"ticker": "QQQ",  "name": "Invesco QQQ Trust",               "quantity": 30,  "cost_basis": 330.00, "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "ETF"},
-    {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 80,  "cost_basis": 195.00, "account": "401(k)",     "institution": "Demo Employer Plan", "type": "ETF"},
-    {"ticker": "VBTLX","name": "Vanguard Total Bond Market Fund", "quantity": 500, "cost_basis": 10.20,  "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
-    {"ticker": "SCHD", "name": "Schwab US Dividend Equity ETF",   "quantity": 90,  "cost_basis": 68.00,  "account": "HSA",        "institution": "Demo HSA Custodian", "type": "ETF"},
+    {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 120, "cost_basis": 25200, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
+    {"ticker": "VXUS", "name": "Vanguard Total Intl Stock ETF",   "quantity": 200, "cost_basis": 11600,  "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
+    {"ticker": "BND",  "name": "Vanguard Total Bond Market ETF",  "quantity": 150, "cost_basis": 10800,  "account": "Brokerage",  "institution": "Demo Brokerage", "type": "ETF"},
+    {"ticker": "AAPL", "name": "Apple Inc.",                      "quantity": 40,  "cost_basis": 6000, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "Stock"},
+    {"ticker": "MSFT", "name": "Microsoft Corp.",                 "quantity": 25,  "cost_basis": 7000, "account": "Brokerage",  "institution": "Demo Brokerage", "type": "Stock"},
+    {"ticker": "VOO",  "name": "Vanguard S&P 500 ETF",            "quantity": 60,  "cost_basis": 22800, "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "ETF"},
+    {"ticker": "QQQ",  "name": "Invesco QQQ Trust",               "quantity": 30,  "cost_basis": 9900, "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "ETF"},
+    {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 80,  "cost_basis": 15600, "account": "401(k)",     "institution": "Demo Employer Plan", "type": "ETF"},
+    {"ticker": "VBTLX","name": "Vanguard Total Bond Market Fund", "quantity": 500, "cost_basis": 5100,  "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
+    {"ticker": "SCHD", "name": "Schwab US Dividend Equity ETF",   "quantity": 90,  "cost_basis": 6120,  "account": "HSA",        "institution": "Demo HSA Custodian", "type": "ETF"},
     # 2026-11-09 refresh: funds with NO cost basis (the manual cost-basis feature has a basis entered for the 401(k) line only,
     # so the combined row shows "known for 1 of 2 accounts"), and two cash accounts (emergency-fund tile, net worth).
     {"ticker": "FXAIX", "name": "Fidelity 500 Index Fund",        "quantity": 160, "cost_basis": "",     "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
@@ -159,6 +160,8 @@ def seed_if_needed():
     uid, _recovery_key = auth.create_user(DEMO_ADMIN_USERNAME, DEMO_ADMIN_PASSWORD, role="admin")
     _write_synthetic_holdings()
     _write_marker()
+    global _FRESH
+    _FRESH = True
     try:
         audit.emit("demo.seeded", actor=uid, actor_name=DEMO_ADMIN_USERNAME,
                    resource="demo_seed.seed_if_needed",
@@ -212,10 +215,11 @@ def reset_and_reseed():
         pass
 
     os.remove(DEMO_MARKER_FILE) if _marker_exists() else None
-    try:
-        os.remove(EXTRAS_MARKER_FILE)
-    except OSError:
-        pass
+    for _m in (EXTRAS_MARKER_FILE, ANCHOR_MARKER_FILE):
+        try:
+            os.remove(_m)
+        except OSError:
+            pass
     result = seed_if_needed()
     extras = seed_extras() if _APP is not None else {"seeded": False, "reason": "app not registered yet (boot-time reset: seeded by the end-of-module hook)"}
     print("[demo_seed] periodic reset complete — fresh demo data seeded.", flush=True)
@@ -228,7 +232,8 @@ def reset_and_reseed():
 # the stored shapes cannot drift from what the app itself saves. Vault documents are deliberately NOT seeded.
 # ---------------------------------------------------------------------------------------------------------------------
 EXTRAS_MARKER_FILE = os.environ.get("DEMO_EXTRAS_MARKER_FILE", "/data/.demo_extras")
-EXTRAS_VERSION = "2026-11-09a"          # bump to make existing demos re-seed the extras on their next boot
+EXTRAS_VERSION = "2026-11-09b"          # bump to make existing demos start fresh (reset + re-seed) on their next boot
+ANCHOR_MARKER_FILE = os.environ.get("DEMO_ANCHOR_MARKER_FILE", "/data/.demo_anchored")
 HISTORY_DAYS = 730                      # about two years of daily snapshots
 HISTORY_END_NET_WORTH = 214000.0        # where the synthetic series lands (close to what the demo holdings are worth)
 HISTORY_END_SPY = 655.0
@@ -252,6 +257,7 @@ DEMO_INSURANCE = {
     "ef_accounts": {"Emergency Fund": {"state": "yes"}},
 }
 _APP = None
+_FRESH = False   # True once THIS process has created or reset the base data (so the extras are simply still pending)
 
 
 def register_app(mod):
@@ -322,6 +328,46 @@ def _seed_all(app_mod, today=None):
     return {"history_days": n, "liabilities": len(clean)}
 
 
+def anchor_history(today_iso, net_worth, invested_value, spy, total_cost, cost_covered_value):
+    """DEMO_MODE only, called by the app just BEFORE it stores the first real snapshot of a freshly seeded demo. The synthetic
+    series is a stand-in with its own price level; this rescales each series by one constant (real value / the synthetic
+    value on the last synthetic day) so the real snapshot continues it exactly, whatever prices the demo sees today.
+    The shape of the history is unchanged. Runs once per seed (marker); a reset re-arms it."""
+    if not DEMO_MODE or not _extras_current():
+        return False
+    try:
+        with open(ANCHOR_MARKER_FILE) as f:
+            if f.read().strip() == EXTRAS_VERSION:
+                return False
+    except OSError:
+        pass
+    rows = [r for r in store.value_history_read_all() if (r.get("date") or "") < today_iso]
+    if not rows:
+        return False
+    last = rows[-1]
+    factors = {}
+    for k, real in (("net_worth", net_worth), ("invested_value", invested_value), ("spy", spy),
+                    ("total_cost", total_cost), ("cost_covered_value", cost_covered_value)):
+        try:
+            f = float(real) / float(last[k])
+        except (TypeError, ValueError, ZeroDivisionError, KeyError):
+            continue
+        if 0.2 <= f <= 5.0:                      # ignore a nonsensical ratio (a half-loaded portfolio) rather than distort the history
+            factors[k] = f
+    for r in rows:
+        v = {k: (round(float(r[k]) * factors[k], 2) if k in factors and r.get(k) is not None else r.get(k))
+             for k in ("net_worth", "invested_value", "spy", "total_cost", "cost_covered_value")}
+        store.value_history_upsert_today(r["date"], v["net_worth"], v["invested_value"], v["spy"], v["total_cost"],
+                                         v["cost_covered_value"], r.get("positions"))
+    try:
+        with open(ANCHOR_MARKER_FILE, "w") as f:
+            f.write(EXTRAS_VERSION + "\n")
+    except OSError:
+        pass
+    print(f"[demo_seed] synthetic history anchored to today's snapshot: {sorted(factors)}", flush=True)
+    return True
+
+
 def _extras_current():
     try:
         with open(EXTRAS_MARKER_FILE) as f:
@@ -340,6 +386,11 @@ def seed_extras(force=False):
         return {"seeded": False, "reason": "no demo marker file: refusing to write anything"}
     if _extras_current() and not force:
         return {"seeded": False, "reason": "extras already current"}
+    if not _FRESH and not force:
+        # a demo seeded by an OLDER release (no extras, or an older extras version): its base data (holdings) is stale too,
+        # so start fresh instead of layering new history over old holdings. reset_and_reseed() seeds the extras itself.
+        print("[demo_seed] demo data comes from an older release: starting fresh.", flush=True)
+        return (reset_and_reseed() or {}).get("extras") or {"seeded": False, "reason": "reset did not seed extras"}
     try:
         res = _seed_all(_APP)
         os.makedirs(os.path.dirname(EXTRAS_MARKER_FILE) or ".", exist_ok=True)
