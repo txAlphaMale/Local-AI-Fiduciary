@@ -50,6 +50,8 @@ FAILED_LOGIN_BURST_THRESHOLD = int(os.environ.get("FAILED_LOGIN_BURST_THRESHOLD"
 FAILED_LOGIN_BURST_WINDOW_MIN = int(os.environ.get("FAILED_LOGIN_BURST_WINDOW_MIN", "10"))
 MFA_DISABLE_ALERT_WINDOW_MIN = int(os.environ.get("MFA_DISABLE_ALERT_WINDOW_MIN", "30"))
 DETECTIONS_INTERVAL_S = int(os.environ.get("DETECTIONS_INTERVAL_S", "300"))
+LOGIN_SPRAY_THRESHOLD = int(os.environ.get("LOGIN_SPRAY_THRESHOLD", "5"))
+LOGIN_SPRAY_WINDOW_MIN = int(os.environ.get("LOGIN_SPRAY_WINDOW_MIN", "10"))
 EMERGENCY_BULK_THRESHOLD = int(os.environ.get("EMERGENCY_BULK_THRESHOLD", "5"))
 EMERGENCY_BULK_WINDOW_MIN = int(os.environ.get("EMERGENCY_BULK_WINDOW_MIN", "10"))
 EMERGENCY_SILENT_AFTER_H = float(os.environ.get("EMERGENCY_SILENT_AFTER_H", "24"))
@@ -68,6 +70,12 @@ RULES = (
     {"id": "first_seen_ip", "label": "First-seen IP for an account",
      "desc": "A successful login from a source IP never seen before for that account "
              "(informational -- may be legitimate, e.g. a new location)."},
+    {"id": "login_spray_from_ip", "label": "One IP trying many usernames",
+     "desc": f"Failed logins for {LOGIN_SPRAY_THRESHOLD}+ DIFFERENT usernames from the same source IP within "
+             f"{LOGIN_SPRAY_WINDOW_MIN} minutes -- password spraying / username probing (the burst rule only sees one name at a time)."},
+    {"id": "suspicious_login_name", "label": "Markup-like name at login",
+     "desc": "A failed login whose username looks like injection or probing (markup or control characters, script "
+             "schemes, encoded brackets, or an unreasonable length). The name itself is not repeated in the alert."},
     {"id": "mfa_disable_then_change", "label": "MFA disabled, then a sensitive change",
      "desc": f"MFA disabled, followed within {MFA_DISABLE_ALERT_WINDOW_MIN} minutes by a secret/"
              f"config/account change from the same actor -- the classic account-takeover sequence."},
@@ -117,6 +125,47 @@ def _check_failed_login_burst():
                    detail={"rule": "failed_login_burst", "username": username,
                            "count": len(hits), "window_minutes": FAILED_LOGIN_BURST_WINDOW_MIN,
                            "source_ips": ips})
+        alerts.append(resource_key)
+    return alerts
+
+
+def _check_login_spray_from_ip():
+    window_ts = _minutes_ago_iso(LOGIN_SPRAY_WINDOW_MIN)
+    rows = audit.query_core(event_type="auth.login.failure", since_ts=window_ts, limit=2000)
+    by_ip = {}
+    for r in rows:
+        if r["src_ip"]:
+            by_ip.setdefault(r["src_ip"], set()).add(r["actor_name"] or "-")
+    alerts = []
+    for ip, names in by_ip.items():
+        if len(names) < LOGIN_SPRAY_THRESHOLD:
+            continue
+        resource_key = f"detection:login_spray:{ip}"
+        if _already_alerted(resource_key, window_ts):
+            continue
+        # Count only: the attempted names are attacker-controlled and stay out of the alert.
+        audit.emit("detection.alert", outcome="denied", resource=resource_key,
+                   detail={"rule": "login_spray_from_ip", "distinct_usernames": len(names),
+                           "window_minutes": LOGIN_SPRAY_WINDOW_MIN, "source_ips": [ip]})
+        alerts.append(resource_key)
+    return alerts
+
+
+def _check_suspicious_login_name():
+    window_ts = _minutes_ago_iso(LOGIN_SPRAY_WINDOW_MIN)
+    rows = audit.query_core(event_type="auth.login.failure", since_ts=window_ts, limit=2000)
+    by_ip = {}
+    for r in rows:
+        if audit.name_is_suspicious(r["actor_name"]):
+            by_ip[r["src_ip"] or "-"] = by_ip.get(r["src_ip"] or "-", 0) + 1
+    alerts = []
+    for ip, n in by_ip.items():
+        resource_key = f"detection:suspicious_name:{ip}"
+        if _already_alerted(resource_key, window_ts):
+            continue
+        audit.emit("detection.alert", outcome="denied", resource=resource_key,
+                   detail={"rule": "suspicious_login_name", "attempts": n,
+                           "window_minutes": LOGIN_SPRAY_WINDOW_MIN, "source_ips": [ip]})
         alerts.append(resource_key)
     return alerts
 
@@ -235,7 +284,7 @@ def run_detections():
     Never raises -- each rule is individually try/excepted so one broken rule can't block the
     others (mirrors audit.emit's own fail-safe contract)."""
     fired = []
-    for fn in (_check_failed_login_burst, _check_first_seen_ip, _check_mfa_disable_then_change,
+    for fn in (_check_failed_login_burst, _check_login_spray_from_ip, _check_suspicious_login_name, _check_first_seen_ip, _check_mfa_disable_then_change,
                _check_emergency_request_pending_no_admin_activity, _check_emergency_bulk_download):
         try:
             fired.extend(fn())

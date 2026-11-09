@@ -31,7 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl tar socat 
 # acme.sh's own error output confirmed works. --force: no cron package in this slim image, and
 # none needed — renewal is driven by tls.py's own background thread (app.py's
 # tls.start_renewal_thread()), not a crontab entry.
-RUN curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz -o /tmp/acme.tar.gz \
+# Pinned (R-21, 2026-11-09): release 3.1.6 by commit, and the download must match this SHA-256 or the build fails, instead
+# of installing whatever the master branch happens to contain that day. To upgrade: pick a release, update both values.
+ARG ACME_SH_COMMIT=807da6498377ee5e0cf43a78091f46f12dc59a89
+ARG ACME_SH_SHA256=ddbe1bcbd1a44a2623a2af167ebdc678669e6e2eb396742f2d1d28e02dc14220
+RUN curl -fsSL "https://github.com/acmesh-official/acme.sh/archive/${ACME_SH_COMMIT}.tar.gz" -o /tmp/acme.tar.gz \
+    && echo "${ACME_SH_SHA256}  /tmp/acme.tar.gz" | sha256sum -c - \
     && mkdir -p /tmp/acme-src && tar -xzf /tmp/acme.tar.gz -C /tmp/acme-src --strip-components=1 \
     && (cd /tmp/acme-src && ./acme.sh --install --force) \
     && rm -rf /tmp/acme.tar.gz /tmp/acme-src

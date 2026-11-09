@@ -44,3 +44,11 @@ updates:
       # (3.12 is supported into 2028).
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # Compose images are pinned by digest (mcpo); Dependabot proposes the digest bump as a normal PR for review.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"

@@ -30,7 +30,7 @@ services:
   # therefore no startup-order race — no depends_on needed. Not published to the
   # host: only portfolio-api (same network) talks to it.
   mcpo:
-    image: ghcr.io/open-webui/mcpo:main
+    image: ghcr.io/open-webui/mcpo:main@sha256:1e82c9555c19e50b80745705f32b47a2647589f35279527b5118ecd3a71bd467   # pinned by digest (R-21); Dependabot proposes bumps
     # Explicit container_name is NOT namespaced by `-p <project>` -- Docker container names are
     # global to the whole daemon, so a second Compose project against this same file (e.g. the
     # demo instance, `-p fiduciary-demo`) WILL collide here unless this is overridden. Real
