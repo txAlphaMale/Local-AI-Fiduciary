@@ -46,7 +46,7 @@ once it's running (the change applies immediately — no restart):
 | `monarch` *(unofficial, at your own risk — off by default)* | Uses Monarch's private API, which their terms restrict. Set `MONARCH_EMAIL`/`PASSWORD`/`MFA_SECRET`, then an admin must accept the risk acknowledgment under SETTINGS → ACCOUNTS → Monarch before it activates. |
 
 ```bash
-# 5. Start the stack (portfolio-api + mcpo)
+# 5. Start the stack (portfolio-api + mcpo). Already running an older version? See UPGRADING.md instead.
 docker compose up -d --build
 
 # 6. Automate what can be automated (validates config, pulls models)
