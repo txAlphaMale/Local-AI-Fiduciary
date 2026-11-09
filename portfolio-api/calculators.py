@@ -1506,6 +1506,7 @@ def roth_vs_traditional(inp):
         n = _num(inp, "years_to_retirement", required=True, lo=1, hi=60, label="years to retirement")
         ret = _num(inp, "return_pct", 6.0, lo=-10, hi=30, label="expected return")
         limit = _num(inp, "annual_limit", None, lo=0)
+        cg = _num(inp, "taxable_gain_rate_pct", 15.0, lo=0, hi=40, label="tax rate on taxable-account gains") / 100.0
         status = str((inp or {}).get("filing_status") or "mfj").lower()
         import tax as _tax
 
@@ -1534,19 +1535,32 @@ def roth_vs_traditional(inp):
     fv = (n if g == 0 else ((1 + g) ** n - 1) / g)          # end-of-year contributions, FV factor per $1/yr
     warnings = []
     equal, same = [], []
+    if limit and E > limit:
+        warnings.append(f"Your election (${E:,.0f}/yr) is above the ${limit:,.0f} annual limit; the plan will stop you at the limit.")
     for s in (0.0, 0.5, 1.0):
-        # EQUAL take-home: cost of all-Roth E; pre-tax part saves t_now, so contribute more gross.
+        # EQUAL take-home: cost of all-Roth E; the pre-tax part saves t_now, so contribute more gross for the same paycheck.
         Es = E / (1 - t_now * (1 - s))
+        capped = bool(limit and Es > limit)
+        leftover = 0.0
+        if capped:
+            # The limit stops the extra contribution. Contribute the limit; the paycheck money that is left over (the same take-home
+            # budget minus what the capped contribution actually costs) goes to a taxable account instead of being ignored.
+            Es = float(limit)
+            leftover = max(0.0, E - (Es - Es * (1 - s) * t_now))
         pre, roth = Es * (1 - s), Es * s
         bal = Es * fv
-        at = pre * fv * (1 - t_ret) + roth * fv
+        in_acct = pre * fv * (1 - t_ret) + roth * fv
+        tax_bal = leftover * fv
+        tax_after = tax_bal - max(0.0, tax_bal - leftover * n) * cg          # gains taxed once, at the end; no yearly drag assumed
+        at = in_acct + tax_after
         row = {"roth_pct": round(s * 100), "gross_per_year": _r2(Es), "pretax_per_year": _r2(pre), "roth_per_year": _r2(roth),
-               "take_home_cost_per_year": _r2(E), "balance_at_retirement": _r2(bal), "after_tax_value": _r2(at),
+               "take_home_cost_per_year": _r2(E), "contribution_cost_per_year": _r2(E - leftover), "balance_at_retirement": _r2(bal), "after_tax_value": _r2(at),
                "tax_saved_now_per_year": _r2(pre * t_now)}
-        if limit and Es > limit:
-            row["over_limit"] = True
-            warnings.append(f"The {round(s*100)}% Roth split needs ${Es:,.0f}/yr gross, above the ${limit:,.0f} annual limit; "
-                            "the limit caps how much extra the deduction can buy.")
+        if capped:
+            row.update({"capped": True, "leftover_to_taxable_per_year": _r2(leftover), "in_account_after_tax": _r2(in_acct),
+                        "taxable_account_after_tax": _r2(tax_after)})
+            warnings.append(f"The {round(s*100)}% Roth split would need ${E / (1 - t_now * (1 - s)):,.0f}/yr gross to keep your paycheck the same, "
+                            f"above the ${limit:,.0f} limit, so it is capped and ${leftover:,.0f}/yr of paycheck is assumed to go to a taxable account.")
         equal.append(row)
         pre2, roth2 = E * (1 - s), E * s
         same.append({"roth_pct": round(s * 100), "gross_per_year": _r2(E),
@@ -1565,7 +1579,9 @@ def roth_vs_traditional(inp):
              "A split is a hedge when you cannot tell which way your rate will go. Pre-tax withdrawals also raise MAGI "
              "(ACA subsidies, IRMAA, Social Security taxation), which Roth withdrawals do not.",
              "Employer match is normally pre-tax whichever you pick, and is not included.",
-             "Check that the new plan offers a Roth option, and that the pre-tax limit is not exceeded."]
+             "Check that the new plan offers a Roth option, and that the pre-tax limit is not exceeded.",
+             "When the annual limit caps a scenario, the leftover paycheck is invested in a taxable account at the same return, with the "
+             "gains taxed once at the end at the rate you give (default 15%); no yearly tax drag, so this slightly flatters those scenarios."]
     return {"calculator": "roth_vs_traditional",
             "assumptions": {"annual_election": _r2(E), "years": n, "return_pct": ret, "rate_now_pct": round(t_now * 100, 2),
                             "rate_retire_pct": round(t_ret * 100, 2), "rate_now_source": src_now, "rate_retire_source": src_ret},

@@ -8288,6 +8288,27 @@ def get_benefits():
     return res
 
 
+@app.get("/api/benefits/limits")
+def get_benefit_limits():
+    """The contribution limits the app computes with (benefits.LIMITS_2026, from the dated-constant registry) plus the 401(k)
+    limit that applies at the household's age, so the calculators can pre-fill it. Never fetched from the web at request time:
+    figures come from the registry, which is re-verified every January (grounding.alerts) and shows its verified date."""
+    ret = _read_retire()
+    age = _derive_age(ret.get("birth_year"), ret.get("current_age"))
+    L = benefits.LIMITS_2026
+    base = L["k401_employee"]
+    if age is not None and 60 <= age <= 63:
+        lim, why = base + L["k401_catchup_60_63"], "age 60-63 super catch-up"
+    elif age is not None and age >= 50:
+        lim, why = base + L["k401_catchup_50"], "age 50+ catch-up"
+    else:
+        lim, why = base, "under 50 (no catch-up)" if age is not None else "base limit (age unknown)"
+    return {"year": benefits.LIMITS_YEAR, "k401_base": base, "k401_catchup_50": L["k401_catchup_50"],
+            "k401_catchup_60_63": L["k401_catchup_60_63"], "ira_limit": L["ira_limit"], "ira_catchup": L["ira_catchup"],
+            "k401_for_you": lim, "k401_for_you_basis": why, "age": age,
+            "verified": grounding.VERIFIED.get("benefits"), "source_url": benefits.SOURCE_URL}
+
+
 # ============ GAP-2: cash / liquidity / debt desk (cashdebt.py) ============
 TBILL_CACHE_FILE = os.environ.get("TBILL_CACHE_FILE", "/data/tbill_yield.json")
 TBILL_SERIES = os.environ.get("TBILL_SERIES", "DTB3")
