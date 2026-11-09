@@ -27,6 +27,7 @@ import csv
 import io
 import datetime
 import threading
+import random
 
 import auth
 import store
@@ -37,7 +38,7 @@ DEMO_MODE = os.environ.get("DEMO_MODE", "0") == "1"
 DEMO_ADMIN_USERNAME = os.environ.get("DEMO_ADMIN_USERNAME", "demo")
 DEMO_ADMIN_PASSWORD = os.environ.get("DEMO_ADMIN_PASSWORD", "FiduciaryDemo2026!")
 DEMO_MARKER_FILE = os.environ.get("DEMO_MARKER_FILE", "/data/.demo_instance")
-DEMO_RESET_INTERVAL_S = int(os.environ.get("DEMO_RESET_INTERVAL_S", str(6 * 3600)))  # 6h default
+DEMO_RESET_INTERVAL_S = int(os.environ.get("DEMO_RESET_INTERVAL_S", str(24 * 3600)))  # daily by default (was 6h until 2026-11-09)
 
 HOLDINGS_CSV = os.environ.get("HOLDINGS_CSV", "/data/holdings.csv")
 
@@ -55,6 +56,12 @@ SYNTHETIC_HOLDINGS = [
     {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 80,  "cost_basis": 195.00, "account": "401(k)",     "institution": "Demo Employer Plan", "type": "ETF"},
     {"ticker": "VBTLX","name": "Vanguard Total Bond Market Fund", "quantity": 500, "cost_basis": 10.20,  "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
     {"ticker": "SCHD", "name": "Schwab US Dividend Equity ETF",   "quantity": 90,  "cost_basis": 68.00,  "account": "HSA",        "institution": "Demo HSA Custodian", "type": "ETF"},
+    # 2026-11-09 refresh: funds with NO cost basis (the manual cost-basis feature has a basis entered for the 401(k) line only,
+    # so the combined row shows "known for 1 of 2 accounts"), and two cash accounts (emergency-fund tile, net worth).
+    {"ticker": "FXAIX", "name": "Fidelity 500 Index Fund",        "quantity": 160, "cost_basis": "",     "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
+    {"ticker": "FXAIX", "name": "Fidelity 500 Index Fund",        "quantity": 40,  "cost_basis": "",     "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "Fund"},
+    {"ticker": "CASH",  "name": "Emergency fund (high-yield savings)", "quantity": 22000, "cost_basis": 22000, "account": "Emergency Fund", "institution": "Demo Bank", "type": "Cash"},
+    {"ticker": "CASH",  "name": "Checking",                       "quantity": 6400, "cost_basis": 6400,  "account": "Checking",   "institution": "Demo Bank", "type": "Cash"},
 ]
 
 CSV_FIELDS = ["ticker", "name", "quantity", "cost_basis", "account", "institution", "type"]
@@ -80,6 +87,23 @@ def _write_marker():
 
 def _marker_exists():
     return os.path.exists(DEMO_MARKER_FILE)
+
+
+def _marker_age_s(now=None):
+    """Seconds since this demo was last (re)seeded, from the marker file's mtime; None if there is no marker."""
+    try:
+        return max(0.0, (now if now is not None else __import__("time").time()) - os.path.getmtime(DEMO_MARKER_FILE))
+    except OSError:
+        return None
+
+
+def seconds_until_reset(interval_s=None, now=None):
+    """How long until the next scheduled reset, measured from the LAST SEED, not from process start. (Measuring from
+    process start meant a daily interval could never fire: the ECS task is replaced every weekday morning, so the
+    timer restarted before it ran out.) A task that boots after the interval has already passed resets at once."""
+    interval = int(interval_s or DEMO_RESET_INTERVAL_S)
+    age = _marker_age_s(now)
+    return 60 if age is None else max(60, int(interval - age))
 
 
 def _reindex_knowledge_async():
@@ -124,7 +148,12 @@ def seed_if_needed():
         return {"seeded": False, "reason": "existing non-demo account data detected — refused for safety"}
 
     if auth.has_any_user() and _marker_exists():
-        # Already a seeded demo instance (e.g. a restart between reset cycles) — nothing to do.
+        # Already a seeded demo instance (e.g. a restart between reset cycles). If it is older than one reset interval (the
+        # ECS task starts each weekday morning, so this is the daily reset), start fresh instead of resuming stale data.
+        age = _marker_age_s()
+        if age is not None and age >= DEMO_RESET_INTERVAL_S - 3600:
+            print(f"[demo_seed] demo data is {int(age // 3600)}h old (interval {DEMO_RESET_INTERVAL_S // 3600}h): resetting at boot.", flush=True)
+            return reset_and_reseed()
         return {"seeded": False, "reason": "already seeded"}
 
     uid, _recovery_key = auth.create_user(DEMO_ADMIN_USERNAME, DEMO_ADMIN_PASSWORD, role="admin")
@@ -183,9 +212,144 @@ def reset_and_reseed():
         pass
 
     os.remove(DEMO_MARKER_FILE) if _marker_exists() else None
+    try:
+        os.remove(EXTRAS_MARKER_FILE)
+    except OSError:
+        pass
     result = seed_if_needed()
+    extras = seed_extras() if _APP is not None else {"seeded": False, "reason": "app not registered yet (boot-time reset: seeded by the end-of-module hook)"}
     print("[demo_seed] periodic reset complete — fresh demo data seeded.", flush=True)
-    return {"reset": True, "reseed": result}
+    return {"reset": True, "reseed": result, "extras": extras}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# 2026-11-09 refresh: seed the newer features so the public demo shows them. Everything is synthetic and deterministic.
+# These helpers use the app's OWN validators/writers (registered by app.py at the END of the module, once they exist), so
+# the stored shapes cannot drift from what the app itself saves. Vault documents are deliberately NOT seeded.
+# ---------------------------------------------------------------------------------------------------------------------
+EXTRAS_MARKER_FILE = os.environ.get("DEMO_EXTRAS_MARKER_FILE", "/data/.demo_extras")
+EXTRAS_VERSION = "2026-11-09a"          # bump to make existing demos re-seed the extras on their next boot
+HISTORY_DAYS = 730                      # about two years of daily snapshots
+HISTORY_END_NET_WORTH = 214000.0        # where the synthetic series lands (close to what the demo holdings are worth)
+HISTORY_END_SPY = 655.0
+DEMO_LIABILITIES = [
+    {"name": "Demo Visa", "institution": "Demo Bank", "type": "Credit Card", "balance": 2150.00, "rate_pct": 22.9, "min_payment": 65, "pay_in_full": True, "notes": "synthetic demo data"},
+    {"name": "Demo Auto Loan", "institution": "Demo Credit Union", "type": "Auto Loan", "balance": 14800.00, "rate_pct": 5.1, "min_payment": 385, "notes": "synthetic demo data"},
+    {"name": "Demo Student Loan", "institution": "Demo Servicer", "type": "Student Loan", "balance": 9300.00, "rate_pct": 4.5, "min_payment": 140, "notes": "synthetic demo data"},
+]
+DEMO_LIABILITIES_TOTAL = sum(r["balance"] for r in DEMO_LIABILITIES)
+DEMO_RETIREMENT = {"current_age": 41, "target_age": 60, "annual_expenses_override": 84000, "annual_savings_override": 46000,
+                   "expected_real_return_pct": 5.0, "withdrawal_rate_pct": 4.0}
+DEMO_INSURANCE = {
+    "income_self": 142000.0, "income_spouse": 88000.0, "children": 2, "home_value_override": 465000.0,
+    "k401_pretax_pct": 10.0, "k401_match_t1_pct": 6.0, "k401_match_t1_rate": 50.0, "hsa_contribution": 3300.0,
+    "roth_ira_contribution_self": 7000.0, "deposit_yield_pct": 4.2,
+    "policies": [
+        {"kind": "life", "owner": "self", "name": "20-year term (demo)", "coverage": 750000, "premium_annual": 620, "term_expires": "2041-06-30", "notes": "synthetic"},
+        {"kind": "disability", "owner": "self", "name": "Employer long-term disability (demo)", "coverage": 6500, "premium_annual": 0, "term_expires": "", "notes": "synthetic"},
+        {"kind": "umbrella", "owner": "household", "name": "Umbrella liability (demo)", "coverage": 1000000, "premium_annual": 280, "term_expires": "", "notes": "synthetic"},
+    ],
+    "ef_accounts": {"Emergency Fund": {"state": "yes"}},
+}
+_APP = None
+
+
+def register_app(mod):
+    """app.py calls this at the very end of the module, once every helper the extras use has been defined."""
+    global _APP
+    _APP = mod
+
+
+def history_rows(today=None, days=HISTORY_DAYS):
+    """Deterministic synthetic daily snapshots ending YESTERDAY (the app writes today's own row). A fixed random seed
+    gives the same picture after every reset; the series is rescaled so it lands near the demo's real value, which
+    avoids a cliff when the first genuine snapshot arrives."""
+    today = today or datetime.date.today()
+    rnd = random.Random(20261109)
+    start = today - datetime.timedelta(days=days)
+    spy, inv, cost = 520.0, 118000.0, 99000.0
+    cash0, liab0 = 21000.0, 36000.0
+    raw = []
+    for i in range(days):
+        d = start + datetime.timedelta(days=i)
+        m = 0.00045 + 0.0085 * rnd.gauss(0, 1)                       # daily market return
+        spy *= (1 + m)
+        inv *= (1 + 0.9 * m + 0.002 * rnd.gauss(0, 1))
+        cash = cash0 + (cash0 * 0.35) * i / days                     # cash grows slowly
+        if d.day in (1, 15):                                          # twice-monthly contributions
+            inv += 1500.0
+            cost += 1500.0
+        liab = liab0 - (liab0 - DEMO_LIABILITIES_TOTAL) * i / days   # loans paid down to today's balances
+        raw.append((d, inv, cost, spy, cash, liab))
+    d_end, inv_e, cost_e, spy_e, cash_e, liab_e = raw[-1]
+    f_inv = (HISTORY_END_NET_WORTH - cash_e + liab_e) / inv_e         # land the net worth on target
+    f_spy = HISTORY_END_SPY / spy_e
+    rows = []
+    for d, inv, cost, spy, cash, liab in raw:
+        iv = inv * f_inv
+        rows.append({"date": d.isoformat(), "net_worth": round(iv + cash - liab, 2), "invested_value": round(iv, 2),
+                     "spy": round(spy * f_spy, 2), "total_cost": round(cost * f_inv, 2), "cost_covered_value": round(iv * 0.92, 2)})
+    return rows
+
+
+def _seed_history(today=None):
+    rows = history_rows(today)
+    for r in rows:
+        store.value_history_upsert_today(r["date"], r["net_worth"], r["invested_value"], r["spy"],
+                                         r["total_cost"], r["cost_covered_value"], None)
+    return len(rows)
+
+
+def _seed_all(app_mod, today=None):
+    """Writes every extra through the app's own helpers. Raises on any validation error so a bad seed is loud."""
+    today = today or datetime.date.today()
+    n = _seed_history(today)
+    clean, errors = app_mod._validate_manual_liability_rows([dict(r) for r in DEMO_LIABILITIES])
+    if errors:
+        raise ValueError(f"demo liabilities invalid: {errors}")
+    app_mod._write_manual_liability_rows(clean)
+    as_of = (today - datetime.timedelta(days=45)).isoformat()
+    app_mod._basis_save([{"institution": "Demo Employer Plan", "account": "401(k)", "ticker": "FXAIX", "avg_cost": 118.40,
+                          "qty_at_entry": 160, "as_of": as_of, "note": "from the plan's annual statement (synthetic)"}])
+    store.write_json(app_mod.RETIRE_FILE, {**app_mod._read_retire(), **DEMO_RETIREMENT})
+    cfg = app_mod._read_insurance_cfg()                     # AFTER the liabilities: they stored their rates in this same file
+    cfg.update(DEMO_INSURANCE)
+    store.write_json(app_mod.INSURANCE_FILE, cfg)
+    try:
+        app_mod._cache["data"], app_mod._cache["ts"] = None, 0   # next /api/portfolio rebuilds with the new data
+    except Exception:
+        pass
+    return {"history_days": n, "liabilities": len(clean)}
+
+
+def _extras_current():
+    try:
+        with open(EXTRAS_MARKER_FILE) as f:
+            return f.read().strip() == EXTRAS_VERSION
+    except OSError:
+        return False
+
+
+def seed_extras(force=False):
+    """DEMO_MODE only, and only on a directory this module already marked as a demo (same safety model as the base seed)."""
+    if not DEMO_MODE:
+        return {"seeded": False, "reason": "DEMO_MODE not set"}
+    if _APP is None:
+        return {"seeded": False, "reason": "app not registered"}
+    if not _marker_exists():
+        return {"seeded": False, "reason": "no demo marker file: refusing to write anything"}
+    if _extras_current() and not force:
+        return {"seeded": False, "reason": "extras already current"}
+    try:
+        res = _seed_all(_APP)
+        os.makedirs(os.path.dirname(EXTRAS_MARKER_FILE) or ".", exist_ok=True)
+        with open(EXTRAS_MARKER_FILE, "w") as f:
+            f.write(EXTRAS_VERSION + "\n")
+        print(f"[demo_seed] extras seeded: {res}", flush=True)
+        return {"seeded": True, **res}
+    except Exception as e:
+        print(f"[demo_seed] extras seeding failed (non-fatal): {e}", flush=True)
+        return {"seeded": False, "reason": f"error: {e}"}
 
 
 def start_demo_reset_thread(interval_s=None):
@@ -199,7 +363,7 @@ def start_demo_reset_thread(interval_s=None):
 
     def _loop():
         while True:
-            _time.sleep(interval)
+            _time.sleep(seconds_until_reset(interval))
             try:
                 reset_and_reseed()
             except Exception as e:

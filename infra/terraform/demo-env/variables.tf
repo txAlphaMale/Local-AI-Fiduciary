@@ -137,7 +137,7 @@ variable "anthropic_strategist_model" {
 
 variable "demo_reset_interval_s" {
   type    = number
-  default = 21600
+  default = 86400 # daily (was 21600 = 6 hours; the reset now also runs at boot when the data is older than this)
 }
 
 variable "sec_user_agent" {

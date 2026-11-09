@@ -15598,3 +15598,10 @@ def service_worker():
     with open(path, encoding="utf-8") as f:
         return Response(content=f.read(), media_type="application/javascript",
                          headers={"Cache-Control": "no-cache"})
+
+
+# Demo harness (2026-11-09): hand the finished module to the demo seeder so it can write the newer features' sample data
+# through this file's own validators. Placed LAST because every helper it uses must already exist. No-op unless DEMO_MODE=1.
+import sys as _sys   # local alias: this module did not import sys at the top
+demo_seed.register_app(_sys.modules[__name__])
+demo_seed.seed_extras()
