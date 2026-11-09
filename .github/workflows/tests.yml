@@ -1,0 +1,29 @@
+name: Tests
+
+# Runs the portfolio-api test suite on every PR and every push to main, so a regression is caught by CI and not only by
+# whoever happens to run pytest locally (risk register R-21: "no automated test job in CI"). Read-only token, no secrets.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (portfolio-api)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: portfolio-api/requirements.txt
+      - name: Install dependencies
+        run: pip install --quiet -r portfolio-api/requirements.txt pytest httpx2==2.16.0   # TestClient dependency in the starlette version the image resolves
+      - name: Run tests
+        working-directory: portfolio-api
+        run: python -m pytest -q
