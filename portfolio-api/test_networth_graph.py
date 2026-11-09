@@ -97,7 +97,7 @@ class TestGraphPrefs(unittest.TestCase):
 class TestWiring(unittest.TestCase):
     def test_panels_and_toggles_are_wired(self):
         for needle in ("function spyPanel(withBar)", "function costPanel(withBar)", "function netWorthPanel(withBar)", "function graphToggleBar()",
-                       "if(graphOn('networth')){ wrap.appendChild(netWorthPanel(takeBar())); }", "if(graphOn('pies')){",
+                       "else if(k==='networth' && graphOn('networth')) n=netWorthPanel(takeBar());", "if(k.indexOf('alloc-')===0 || k.indexOf('mix-')===0){ if(!graphOn('pies')) return; }",
                        "document.getElementById('c-networth')", "localStorage.setItem('fidGraphs'", "'<canvas id=\"c-networth\"></canvas>'"):
             self.assertIn(needle, HTML, needle)
 
