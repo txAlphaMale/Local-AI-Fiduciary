@@ -14833,7 +14833,7 @@ FIDUCIARY_PROMPT = (
     "figures saved with the note to today's and re-run the tools before relying on one. You cannot save notes; if an answer is worth "
     "keeping, tell {user} to press SAVE NOTE under it (they can add a revisit date).\n"
     "ARITHMETIC: never compute loan payments, payoff timelines, interest saved, mortgage total cost, "
-    "future/present values, implied rates, DRIP projections, rent-vs-buy, or NPV/IRR in your head — call "
+    "future/present values, implied rates, DRIP projections, rent-vs-buy, NPV/IRR, or a Roth-vs-traditional 401(k) split in your head — call "
     "run_calculator and quote its figures (it is the same engine as the CALCULATORS tab, so you can point "
     "{user} there to explore further). For 'what if I paid $X extra on <my debt>', call get_liabilities "
     "first for the real balance/APR/payment; if a fact is missing, ask for it rather than assuming one.\n"
@@ -14987,7 +14987,10 @@ FIDUCIARY_TOOLS = [
                        "muni_instate_yield, muni_outstate_yield, apr_pct|apy_pct\n"
                        "inflation: amount, years, inflation_pct, nominal_return_pct\n"
                        "lump_vs_annuity: lump_sum, payment, years, cola_pct, discount_rate_pct\n"
-                       "npv_irr: initial_investment, cash_flows (comma list), discount_rate_pct",
+                       "npv_irr: initial_investment, cash_flows (comma list), discount_rate_pct\n"
+                       "roth_vs_traditional: salary + election_pct (or annual_election), years_to_retirement, return_pct, "
+                       "rate_now_pct|income_now, rate_retire_pct|income_retire, filing_status, annual_limit — compares 0/50/100% "
+                       "Roth on an equal take-home basis; get the real bracket from get_retirement/get_tax_audit first",
         "parameters": {"type": "object", "properties": {
             "calculator": {"type": "string", "enum": list(calculators.CALCULATORS)},
             "inputs": {"type": "object", "description": "Field: value pairs for that calculator."}},

@@ -9947,6 +9947,26 @@ CALC_SPECS.points={title:'MORTGAGE POINTS · BREAK-EVEN',
     {k:'points',l:'Points',u:'pts',ph:'1'},
     {k:'points_cost',l:'…or points cost',u:'$',ph:''},
     {k:'hold_years',l:'Expect to keep the loan',u:'yrs',ph:'7',h:'Until you sell or refinance.'}]}]};
+CALC_SPECS.roth_vs_traditional={title:'ROTH vs TRADITIONAL · 401(k) ELECTION',
+  intro:'Compares putting your election all pre-tax, half and half, or all Roth, on an EQUAL take-home basis (a pre-tax dollar costs less paycheck, so the deduction buys extra contributions). Roth wins when your retirement tax rate is higher than today\'s, traditional when it is lower. Educational, not tax advice.',
+  prefill:()=>{ if(!TAX||TAX.error) return null; const o={}; if(TAX.marginal_ordinary_rate_pct!=null) o.rate_now_pct=String(TAX.marginal_ordinary_rate_pct); return o; },
+  prefillLabel:'use my tax bracket for today\'s rate',
+  groups:[
+    {g:'THE ELECTION',f:[
+      {k:'salary',l:'Salary',u:'$',ph:'150000'},
+      {k:'election_pct',l:'Election',u:'%',ph:'10'},
+      {k:'annual_election',l:'…or annual election',u:'$',ph:'15000',h:'Used when salary and % are blank.'},
+      {k:'years_to_retirement',l:'Years until you start withdrawing',u:'yrs',ph:'20',req:1},
+      {k:'return_pct',l:'Expected return',u:'%',d:'6'},
+      {k:'annual_limit',l:'Annual contribution limit',u:'$',ph:'',h:'Optional. Flags a split that would need more gross than the limit allows.'}]},
+    {g:'TAX RATES (ENTER A RATE, OR AN INCOME)',f:[
+      {k:'rate_now_pct',l:'Marginal rate today',u:'%',ph:'24'},
+      {k:'income_now',l:'…or taxable income today',u:'$',ph:''},
+      {k:'rate_retire_pct',l:'Expected marginal rate in retirement',u:'%',ph:'22'},
+      {k:'income_retire',l:'…or taxable income in retirement',u:'$',ph:''},
+      {k:'filing_status',l:'Filing status (for the income route)',t:'sel',d:'mfj',o:[['mfj','Married filing jointly'],['single','Single'],['hoh','Head of household']]},
+      {k:'state_rate_now_pct',l:'State rate today',u:'%',ph:'0'},
+      {k:'state_rate_retire_pct',l:'State rate in retirement',u:'%',ph:'0'}]}]};
 CALC_SPECS.yields={title:'AFTER-TAX YIELD · TAX-EQUIVALENT · APR↔APY',
   intro:'Compare a CD or savings yield, a Treasury (no state tax), and in-/out-of-state munis on what you actually keep. Each shows its taxable-equivalent yield — what a fully taxable bond would have to pay to match it.',
   prefill:()=>{ if(!TAX||TAX.error) return null; const o={}; if(TAX.marginal_ordinary_rate_pct!=null) o.fed_rate_pct=String(TAX.marginal_ordinary_rate_pct); const st=TAX.state_tax||{}; if(st.rate_pct!=null) o.state_rate_pct=String(st.rate_pct); return Object.keys(o).length?o:null; },
@@ -10439,6 +10459,21 @@ CALC_RENDER.points=(r,key)=>{
   ]));
   w.appendChild(_cNotes(r)); return w;
 };
+CALC_RENDER.roth_vs_traditional=(r,key)=>{
+  const w=el('div'); const a=r.assumptions||{}; const eq=r.equal_take_home||[]; const best=eq.find(x=>x.roth_pct===r.best_after_tax)||{};
+  w.appendChild(_cTiles([
+    ['BEST AFTER-TAX', r.best_after_tax+'% Roth','pos',_c$(best.after_tax_value)+' after tax in retirement'],
+    ['RATES', _cN(a.rate_now_pct,1)+'% → '+_cN(a.rate_retire_pct,1)+'%',null,'today → retirement'],
+    ['YEARS', _cN(a.years,0),null,_cN(a.return_pct,1)+'% return']]));
+  const lean=el('div'); lean.style.cssText='margin-bottom:var(--space-2);'; lean.textContent=r.lean||''; w.appendChild(lean);
+  w.appendChild(_calcGroupHead('EQUAL TAKE-HOME (same paycheck cost: '+_c$(a.annual_election)+'/yr)'));
+  w.appendChild(_cTable([['roth_pct','Roth share',x=>x+'%'],['gross_per_year','Gross / yr',_c$],['pretax_per_year','Pre-tax / yr',_c$],['roth_per_year','Roth / yr',_c$],
+    ['balance_at_retirement','Balance',_c$],['after_tax_value','After-tax value',_c$]], eq));
+  w.appendChild(_calcGroupHead('SAME GROSS ELECTION (what the paycheck difference is)'));
+  w.appendChild(_cTable([['roth_pct','Roth share',x=>x+'%'],['gross_per_year','Gross / yr',_c$],['take_home_cost_per_year','Paycheck cost / yr',_c$],
+    ['balance_at_retirement','Balance',_c$],['after_tax_value','After-tax value',_c$]], r.same_gross_election||[]));
+  w.appendChild(_cNotes(r)); return w;
+};
 CALC_RENDER.yields=(r,key)=>{
   const w=el('div');
   if((r.rows||[]).length){
@@ -10647,6 +10682,7 @@ function calculatorsContent(){
     {key:'affordability',label:'AFFORDABILITY',build:()=>calcPanel('affordability')},
     {key:'points',label:'POINTS',build:()=>calcPanel('points')},
     {key:'yields',label:'YIELDS · TAX-EQUIV',build:()=>calcPanel('yields')},
+    {key:'roth_vs_traditional',label:'ROTH vs TRAD',build:()=>calcPanel('roth_vs_traditional')},
     {key:'inflation',label:'INFLATION',build:()=>calcPanel('inflation')},
     {key:'lump_vs_annuity',label:'LUMP vs ANNUITY',build:()=>calcPanel('lump_vs_annuity')},
     {key:'npv_irr',label:'NPV · IRR',build:()=>calcPanel('npv_irr')},
