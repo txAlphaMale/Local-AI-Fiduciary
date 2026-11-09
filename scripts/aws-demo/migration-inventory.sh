@@ -66,9 +66,10 @@ say; say "-- IAM / logs / secrets"
 A iam get-role --role-name fiduciary-demo-backup-role >/dev/null 2>&1 \
   && { say "  exists: role fiduciary-demo-backup-role"; IMPORTS+=("terraform -chdir=infra/terraform/persistent import aws_iam_role.backup fiduciary-demo-backup-role"); } \
   || say "  missing: role fiduciary-demo-backup-role (Terraform will create it)"
-A logs describe-log-groups --log-group-name-prefix aws-waf-logs-fiduciary-demo --query 'logGroups[].logGroupName' --output text 2>/dev/null | grep -q . \
-  && { say "  exists: log group aws-waf-logs-fiduciary-demo"; IMPORTS+=("terraform -chdir=infra/terraform/persistent import aws_cloudwatch_log_group.waf aws-waf-logs-fiduciary-demo"); } \
-  || say "  missing: log group aws-waf-logs-fiduciary-demo"
+waf_lg=$(A logs describe-log-groups --log-group-name-prefix aws-waf-logs-fiduciary-demo --query 'logGroups[].logGroupName' --output text 2>/dev/null || true)
+if [ -n "$waf_lg" ]; then
+  say "  exists: log group aws-waf-logs-fiduciary-demo"; IMPORTS+=("terraform -chdir=infra/terraform/persistent import aws_cloudwatch_log_group.waf aws-waf-logs-fiduciary-demo")
+else say "  missing: log group aws-waf-logs-fiduciary-demo"; fi
 n=$(A ssm describe-parameters --parameter-filters Key=Name,Option=BeginsWith,Values=/fiduciary-demo/ --query 'length(Parameters)' --output text 2>/dev/null || echo 0)
 say "  SSM parameters under /fiduciary-demo/: $n (the stack expects 6; ./scripts/aws-demo/set-secrets.sh manages them)"
 [ "$n" -ge 6 ] 2>/dev/null || note "only $n SSM parameters found under /fiduciary-demo/ (expected 6): run set-secrets.sh before up.sh"
@@ -78,8 +79,9 @@ A ecs describe-services --cluster fiduciary-demo --services portfolio-api --quer
 for s in fiduciary-demo-scale-up fiduciary-demo-scale-down fiduciary-demo-backup-daily; do
   A scheduler get-schedule --name "$s" >/dev/null 2>&1 && say "  schedule: $s exists" || say "  schedule: $s missing"
 done
-A wafv2 list-web-acls --scope REGIONAL --query "WebACLs[?Name=='fiduciary-demo-acl'].Name" --output text 2>/dev/null | grep -q . \
-  && say "  WAF Web ACL fiduciary-demo-acl exists (export-live-config.sh must snapshot its blocklist BEFORE teardown)" || say "  no WAF Web ACL named fiduciary-demo-acl"
+waf_acl=$(A wafv2 list-web-acls --scope REGIONAL --query "WebACLs[?Name=='fiduciary-demo-acl'].Name" --output text 2>/dev/null || true)
+if [ -n "$waf_acl" ]; then say "  WAF Web ACL fiduciary-demo-acl exists (export-live-config.sh must snapshot its blocklist BEFORE teardown)"
+else say "  no WAF Web ACL named fiduciary-demo-acl"; fi
 
 say; say "-- local files"
 [ -f infra/terraform/backend.hcl ] && say "  backend.hcl present" || say "  backend.hcl absent (expected before migration)"

@@ -60,7 +60,10 @@ bucket=no; aws s3api head-bucket --bucket "$STATE_BUCKET" --region "$REGION" >/d
 state_objs=no
 if [ "$bucket" = yes ]; then
   # the ENVIRONMENT stack's state is what a deploy needs; persistent/ alone (migration half-way) is not enough
-  aws s3 ls "s3://$STATE_BUCKET/" --recursive --region "$REGION" 2>/dev/null | grep -q 'demo-env/' && state_objs=yes
+  # capture first, then match: `aws ... | grep -q` makes aws die with SIGPIPE when grep stops at the first hit, and under
+  # `set -o pipefail` that read as "no match" (2026-11-09: reported demo-env state missing on a migrated demo)
+  state_listing=$(aws s3 ls "s3://$STATE_BUCKET/" --recursive --region "$REGION" 2>/dev/null || true)
+  case "$state_listing" in *demo-env/*) state_objs=yes ;; esac
 fi
 tfver=$(terraform version 2>/dev/null | head -1 || true)
 svc_active=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
