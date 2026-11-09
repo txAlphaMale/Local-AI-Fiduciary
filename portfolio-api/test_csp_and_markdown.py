@@ -30,7 +30,7 @@ class TestCsp(unittest.TestCase):
         self.assertNotRegex(self.csp, r"(?:^|; )script-src [^;]*'unsafe-inline'")
 
     def test_every_inline_script_is_allowed_by_hash(self):
-        blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", HTML, re.S | re.I)
+        blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", HTML, re.S | re.I)
         self.assertTrue(blocks)
         for b in blocks:
             h = "'sha256-" + base64.b64encode(hashlib.sha256(b.encode()).digest()).decode() + "'"

@@ -15625,7 +15625,7 @@ def index():
 # moved to addEventListener). The page's own inline <script> blocks are allowed by SHA-256 hash, computed here from the
 # file being served, so editing index.html never needs a manual hash update.
 _CSP_CDNS = "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com"   # the pinned, integrity-checked third-party assets
-_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
+_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", re.S | re.I)
 
 
 def _dashboard_csp(html_text):
