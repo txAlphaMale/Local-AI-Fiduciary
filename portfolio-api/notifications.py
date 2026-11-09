@@ -292,7 +292,9 @@ def send_email_checked(subject, body):
 def _send_email(subject, body):
     ok, err = send_email_checked(subject, body)
     if not ok and err and not err.startswith("Not configured"):
-        print(f"[notifications] email send failed: {err}", flush=True)
+        # The reason (which can quote the mail server's own reply) is returned to the caller / shown by the test button;
+        # the log line deliberately carries no server text.
+        print("[notifications] email send failed (use SETTINGS -> NOTIFICATIONS -> send test for the reason)", flush=True)
     return ok
 
 

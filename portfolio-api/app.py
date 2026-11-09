@@ -3048,6 +3048,9 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         "total_assets": round(total_assets, 2),
         "total_liabilities": round(total_liabilities, 2),
         "invested_value": invested,
+        # Cash-type lines (savings, checking, brokerage cash) are inside invested_value because the risk/drift/plan engines
+        # need them there; the header tile shows invested_value minus this so cash is not presented as an investment.
+        "cash_value": round(sum(p["value"] or 0 for p in positions if (p.get("type") or "") == "Cash"), 2),
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
         "total_gain_pct": round(total_gain / total_cost * 100, 2) if total_cost else None,
@@ -11330,7 +11333,8 @@ def get_secrets(request: Request):
 # Secrets read fresh on every use (see _snaptrade_env / _plaid_creds) -- saving one takes effect at once. A key
 # that is ALSO set in the real .env still wins (reported as staged_behind_env), so it is not "applied live".
 _LIVE_SECRETS = {"SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET",
-                 "PLAID_CLIENT_ID", "PLAID_SECRET", "TAVILY_API_KEY"}
+                 "PLAID_CLIENT_ID", "PLAID_SECRET", "TAVILY_API_KEY",
+                 "BACKUP_PASSPHRASE"}   # read per call by /api/backup/* via _read_secrets(); saving it needs no rebuild
 
 
 @app.post("/api/secrets")
