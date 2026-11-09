@@ -1,0 +1,28 @@
+# Opt-in hardening for portfolio-api (risk register R-7). Trialled 2026-11-09 on a scratch container: non-root uid,
+# read-only root filesystem, no Linux capabilities, no-new-privileges, pid and memory limits. Verified there: start-up,
+# health, login, audit verify, self-signed certificate (persists across restart), secrets save, encrypted backup run.
+# NOT exercised in the trial: a live ACME (Let's Encrypt) issuance, and a restore of a real backup.
+#
+# Use (the container must run as the SAME uid as the host user that owns this folder, so the files it writes in
+# ./mcpo-secrets, ./backups and ./knowledge stay readable by you and by `docker compose`):
+#   1. One-time ownership change, no sudo needed (uses a throwaway container):
+#        UID_=$(id -u)
+#        docker run --rm -v fiduciary_portfolio-data:/data -v "$PWD/backups:/b" alpine sh -c "chown -R $UID_:$UID_ /data /b"
+#   2. Build and start with the override:
+#        APP_UID=$(id -u) docker compose -f docker-compose.yml -f docker-compose.hardened.yml build --pull portfolio-api
+#        APP_UID=$(id -u) docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d portfolio-api
+# Roll back: build and `up -d` with the plain docker-compose.yml (no -f override) and no APP_UID. The data stays readable by root.
+services:
+  portfolio-api:
+    build:
+      args:
+        APP_UID: ${APP_UID:?set APP_UID to the host user's uid (id -u)}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 2g

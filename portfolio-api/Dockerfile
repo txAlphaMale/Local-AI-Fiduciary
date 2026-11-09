@@ -33,9 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl tar socat 
 # tls.start_renewal_thread()), not a crontab entry.
 RUN curl -fsSL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz -o /tmp/acme.tar.gz \
     && mkdir -p /tmp/acme-src && tar -xzf /tmp/acme.tar.gz -C /tmp/acme-src --strip-components=1 \
-    && (cd /tmp/acme-src && ./acme.sh --install --force) \
+    && (cd /tmp/acme-src && ./acme.sh --install --force --home /opt/acme.sh) \
+    && chmod -R a+rX /opt/acme.sh \
     && rm -rf /tmp/acme.tar.gz /tmp/acme-src
 
+# World-readable install location (a non-root uid cannot read /root); tls.py picks this up from ACME_SH_PATH.
+ENV ACME_SH_PATH=/opt/acme.sh/acme.sh
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # Nothing at runtime needs a package manager, and pip carries vendored copies of urllib3/msgpack/setuptools
