@@ -11261,7 +11261,9 @@ def _write_mcpo_secrets_file():
         # instant portfolio-api regenerates it. 0644 keeps it out of other users' write access but
         # lets the host's own compose invocation read it -- no worse than the file already being
         # plaintext-by-necessity for Compose's env_file mechanism (see mcpo.env.example).
-        store.atomic_write_text(MCPO_SECRETS_FILE, "\n".join(lines) + "\n", mode=0o644)
+        # R-7: when the container runs as the host user (APP_UID), the host/Compose reader owns the file, so 0600 is enough;
+        # as root the file would be root-owned and unreadable to Compose, hence the 0644 above.
+        store.atomic_write_text(MCPO_SECRETS_FILE, "\n".join(lines) + "\n", mode=(0o600 if os.geteuid() != 0 else 0o644))
     except Exception:
         pass   # best-effort -- a write failure here shouldn't break the /api/secrets response
 
