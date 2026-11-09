@@ -20,6 +20,7 @@ import time
 import math
 import random
 import re
+import base64
 import hashlib   # 2026-08-06: session-cookie fingerprinting for the session.expired audit event
                  # (the cookie VALUE is never logged -- only a truncated digest, so repeated
                  # sightings of the same dead cookie can be deduped without storing a credential)
@@ -15613,7 +15614,39 @@ def index():
     RESUME-TRACKER.md for the retirement writeup."""
     path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     with open(path, encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+        html_text = f.read()
+    return HTMLResponse(html_text, headers={"Content-Security-Policy": _dashboard_csp(html_text)})
+
+
+# Content-Security-Policy for the dashboard page (R-23). What it buys even though the page still uses inline event
+# handlers and style attributes: an injected <script src>, <base>, <object> or a form posting elsewhere is blocked, and
+# injected script cannot send data to another origin (connect-src 'self'). What it does NOT yet stop: an injected
+# inline event handler such as <img onerror=...> (script-src-attr stays 'unsafe-inline' until the ~80 inline handlers are
+# moved to addEventListener). The page's own inline <script> blocks are allowed by SHA-256 hash, computed here from the
+# file being served, so editing index.html never needs a manual hash update.
+_CSP_CDNS = "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com"   # the pinned, integrity-checked third-party assets
+_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", re.S | re.I)
+
+
+def _dashboard_csp(html_text):
+    hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(m.encode("utf-8")).digest()).decode() + "'"
+                      for m in _INLINE_SCRIPT_RE.findall(html_text))
+    return "; ".join([
+        "default-src 'self'",
+        f"script-src 'self' {_CSP_CDNS} {hashes}".strip(),
+        "script-src-attr 'unsafe-inline'",
+        f"style-src 'self' 'unsafe-inline' {_CSP_CDNS}",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self'",
+        "worker-src 'self'",
+        "manifest-src 'self'",
+        "frame-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ])
 
 
 @app.get("/manifest.json")

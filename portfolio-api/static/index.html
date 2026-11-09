@@ -1089,7 +1089,7 @@ async function load(refresh, bg){
     render();   // re-render with research / insights / plan / ideas / strategist panels
     if(!bg) _maybeAutoStartTour();   // once per page session, only after a real (non-background) load
     if(_bgScrollY!=null){ try{ window.scrollTo(0, _bgScrollY); }catch(_){} }   // restore scroll after a background refresh
-  }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+e+'</div>'; }
+  }catch(e){ document.getElementById('body').innerHTML='<div class="err">'+escHtml(e)+'</div>'; }
   document.getElementById('refresh').textContent='↻ REFRESH';
 }
 
@@ -1910,7 +1910,7 @@ function cockpitPanel(){
     const chip=el('span');
     chip.style.cssText=`cursor:pointer;border:1px solid ${c};border-left:3px solid ${c};border-radius:var(--radius-md);`+
       `padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);color:var(--color-text);white-space:nowrap;`+(dim?'opacity:0.55;':'');
-    const lab=document.createElement('span'); lab.innerHTML=`<span style="color:${c};letter-spacing:1px;">${a.cat}</span> <span class="muted">·</span> ${a.msg}`;
+    const lab=document.createElement('span'); lab.innerHTML=`<span style="color:${c};letter-spacing:1px;">${escHtml(a.cat)}</span> <span class="muted">·</span> ${escHtml(a.msg)}`;
     chip.appendChild(lab);
     chip.title=(a.tip?a.tip+' — ':'')+'Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
     chip.onclick=()=>{ TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
@@ -2067,7 +2067,7 @@ function accountsPanel(d){
   const _ah=el('div','ph','ACCOUNTS'); _ah.appendChild(wikiLink('accounts-panel')); p.appendChild(_ah);
   d.by_account.forEach(a=>{
     const row=el('div','row');
-    row.innerHTML=`<span class="nm">${a.account}<br><span class="sub">${shortInst(a.institution)}</span></span>`+
+    row.innerHTML=`<span class="nm">${escHtml(a.account)}<br><span class="sub">${escHtml(shortInst(a.institution))}</span></span>`+
       `<span style="text-align:right">${usd(a.value)}</span>`;
     p.appendChild(row);
   });
@@ -2076,7 +2076,7 @@ function accountsPanel(d){
   // donut), not under "Other Assets" — the "balance only" note explains why they have no holdings detail.
   (d.investment_balance_accounts||[]).forEach(a=>{
     const row=el('div','row');
-    row.innerHTML=`<span class="nm">${a.account}<br><span class="sub">${shortInst(a.institution)} · balance only</span></span>`+
+    row.innerHTML=`<span class="nm">${escHtml(a.account)}<br><span class="sub">${escHtml(shortInst(a.institution))} · balance only</span></span>`+
       `<span style="text-align:right">${usd(a.value)}</span>`;
     p.appendChild(row);
   });
@@ -2092,7 +2092,7 @@ function accountsPanel(d){
   const subhead=t=>{ const s=el('div','sub'); s.style.cssText='margin:9px 0 2px;letter-spacing:1px;color:var(--color-text-muted);'; s.textContent=t; return s; };
   const line=(nm,inst,val,neg)=>{
     const row=el('div','row');
-    row.innerHTML=`<span class="nm">${nm}<br><span class="sub">${shortInst(inst||'—')}</span></span>`+
+    row.innerHTML=`<span class="nm">${escHtml(nm)}<br><span class="sub">${escHtml(shortInst(inst||'—'))}</span></span>`+
       `<span class="${neg?'neg':''}" style="text-align:right">${neg?'-'+usd(Math.abs(val)):usd(val)}</span>`;
     return row;
   };
@@ -2114,7 +2114,7 @@ function moversPanel(title,items,field){
   items.forEach(it=>{
     const v = field==='day_pct'? pct(it.day_pct) : sgn(it.gain);
     const row=el('div','row');
-    row.innerHTML=`<span class="nm"><span style="color:var(--color-accent)">${it.ticker}</span> <span class="sub">${usd(it.value)}</span></span>`+
+    row.innerHTML=`<span class="nm"><span style="color:var(--color-accent)">${escHtml(it.ticker)}</span> <span class="sub">${usd(it.value)}</span></span>`+
       `<span class="${cls(field==='day_pct'?it.day_pct:it.gain)}">${v}</span>`;
     p.appendChild(row);
   });
@@ -2586,7 +2586,7 @@ function analysisContent(a){
         : (b.cache_stale
           ? `<span style="display:block;font-size:var(--font-size-sm);margin-bottom:2px;color:var(--color-accent)" title="An input could not be refreshed and the last successful retrieval is past its freshness window, counted in trading days.">⚠ DATED INPUTS${(b.cache_dated||[]).length?' · '+b.cache_dated.join(', '):''}${b.cache_fetched_at?' · oldest source from '+new Date(b.cache_fetched_at*1000).toLocaleDateString():''}</span>`
           : ''));
-    row.innerHTML=`<span style="color:var(--color-accent)">${t}</span>`+
+    row.innerHTML=`<span style="color:var(--color-accent)">${escHtml(t)}</span>`+
       `<span>${ratingCell}</span>`+
       `<span style="line-height:1.45">${staleChip}<span style="color:var(--color-text)">${thesis||'—'}</span>${extra.join('')}${fundLine(b)}</span>`;
     wrap.appendChild(row);
@@ -2652,7 +2652,7 @@ function scannerContent(){
     const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
     const ana=i.analyst_rating?`${i.analyst_rating}${i.analyst_buy_pct!=null?' '+i.analyst_buy_pct+'%':''}`:'—';
     const why=(i.excluded_because||[]).join('; ');
-    tr.innerHTML=`<td class="sym">${i.ticker}${i.already_held?' <span class="muted" style="font-size:var(--font-size-xs)">held</span>':''}${i.composite_score!=null?` <span class="muted" style="font-size:var(--font-size-xs)" title="composite quality+value+momentum (0-100): Q ${(i.composite_subscores||{}).quality} · V ${(i.composite_subscores||{}).value} · M ${(i.composite_subscores||{}).momentum}">·c${i.composite_score}</span>`:''}</td>`+
+    tr.innerHTML=`<td class="sym">${escHtml(i.ticker)}${i.already_held?' <span class="muted" style="font-size:var(--font-size-xs)">held</span>':''}${i.composite_score!=null?` <span class="muted" style="font-size:var(--font-size-xs)" title="composite quality+value+momentum (0-100): Q ${(i.composite_subscores||{}).quality} · V ${(i.composite_subscores||{}).value} · M ${(i.composite_subscores||{}).momentum}">·c${i.composite_score}</span>`:''}</td>`+
       `<td>${i.price!=null?'$'+(+i.price).toFixed(2):'—'}</td>`+
       `<td class="${fitc}">${fit}</td>`+
       `<td class="${(i.expected_return_pct||0)>=0?'pos':'neg'}" title="${i.target_mean!=null?'analyst target $'+(+i.target_mean).toFixed(2):''}">${i.expected_return_pct!=null?(i.expected_return_pct>0?'+':'')+i.expected_return_pct+'%':'—'}</td>`+
@@ -2686,7 +2686,7 @@ function scannerContent(){
   }
   if(unavail.length){
     const u=el('div','muted'); u.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-sm);line-height:1.4;';
-    u.innerHTML='⚠ WATCHLIST · NO DATA: '+unavail.map(x=>`<b>${x.ticker}</b> <span class="muted">(${(x.reason||'').replace(/</g,'&lt;')})</span>`).join(' · ')+
+    u.innerHTML='⚠ WATCHLIST · NO DATA: '+unavail.map(x=>`<b>${escHtml(x.ticker)}</b> <span class="muted">(${(x.reason||'').replace(/</g,'&lt;')})</span>`).join(' · ')+
       ' — check for a typo, a delisting, or a symbol the free data tiers do not cover.';
     wrap.appendChild(u);
   }
@@ -2872,7 +2872,7 @@ function alertsContent(){
     wrap.appendChild(el('div','muted','No holdings news alerts right now.')); return wrap; }
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='material news / SEC 8-K on your largest positions'; wrap.appendChild(sub);
   const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale, null, DISCO.fetch_error); wrap.appendChild(cl);
-  DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid var(--color-border);'; let html=`<span style="color:var(--color-accent)">${a.ticker}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
+  DISCO.alerts.forEach(a=>{ const blk=el('div'); blk.style.cssText='padding:4px 0;border-bottom:1px solid var(--color-border);'; let html=`<span style="color:var(--color-accent)">${escHtml(a.ticker)}</span> <span class="muted" style="font-size:var(--font-size-sm)">${a.weight_pct!=null?a.weight_pct+'%':''}</span>`; (a.headlines||[]).forEach(n=>{ const ti=(n.title||'').replace(/</g,'&lt;'); html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;">• ${n.url?`<a href="${n.url}" target="_blank">${ti}</a>`:ti} ${n.date?`<span class="muted" style="font-size:var(--font-size-xs)">${n.date}</span>`:''}</div>`; }); (a.filings||[]).forEach(f=>{ html+=`<div style="font-size:var(--font-size-base);padding:2px 0 2px 12px;color:var(--color-info)">▸ SEC 8-K ${f.date||''}: ${((f.labels||[]).join(', ')||f.items||'filing')} ${f.url?`<a href="${f.url}" target="_blank">[filing]</a>`:''}</div>`; }); blk.innerHTML=html; wrap.appendChild(blk); });
   return wrap;
 }
 
@@ -3406,7 +3406,7 @@ function planContent(r){
     if(r.scenarios && r.scenarios.length>1){
       const sh=el('div','ph','RETURN SCENARIOS · years to FI'); sh.style.marginTop='12px'; wrap.appendChild(sh);
       const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SCENARIO</th><th>REAL RETURN</th><th>YEARS TO FI</th><th class="l">BASIS</th>'; t.appendChild(hr);
-      r.scenarios.forEach(s=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${s.name}</td><td>${s.real_return_pct!=null?s.real_return_pct+'%':'—'}</td><td>${s.years_to_fi!=null?s.years_to_fi:'>80'}</td><td class="l muted" style="font-size:var(--font-size-sm)">${s.basis||''}</td>`; t.appendChild(tr); });
+      r.scenarios.forEach(s=>{ const tr=el('tr'); tr.innerHTML=`<td class="l sym">${escHtml(s.name)}</td><td>${s.real_return_pct!=null?s.real_return_pct+'%':'—'}</td><td>${s.years_to_fi!=null?s.years_to_fi:'>80'}</td><td class="l muted" style="font-size:var(--font-size-sm)">${s.basis||''}</td>`; t.appendChild(tr); });
       wrap.appendChild(t);
       const impl=r.scenarios.find(s=>s.name==='analyst-implied');
       if(impl && impl.caveat){ const cv=el('div','muted'); cv.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);line-height:1.4;color:var(--color-accent)'; cv.textContent='⚠ '+impl.caveat; wrap.appendChild(cv); }
@@ -3431,7 +3431,7 @@ function planContent(r){
     wrap.appendChild(ss2);
     ppl.forEach(p=>{
       const pl=el('div'); pl.style.cssText='font-size:var(--font-size-base);margin:2px 0;';
-      pl.innerHTML=`<span class="muted">${p.label}:</span> claim ${p.claim_age} `+
+      pl.innerHTML=`<span class="muted">${escHtml(p.label)}:</span> claim ${p.claim_age} `+
         `<span class="muted">(${p.claim_vs_pia_pct}% of $${Math.round(p.pia_monthly).toLocaleString()}/mo PIA, FRA ${p.fra.years}y${p.fra.months?p.fra.months+'m':''})</span> → `+
         `<span class="pos">${u0(p.monthly_benefit)}/mo</span> <span class="muted">(${u0(p.annual_benefit)}/yr, ${p.taxable_pct_of_benefit}% taxable · ${p.pia_confidence} confidence)</span>`;
       wrap.appendChild(pl);
@@ -5090,7 +5090,7 @@ function _auditPanel(){
   } else if(AUDIT_VERIFY.ok===true){
     chain.innerHTML=`<span class="pos">✓ Chain integrity verified</span> — ${AUDIT_VERIFY.checked} event(s) checked, no tampering detected.`;
   } else {
-    chain.innerHTML=`<span class="neg">✗ CHAIN INTEGRITY FAILURE</span> — verification broke at event #${AUDIT_VERIFY.broken_at_seq} (${AUDIT_VERIFY.reason||'mismatch'}). This means a stored event was altered or removed outside the app's own retention process.`;
+    chain.innerHTML=`<span class="neg">✗ CHAIN INTEGRITY FAILURE</span> — verification broke at event #${AUDIT_VERIFY.broken_at_seq} (${escHtml(AUDIT_VERIFY.reason||'mismatch')}). This means a stored event was altered or removed outside the app's own retention process.`;
   }
   box.appendChild(chain);
 
@@ -5102,7 +5102,7 @@ function _auditPanel(){
   if(AUDIT_ANCHOR==null){
     anchorBox.innerHTML='<span class="muted">Loading external timestamp anchor status…</span>';
   } else if(AUDIT_ANCHOR.error){
-    anchorBox.innerHTML=`<span class="muted">External timestamp anchoring status unavailable (${AUDIT_ANCHOR.error}).</span>`;
+    anchorBox.innerHTML=`<span class="muted">External timestamp anchoring status unavailable (${escHtml(AUDIT_ANCHOR.error)}).</span>`;
   } else {
     const a=AUDIT_ANCHOR.latest_anchor;
     let line;
@@ -5553,7 +5553,7 @@ async function certGenCsr(){
     const d=await r.json();
     if(d.error){ err.textContent=d.error; return; }
     const out=document.getElementById('cert-csr-out');
-    out.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:4px;">${d.note} <span id="cert-csr-copy"></span></div>`+
+    out.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:4px;">${escHtml(d.note)} <span id="cert-csr-copy"></span></div>`+
       `<textarea readonly rows="10" style="width:400px;font-family:monospace;font-size:12px;">${d.csr_pem}</textarea>`;
     const cp=document.getElementById('cert-csr-copy');
     if(cp) cp.appendChild(copyBtn(d.csr_pem, 'Copy CSR'));
@@ -6388,7 +6388,7 @@ function performanceContent(){
   hr.innerHTML='<th class="l">PERIOD</th><th>PORTFOLIO</th><th>POLICY MIX</th><th>SPY</th><th>EXCESS vs POLICY</th>'; t.appendChild(hr);
   ['QTD','YTD','1Y','3Y'].forEach(p=>{ const x=(r.periods||{})[p]; if(!x) return;
     const tr=el('tr');
-    tr.innerHTML=`<td class="l sym">${p}</td><td class="${cls(x.portfolio_pct)}">${fmt(x.portfolio_pct)}</td>`+
+    tr.innerHTML=`<td class="l sym">${escHtml(p)}</td><td class="${cls(x.portfolio_pct)}">${fmt(x.portfolio_pct)}</td>`+
       `<td>${fmt(x.policy_pct)}</td><td>${fmt(x.spy_pct)}</td>`+
       `<td class="${cls(x.excess_vs_policy_pct)}"><b>${fmt(x.excess_vs_policy_pct)}</b></td>`;
     t.appendChild(tr); });
@@ -7307,7 +7307,7 @@ function backtestContent(){
     const pt=el('table'); const ph2=el('tr');
     ph2.innerHTML='<th class="l">TICKER</th><th>ENTRY</th><th>$ SIZE</th><th>RET</th><th>SPY</th><th>EXCESS</th>'; pt.appendChild(ph2);
     (p.rows||[]).forEach(r=>{ const tr=el('tr');
-      tr.innerHTML=`<td class="l sym">${r.ticker}</td><td>${r.date}</td><td>$${(r.dollars||0).toLocaleString()}</td>`+
+      tr.innerHTML=`<td class="l sym">${escHtml(r.ticker)}</td><td>${r.date}</td><td>$${(r.dollars||0).toLocaleString()}</td>`+
         `<td class="${cls(r.ret_pct)}">${fmt(r.ret_pct,1)}</td><td>${fmt(r.spy_pct,1)}</td>`+
         `<td class="${cls(r.excess_pct)}">${fmt(r.excess_pct,1)}</td>`;
       pt.appendChild(tr); });
@@ -7320,7 +7320,7 @@ function backtestContent(){
     const rtb=el('table'); const rh=el('tr');
     rh.innerHTML='<th class="l">TICKER</th><th>DATE</th><th>CALL</th><th>CONF</th><th>HZN</th><th>FWD</th><th>SPY</th><th>EXCESS</th><th>HIT</th>'; rtb.appendChild(rh);
     rt.recent.forEach(r=>{ const tr=el('tr');
-      tr.innerHTML=`<td class="l sym">${r.ticker}</td><td>${r.date}</td><td>${r.rating}</td><td>${r.confidence||'—'}</td><td>${r.horizon}</td>`+
+      tr.innerHTML=`<td class="l sym">${escHtml(r.ticker)}</td><td>${r.date}</td><td>${r.rating}</td><td>${r.confidence||'—'}</td><td>${r.horizon}</td>`+
         `<td class="${cls(r.fwd_pct)}">${fmt(r.fwd_pct,1)}</td><td>${fmt(r.spy_pct,1)}</td>`+
         `<td class="${cls(r.excess_pct)}">${fmt(r.excess_pct,1)}</td>`+
         `<td>${r.hit==null?'—':(r.hit?'<span class="pos">✓</span>':'<span class="neg">✗</span>')}</td>`;
@@ -7460,7 +7460,7 @@ function driftContent(){
       const ret=c.total_return_pct;
       const rs=ret==null?'':` · <span class="${ret>=0?'pos':'neg'}">${ret>0?'+':''}${ret}% since cost</span>`;
       const row=el('div','row');
-      row.innerHTML=`<span class="nm"><span style="color:var(--color-accent)">${c.ticker}</span> <span class="sub">${c.weight_pct}% (cap ${c.cap_pct}%) · ${u0(c.value)}${rs}</span></span>`+
+      row.innerHTML=`<span class="nm"><span style="color:var(--color-accent)">${escHtml(c.ticker)}</span> <span class="sub">${c.weight_pct}% (cap ${c.cap_pct}%) · ${u0(c.value)}${rs}</span></span>`+
         `<span class="neg">trim ~${u0(c.trim_usd)}</span>`;
       wrap.appendChild(row);
     });
@@ -7527,7 +7527,7 @@ function exposureContent(){
       const sh=el('div','ph','STRESS TEST · IF THE MARKET REPEATS'); sh.style.marginTop='12px'; wrap.appendChild(sh);
       const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SCENARIO</th><th>MARKET</th><th>YOUR EST</th><th>EST $ IMPACT</th>'; t.appendChild(hr);
       ex.stress_test.forEach(s=>{ const tr=el('tr');
-        tr.innerHTML=`<td class="l" title="${s.detail||''}">${s.name}</td>`+
+        tr.innerHTML=`<td class="l" title="${escHtml(s.detail||'')}">${escHtml(s.name)}</td>`+
           `<td class="neg">${s.market_pct}%</td>`+
           `<td class="neg">${s.est_portfolio_pct==null?'—':s.est_portfolio_pct+'%'}</td>`+
           `<td class="neg">${s.est_dollar_impact==null?'—':u0(s.est_dollar_impact)}</td>`;
@@ -7540,7 +7540,7 @@ function exposureContent(){
       const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);margin:2px 0 4px;'; sub.textContent=`equity ${u0(ms.equity_value)} · bond ${u0(ms.bond_value)} · cash ${u0(ms.cash_value)} · via ${ms.source}`; wrap.appendChild(sub);
       const t2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">SCENARIO</th><th>EQ / BD / CASH</th><th>EST $ IMPACT</th><th>% PORTFOLIO</th>'; t2.appendChild(hr2);
       ms.scenarios.forEach(s=>{ const pos=(s.dollar_impact||0)>=0; const tr=el('tr');
-        tr.innerHTML=`<td class="l" title="${s.detail||''}">${s.name}</td>`+
+        tr.innerHTML=`<td class="l" title="${escHtml(s.detail||'')}">${escHtml(s.name)}</td>`+
           `<td class="muted">${s.equity_pct}/${s.bond_pct}/${s.cash_pct}%</td>`+
           `<td class="${pos?'pos':'neg'}">${u0(s.dollar_impact)}</td>`+
           `<td class="${pos?'pos':'neg'}">${s.pct_impact==null?'—':s.pct_impact+'%'}</td>`;
@@ -7696,7 +7696,7 @@ function attributionContent(){
     c.holdings.forEach(h=>{
       const cCls=(h.contribution_pct>=0?'pos':'neg'), rCls=(h.window_return_pct>=0?'pos':'neg');
       const tr=el('tr');
-      tr.innerHTML=`<td style="padding:var(--space-1) var(--space-2);">${h.ticker}</td>`+
+      tr.innerHTML=`<td style="padding:var(--space-1) var(--space-2);">${escHtml(h.ticker)}</td>`+
         `<td style="text-align:right;padding:var(--space-1) var(--space-2);">${h.weight_pct}%</td>`+
         `<td style="text-align:right;padding:var(--space-1) var(--space-2);" class="${rCls}">${h.window_return_pct>0?'+':''}${h.window_return_pct}%</td>`+
         `<td style="text-align:right;padding:var(--space-1) var(--space-2);" class="${cCls}">${h.contribution_pct>0?'+':''}${h.contribution_pct}pt</td>`+
@@ -7738,7 +7738,7 @@ function sizingContent(){
   const tb=el('tbody');
   (lb.positions||[]).forEach(r=>{
     const tr=el('tr'); if(r.over_budget) tr.style.background='rgba(240,180,80,0.07)';
-    tr.innerHTML=`<td style="padding:var(--space-1) var(--space-2);">${r.ticker}${r.over_budget?' <span style="color:var(--color-accent)">⚠</span>':''}</td>`+
+    tr.innerHTML=`<td style="padding:var(--space-1) var(--space-2);">${escHtml(r.ticker)}${r.over_budget?' <span style="color:var(--color-accent)">⚠</span>':''}</td>`+
       `<td style="text-align:right;padding:var(--space-1) var(--space-2);">${r.current_weight_pct==null?'—':r.current_weight_pct+'%'}</td>`+
       `<td style="text-align:right;padding:var(--space-1) var(--space-2);" class="muted">${r.target_weight_pct==null?'—':r.target_weight_pct+'%'}</td>`+
       `<td style="text-align:right;padding:var(--space-1) var(--space-2);">${r.cvar_pct_horizon}%</td>`+
@@ -7781,7 +7781,7 @@ function sizingContent(){
   const xf=(lb.positions||[]).filter(r=>r.exchange_fund_note);
   if(xf.length){
     const xh=el('div'); xh.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-base);';
-    xf.forEach(r=>{ const x=el('div'); x.style.cssText='font-size:var(--font-size-sm);margin:3px 0;border-left:3px solid var(--color-border-strong);padding-left:var(--space-2);'; x.innerHTML=`<b>${r.ticker}</b> — ${r.exchange_fund_note}`; xh.appendChild(x); });
+    xf.forEach(r=>{ const x=el('div'); x.style.cssText='font-size:var(--font-size-sm);margin:3px 0;border-left:3px solid var(--color-border-strong);padding-left:var(--space-2);'; x.innerHTML=`<b>${escHtml(r.ticker)}</b> — ${r.exchange_fund_note}`; xh.appendChild(x); });
     wrap.appendChild(xh);
   }
   if((s.unresolved||[]).length){ const ur=el('div','muted'); ur.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-2);'; ur.textContent='no daily data (excluded): '+s.unresolved.join(', '); wrap.appendChild(ur); }
@@ -8635,7 +8635,7 @@ function flContent(f){
       const ddv=c.avg_daily_dollar_volume!=null?usd(c.avg_daily_dollar_volume):'—';
       const mc=c.market_cap_musd!=null?'$'+Math.round(c.market_cap_musd).toLocaleString()+'M':'—';
       const ex=c.days_to_exit!=null?c.days_to_exit+'d':'—';
-      tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.name||''}</td><td>${usd(c.value)}</td><td>${ddv}</td><td>${mc}</td><td>${ex}</td><td class="neg" style="font-size:var(--font-size-base)">${(c.flags||[]).join(', ')}</td>`;
+      tr.innerHTML=`<td class="sym">${escHtml(c.ticker)}</td><td class="name">${c.name||''}</td><td>${usd(c.value)}</td><td>${ddv}</td><td>${mc}</td><td>${ex}</td><td class="neg" style="font-size:var(--font-size-base)">${(c.flags||[]).join(', ')}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
   } else { wrap.appendChild(el('div','muted','No liquidity flags — all tradable holdings are liquid enough.')); }
@@ -8707,7 +8707,7 @@ function taxContent(bracket, audit){
       const tb=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>COST</th><th>LOSS</th><th>LOSS%</th><th class="l">WASH-SALE</th>'; tb.appendChild(hr);
       const wv=v=>v==='clear'?'<span class="pos">✓ clear</span>':(v==='blocked'?'<span class="neg">✗ BLOCKED</span>':(v==='caution-drip'?'<span style="color:var(--color-accent)">⚠ DRIP</span>':'<span class="muted">?</span>'));
       tlh.candidates.forEach(c=>{ const w=c.wash||{}; const tr=el('tr');
-        tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td>${c.cost!=null?usd(c.cost):'—'}${c.cost_source==='manual'?` <span title="${c.basis_stale?'cost basis entered by you — ESTIMATE: your share count changed since entry; confirm with your brokerage before relying on this loss':'cost basis entered by you, not reported by your provider; confirm with your brokerage'}">✎${c.basis_stale?' est.':''}</span>`:''}</td><td class="neg">${sgn(c.loss)}</td><td class="neg">${pct(c.loss_pct)}</td>`+
+        tr.innerHTML=`<td class="sym">${escHtml(c.ticker)}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td>${c.cost!=null?usd(c.cost):'—'}${c.cost_source==='manual'?` <span title="${c.basis_stale?'cost basis entered by you — ESTIMATE: your share count changed since entry; confirm with your brokerage before relying on this loss':'cost basis entered by you, not reported by your provider; confirm with your brokerage'}">✎${c.basis_stale?' est.':''}</span>`:''}</td><td class="neg">${sgn(c.loss)}</td><td class="neg">${pct(c.loss_pct)}</td>`+
           `<td class="l" style="font-size:var(--font-size-sm);" title="${((w.msg||'')+'').replace(/"/g,'&quot;')}">${wv(w.verdict)}${w.window_opens?` <span class="muted">reopens ${w.window_opens}</span>`:''}</td>`;
         tb.appendChild(tr);
         const rp=w.replacement;
@@ -8732,7 +8732,7 @@ function taxContent(bracket, audit){
       wrap.appendChild(chip);
       if(inc.by_ticker && inc.by_ticker.length){
         const tbi=el('table'); const hri=el('tr'); hri.innerHTML='<th class="l">SYM</th><th>VALUE</th><th>YIELD</th><th>EST INCOME/YR</th><th>ACCTS</th>'; tbi.appendChild(hri);
-        inc.by_ticker.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td>${usd(c.value)}</td><td style="color:var(--color-accent)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td><td title="${(c.accounts||[]).join(', ').replace(/"/g,'')}">${c.account_count}</td>`; tbi.appendChild(tr); });
+        inc.by_ticker.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${escHtml(c.ticker)}</td><td>${usd(c.value)}</td><td style="color:var(--color-accent)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td><td title="${(c.accounts||[]).join(', ').replace(/"/g,'')}">${c.account_count}</td>`; tbi.appendChild(tr); });
         wrap.appendChild(tbi);
       }
       const ni=el('div','muted'); ni.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:8px 0 14px;'; ni.textContent=inc.note||''; wrap.appendChild(ni);
@@ -8744,7 +8744,7 @@ function taxContent(bracket, audit){
       tot2.innerHTML=`<span class="muted">~</span>${usd(loc.est_annual_income_in_taxable)}<span class="muted">/yr of that income is taxable distributions across ${loc.count} high-yield holding(s) — sheltering these in an IRA/401k stops the yearly tax:</span>`;
       wrap.appendChild(tot2);
       const tb2=el('table'); const hr2=el('tr'); hr2.innerHTML='<th class="l">SYM</th><th class="l">ACCOUNT</th><th>VALUE</th><th>YIELD</th><th>EST INCOME/YR</th>'; tb2.appendChild(hr2);
-      loc.misplaced.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${c.ticker}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td style="color:var(--color-accent)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td>`; tb2.appendChild(tr); });
+      loc.misplaced.forEach(c=>{ const tr=el('tr'); tr.innerHTML=`<td class="sym">${escHtml(c.ticker)}</td><td class="name">${c.account}</td><td>${usd(c.value)}</td><td style="color:var(--color-accent)">${(+c.dividend_yield_pct).toFixed(2)}%</td><td>${usd(c.est_annual_income)}</td>`; tb2.appendChild(tr); });
       wrap.appendChild(tb2);
     } else { wrap.appendChild(el('div','muted','No high-yield holdings flagged in taxable accounts (or the research cache lacks yields for them).')); }
     const n2=el('div','muted'); n2.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-top:var(--space-2);'; n2.textContent=loc.note||''; wrap.appendChild(n2);
@@ -8821,7 +8821,7 @@ function stratContent(r){
   }
   if(r.transactions && r.transactions.length){
     const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
-    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${x.ticker}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
+    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${escHtml(x.ticker)}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
   }
   wrap.appendChild(userLedgerPanel());
   return wrap;
@@ -9060,7 +9060,7 @@ function userLedgerPanel(){
   } else { wrap.appendChild(el('div','muted','All cash — no positions yet.')); }
   if(r.transactions && r.transactions.length){
     const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
-    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${x.ticker}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
+    [...r.transactions].reverse().slice(0,15).forEach(x=>{ const d=el('div'); d.style.cssText='font-size:var(--font-size-base);padding:1px 0;'; d.innerHTML=`<span class="muted">${new Date(x.ts*1000).toLocaleDateString()}</span> <span class="${x.action==='buy'?'pos':'neg'}">${x.action.toUpperCase()}</span> <span style="color:var(--color-accent)">${escHtml(x.ticker)}</span> ${(+x.shares).toFixed(3)} @ $${(+x.price).toFixed(2)} = ${usd(x.value)}`; wrap.appendChild(d); });
   }
   return wrap;
 }
@@ -9344,7 +9344,14 @@ function mdToHtml(t){
     if(window.marked){
       if(!_mdRenderer){ _mdRenderer=new marked.Renderer();
         // every markdown table gets the same wrapper, so the .md-table-wrap CSS (wrapping, left-align, own scrollbar) applies wherever it renders
-        _mdRenderer.table=(header,body)=>'<div class="md-table-wrap"><table><thead>'+header+'</thead>'+(body?'<tbody>'+body+'</tbody>':'')+'</table></div>'; }
+        _mdRenderer.table=(header,body)=>'<div class="md-table-wrap"><table><thead>'+header+'</thead>'+(body?'<tbody>'+body+'</tbody>':'')+'</table></div>';
+        // R-23 (2026-11-09): model output can be steered by whatever the tools fetch (web search, filings, knowledge documents), and
+        // marked 4 passes raw HTML through. Show raw HTML as text, allow only http(s)/mailto/relative links, and do not render images.
+        const _mdE=x=>String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        _mdRenderer.html=h=>_mdE(h);
+        _mdRenderer.link=(href,title,text)=>/^\s*(https?:|mailto:|\/|#)/i.test(String(href||''))
+          ? '<a href="'+_mdE(href)+'"'+(title?' title="'+_mdE(title)+'"':'')+' target="_blank" rel="noopener noreferrer">'+text+'</a>' : text;
+        _mdRenderer.image=(href,title,text)=>_mdE(text||''); }
       return marked.parse(t||'', {breaks:true, renderer:_mdRenderer});
     }
   }catch(_){}
