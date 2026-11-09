@@ -69,7 +69,17 @@ if [ -z "$SRC" ]; then
   read -r -p "Data volume path to back up [$DEFAULT_SRC]: " SRC
   SRC="${SRC:-$DEFAULT_SRC}"
 fi
-if [ ! -d "$SRC" ]; then
+case "$SRC" in docker-volume:*) ;; *)
+  # Docker Desktop / WSL: the engine is not in this OS, so the usual /var/lib/docker path does not exist; read the volume
+  # through Docker instead (backup.sh understands docker-volume:NAME).
+  if [ ! -d "$SRC" ] && docker volume inspect fiduciary_portfolio-data >/dev/null 2>&1; then
+    echo "Host path '$SRC' is not reachable; using the Docker volume fiduciary_portfolio-data via docker instead."
+    SRC="docker-volume:fiduciary_portfolio-data"
+  fi ;;
+esac
+if [ "${SRC#docker-volume:}" != "$SRC" ]; then
+  :
+elif [ ! -d "$SRC" ]; then
   echo "ERROR: '$SRC' does not exist. Find the real path with:" >&2
   echo "  docker volume inspect fiduciary_portfolio-data --format '{{ .Mountpoint }}'" >&2
   exit 1

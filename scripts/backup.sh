@@ -56,7 +56,19 @@ if [ -z "$PASS" ]; then
   echo "ERROR: BACKUP_PASSPHRASE is not set. Refusing to write an unencrypted backup." >&2
   exit 1
 fi
-if [ ! -d "$SRC" ]; then
+# SRC may be "docker-volume:NAME" (2026-11-09): read a Docker named volume through a throwaway container. Needed when the
+# Docker engine runs outside this OS (Docker Desktop with WSL integration), where /var/lib/docker/volumes/... is not a
+# path this host can open.
+VOLUME=""
+case "$SRC" in
+  docker-volume:*) VOLUME="${SRC#docker-volume:}" ;;
+esac
+if [ -n "$VOLUME" ]; then
+  if ! docker volume inspect "$VOLUME" >/dev/null 2>&1; then
+    echo "ERROR: docker volume '$VOLUME' not found (is Docker running?)." >&2
+    exit 1
+  fi
+elif [ ! -d "$SRC" ]; then
   echo "ERROR: source directory '$SRC' does not exist or is not reachable." >&2
   exit 1
 fi
@@ -65,7 +77,12 @@ mkdir -p "$OUT"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 enc_path="$OUT/fiduciary-backup-$ts.tar.gz.enc"
 
-tar czf - -C "$SRC" . | \
+if [ -n "$VOLUME" ]; then
+  # read-only mount; the pinned-by-name alpine image is already on this host (used by the compose tooling)
+  docker run --rm -v "$VOLUME":/data:ro alpine tar czf - -C /data .
+else
+  tar czf - -C "$SRC" .
+fi | \
   openssl enc -aes-256-cbc -pbkdf2 -iter 300000 -salt -pass env:BACKUP_PASSPHRASE -out "$enc_path"
 
 sha256sum "$enc_path" > "$enc_path.sha256" 2>/dev/null || shasum -a 256 "$enc_path" > "$enc_path.sha256"
