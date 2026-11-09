@@ -1643,7 +1643,7 @@ function render(){
   // top stats
   const stats=[
     ['NET WORTH', usd(d.net_worth), ''],
-    ['INVESTED', usd(d.invested_value), ''],
+    ['INVESTED', usd((d.invested_value||0)-(d.cash_value||0)), ''],
     ['UNREAL P/L', sgn(d.total_unrealized_gain), cls(d.total_unrealized_gain)],
     ['P/L %', pct(d.total_gain_pct), cls(d.total_gain_pct)],
   ];
