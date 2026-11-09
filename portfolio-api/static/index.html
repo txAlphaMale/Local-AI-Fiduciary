@@ -262,6 +262,9 @@
   .chat-ptab{flex:1;text-align:center;cursor:pointer;font-size:var(--font-size-sm);letter-spacing:1px;padding:5px 0;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);color:var(--color-text-muted);}
   .chat-ptab.on{color:var(--color-accent);border-color:var(--color-accent);}
   .chat-list{flex:1;overflow:auto;}
+  .dash-arrange{outline:1px dashed var(--color-accent);outline-offset:-1px;cursor:grab;}
+  .dash-handle{display:flex;align-items:center;gap:var(--space-2);padding:2px 6px;margin-bottom:4px;font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-accent);background:var(--overlay-accent-weak);border-radius:var(--radius-md);user-select:none;}
+  .dash-handle button{padding:0 6px;font-size:var(--font-size-sm);}
   .chat-sess{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);padding:var(--space-1) var(--space-2);border-radius:var(--radius-md);cursor:pointer;font-size:var(--font-size-base);color:var(--color-text);}
   .chat-sess:hover{background:var(--color-panel-alt);}
   .chat-sess.on{background:var(--color-panel-alt);border-left:2px solid var(--color-accent);}
@@ -2167,11 +2170,25 @@ function dashboardContent(){
   const gb=el('button','mut-btn',nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:var(--space-2);';
   gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
   nbox.appendChild(gb);
-  wrap.appendChild(nbox);
-  // row 1 (moved here 2026-07-21, Jason): portfolio value vs SPY (growth-of-100 line; accrues
-  // from the daily snapshot) — its own full-width row, first of the panel rows (was row 3,
-  // below the movers). No margin-top: follows nbox, which already carries margin-bottom.
-  const r3=el('div'); r3.appendChild(valuePanel()); wrap.appendChild(r3);
+  // The full-width rows: the weekly letter and the three trend charts, in the user's order (DASH_ORDER.rows; default: letter, net worth,
+  // portfolio vs SPY, value vs cost basis). The shared window picker (1M..ALL, custom) rides on the first chart that is shown.
+  wrap.appendChild(dashToolbar());
+  let needBar=true;
+  const takeBar=()=>{ const b=needBar; needBar=false; return b; };
+  const rowsBox=el('div');
+  if(graphOn('cost')===false && graphOn('spy')===false && graphOn('networth')===false) rowsBox.appendChild(el('div','muted','All charts are hidden. Use the buttons above to show them.'));
+  DASH_ORDER.rows.forEach(k=>{
+    let n=null;
+    if(k==='letter') n=nbox;
+    else if(k==='networth' && graphOn('networth')) n=netWorthPanel(takeBar());
+    else if(k==='spy' && graphOn('spy')) n=spyPanel(takeBar());
+    else if(k==='cost' && graphOn('cost')) n=costPanel(takeBar());
+    if(!n) return;
+    n.style.marginTop=rowsBox.querySelector('[data-pkey]')?'10px':'';
+    rowsBox.appendChild(dashDecorate(n,'rows',k));
+  });
+  if(DASH_ARRANGE) wireDashDnD(rowsBox,'rows',true);
+  wrap.appendChild(rowsBox);
   // row 2 (restructured 2026-07-22, Jason): the two donut panels finished rendering early and,
   // because ACCOUNTS shared the same CSS-grid row and Grid stretches every cell to the tallest
   // sibling, a long ACCOUNTS list stretched the short donuts and left dead space above the movers
@@ -2183,16 +2200,20 @@ function dashboardContent(){
   const body=el('div'); body.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:10px;margin-top:10px;align-items:start;';
   const small=el('div','grid cols');
   MIXCHARTS=[];
-  if(graphOn('pies')){                                // ALLOCATION & MIX graphs can be hidden as a group (graph toggle bar above the charts)
-    small.appendChild(allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value));
-    small.appendChild(allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value));
-    small.appendChild(mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()));
-    small.appendChild(mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP), 'mix-pies'));
-    small.appendChild(mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT), 'mix-pies'));
-  }
-  small.appendChild(moversPanel('TOP GAINERS', d.gainers, 'gain'));
-  small.appendChild(moversPanel('TOP LOSERS', d.losers, 'gain'));
-  small.appendChild(moversPanel('DAY MOVERS', d.day_movers, 'day_pct'));
+  const tileFactory={
+    'alloc-inst':()=>allocPanel('ALLOCATION · INSTITUTION','c-inst', d.by_institution, d.allocation_total||d.invested_value),
+    'alloc-type':()=>allocPanel('ALLOCATION · ASSET TYPE','c-type', d.by_type, d.invested_value),
+    'mix-hold':()=>mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()),
+    'mix-sector':()=>mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP), 'mix-pies'),
+    'mix-class':()=>mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT), 'mix-pies'),
+    gainers:()=>moversPanel('TOP GAINERS', d.gainers, 'gain'),
+    losers:()=>moversPanel('TOP LOSERS', d.losers, 'gain'),
+    daymovers:()=>moversPanel('DAY MOVERS', d.day_movers, 'day_pct')};
+  DASH_ORDER.tiles.forEach(k=>{
+    if(k.indexOf('alloc-')===0 || k.indexOf('mix-')===0){ if(!graphOn('pies')) return; }   // ALLOCATION & MIX graphs can be hidden as a group (GRAPHS bar above the charts)
+    const n=tileFactory[k](); if(n) small.appendChild(dashDecorate(n,'tiles',k));
+  });
+  if(DASH_ARRANGE) wireDashDnD(small,'tiles',false);
   body.appendChild(small);
   const acctCol=el('div'); acctCol.appendChild(accountsPanel(d)); body.appendChild(acctCol);
   wrap.appendChild(body);
@@ -9169,17 +9190,6 @@ function perfSeries(){            // -> {rows:[{date,port,spy}], mode, note, ran
   const range=chartWindowRange(CH_WIN, CH_FROM, CH_TO, rows[0].date, rows[rows.length-1].date);
   return {rows:sliceRebase(rows, range[0], range[1], ['port','spy']), mode, range, wantReturn:CH_MODE==='return', haveRet};
 }
-function valuePanel(){
-  const wrap=el('div');
-  wrap.appendChild(graphToggleBar());
-  let needBar=true;                 // the shared window picker (1M..ALL, custom) rides on the first chart that is shown
-  const takeBar=()=>{ const b=needBar; needBar=false; return b; };
-  if(graphOn('cost')===false && graphOn('spy')===false && graphOn('networth')===false) wrap.appendChild(el('div','muted','All charts are hidden. Use the buttons above to show them.'));
-  if(graphOn('spy')){ wrap.appendChild(spyPanel(takeBar())); }
-  if(graphOn('cost')){ wrap.appendChild(costPanel(takeBar())); }
-  if(graphOn('networth')){ wrap.appendChild(netWorthPanel(takeBar())); }
-  return wrap;
-}
 function spyPanel(withBar){
   const ps=perfSeries();
   const p=el('div','panel');
@@ -9232,6 +9242,89 @@ function graphPrefsParse(raw){              // never throws: anything unreadable
 }
 let GRAPHS=graphPrefsParse((()=>{ try{ return localStorage.getItem('fidGraphs'); }catch(_){ return null; } })());
 const graphOn=k=>GRAPHS[k]!==false;
+// ---- Dashboard layout (2026-11-09): the order of the dashboard's panels is the user's to set. ARRANGE mode shows a handle on every
+// panel: drag it, or use the arrows (which also work on a phone, where drag-and-drop does not). Two independent lists: the full-width
+// rows (weekly letter + the three trend charts) and the tile grid (allocation/mix pies and movers). ACCOUNTS stays docked on the right.
+// The order is a per-browser preference (localStorage, like the graph toggles); panels hidden by the GRAPHS switches keep their slot.
+const DASH_DEFAULT={rows:['letter','networth','spy','cost'], tiles:['alloc-inst','alloc-type','mix-hold','mix-sector','mix-class','gainers','losers','daymovers']};
+const DASH_LABEL={letter:'WEEKLY LETTER', networth:'NET WORTH', spy:'PORTFOLIO vs SPY', cost:'VALUE vs COST BASIS',
+  'alloc-inst':'ALLOCATION · INSTITUTION','alloc-type':'ALLOCATION · ASSET TYPE','mix-hold':'MIX · HOLDINGS','mix-sector':'MIX · SECTOR','mix-class':'MIX · ASSET CLASS',
+  gainers:'TOP GAINERS', losers:'TOP LOSERS', daymovers:'DAY MOVERS'};
+function dashOrderParse(raw){               // never throws: unreadable, unknown or missing keys fall back to / are appended from the defaults
+  const o={rows:DASH_DEFAULT.rows.slice(), tiles:DASH_DEFAULT.tiles.slice()};
+  try{
+    const j=JSON.parse(raw||'null');
+    if(j && typeof j==='object') ['rows','tiles'].forEach(g=>{
+      if(!Array.isArray(j[g])) return;
+      const known=DASH_DEFAULT[g], seen=j[g].filter((k,i)=>known.indexOf(k)>=0 && j[g].indexOf(k)===i);
+      o[g]=seen.concat(known.filter(k=>seen.indexOf(k)<0));
+    });
+  }catch(_){}
+  return o;
+}
+function dashMergeOrder(full, visibleNew){  // visible panels take the visible slots in their new order; hidden ones keep theirs
+  const vis=new Set(visibleNew); let i=0;
+  return full.map(k=>vis.has(k)?visibleNew[i++]:k);
+}
+let DASH_ORDER=dashOrderParse((()=>{ try{ return localStorage.getItem('fidDashOrder'); }catch(_){ return null; } })());
+let DASH_ARRANGE=false;
+function dashCommit(group, keys){
+  DASH_ORDER[group]=dashMergeOrder(DASH_ORDER[group], keys);
+  try{ localStorage.setItem('fidDashOrder',JSON.stringify(DASH_ORDER)); }catch(_){}
+  render();
+}
+function dashVisible(group){ return [...document.querySelectorAll('[data-pgroup="'+group+'"][data-pkey]')].map(n=>n.dataset.pkey); }
+function dashMove(group, key, delta){
+  const ks=dashVisible(group), i=ks.indexOf(key), j=i+delta;
+  if(i<0 || j<0 || j>=ks.length) return;
+  const t=ks[i]; ks[i]=ks[j]; ks[j]=t; dashCommit(group, ks);
+}
+function dashReset(){ DASH_ORDER=dashOrderParse(null); try{ localStorage.removeItem('fidDashOrder'); }catch(_){} render(); }
+function dashDecorate(node, group, key){     // tag a panel with its slot; in ARRANGE mode add the handle bar and make it draggable
+  node.dataset.pkey=key; node.dataset.pgroup=group;
+  if(!DASH_ARRANGE) return node;
+  node.classList.add('dash-arrange'); node.draggable=true;
+  const h=el('div','dash-handle'); h.title='Drag this panel to a new place';
+  h.appendChild(el('span',null,'⠿ '+(DASH_LABEL[key]||key)));
+  const up=el('button','mut-btn','▲'); up.title='Move earlier'; up.onclick=ev=>{ ev.stopPropagation(); dashMove(group,key,-1); };
+  const dn=el('button','mut-btn','▼'); dn.title='Move later'; dn.onclick=ev=>{ ev.stopPropagation(); dashMove(group,key,1); };
+  h.appendChild(up); h.appendChild(dn); node.insertBefore(h, node.firstChild);
+  return node;
+}
+function wireDashDnD(box, group, vertical){
+  let drag=null, orig='';
+  const items=()=>[...box.children].filter(c=>c.dataset&&c.dataset.pkey);
+  const keys=()=>items().map(c=>c.dataset.pkey);
+  box.ondragstart=e=>{
+    const it=e.target&&e.target.closest&&e.target.closest('[data-pkey]'); if(!it||it.parentNode!==box) return;
+    drag=it; orig=keys().join('|');
+    try{ e.dataTransfer.setData('text/plain', it.dataset.pkey); e.dataTransfer.effectAllowed='move'; }catch(_){}
+    setTimeout(()=>{ if(drag) drag.style.opacity='0.35'; },0);
+  };
+  box.ondragover=e=>{
+    if(!drag) return; e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){}
+    const t=e.target&&e.target.closest&&e.target.closest('[data-pkey]'); if(!t||t===drag||t.parentNode!==box) return;
+    const r=t.getBoundingClientRect(), dr=drag.getBoundingClientRect();
+    const sameRow=!vertical && Math.abs(r.top-dr.top)<30;                 // tiles in one grid row are ordered left to right, otherwise top to bottom
+    const before=sameRow ? e.clientX<r.left+r.width/2 : e.clientY<r.top+r.height/2;
+    box.insertBefore(drag, before?t:t.nextSibling);
+  };
+  box.ondrop=e=>{ e.preventDefault(); };
+  box.ondragend=()=>{
+    if(!drag) return; drag.style.opacity=''; const ks=keys(), changed=ks.join('|')!==orig; drag=null;
+    if(changed) dashCommit(group, ks);
+  };
+}
+function dashToolbar(){
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+  bar.appendChild(graphToggleBar());
+  const ar=el('span',null,(DASH_ARRANGE?'● ':'○ ')+'ARRANGE'); ar.title='Drag panels (or use the arrows) to reorder the dashboard';
+  ar.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);font-size:var(--font-size-sm);'+(DASH_ARRANGE?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+  ar.onclick=()=>{ DASH_ARRANGE=!DASH_ARRANGE; render(); };
+  bar.appendChild(ar);
+  if(DASH_ARRANGE){ const rs=el('button','mut-btn','RESET LAYOUT'); rs.style.cssText='font-size:var(--font-size-sm);padding:1px 8px;'; rs.onclick=dashReset; bar.appendChild(rs); }
+  return bar;
+}
 function graphToggleBar(){
   const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;margin:var(--space-1) 0;font-size:var(--font-size-sm);';
   bar.appendChild(el('span','muted','GRAPHS'));
