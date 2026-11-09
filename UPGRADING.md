@@ -33,11 +33,11 @@ docker compose up -d
 
 ## 3. Optional: harden the container (Linux or WSL, data on the Linux disk)
 
-Runs `portfolio-api` as your own user with a read-only filesystem, no Linux capabilities, and resource limits. Default behaviour is unchanged unless you do this. Not for data kept on a Windows drive (`/mnt/c/...`), where file ownership does not map.
+Runs `portfolio-api` as your own user with a read-only filesystem, no Linux capabilities, and resource limits; `mcpo` also drops all capabilities. Default behaviour is unchanged unless you do this. Not for data kept on a Windows drive (`/mnt/c/...`), where file ownership does not map.
 
 ```bash
 docker compose stop portfolio-api
-docker run --rm -v <project>_portfolio-data:/data -v "$PWD/backups:/b" alpine sh -c "chown -R $(id -u):$(id -u) /data /b"
+docker run --rm -v <project>_portfolio-data:/data   # e.g. fiduciary_portfolio-data for a folder named Fiduciary -v "$PWD/backups:/b" alpine sh -c "chown -R $(id -u):$(id -u) /data /b"
 ```
 
 Then add two lines to your `.env` (the volume name is `<folder name>_portfolio-data`; check with `docker volume ls`):
@@ -50,8 +50,10 @@ APP_UID=<the output of: id -u>
 and rebuild:
 
 ```bash
-docker compose build --pull portfolio-api && docker compose up -d portfolio-api
+docker compose build --pull portfolio-api && docker compose up -d
 ```
+
+(Plain `up -d`, not just `portfolio-api`, so `mcpo` is recreated with its new settings too.) Afterwards `docker compose exec portfolio-api id -u` should print your uid, not `0`.
 
 To undo: remove those two `.env` lines and rebuild. Root can still read the data. Details are in the header of `docker-compose.hardened.yml`.
 
