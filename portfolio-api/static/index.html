@@ -9247,7 +9247,7 @@ function netWorthPanel(withBar){
     p.appendChild(cap); return p;
   }
   const unit={daily:'day',weekly:'week',monthly:'month'}[nr.mode];
-  cap.textContent='Bars: your net worth (assets minus debts) at the end of each '+unit+' · bars compress from daily to weekly to monthly as the window grows · same window as the charts above.';
+  cap.textContent='Line: your net worth (assets minus debts) at the end of each '+unit+' · points thin out from daily to weekly to monthly as the window grows · same window as the charts above.';
   p.appendChild(cap);
   const box=el('div'); box.style.cssText='height:190px;position:relative;'; box.innerHTML='<canvas id="c-networth"></canvas>'; p.appendChild(box);
   return p;
@@ -9291,13 +9291,15 @@ function drawPerfCharts(){
     if(nr.rows.length>=2){
       const fmt=v=>Math.abs(v)>=1e6?'$'+(v/1e6).toFixed(2)+'M':'$'+Math.round(v/1000)+'k';
       const spanDays=Math.round((new Date(nr.range[1])-new Date(nr.range[0]))/86400000);
-      charts.push(new Chart(cn,{type:'bar',
+      // A single calm line (same look as the PORTFOLIO vs SPY chart): thin, no point markers, no fill.
+      charts.push(new Chart(cn,{type:'line',
         data:{labels:nr.rows.map(r=>r.date),datasets:[{label:'Net worth',data:nr.rows.map(r=>r.nw),
-          backgroundColor:nr.rows.map(r=>r.nw>=0?resolveColor('var(--color-accent)'):resolveColor('var(--color-negative)')),borderWidth:0}]},
+          borderColor:resolveColor('var(--color-accent)'),backgroundColor:'transparent',borderWidth:2,pointRadius:0,pointHoverRadius:3,tension:0.2}]},
         options:{responsive:true,maintainAspectRatio:false,
+          interaction:{mode:'index',intersect:false},
           plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label+' ('+nr.mode+')',label:t=>'Net worth: $'+Math.round(t.parsed.y).toLocaleString()}}},
-          scales:{x:{ticks:{color:muted,font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:12,
-                           callback:function(v){ return perfTickLabel(this.getLabelForValue(v), spanDays); }},grid:{display:false}},
+          scales:{x:{ticks:{color:muted,font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:8,
+                           callback:function(v){ return perfTickLabel(this.getLabelForValue(v), spanDays); }},grid:{color:grid}},
                   y:{ticks:{color:muted,font:{size:9},callback:v=>fmt(v)},grid:{color:grid}}}}}));
     }
   }

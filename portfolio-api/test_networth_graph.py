@@ -101,6 +101,13 @@ class TestWiring(unittest.TestCase):
                        "document.getElementById('c-networth')", "localStorage.setItem('fidGraphs'", "'<canvas id=\"c-networth\"></canvas>'"):
             self.assertIn(needle, HTML, needle)
 
+    def test_net_worth_is_a_quiet_line_not_bars(self):
+        block = HTML.split("document.getElementById('c-networth')")[1].split("// fetch the holdings-based return series")[0]
+        self.assertIn("type:'line'", block)
+        self.assertNotIn("type:'bar'", block)
+        self.assertIn("pointRadius:0", block)
+        self.assertIn("Line: your net worth", HTML)
+
     def test_window_picker_survives_hiding_the_first_chart(self):
         self.assertIn("const takeBar=()=>{ const b=needBar; needBar=false; return b; };", HTML)
         self.assertIn("if(withBar) p.appendChild(perfToolbar());", HTML)
