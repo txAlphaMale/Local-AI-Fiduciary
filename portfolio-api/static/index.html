@@ -10040,10 +10040,22 @@ CALC_SPECS.points={title:'MORTGAGE POINTS · BREAK-EVEN',
     {k:'points',l:'Points',u:'pts',ph:'1'},
     {k:'points_cost',l:'…or points cost',u:'$',ph:''},
     {k:'hold_years',l:'Expect to keep the loan',u:'yrs',ph:'7',h:'Until you sell or refinance.'}]}]};
+let BEN_LIMITS=null;       // contribution limits the app computes with (GET /api/benefits/limits: dated registry, verified date, source link)
+function benLimitsLoad(){
+  fetch('/api/benefits/limits').then(r=>r.ok?r.json():null).then(d=>{ BEN_LIMITS=d||{}; if(TAB==='calculators') render(); }).catch(()=>{ BEN_LIMITS={}; });
+}
+function k401LimitHint(){
+  const L=BEN_LIMITS;
+  if(!L || !L.k401_base) return 'The 401(k) employee deferral limit (pre-tax and Roth combined), not the IRA limit. Look up the current year at irs.gov (search "401(k) limit"). Leave blank to ignore the limit.';
+  const u=n=>'$'+Math.round(n).toLocaleString();
+  return 'The 401(k) employee deferral limit (pre-tax and Roth combined), not the IRA limit. '+L.year+': '+u(L.k401_base)+'; plus '+u(L.k401_catchup_50)+' if you are 50+, or '+u(L.k401_catchup_60_63)+' instead at 60-63. '
+    +(L.k401_for_you?('For you ('+L.k401_for_you_basis+'): '+u(L.k401_for_you)+'. '):'')+'Verified '+(L.verified||'?')+' against the IRS announcement ('+(L.source_url||'irs.gov')+'); the app flags these figures for re-verification every January; you can type any figure to test a scenario. IRA limit ('+u(L.ira_limit)+') is separate.';
+}
 CALC_SPECS.roth_vs_traditional={title:'ROTH vs TRADITIONAL · 401(k) ELECTION',
   intro:'Compares putting your election all pre-tax, half and half, or all Roth, on an EQUAL take-home basis (a pre-tax dollar costs less paycheck, so the deduction buys extra contributions). Roth wins when your retirement tax rate is higher than today\'s, traditional when it is lower. Educational, not tax advice.',
-  prefill:()=>{ if(!TAX||TAX.error) return null; const o={}; if(TAX.marginal_ordinary_rate_pct!=null) o.rate_now_pct=String(TAX.marginal_ordinary_rate_pct); return o; },
-  prefillLabel:'use my tax bracket for today\'s rate',
+  prefill:()=>{ const o={}; if(TAX&&!TAX.error&&TAX.marginal_ordinary_rate_pct!=null) o.rate_now_pct=String(TAX.marginal_ordinary_rate_pct);
+    if(BEN_LIMITS&&BEN_LIMITS.k401_for_you) o.annual_limit=String(BEN_LIMITS.k401_for_you); return Object.keys(o).length?o:null; },
+  prefillLabel:'use my tax bracket and 401(k) limit',
   groups:[
     {g:'THE ELECTION',f:[
       {k:'salary',l:'Salary',u:'$',ph:'150000'},
@@ -10051,7 +10063,7 @@ CALC_SPECS.roth_vs_traditional={title:'ROTH vs TRADITIONAL · 401(k) ELECTION',
       {k:'annual_election',l:'…or annual election',u:'$',ph:'15000',h:'Used when salary and % are blank.'},
       {k:'years_to_retirement',l:'Years until you start withdrawing',u:'yrs',ph:'20',req:1},
       {k:'return_pct',l:'Expected return',u:'%',d:'6'},
-      {k:'annual_limit',l:'Annual 401(k) contribution limit',u:'$',ph:'24500',h:'The 401(k) employee deferral limit (pre-tax and Roth combined), not the IRA limit. 2026: $24,500; plus $8,000 if you are 50+ ($32,500), or $11,250 if you are 60-63 ($35,750). A separate IRA limit ($7,500 for 2026) does not apply here. Optional: if a split would need more gross than this to keep your paycheck the same, the result is flagged.'}]},
+      {k:'annual_limit',l:'Annual 401(k) contribution limit',u:'$',ph:'24500',h:()=>k401LimitHint()}]},
     {g:'TAX RATES (ENTER A RATE, OR AN INCOME)',f:[
       {k:'rate_now_pct',l:'Marginal rate today',u:'%',ph:'24'},
       {k:'income_now',l:'…or taxable income today',u:'$',ph:''},
@@ -10250,13 +10262,14 @@ function _calcFieldNode(key,f,opts){
     (opts.highlight?'box-shadow:0 0 0 2px var(--color-accent);border-radius:var(--radius-md);padding:4px;':'');
   const lab=el('label','muted');
   lab.style.cssText='font-size:var(--font-size-sm);letter-spacing:0.5px;';
-  lab.innerHTML=_cE(f.l)+(f.req?' <span style="color:var(--color-accent)">*</span>':'')+(f.h?' <span title="'+_cE(f.h)+'" style="cursor:help;opacity:0.8;">ⓘ</span>':'');
+  const _hint=(typeof f.h==='function')?f.h():f.h;       // a field's help text may be computed (e.g. from the dated limits table)
+  lab.innerHTML=_cE(f.l)+(f.req?' <span style="color:var(--color-accent)">*</span>':'')+(_hint?' <span title="'+_cE(_hint)+'" style="cursor:help;opacity:0.8;">ⓘ</span>':'');
   const inp=_calcInputEl(key,f);
   lab.htmlFor=inp.id;
   if(f.t==='chk'){
     const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-2);min-height:28px;';
     row.appendChild(inp); const t=el('span',null,_cE(f.l)); t.style.fontSize='var(--font-size-sm)'; row.appendChild(t);
-    if(f.h) row.title=f.h;
+    if(_hint) row.title=_hint;
     box.appendChild(el('label','muted','&nbsp;')); box.appendChild(row); return box;
   }
   box.appendChild(lab);
@@ -10561,7 +10574,8 @@ CALC_RENDER.roth_vs_traditional=(r,key)=>{
   const lean=el('div'); lean.style.cssText='margin-bottom:var(--space-2);'; lean.textContent=r.lean||''; w.appendChild(lean);
   w.appendChild(_calcGroupHead('EQUAL TAKE-HOME (same paycheck cost: '+_c$(a.annual_election)+'/yr)'));
   w.appendChild(_cTable([['roth_pct','Roth share',x=>x+'%'],['gross_per_year','Gross / yr',_c$],['pretax_per_year','Pre-tax / yr',_c$],['roth_per_year','Roth / yr',_c$],
-    ['balance_at_retirement','Balance',_c$],['after_tax_value','After-tax value',_c$]], eq));
+    ].concat(eq.some(x=>x.capped)?[['leftover_to_taxable_per_year','Leftover → taxable / yr',x=>x?_c$(x):'—']]:[]).concat([
+    ['balance_at_retirement','Balance',_c$],['after_tax_value','After-tax value (all in)',_c$]]), eq));
   w.appendChild(_calcGroupHead('SAME GROSS ELECTION (what the paycheck difference is)'));
   w.appendChild(_cTable([['roth_pct','Roth share',x=>x+'%'],['gross_per_year','Gross / yr',_c$],['take_home_cost_per_year','Paycheck cost / yr',_c$],
     ['balance_at_retirement','Balance',_c$],['after_tax_value','After-tax value',_c$]], r.same_gross_election||[]));
@@ -10764,6 +10778,7 @@ CALC_RENDER.whatif=(r,key)=>{
 };
 // ---- the tab ----------------------------------------------------------------------------------
 function calculatorsContent(){
+  if(BEN_LIMITS===null) benLimitsLoad();
   return panelSubtabs('calculators',[
     {key:'whatif',label:'WHAT-IF · MY DEBTS',build:()=>whatifPanel()},
     {key:'mortgage',label:'MORTGAGE',build:()=>calcPanel('mortgage')},
