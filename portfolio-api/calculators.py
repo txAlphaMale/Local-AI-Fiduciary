@@ -1483,6 +1483,96 @@ def npv_irr(inp):
 
 
 # ============================================================================ REGISTRY
+def roth_vs_traditional(inp):
+    """Pre-tax (traditional) vs Roth 401(k)/IRA elections, split three ways, on an EQUAL TAKE-HOME basis.
+
+    A traditional dollar costs less take-home than a Roth dollar (the deduction), so comparing the same gross election
+    would flatter Roth. Here every scenario costs the same take-home pay as the all-Roth election: a pre-tax share lets you
+    contribute more gross for that money (the deduction is spent on extra contributions). The result is the after-tax value
+    of the balance in retirement (the pre-tax part taxed at the retirement rate). If the two rates are equal the three
+    scenarios tie; Roth wins when the retirement rate is higher than today's, traditional when it is lower. The second table
+    shows the SAME gross election for each split instead, so you can see what the paycheck difference is.
+    Tax rates: give them directly, or give taxable income + filing status and the 2026 federal brackets are used (tax.py).
+    Ignores: employer match (usually pre-tax in either case), state taxes beyond the optional extra rates, RMDs, IRMAA/ACA
+    effects (Roth withdrawals do not count toward MAGI), and the future law changing."""
+    try:
+        salary = _num(inp, "salary", None, lo=0)
+        pct = _num(inp, "election_pct", None, lo=0, hi=100)
+        E = _num(inp, "annual_election", None, lo=0)
+        if E is None and salary is not None and pct is not None:
+            E = salary * pct / 100.0
+        if E is None or E <= 0:
+            return {"error": "Enter the annual election in dollars, or salary and election %.", "missing": ["annual_election"]}
+        n = _num(inp, "years_to_retirement", required=True, lo=1, hi=60, label="years to retirement")
+        ret = _num(inp, "return_pct", 6.0, lo=-10, hi=30, label="expected return")
+        limit = _num(inp, "annual_limit", None, lo=0)
+        status = str((inp or {}).get("filing_status") or "mfj").lower()
+        import tax as _tax
+
+        def _rate(direct_key, income_key, label):
+            d = _num(inp, direct_key, None, lo=0, hi=60, label=label)
+            if d is not None:
+                return d / 100.0, "entered"
+            inc = _num(inp, income_key, None, lo=0, label=label + " income")
+            if inc is None:
+                raise _Missing(direct_key)
+            return _tax.marginal_ordinary_rate(inc, status), "2026 brackets at taxable income $%s (%s)" % (format(int(inc), ","), status)
+
+        t_now, src_now = _rate("rate_now_pct", "income_now", "tax rate now")
+        t_ret, src_ret = _rate("rate_retire_pct", "income_retire", "tax rate in retirement")
+        st_now = _num(inp, "state_rate_now_pct", 0.0, lo=0, hi=20) / 100.0
+        st_ret = _num(inp, "state_rate_retire_pct", 0.0, lo=0, hi=20) / 100.0
+    except _Missing as m:
+        return {"error": f"Missing required input: {m}", "missing": [str(m)]}
+    except ValueError as e:
+        return {"error": str(e)}
+    t_now += st_now
+    t_ret += st_ret
+    if t_now >= 1 or t_ret >= 1:
+        return {"error": "tax rates must be below 100%"}
+    g = ret / 100.0
+    fv = (n if g == 0 else ((1 + g) ** n - 1) / g)          # end-of-year contributions, FV factor per $1/yr
+    warnings = []
+    equal, same = [], []
+    for s in (0.0, 0.5, 1.0):
+        # EQUAL take-home: cost of all-Roth E; pre-tax part saves t_now, so contribute more gross.
+        Es = E / (1 - t_now * (1 - s))
+        pre, roth = Es * (1 - s), Es * s
+        bal = Es * fv
+        at = pre * fv * (1 - t_ret) + roth * fv
+        row = {"roth_pct": round(s * 100), "gross_per_year": _r2(Es), "pretax_per_year": _r2(pre), "roth_per_year": _r2(roth),
+               "take_home_cost_per_year": _r2(E), "balance_at_retirement": _r2(bal), "after_tax_value": _r2(at),
+               "tax_saved_now_per_year": _r2(pre * t_now)}
+        if limit and Es > limit:
+            row["over_limit"] = True
+            warnings.append(f"The {round(s*100)}% Roth split needs ${Es:,.0f}/yr gross, above the ${limit:,.0f} annual limit; "
+                            "the limit caps how much extra the deduction can buy.")
+        equal.append(row)
+        pre2, roth2 = E * (1 - s), E * s
+        same.append({"roth_pct": round(s * 100), "gross_per_year": _r2(E),
+                     "take_home_cost_per_year": _r2(E - pre2 * t_now), "after_tax_value": _r2(E * fv * (s + (1 - s) * (1 - t_ret))),
+                     "balance_at_retirement": _r2(E * fv)})
+    best = max(equal, key=lambda r: r["after_tax_value"])
+    diff = t_ret - t_now
+    if abs(round(diff * 100, 4)) < 2:
+        lean = "close to a tie: the rates are within 2 points, so a split mostly hedges the unknown future rate"
+    elif diff > 0:
+        lean = f"Roth is ahead: your retirement rate ({t_ret*100:.0f}%) is above today's ({t_now*100:.0f}%)"
+    else:
+        lean = f"Traditional is ahead: your retirement rate ({t_ret*100:.0f}%) is below today's ({t_now*100:.0f}%)"
+    notes = ["Equal take-home basis: every scenario costs the same paycheck as the all-Roth election.",
+             "Roth wins when the retirement rate is higher than today's; traditional wins when it is lower; they tie when equal.",
+             "A split is a hedge when you cannot tell which way your rate will go. Pre-tax withdrawals also raise MAGI "
+             "(ACA subsidies, IRMAA, Social Security taxation), which Roth withdrawals do not.",
+             "Employer match is normally pre-tax whichever you pick, and is not included.",
+             "Check that the new plan offers a Roth option, and that the pre-tax limit is not exceeded."]
+    return {"calculator": "roth_vs_traditional",
+            "assumptions": {"annual_election": _r2(E), "years": n, "return_pct": ret, "rate_now_pct": round(t_now * 100, 2),
+                            "rate_retire_pct": round(t_ret * 100, 2), "rate_now_source": src_now, "rate_retire_source": src_ret},
+            "equal_take_home": equal, "same_gross_election": same, "best_after_tax": best["roth_pct"],
+            "lean": lean, "warnings": warnings, "notes": notes}
+
+
 CALCULATORS = {
     "mortgage":        (mortgage, "Mortgage · true cost of ownership"),
     "loan":            (loan, "Loan (auto, personal, student…)"),
@@ -1494,6 +1584,7 @@ CALCULATORS = {
     "affordability":   (affordability, "Home affordability (28/36)"),
     "points":          (points, "Mortgage points break-even"),
     "yields":          (yields, "After-tax / tax-equivalent yield, APR↔APY"),
+    "roth_vs_traditional": (roth_vs_traditional, "Roth vs traditional 401(k) election (0 / 50 / 100% Roth)"),
     "inflation":       (inflation, "Inflation & real return"),
     "lump_vs_annuity": (lump_vs_annuity, "Lump sum vs annuity (pension)"),
     "npv_irr":         (npv_irr, "NPV / IRR of a cash-flow series"),
