@@ -15611,6 +15611,6 @@ def service_worker():
 
 # Demo harness (2026-11-09): hand the finished module to the demo seeder so it can write the newer features' sample data
 # through this file's own validators. Placed LAST because every helper it uses must already exist. No-op unless DEMO_MODE=1.
-import sys as _sys   # local alias: this module did not import sys at the top
-demo_seed.register_app(_sys.modules[__name__])
+import sys as _sys_module   # NOT `_sys`: that name is this file's prompt helper (def _sys), and rebinding it broke every caller
+demo_seed.register_app(_sys_module.modules[__name__])
 demo_seed.seed_extras()
