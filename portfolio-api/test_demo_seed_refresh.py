@@ -109,7 +109,7 @@ class TestSeedAll(unittest.TestCase):
         self.assertEqual(self.r["retire"], [41, 60])
         self.assertEqual(self.r["ins_income"], 142000.0)
         self.assertEqual(self.r["policy_kinds"], ["disability", "life", "umbrella"])
-        self.assertEqual(self.r["ef"], {"Emergency Fund": {"state": "yes"}})
+        self.assertEqual(self.r["ef"], {"Emergency Fund": {"on": True}})
         self.assertIn("Demo Auto Loan", self.r["rates_kept"])         # the liabilities' rates survived the planning write
 
     def test_no_vault_documents_are_seeded(self):
@@ -185,7 +185,7 @@ class TestCostBasisTotals(unittest.TestCase):
     def test_cost_basis_is_the_total_cost_of_the_line_not_per_share(self):
         expect = {("VTI", "Brokerage"): 25200, ("VXUS", "Brokerage"): 11600, ("BND", "Brokerage"): 10800, ("AAPL", "Brokerage"): 6000,
                   ("MSFT", "Brokerage"): 7000, ("VOO", "Roth IRA"): 22800, ("QQQ", "Roth IRA"): 9900, ("VTI", "401(k)"): 15600,
-                  ("VBTLX", "401(k)"): 5100, ("SCHD", "HSA"): 6120}
+                  ("VBTLX", "401(k)"): 5100, ("SCHD", "HSA"): 2340}
         got = {(h["ticker"], h["account"]): h["cost_basis"] for h in demo_seed.SYNTHETIC_HOLDINGS if h["cost_basis"] not in ("", None) and h["type"] != "Cash"}
         self.assertEqual(got, expect)
         for h in demo_seed.SYNTHETIC_HOLDINGS:

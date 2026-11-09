@@ -56,7 +56,7 @@ SYNTHETIC_HOLDINGS = [
     {"ticker": "QQQ",  "name": "Invesco QQQ Trust",               "quantity": 30,  "cost_basis": 9900, "account": "Roth IRA",   "institution": "Demo Custodian",  "type": "ETF"},
     {"ticker": "VTI",  "name": "Vanguard Total Stock Market ETF", "quantity": 80,  "cost_basis": 15600, "account": "401(k)",     "institution": "Demo Employer Plan", "type": "ETF"},
     {"ticker": "VBTLX","name": "Vanguard Total Bond Market Fund", "quantity": 500, "cost_basis": 5100,  "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
-    {"ticker": "SCHD", "name": "Schwab US Dividend Equity ETF",   "quantity": 90,  "cost_basis": 6120,  "account": "HSA",        "institution": "Demo HSA Custodian", "type": "ETF"},
+    {"ticker": "SCHD", "name": "Schwab US Dividend Equity ETF",   "quantity": 90,  "cost_basis": 2340,  "account": "HSA",        "institution": "Demo HSA Custodian", "type": "ETF"},
     # 2026-11-09 refresh: funds with NO cost basis (the manual cost-basis feature has a basis entered for the 401(k) line only,
     # so the combined row shows "known for 1 of 2 accounts"), and two cash accounts (emergency-fund tile, net worth).
     {"ticker": "FXAIX", "name": "Fidelity 500 Index Fund",        "quantity": 160, "cost_basis": "",     "account": "401(k)",     "institution": "Demo Employer Plan", "type": "Fund"},
@@ -232,7 +232,7 @@ def reset_and_reseed():
 # the stored shapes cannot drift from what the app itself saves. Vault documents are deliberately NOT seeded.
 # ---------------------------------------------------------------------------------------------------------------------
 EXTRAS_MARKER_FILE = os.environ.get("DEMO_EXTRAS_MARKER_FILE", "/data/.demo_extras")
-EXTRAS_VERSION = "2026-11-09b"          # bump to make existing demos start fresh (reset + re-seed) on their next boot
+EXTRAS_VERSION = "2026-11-09c"          # bump to make existing demos start fresh (reset + re-seed) on their next boot
 ANCHOR_MARKER_FILE = os.environ.get("DEMO_ANCHOR_MARKER_FILE", "/data/.demo_anchored")
 HISTORY_DAYS = 730                      # about two years of daily snapshots
 HISTORY_END_NET_WORTH = 214000.0        # where the synthetic series lands (close to what the demo holdings are worth)
@@ -254,7 +254,7 @@ DEMO_INSURANCE = {
         {"kind": "disability", "owner": "self", "name": "Employer long-term disability (demo)", "coverage": 6500, "premium_annual": 0, "term_expires": "", "notes": "synthetic"},
         {"kind": "umbrella", "owner": "household", "name": "Umbrella liability (demo)", "coverage": 1000000, "premium_annual": 280, "term_expires": "", "notes": "synthetic"},
     ],
-    "ef_accounts": {"Emergency Fund": {"state": "yes"}},
+    "ef_accounts": {"Emergency Fund": {"on": True}},
 }
 _APP = None
 _FRESH = False   # True once THIS process has created or reset the base data (so the extras are simply still pending)
