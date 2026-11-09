@@ -58,6 +58,7 @@ SECRETS_FILE = os.environ.get("SECRETS_FILE", "/data/secrets.json")  # same file
 CATEGORIES = {
     "security": "Security alerts (logins, MFA/account changes, admin actions, detections)",
     "integration_outage": "Portfolio data source outages (SnapTrade / Monarch / market data)",
+    "reminders": "Reminders to revisit a saved decision note",
 }
 
 INTEGRATION_OUTAGE_THRESHOLD = int(os.environ.get("INTEGRATION_OUTAGE_THRESHOLD", "3"))
@@ -442,9 +443,22 @@ def _admin_uid():
     return None
 
 
+def notify_reminder(title, body):
+    """A plain reminder (no audit event behind it): same push/email channels and per-user category switch as alerts."""
+    _dispatch_message("reminders", str(title)[:120], str(body)[:300])
+
+
 def _dispatch(category, event_type, outcome, actor_name, resource, detail):
     try:
         title, body = _format_message(category, event_type, outcome, actor_name, resource, detail)
+    except Exception as e:
+        print(f"[notifications] dispatch failed: {e}", flush=True)
+        return
+    _dispatch_message(category, title, body)
+
+
+def _dispatch_message(category, title, body):
+    try:
         subs = _read_subs()
         prefs_all = _read_prefs()
         changed = False
