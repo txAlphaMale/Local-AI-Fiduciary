@@ -3826,6 +3826,7 @@ def _snapshot_value(d):
             return
         covered = sum((p.get("value") or 0) for p in (d.get("positions") or [])
                       if p.get("cost_total") is not None and not p.get("suspect"))
+        demo_seed.anchor_history(today, d.get("net_worth"), d.get("invested_value"), spy, d.get("total_cost"), round(covered, 2))   # demo only: no-op elsewhere
         store.value_history_upsert_today(today, d.get("net_worth"), d.get("invested_value"), spy,
                                          d.get("total_cost"), round(covered, 2), d.get("position_count"))
     except Exception:
@@ -15598,3 +15599,10 @@ def service_worker():
     with open(path, encoding="utf-8") as f:
         return Response(content=f.read(), media_type="application/javascript",
                          headers={"Cache-Control": "no-cache"})
+
+
+# Demo harness (2026-11-09): hand the finished module to the demo seeder so it can write the newer features' sample data
+# through this file's own validators. Placed LAST because every helper it uses must already exist. No-op unless DEMO_MODE=1.
+import sys as _sys   # local alias: this module did not import sys at the top
+demo_seed.register_app(_sys.modules[__name__])
+demo_seed.seed_extras()
