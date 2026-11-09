@@ -1,6 +1,7 @@
 # Opt-in hardening for portfolio-api (risk register R-7). Trialled 2026-11-09 on a scratch container: non-root uid,
 # read-only root filesystem, no Linux capabilities, no-new-privileges, pid and memory limits. Verified there: start-up,
 # health, login, audit verify, self-signed certificate (persists across restart), secrets save, encrypted backup run.
+# mcpo gets cap_drop ALL and no-new-privileges (below), but stays root with a writable filesystem.
 # NOT exercised in the trial: a live ACME (Let's Encrypt) issuance, and a restore of a real backup.
 #
 # Use (the container must run as the SAME uid as the host user that owns this folder, so the files it writes in
@@ -26,3 +27,12 @@ services:
       - no-new-privileges:true
     pids_limit: 512
     mem_limit: 2g
+
+  # mcpo (trialled 2026-11-09 on a scratch container with the real image digest): starts, serves its OpenAPI, and the
+  # uvx-launched time server connects with all capabilities dropped. It stays root with a writable filesystem because it
+  # keeps session/OAuth data in /root/.mcpo and runs MCP servers through uvx's cache.
+  mcpo:
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
