@@ -79,6 +79,7 @@ import backup        # SEC-7a (2026-07-27) — UI-triggered encrypted backup/sta
 import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Storage Stage A, flat JSON -> SQLite
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
+import prefs  # per-user interface preferences kept on the server (layout, order, theme)
 import notes  # decision notes: the household's saved Q&A with a revisit date
 import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
 import vault          # TASK-001 — encrypted document vault
@@ -710,6 +711,7 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # Notifications (2026-07-26) -- self-service, same category as the identity/security rows
     # above: a viewer manages their OWN device subscriptions/preferences, never anyone else's, and
     # none of these can read or change anything about the household's financial data or config.
+    "/api/prefs",          # a viewer saves their OWN layout/theme (keyed by their account id, whitelisted keys only)
     "/api/notifications/subscribe", "/api/notifications/unsubscribe",
     "/api/notifications/preferences", "/api/notifications/test",
     # Chat (2026-07-27, Jason's call): FIDUCIARY_TOOLS is entirely get_*/search_knowledge/
@@ -1185,6 +1187,7 @@ async def auth_reset_account(request: Request):
     audit.emit("auth.account.reset", outcome="success", request=request, actor=uid,
                actor_name=user["username"], resource="/api/auth/reset-account")
     auth.delete_user(uid)
+    prefs.delete_user(uid)
     emergency.revalidate("account reset")
     request.session.clear()
     return {"ok": True}
@@ -1238,6 +1241,7 @@ def auth_delete_user(uid: str, request: Request):
         return JSONResponse({"error": "no such account"}, status_code=404)
     try:
         auth.admin_delete_viewer(uid)
+        prefs.delete_user(uid)
         emergency.revalidate("household account deleted")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -3035,6 +3039,28 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         inst_alloc[k] = round(inst_alloc.get(k, 0) + (a.get("balance") or 0), 2)
     by_institution = [{"label": k, "value": v} for k, v in sorted(inst_alloc.items(), key=lambda x: -x[1])]
     by_type = agg(lambda p: p["type"] or "Other")
+    # Display allocation (2026-11-09, Jason): the dashboard's allocation widgets must not treat cash as an investment, but should keep one slice
+    # for FREE CASH SITTING IN BROKERAGE ACCOUNTS. "Brokerage cash" = a Cash line in an account that also holds securities; a Cash-only account
+    # (savings, checking, emergency fund) is bank cash and is left out of the widgets. The engines keep using by_type / by_institution unchanged
+    # (policy drift needs the cash sleeve); only the display fields below are new.
+    _sec_accts = {(p.get("institution"), p.get("account")) for p in positions if (p.get("type") or "") != "Cash"}
+    _is_cash = lambda p: (p.get("type") or "") == "Cash"
+    _brokerage_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) in _sec_accts]
+    _bank_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) not in _sec_accts]
+    brokerage_cash = round(sum(p["value"] or 0 for p in _brokerage_cash_pos), 2)
+    bank_cash = round(sum(p["value"] or 0 for p in _bank_cash_pos), 2)
+    _disp = [p for p in positions if not any(p is b for b in _bank_cash_pos)]
+    _d_inst, _d_type = {}, {}
+    for p in _disp:
+        _d_inst[p["institution"] or "?"] = round(_d_inst.get(p["institution"] or "?", 0) + (p["value"] or 0), 2)
+        _d_type[p["type"] or "Other"] = round(_d_type.get(p["type"] or "Other", 0) + (p["value"] or 0), 2)
+    for a in balance_only:
+        _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
+    alloc_display = {
+        "by_institution": [{"label": k, "value": v} for k, v in sorted(_d_inst.items(), key=lambda x: -x[1])],
+        "by_type": [{"label": ("Cash (in brokerage accounts)" if k == "Cash" else k), "value": v}
+                    for k, v in sorted(_d_type.items(), key=lambda x: -x[1])],
+        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2)}
     investment_balance_accounts = [
         {"account": a.get("name"), "institution": a.get("institution"),
          "value": a.get("balance"), "type": a.get("type")}
@@ -3058,6 +3084,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         # Cash-type lines (savings, checking, brokerage cash) are inside invested_value because the risk/drift/plan engines
         # need them there; the header tile shows invested_value minus this so cash is not presented as an investment.
         "cash_value": round(sum(p["value"] or 0 for p in positions if (p.get("type") or "") == "Cash"), 2),
+        "brokerage_cash": brokerage_cash, "bank_cash": bank_cash, "alloc_display": alloc_display,
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
         "total_gain_pct": round(total_gain / total_cost * 100, 2) if total_cost else None,
@@ -15770,6 +15797,32 @@ def chat_session(sid: str):
 def chat_session_delete(sid: str):
     _chat_delete_session(sid)
     return {"ok": True}
+
+
+# ---- Interface preferences kept on the server (see prefs.py). Per signed-in account; off on the demo, whose single shared login
+# would hand one visitor's layout to the next. The browser still keeps a local copy (works offline / before sign-in).
+@app.get("/api/prefs")
+def prefs_get(request: Request):
+    if demo_seed.DEMO_MODE:
+        return {"enabled": False, "prefs": {}}
+    uid = request.session.get("uid")
+    return {"enabled": True, "prefs": prefs.get(uid) if uid else {}}
+
+
+@app.post("/api/prefs")
+async def prefs_set(request: Request):
+    if demo_seed.DEMO_MODE:
+        return {"enabled": False, "ok": True}
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "sign in first"}, status_code=401)
+    body = await request.json()
+    try:
+        stored = prefs.update(uid, set_=body.get("set") if isinstance(body.get("set"), dict) else None,
+                              remove=body.get("remove") if isinstance(body.get("remove"), list) else None)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"enabled": True, "ok": True, "keys": sorted(stored)}
 
 
 # ---- Decision notes (see notes.py). Writes are admin-only by the global gate (a viewer's POST/PATCH/DELETE is refused
