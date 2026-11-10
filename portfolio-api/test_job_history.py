@@ -112,7 +112,7 @@ class TestApiAndUi(unittest.TestCase):
         self.assertIn('class="l sym" style="white-space:normal;min-width:150px;max-width:340px;"', body)      # job name + warnings wrap
         self.assertIn("overflow-x:auto", body)                                                           # last resort: scroll inside the box
         self.assertEqual(body.count("<th"), 6)                                                           # 6 columns (was 7): the buttons share one cell
-        self.assertEqual(body.count("saveSchedule('${j.kind}')") + body.count("runScheduleNow('${j.kind}'"), 2)
+        self.assertEqual(body.count("A('click','saveSchedule',j.kind)") + body.count("A('click','runScheduleNow',j.kind)"), 2)   # both buttons share one cell (inline handlers are gone: R-23)
 
     def test_worker_records_each_finished_run(self):
         src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
