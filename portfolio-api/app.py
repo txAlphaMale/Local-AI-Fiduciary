@@ -2356,6 +2356,7 @@ def _enqueue(kind, source="manual"):
         _JOBS_ORDER.append(jid)
         while len(_JOBS_ORDER) > JOBS_MAX:      # trim the oldest record
             _JOBS.pop(_JOBS_ORDER.pop(0), None)
+    _inflight_write()
     _JOB_Q.put(jid)
     return jid, True
 
@@ -2363,6 +2364,9 @@ def _enqueue(kind, source="manual"):
 # "how long did this take last time?" unanswerable for weekly/monthly jobs. A small per-kind list (last 10 runs) lives
 # in the store instead, so TASK SCHEDULE can show last/typical duration and warn about overlaps.
 JOB_HISTORY_FILE = os.environ.get("JOB_HISTORY_FILE", "/data/job_history.json")
+# D2 (2026-11-10): jobs that are queued or running right now, mirrored to disk so a restart/deploy can say "interrupted" instead of silently
+# forgetting them. Written whenever a job is queued, starts or finishes; read once at startup (see _jobs_recover_interrupted).
+JOB_INFLIGHT_FILE = os.environ.get("JOB_INFLIGHT_FILE", "/data/jobs_inflight.json")
 _JOB_HISTORY_KEEP = 10
 _JOB_HISTORY_LOCK = threading.Lock()
 
@@ -2373,6 +2377,50 @@ def _read_job_history():
     except Exception:
         h = {}
     return h if isinstance(h, dict) else {}
+
+
+def _inflight_write():
+    """Mirror queued/running jobs to JOB_INFLIGHT_FILE. Never raises: bookkeeping must not break a job."""
+    try:
+        with _JOBS_LOCK:
+            live = {j["id"]: {k: j.get(k) for k in ("kind", "label", "status", "source", "submitted", "started")}
+                    for j in _JOBS.values() if j["status"] in ("queued", "running")}
+        store.write_json(JOB_INFLIGHT_FILE, live)
+    except Exception as e:
+        print(f"[jobs] could not record in-flight jobs: {type(e).__name__}", flush=True)
+
+
+def _jobs_recover_interrupted():
+    """At startup: any job the previous process left queued or running was cut off by the restart. Show each as 'interrupted' in
+    /api/jobs and the run history (with a plain error) rather than letting it vanish. They are NOT re-run automatically: a heavy job
+    the user started by hand should not silently restart at boot; scheduled ones return on their next slot. Returns the recovered list."""
+    try:
+        left = store.read_json_strict(JOB_INFLIGHT_FILE) or {}
+    except Exception:
+        left = {}
+    if not isinstance(left, dict) or not left:
+        return []
+    now = int(time.time())
+    out = []
+    for jid, r in left.items():
+        if not isinstance(r, dict) or r.get("kind") not in _JOB_KINDS:
+            continue
+        rec = {"id": f"{jid}-x", "kind": r["kind"], "label": r.get("label") or _JOB_KINDS[r["kind"]][0], "gpu": _JOB_KINDS[r["kind"]][1],
+               "status": "interrupted", "source": r.get("source"), "submitted": r.get("submitted"), "started": r.get("started"),
+               "finished": now, "error": "interrupted by a restart (the app was restarted or redeployed while this was " +
+                                         ("running" if r.get("status") == "running" else "waiting in the queue") + "); run it again if you still need it"}
+        with _JOBS_LOCK:
+            _JOBS[rec["id"]] = rec
+            _JOBS_ORDER.append(rec["id"])
+        _record_job_run(r["kind"], r.get("started") or r.get("submitted"), now, "interrupted", r.get("source"))
+        out.append(rec)
+    try:
+        store.write_json(JOB_INFLIGHT_FILE, {})
+    except Exception:
+        pass
+    if out:
+        print(f"[jobs] {len(out)} job(s) were interrupted by the restart: " + ", ".join(sorted({r['kind'] for r in out})), flush=True)
+    return out
 
 
 def _record_job_run(kind, started, finished, status, source):
@@ -2412,6 +2460,7 @@ def _job_worker():
         if not rec:
             continue
         rec["status"] = "running"; rec["started"] = int(time.time())
+        _inflight_write()
         fn = _JOB_KINDS[rec["kind"]][2]
         try:
             # A job that found its single-flight lock already held returns "skipped" -- it did NOT run, so
@@ -2422,7 +2471,9 @@ def _job_worker():
         finally:
             rec["finished"] = int(time.time())
             _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
+            _inflight_write()
 
+_jobs_recover_interrupted()
 threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
 
 
@@ -2499,7 +2550,9 @@ def get_jobs():
                     "typical_seconds": (round(typical) if typical is not None else None),
                     "pct_of_typical": (round(elapsed / typical * 100) if typical else None),
                     "over_typical": bool(typical and elapsed > typical * 1.5)}
-    return {"queued": depth, "running": running, "progress": progress,
+    hist = _read_job_history()
+    typical_by_kind = {k: _history_summary(hist.get(k)).get("typical_seconds") for k, spec in _JOB_KINDS.items() if spec[1]}   # GPU jobs
+    return {"queued": depth, "running": running, "progress": progress, "typical_by_kind": typical_by_kind,
             "scheduler": INTERNAL_SCHEDULER,
             "jobs": list(reversed(jobs)),      # newest first
             "strategist_busy": _strat_lock.locked()}
@@ -14924,6 +14977,30 @@ def _chat_init():
                 pass                                                  # column already there
 
 
+INTERRUPTED_NOTE = ("_(No answer was saved for this message: the app was restarted, or the request stopped, before it finished. "
+                    "Send it again to retry.)_")
+
+
+def _chat_mark_interrupted():
+    """At startup nothing can be generating, so a session whose LAST message is still the user's has an orphaned question (a restart or a crash
+    cut the answer off). Add a visible assistant note to each, so the chat shows what happened instead of a question with no reply.
+    Returns how many sessions were marked."""
+    n = 0
+    try:
+        with _chat_conn() as c:
+            rows = c.execute("SELECT m.session_id FROM messages m WHERE m.id = (SELECT MAX(id) FROM messages WHERE session_id = m.session_id) "
+                             "AND m.role = 'user'").fetchall()
+        for r in rows:
+            _chat_add_message(r["session_id"], "assistant", INTERRUPTED_NOTE, tool_json=json.dumps({"interrupted": True}))
+            _chat_touch_session(r["session_id"])
+            n += 1
+    except Exception as e:
+        print(f"[chat] interrupted-message sweep skipped: {type(e).__name__}", flush=True)
+    if n:
+        print(f"[chat] {n} chat(s) had a question with no saved answer after the restart; marked as interrupted", flush=True)
+    return n
+
+
 def _chat_enc(v):
     """Encrypts a chat.db text field before it hits SQLite -- message content/tool-call JSON and
     session titles are arguably the single most sensitive table in the app (a verbatim transcript
@@ -14995,6 +15072,7 @@ def _chat_delete_session(sid):
 
 
 _chat_init()
+_chat_mark_interrupted()
 
 
 # ---- Rolling summary of older turns (2026-11-09). Only the last CHAT_MAX_HISTORY turns reach the model; anything older used to
@@ -15150,6 +15228,9 @@ FIDUCIARY_PROMPT = (
     "list_compliance_docs / get_compliance_doc (the Risk Register, Statement of Applicability, IR "
     "Runbook, Privacy Notice, Retention Schedule, ROPA, DPIA), NOT search_knowledge (that's external "
     "tax/investing/estate reference material, a different corpus entirely). Cite the specific document.\n"
+    "ACCOUNTS vs HOLDINGS: an account is a container (a 401(k), a brokerage account, a checking account, a loan); a holding is a security "
+    "inside one. For 'how many accounts' or per-account balances call get_accounts and quote its explicit counts; never answer an account "
+    "question by counting holdings.\n"
     "MEMORY: you have no memory of your own between chats. Earlier decisions live in {user}'s SAVED NOTES (get_notes) and in past "
     "conversations (search_past_chats): call them when {user} says 'earlier', 'last time', 'we decided', 'revisit' or asks about a "
     "question that may have come up before, and say where the information came from and when. Old answers can be stale; compare the "
@@ -15175,6 +15256,11 @@ FIDUCIARY_TOOLS = [
     {"type": "function", "function": {"name": "get_holdings",
         "description": "The user's REAL portfolio: net worth and consolidated holdings with weights and "
                        "gains. Call this FIRST.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_accounts",
+        "description": "The household's ACCOUNTS (names without account numbers, institution, type, balance, tax status, whether it is a "
+                       "liability) with explicit counts. Use this, not get_holdings, for 'how many accounts', 'what accounts do I have' "
+                       "and per-account balances. Holdings are securities; accounts are containers.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_policy",
         "description": "The Investment Policy Statement (IPS): target asset-class sleeves and policy.",
@@ -15339,15 +15425,39 @@ FIDUCIARY_TOOLS = [
 ]
 
 
+def _accounts_for_chat():
+    """get_accounts tool body (D5, 2026-11-10): the household's ACCOUNTS (not holdings). The model used to answer 'how many accounts' with the
+    number of securities because get_holdings was the only portfolio tool. Counts are explicit; account numbers/masks are stripped."""
+    d = _data()
+    rows = []
+    for a in d.get("accounts") or []:
+        nm = re.sub(r"\s*\(\.{2,}\s*\d{2,6}\)\s*$", "", cashdetect._MASK_RE.sub("", str(a.get("name") or ""))).strip()   # drop "(...1234)" and "XX1234" masks
+        st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
+        rows.append({"name": nm, "institution": a.get("institution"), "type": a.get("type"), "subtype": a.get("subtype"),
+                     "balance": a.get("balance"), "is_liability": a.get("is_asset") is False, "tax_status": st,
+                     "holdings_listed": a.get("holdings_count") or 0, "in_net_worth": bool(a.get("include_nw"))})
+    rows.sort(key=lambda r: -abs(r["balance"] or 0))
+    assets = [r for r in rows if not r["is_liability"]]
+    return {"counts": {"accounts_total": len(rows), "asset_accounts": len(assets), "liability_accounts": len(rows) - len(assets),
+                       "investment_accounts": sum(1 for r in assets if r["tax_status"] != "na"),
+                       "accounts_with_holdings_listed": sum(1 for r in rows if r["holdings_listed"] > 0),
+                       "not_in_net_worth": sum(1 for r in rows if not r["in_net_worth"])},
+            "accounts": rows[:80],
+            "note": "These are ACCOUNTS. A count of securities/holdings (get_holdings) is a different number; never use one for the other."}
+
+
 def _fiduciary_dispatch(name, args):
     """Read-only dispatch for the Fiduciary. Every branch calls an existing analytics function; no
     branch mutates anything."""
     args = args or {}
     try:
+        if name == "get_accounts":
+            return _accounts_for_chat()
         if name == "get_holdings":
             d = _data()
             top = sorted((d.get("consolidated") or []), key=lambda c: c.get("value") or 0, reverse=True)
             return {"net_worth": d.get("net_worth"),
+                    "holdings_count_note": f"{len(top)} distinct securities (NOT accounts: call get_accounts for account counts and balances)",
                     "holdings": [{"ticker": c.get("ticker"), "name": c.get("name"), "value": c.get("value"),
                                   "weight_pct": c.get("weight_pct"), "gain_pct": c.get("gain_pct")}
                                  for c in top[:30] if c.get("ticker")]}

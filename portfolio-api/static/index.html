@@ -2272,7 +2272,12 @@ function dashboardContent(){
     }
   }
   const gb=el('button','mut-btn',nl?'REGENERATE':'GENERATE NOW'); gb.style.cssText='margin-top:var(--space-2);';
-  gb.onclick=()=>runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
+  gb.onclick=async()=>{
+    // D4 (2026-11-10): the brief holds the model for about half an hour on this hardware and chat waits behind it, so say so BEFORE starting it.
+    if(nl){ try{ const j=await fetch('/api/jobs').then(r=>r.ok?r.json():null); const t=j&&j.typical_by_kind&&j.typical_by_kind.narrative;
+      if(t && t>=300 && !confirm('Regenerating the letter usually takes about '+Math.round(t/60)+' min on this machine. The model is busy for that long: chat messages sent meanwhile wait in a queue and start automatically afterwards. Continue?')) return; }catch(_){ /* no estimate: just run it */ } }
+    runJob('/api/run-narrative', gb, 'queued… (watch #jobs)').then(res=>{ if(res) _narrStartPoll(); });
+  };
   nbox.appendChild(gb);
   // The full-width rows: the weekly letter and the three trend charts, in the user's order (DASH_ORDER.rows; default: letter, net worth,
   // portfolio vs SPY, value vs cost basis). The shared window picker (1M..ALL, custom) rides on the first chart that is shown.
