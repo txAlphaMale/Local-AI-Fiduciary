@@ -75,6 +75,50 @@ def update(uid, set_=None, remove=None):
     return cur
 
 
+# ---- Household-level cash designations (2026-11-10, Jason): per ACCOUNT, how the cash/allocation widgets should treat it. One shared
+# setting for the household (not per login), kept encrypted in the same file. Key = "institution||account name".
+DESIGNATIONS = ("investment", "brokerage_cash", "bank_cash", "exclude")
+MAX_DESIGNATIONS = 500
+
+
+def desig_key(institution, name):
+    return f"{institution or ''}||{name or ''}"
+
+
+def cash_designations():
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS household(k TEXT PRIMARY KEY, blob TEXT, updated INTEGER)")
+        r = c.execute("SELECT blob FROM household WHERE k='cash_designations'").fetchone()
+    if not r or not r[0]:
+        return {}
+    try:
+        d = json.loads(secrets_crypto.decrypt_or_legacy(r[0]) or "{}")
+    except ValueError:
+        return {}
+    return {k: v for k, v in d.items() if isinstance(k, str) and v in DESIGNATIONS} if isinstance(d, dict) else {}
+
+
+def set_cash_designations(changes):
+    """Merge {key: designation | None}; None clears one (back to Auto). Returns the stored dict. Raises ValueError on bad input."""
+    cur = cash_designations()
+    for k, v in (changes or {}).items():
+        if not isinstance(k, str) or "||" not in k or len(k) > 300:
+            raise ValueError("bad account key")
+        if v is None or v == "auto":
+            cur.pop(k, None)
+        elif v in DESIGNATIONS:
+            cur[k] = v
+        else:
+            raise ValueError("designation must be one of: auto, " + ", ".join(DESIGNATIONS))
+    if len(cur) > MAX_DESIGNATIONS:
+        raise ValueError("too many designations")
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS household(k TEXT PRIMARY KEY, blob TEXT, updated INTEGER)")
+        c.execute("INSERT INTO household(k, blob, updated) VALUES('cash_designations',?,?) ON CONFLICT(k) DO UPDATE SET blob=excluded.blob, updated=excluded.updated",
+                  (secrets_crypto.encrypt(json.dumps(cur)), int(time.time())))
+    return cur
+
+
 def delete_user(uid):
     with _conn() as c:
         c.execute("DELETE FROM prefs WHERE uid=?", (str(uid),))
