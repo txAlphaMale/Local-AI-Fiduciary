@@ -123,13 +123,20 @@ class TestHealthcareExpenseLine(unittest.TestCase):
                 mock.patch.object(appmod, "_cashflow_annual", return_value=(None, None)):
             return appmod._retirement()
 
-    def test_off_by_default_shows_the_line_but_does_not_change_the_fi_number(self):
+    def test_on_by_default_and_the_default_is_a_dated_decision(self):
+        self.assertEqual(appmod.DEFAULT_RETIRE["healthcare_expense_mode"], "add")
         r = self.run_ret()
+        a = r["assumptions"]
+        self.assertTrue(a["healthcare_line"]["included"])
+        self.assertEqual(r["fi_number"], round(67420 / 0.04, 2))
+        self.assertEqual((a["healthcare_line"]["fi_number_without"], a["healthcare_line"]["fi_number_with"]), (1500000.0, 1685500.0))
+
+    def test_turning_it_off_leaves_the_fi_number_on_plain_expenses(self):
+        r = self.run_ret(healthcare_expense_mode="off")
         a = r["assumptions"]
         self.assertEqual(r["fi_number"], 1500000.0)                                     # 60,000 / 4%
         self.assertEqual(a["annual_expenses"], 60000.0)
         self.assertFalse(a["healthcare_line"]["included"])
-        self.assertEqual((a["healthcare_line"]["fi_number_without"], a["healthcare_line"]["fi_number_with"]), (1500000.0, 1685500.0))
 
     def test_turning_it_on_adds_the_yearly_cost_to_expenses_and_the_fi_number(self):
         r = self.run_ret(healthcare_expense_mode="add")
