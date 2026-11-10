@@ -194,7 +194,7 @@ DEFAULT_POLICY = {"targets_by_type": {}, "max_position_pct": 10.0, "drift_thresh
                   # _sleeve() heuristic checks this before falling back to the Finnhub profile lookup.
                   "intl_tickers": {}}
 RETIRE_FILE = os.environ.get("RETIRE_FILE", "/data/retirement.json")
-DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None, "healthcare_expense_mode": "off",
+DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None, "healthcare_expense_mode": "add",
                   "annual_expenses_override": None, "annual_savings_override": None,
                   "current_age": None, "target_age": 60, "exclude_account_types": ["Real Estate"],
                   "income_target_yield_pct": 3.5, "optimistic_real_return_pct": 8.0,
@@ -10378,8 +10378,8 @@ def _retirement():
         cf_inc, cf_exp = _cashflow_annual()
     annual_expenses = exp_override if exp_override is not None else cf_exp
     # Healthcare as a yearly expense line (2026-11-10): the typical retirement-year cost (Fidelity estimate or the household's own figure,
-    # spread over 65-90). Shown always; added to the expenses behind the FI number / funded ratio only when the household turns it on, because
-    # Monarch's trailing expenses already contain today's premiums and medical bills, so adding it can double count.
+    # spread over 65-90). ON by default (Jason, 2026-11-10: the tool should make younger users plan for it early); the household can turn it
+    # off in PLAN because Monarch's trailing expenses already contain today's premiums and medical bills, so it can partly double count.
     _hc = hsa.annual_cost(_hs["need"]["people"], override=cfg.get("healthcare_need_override"))
     _hc_on = cfg.get("healthcare_expense_mode") == "add" and _hc["annual"] is not None
     base_expenses = annual_expenses
