@@ -16047,9 +16047,26 @@ def _notes_reminder_sweep():
         print(f"[notes] reminder sweep failed: {_errref(e)}", flush=True)
 
 
+_INDEX_CACHE = {"mtime": None, "text": "", "build": ""}
+
+
+def _index_page():
+    """The dashboard HTML plus a build id (hash of the file) injected as <meta name="app-build">. An open tab keeps running the JavaScript it
+    loaded until it is reloaded, so after a deploy a tab can pair old page code with new server data (2026-11-10: the rings looked unchanged
+    for exactly that reason). The page compares its own build id with /health and offers a reload when they differ."""
+    path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    mt = os.path.getmtime(path)
+    if _INDEX_CACHE["mtime"] != mt:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        build = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+        _INDEX_CACHE.update(mtime=mt, build=build, text=raw.replace("<head>", '<head>\n<meta name="app-build" content="%s">' % build, 1))
+    return _INDEX_CACHE["text"], _INDEX_CACHE["build"]
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
+    return {"ok": True, "build": _index_page()[1], "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
             "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL,
             "llm_dialect": llm._dialect(), "llm_model": _text_model(),
             "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()}
@@ -16062,10 +16079,8 @@ def index():
     protect) was retired as redundant now that the session auth gate above covers every route,
     including the /api/run-*/knowledge-reindex endpoints this used to patch around. See
     RESUME-TRACKER.md for the retirement writeup."""
-    path = os.path.join(os.path.dirname(__file__), "static", "index.html")
-    with open(path, encoding="utf-8") as f:
-        html_text = f.read()
-    return HTMLResponse(html_text, headers={"Content-Security-Policy": _dashboard_csp(html_text)})
+    html_text, _build = _index_page()
+    return HTMLResponse(html_text, headers={"Content-Security-Policy": _dashboard_csp(html_text), "Cache-Control": "no-cache"})
 
 
 # Content-Security-Policy for the dashboard page (R-23): an injected <script src>, <base>, <object> or a form posting elsewhere is

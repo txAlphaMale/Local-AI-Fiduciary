@@ -11423,9 +11423,26 @@ function pollDemoStatus(){
 // Gate: only start once, only after a real session exists (see RESUME-TRACKER 2026-07-29 note
 // above authInitApp()) — never fired for an unauthenticated page view.
 let _bgPollingStarted=false;
+// ---- "A new version is available" (2026-11-10): an open tab keeps the page code it loaded, so after a deploy it can show new server data through old
+// page code. The server stamps the page with a build id (<meta name="app-build">) and /health reports the current one; when they differ, offer a reload.
+const APP_BUILD=(document.querySelector('meta[name="app-build"]')||{}).content||'';
+function showNewVersionBanner(){
+  if(document.getElementById('newver')) return;
+  const b=el('div'); b.id='newver'; b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:9999;background:var(--color-panel-alt);border:1px solid var(--color-accent);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);font-size:var(--font-size-base);box-shadow:0 4px 18px rgba(0,0,0,.5);display:flex;gap:var(--space-3);align-items:center;';
+  b.appendChild(el('span',null,'A new version of the dashboard is available.'));
+  const r=el('button',null,'RELOAD'); r.onclick=()=>location.reload(); b.appendChild(r);
+  const x=el('button','mut-btn','✕'); x.title='Dismiss until the next check'; x.onclick=()=>b.remove(); b.appendChild(x);
+  document.body.appendChild(b);
+}
+function checkNewVersion(){
+  if(!APP_BUILD) return;
+  fetch('/health').then(r=>r.json()).then(h=>{ if(h && h.build && h.build!==APP_BUILD) showNewVersionBanner(); }).catch(()=>{});
+}
 function startBackgroundPolling(){
   if(_bgPollingStarted) return;
   _bgPollingStarted=true;
+  checkNewVersion(); setInterval(checkNewVersion, 120000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) checkNewVersion(); });
   pollJobs(); setInterval(pollJobs, 15000);
   pollAttn(); setInterval(pollAttn, 60000);
   pollDemoStatus();
