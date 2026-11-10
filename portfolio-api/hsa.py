@@ -58,6 +58,21 @@ def need(ages, override=None, today=None):
             "people": people, "table": t}
 
 
+def annual_cost(people, override=None, today=None):
+    """Healthcare as a YEARLY retirement expense (today's dollars): the lifetime estimate spread over the 25 years from 65 to 90, per person,
+    times the number of people. A household override is a lifetime TOTAL and is spread the same way. -> {annual, years, source, basis} or
+    annual=None when no estimate exists. Unlike need(), this does not shrink with age: it is what a typical retirement YEAR costs."""
+    years = HORIZON_AGE - RETIRE_AGE
+    people = max(1, int(people or 1))
+    if override not in (None, "", 0):
+        return {"annual": round(float(override) / years, 2), "years": years, "source": "your override", "people": people}
+    t = table(today)
+    if t["per_person"] is None:
+        return {"annual": None, "years": years, "source": "no estimate available", "people": people}
+    return {"annual": round(t["per_person"] * people / years, 2), "years": years, "people": people,
+            "source": "Fidelity retiree health care cost estimate", "per_person_annual": round(t["per_person"] / years, 2)}
+
+
 def split(balance, age, healthcare_need):
     """Medical reserve versus retirement surplus for one household HSA balance. `age`: the age that governs access to the money (the
     account holder's; the 65 rule is per person, and the older holder's age is not assumed). Unknown age or need counts NOTHING as

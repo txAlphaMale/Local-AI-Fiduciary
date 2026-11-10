@@ -37,7 +37,7 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
@@ -194,7 +194,7 @@ DEFAULT_POLICY = {"targets_by_type": {}, "max_position_pct": 10.0, "drift_thresh
                   # _sleeve() heuristic checks this before falling back to the Finnhub profile lookup.
                   "intl_tickers": {}}
 RETIRE_FILE = os.environ.get("RETIRE_FILE", "/data/retirement.json")
-DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None,
+DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None, "healthcare_expense_mode": "off",
                   "annual_expenses_override": None, "annual_savings_override": None,
                   "current_age": None, "target_age": 60, "exclude_account_types": ["Real Estate"],
                   "income_target_yield_pct": 3.5, "optimistic_real_return_pct": 8.0,
@@ -272,6 +272,7 @@ class PolicyUpdate(BaseModel):
 
 
 class RetirementConfigUpdate(BaseModel):
+    healthcare_expense_mode: Optional[Literal["off", "add"]] = None   # "add": the estimated yearly retirement healthcare cost is added to expenses
     healthcare_need_override: Optional[float] = Field(None, ge=0, le=5_000_000)   # household's own lifetime healthcare need (replaces the Fidelity estimate)
     withdrawal_rate_pct: Optional[float] = Field(None, ge=0, le=25)
     expected_real_return_pct: Optional[float] = Field(None, ge=-20, le=30)
@@ -10376,6 +10377,14 @@ def _retirement():
     if exp_override is None or sav_override is None:
         cf_inc, cf_exp = _cashflow_annual()
     annual_expenses = exp_override if exp_override is not None else cf_exp
+    # Healthcare as a yearly expense line (2026-11-10): the typical retirement-year cost (Fidelity estimate or the household's own figure,
+    # spread over 65-90). Shown always; added to the expenses behind the FI number / funded ratio only when the household turns it on, because
+    # Monarch's trailing expenses already contain today's premiums and medical bills, so adding it can double count.
+    _hc = hsa.annual_cost(_hs["need"]["people"], override=cfg.get("healthcare_need_override"))
+    _hc_on = cfg.get("healthcare_expense_mode") == "add" and _hc["annual"] is not None
+    base_expenses = annual_expenses
+    if _hc_on and annual_expenses is not None:
+        annual_expenses = round(annual_expenses + _hc["annual"], 2)
     exp_source = "override" if exp_override is not None else ("monarch_cashflow" if cf_exp is not None else None)
     if sav_override is not None:
         annual_savings = sav_override
@@ -10397,6 +10406,11 @@ def _retirement():
     assumptions = {"withdrawal_rate_pct": cfg.get("withdrawal_rate_pct"),
                    "expected_real_return_pct": cfg.get("expected_real_return_pct"),
                    "annual_expenses": annual_expenses, "expenses_source": exp_source,
+                   "annual_expenses_base": base_expenses, "healthcare_expense_mode": cfg.get("healthcare_expense_mode") or "off",
+                   "healthcare_need_override": cfg.get("healthcare_need_override"),
+                   "healthcare_line": {**_hc, "included": bool(_hc_on and base_expenses is not None),
+                                       "fi_number_without": (round(base_expenses / wr, 2) if (base_expenses and wr) else None),
+                                       "fi_number_with": (round((base_expenses + _hc["annual"]) / wr, 2) if (base_expenses and wr and _hc["annual"] is not None) else None)},
                    "annual_savings": annual_savings,
                    # current_age/spouse_age (2026-07-23, superseding the same-day fix that added a
                    # manual "Spouse age" input): DERIVED from birth_year/spouse_birth_year via

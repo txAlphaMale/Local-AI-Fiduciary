@@ -106,3 +106,46 @@ class TestSummaryAndRetirement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHealthcareExpenseLine(unittest.TestCase):
+    def test_annual_cost_spreads_the_lifetime_estimate_over_65_to_90(self):
+        c = hsa.annual_cost(1, today=TODAY)
+        self.assertEqual((c["annual"], c["years"]), (7420.0, 25))                      # 185,500 / 25
+        self.assertEqual(hsa.annual_cost(2, today=TODAY)["annual"], 14840.0)
+        self.assertEqual(hsa.annual_cost(2, override=250000, today=TODAY)["annual"], 10000.0)   # an override is a household lifetime total
+        self.assertEqual(hsa.annual_cost(2, override=250000, today=TODAY)["source"], "your override")
+
+    def run_ret(self, **cfg_over):
+        cfg = dict(appmod.DEFAULT_RETIRE, birth_year=datetime.date.today().year - 50, annual_expenses_override=60000.0,
+                   annual_savings_override=0.0, withdrawal_rate_pct=4.0, **cfg_over)
+        with mock.patch.object(appmod, "_data", return_value=_data_with()), mock.patch.object(appmod, "_read_retire", return_value=cfg), \
+                mock.patch.object(appmod, "_cashflow_annual", return_value=(None, None)):
+            return appmod._retirement()
+
+    def test_off_by_default_shows_the_line_but_does_not_change_the_fi_number(self):
+        r = self.run_ret()
+        a = r["assumptions"]
+        self.assertEqual(r["fi_number"], 1500000.0)                                     # 60,000 / 4%
+        self.assertEqual(a["annual_expenses"], 60000.0)
+        self.assertFalse(a["healthcare_line"]["included"])
+        self.assertEqual((a["healthcare_line"]["fi_number_without"], a["healthcare_line"]["fi_number_with"]), (1500000.0, 1685500.0))
+
+    def test_turning_it_on_adds_the_yearly_cost_to_expenses_and_the_fi_number(self):
+        r = self.run_ret(healthcare_expense_mode="add")
+        a = r["assumptions"]
+        self.assertEqual((a["annual_expenses"], a["annual_expenses_base"]), (67420.0, 60000.0))
+        self.assertEqual(r["fi_number"], round(67420 / 0.04, 2))
+        self.assertTrue(a["healthcare_line"]["included"])
+
+    def test_an_override_changes_the_yearly_line(self):
+        r = self.run_ret(healthcare_expense_mode="add", healthcare_need_override=100000.0)
+        self.assertEqual(r["assumptions"]["annual_expenses"], 64000.0)                  # 100,000 / 25 = 4,000
+
+    def test_config_accepts_only_off_or_add_and_the_plan_screen_has_the_inputs(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        self.assertIn('healthcare_expense_mode: Optional[Literal["off", "add"]]', src)
+        html = open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8").read()
+        for needle in ('id="ret-hc"', 'id="ret-hcadd"', "healthcare_need_override: num('ret-hc')", "healthcare_expense_mode:"):
+            self.assertIn(needle, html, needle)
+        self.assertNotIn("esc(a.healthcare_line", html.replace("escHtml(a.healthcare_line", ""))   # esc() is not in scope in planContent
