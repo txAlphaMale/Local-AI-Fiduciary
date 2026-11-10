@@ -15941,12 +15941,11 @@ def index():
     return HTMLResponse(html_text, headers={"Content-Security-Policy": _dashboard_csp(html_text)})
 
 
-# Content-Security-Policy for the dashboard page (R-23). What it buys even though the page still uses inline event
-# handlers and style attributes: an injected <script src>, <base>, <object> or a form posting elsewhere is blocked, and
-# injected script cannot send data to another origin (connect-src 'self'). What it does NOT yet stop: an injected
-# inline event handler such as <img onerror=...> (script-src-attr stays 'unsafe-inline' until the ~80 inline handlers are
-# moved to addEventListener). The page's own inline <script> blocks are allowed by SHA-256 hash, computed here from the
-# file being served, so editing index.html never needs a manual hash update.
+# Content-Security-Policy for the dashboard page (R-23): an injected <script src>, <base>, <object> or a form posting elsewhere is
+# blocked, injected script cannot send data to another origin (connect-src 'self'), and inline event-handler attributes
+# (<img onerror=...>, onclick="...") are blocked too (script-src-attr 'none'; the page itself uses data-on-* attributes and one
+# delegated listener, see ACT in index.html). The page's own inline <script> blocks are allowed by SHA-256 hash, computed here from
+# the file being served, so editing index.html never needs a manual hash update.
 _CSP_CDNS = "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com"   # the pinned, integrity-checked third-party assets
 _INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", re.S | re.I)
 
@@ -15957,7 +15956,7 @@ def _dashboard_csp(html_text):
     return "; ".join([
         "default-src 'self'",
         f"script-src 'self' {_CSP_CDNS} {hashes}".strip(),
-        "script-src-attr 'unsafe-inline'",
+        "script-src-attr 'none'",
         f"style-src 'self' 'unsafe-inline' {_CSP_CDNS}",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",

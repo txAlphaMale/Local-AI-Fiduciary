@@ -29,6 +29,23 @@ class TestCsp(unittest.TestCase):
         self.assertNotIn("script-src 'unsafe-inline'", self.csp)
         self.assertNotRegex(self.csp, r"(?:^|; )script-src [^;]*'unsafe-inline'")
 
+    def test_inline_event_handler_attributes_are_blocked_and_the_page_has_none(self):
+        self.assertIn("script-src-attr 'none'", self.csp)
+        self.assertNotIn("'unsafe-inline'", [p for p in self.csp.split("; ") if p.startswith("script-src")][0])
+        # the page must not rely on any: no on<event>="..." attribute anywhere in the markup or the strings that build it
+        self.assertEqual(re.findall(r"""\son[a-z]+\s*=\s*["'\\]""", HTML), [])
+        self.assertEqual(re.findall(r"setAttribute\(\s*['\"]on", HTML), [])
+
+    def test_every_action_named_in_the_page_is_registered(self):
+        named = set(re.findall(r"A\('(?:click|change|input|keydown)',\s*'([A-Za-z_][A-Za-z0-9_]*)'", HTML))
+        named |= {"_frMfaSetupDone", "render"}                                   # the onboarding ? done : render choice
+        m = re.search(r"\(\['([^\]]*)'\]\)\.forEach\(n=>\{ ACT\[n\]", HTML)
+        plain = set(m.group(1).split("','"))
+        explicit = set(re.findall(r"^ACT\.([A-Za-z0-9_]+)=", HTML, re.M))
+        self.assertEqual(named - plain - explicit, set(), "named in markup but not in the registry")
+        for n in plain:                                                          # plain actions call window[n]: each must be a real top-level function
+            self.assertRegex(HTML, r"(?m)^(?:async )?function %s\(" % re.escape(n), n)
+
     def test_every_inline_script_is_allowed_by_hash(self):
         blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", HTML, re.S | re.I)
         self.assertTrue(blocks)
