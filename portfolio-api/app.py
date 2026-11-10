@@ -4788,7 +4788,7 @@ _leverage_lock = threading.Lock()
 def _leverage():
     """Ruin curve + borrow-vs-sell on the pledgeable (taxable) book, using reconstructed returns."""
     d = _data()
-    bal = _balances_by_tax_status()
+    bal = _balances_by_tax_status(include_balance_only=False)      # collateral needs real, listed positions
     collateral = bal.get("taxable", 0.0)      # only taxable/brokerage assets can be pledged
     cons = [c for c in d.get("consolidated", [])
             if c.get("ticker") and (c.get("type") or "") != "Cash"]
@@ -12560,8 +12560,12 @@ SEPP_RATE_PCT = float(os.environ.get("SEPP_RATE_PCT", "5.0"))    # 72(t) rate = 
 BRIDGE_TAX_PCT = float(os.environ.get("BRIDGE_TAX_PCT", "15.0"))  # effective ordinary-income rate on Roth conversions
 
 
-def _balances_by_tax_status():
-    """Investable securities value grouped by account tax status (taxable/roth/deferred/hsa)."""
+def _balances_by_tax_status(include_balance_only=True):
+    """Investable value grouped by account tax status (taxable/roth/deferred/hsa): the securities the provider lists PLUS, by default, the
+    balance of investment accounts that report only a balance and no holdings (a 401(k) or HSA that syncs one number). Those used to count
+    as $0 here, which understated the bridge plan and the Roth ladder. `include_balance_only=False` keeps the securities-only view for
+    callers that need real positions (the borrow-against-portfolio collateral). The HSA stays in its own bucket: it is a medical reserve
+    first and is never added to the retirement-spendable buckets (see HSA-AUDIT)."""
     d = _data()
     acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
@@ -12571,6 +12575,14 @@ def _balances_by_tax_status():
         status = acct_status.get(name) or _account_tax_status(name, "Investments")
         if status in bal:
             bal[status] += sum((h.get("value") or 0) for h in acct.get("holdings", []))
+    if include_balance_only:
+        listed = {a.get("account") for a in d.get("by_account", [])}
+        for a in d.get("accounts", []):
+            if ((a.get("holdings_count") or 0) == 0 and a.get("include_nw") and a.get("is_asset") is not False
+                    and a.get("name") not in listed and (a.get("balance") or 0) > 0):
+                st = acct_status.get(a.get("name"))
+                if st in bal:
+                    bal[st] += a.get("balance") or 0
     return {k: round(v, 2) for k, v in bal.items()}
 
 

@@ -48,7 +48,7 @@ class TestAccounts(unittest.TestCase):
     def test_wells_fargo_style_cash_accounts_pair_with_their_brokerage(self):
         b = self.by()
         for n, p in (("WF IRA Cash - XX2053", "WF IRA - XX6140"), ("MC WF IRA Roth Cash - XX3595", "WF IRA Roth - XX3916"),
-                     ("WF Investing Cash - XX5346", "WF Investment - XX9571"), ("Voya HSA Cash", "Voya HSA")):
+                     ("WF Investing Cash - XX5346", "WF Investment - XX9571")):
             self.assertEqual((b[n]["verdict"], b[n]["paired_with"]), ("brokerage_cash", p), n)
             self.assertEqual(b[n]["confidence"], "high")
 
@@ -118,7 +118,7 @@ class TestRealCapturePatterns(unittest.TestCase):
 
     def test_a_health_savings_account_is_left_for_the_owner_to_decide(self):
         r = self.by()["Health Savings Account (...8095)"]
-        self.assertEqual((r["verdict"], r["confidence"]), ("unsure", "low"))
+        self.assertEqual((r["verdict"], r["confidence"]), ("hsa", "high"))       # an HSA is a medical reserve: never unsure, never cash
         self.assertIn("health savings", " ".join(r["reasons"]))
 
     def test_investment_accounts_stay_not_cash(self):
@@ -131,7 +131,7 @@ class TestRealCapturePatterns(unittest.TestCase):
         g = r["guessed_totals"]
         self.assertEqual(g["brokerage_cash"], round(1292 + 113 + 5, 2))      # E*TRADE cash line + the two Wells brokerage-cash accounts
         self.assertEqual(g["bank_cash"], 800 + 40 + 15 + 5 + 9000 + 6000)    # checking, savings, wallets
-        self.assertEqual(g["unsure"], 1278.0)                                # the HSA
+        self.assertEqual(g["unsure"], 0.0)                                   # the HSA is no longer a cash guess at all
         self.assertEqual([h["ticker"] for h in r["cash_holdings"]], ["CASH"])
 
 
@@ -191,7 +191,7 @@ class TestReport(unittest.TestCase):
         poss = TestAccounts.POS + [pos("MC VG IRA", "Vanguard", "VFIAX", "Mutual Fund", 40000, price=480.0),
                                    pos("MC VG IRA", "Vanguard", "VMFXX", "Mutual Fund", 5000, price=1.0, name="Money Market", day=0.0)]
         r = cd.report(accts, poss, 0.0, 0.0)
-        self.assertEqual(r["guessed_totals"]["brokerage_cash"], round(5000 + 4 + 0.5 + 5 + 1278, 2))
+        self.assertEqual(r["guessed_totals"]["brokerage_cash"], round(5000 + 4 + 0.5 + 5, 2))   # the Voya HSA Cash balance is a medical reserve, not brokerage cash
         self.assertEqual(r["guessed_totals"]["bank_cash"], 20000.0)
         self.assertEqual(r["guessed_totals"]["unsure"], 90.0)
         self.assertEqual([h["ticker"] for h in r["cash_holdings"]], ["VMFXX"])

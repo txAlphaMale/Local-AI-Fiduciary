@@ -5117,7 +5117,7 @@ function cashCheckContent(){
     wrap.appendChild(resizableTable(at,'cashcheck-reconcile',[13,22,11,10,10,8,26]));
     const nn=el('div','muted'); nn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:4px 0 14px;max-width:900px;'; nn.textContent=(wt.note||'')+(wt.cached_age_s!=null?' Snapshot age: '+Math.round(wt.cached_age_s/60)+' min.':''); wrap.appendChild(nn);
   } else wrap.appendChild(el('div','muted','Account reconciliation is loading… (reopen this tab in a moment)'));
-  const badge={brokerage_cash:['BROKERAGE CASH','var(--color-positive)'],bank_cash:['BANK CASH','var(--color-text-muted)'],unsure:['UNSURE','var(--color-negative)'],investment:['investment','var(--color-text-dim)'],not_cash:['not cash','var(--color-text-dim)']};
+  const badge={brokerage_cash:['BROKERAGE CASH','var(--color-positive)'],bank_cash:['BANK CASH','var(--color-text-muted)'],hsa:['HSA · MEDICAL RESERVE','var(--color-text-muted)'],unsure:['UNSURE','var(--color-negative)'],investment:['investment','var(--color-text-dim)'],not_cash:['not cash','var(--color-text-dim)']};
   const vcell=a=>{ const b=badge[a.verdict]||[a.verdict,'']; return `<span style="color:${b[1]};letter-spacing:1px;font-size:var(--font-size-sm);">${escHtml(b[0])}</span> <span class="muted" style="font-size:var(--font-size-xs)">${escHtml(a.confidence)}</span>`; };
   wrap.appendChild(el('div','ph','ACCOUNTS · WHAT THE PROVIDER SENDS AND WHAT THE RULES GUESS'));
   const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TYPE / SUBTYPE</th><th>HOLDINGS</th><th>BALANCE</th><th class="l">PROVIDER STATE</th><th class="l">GUESS</th><th class="l">YOUR SETTING</th><th class="l">WHY</th>'; t.appendChild(hr);
