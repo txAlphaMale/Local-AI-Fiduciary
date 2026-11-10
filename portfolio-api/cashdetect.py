@@ -29,6 +29,14 @@ MONEY_MARKET_TICKERS = frozenset({
 _MM_NAME_RE = re.compile(r"\b(money\s*market|cash\s*(?:management|reserves?|sweep)|sweep|government\s+(?:cash|money)|treasury\s+cash)\b", re.I)
 _CASH_ACCT_RE = re.compile(r"\b(cash|money\s*market|sweep|mm|mmf|core\s+position)\b", re.I)
 _BANK_ACCT_RE = re.compile(r"\b(savings|checking|emergency|high[- ]yield|hysa|cd)\b", re.I)
+# From the first real capture (2026-11-10, Plaid-style names): credit cards named "Blue Cash Everyday" / "Customized Cash Rewards" were being
+# read as cash, payment wallets (Venmo, PayPal, Apple Cash) had no pairing, and brokerage cash accounts literally named "BROKERAGE CASH"
+# did not pair because the investment accounts are called "WELLSTRADE ...".
+_LIABILITY_TYPE_RE = re.compile(r"credit|loan|mortgage|line of credit|liabilit", re.I)
+_LIABILITY_NAME_RE = re.compile(r"\b(visa|mastercard|amex|american express card|platinum card|credit card|rewards card|card|mortgage|installment|loan|line of credit)\b", re.I)
+_WALLET_RE = re.compile(r"\b(venmo|paypal|apple\s+cash|cash\s*app|zelle|google\s*pay)\b", re.I)
+_BROKERAGE_CASH_RE = re.compile(r"\b(brokerage\s+cash|core\s+cash|cash\s+sweep|sweep\s+account|investing\s+cash|investment\s+cash|ira\s+cash)\b", re.I)
+_HSA_RE = re.compile(r"\b(hsa|health\s+savings)\b", re.I)
 _MASK_RE = re.compile(r"[-–—\s]*\(?\s*(?:xx+|\*+|#)\s*\d{2,6}\)?\s*$", re.I)
 _PREFIX_RE = re.compile(r"^(mc|manual)\s+", re.I)
 _CASH_WORDS_RE = re.compile(r"\b(cash|money\s*market|sweep|mmf|mm|core\s+position|investing|investment)\b", re.I)
@@ -84,14 +92,32 @@ def classify_accounts(accounts, positions):
     for a in accounts:
         name, inst = a.get("name") or "", a.get("institution")
         typ, sub = str(a.get("type") or ""), str(a.get("subtype") or "")
+        liability = (a.get("is_asset") is False) or bool(_LIABILITY_TYPE_RE.search(typ + " " + sub)) or \
+            (bool(_LIABILITY_NAME_RE.search(name)) and (inst, name) not in sec_accts and (a.get("holdings_count") or 0) == 0
+             and not _BROKERAGE_CASH_RE.search(name))
+        if liability:                       # a card or loan is never cash, whatever its name says ("Blue Cash Everyday")
+            out.append({"name": name, "institution": inst, "type": a.get("type"), "subtype": a.get("subtype"),
+                        "holdings_count": a.get("holdings_count") or 0, "balance": a.get("balance"),
+                        "has_securities": False, "verdict": "not_cash", "confidence": "high",
+                        "reasons": ["credit card, loan or other liability"], "paired_with": None})
+            continue
         reasons, cashy = [], False
         if _CASH_ACCT_RE.search(name):
             reasons.append("account name contains a cash word"); cashy = True
         if typ.lower() in ("cash", "depository", "checking", "savings") or sub.lower() in ("checking", "savings", "cash", "money market", "cash management"):
             reasons.append(f"provider type/subtype is {typ or sub}"); cashy = True
         bank_word = bool(_BANK_ACCT_RE.search(name))
-        if bank_word:
+        wallet = bool(_WALLET_RE.search(name))
+        hsa = bool(_HSA_RE.search(name))
+        if wallet:
+            reasons.append("payment wallet (Venmo / PayPal / Apple Cash style)"); cashy = True
+        elif hsa and (a.get("holdings_count") or 0) == 0 and (inst, name) not in sec_accts:
+            reasons.append("health savings account: its balance may be cash or invested, only you can say"); cashy = True
+        elif bank_word:
             reasons.append("account name looks like a bank account"); cashy = True
+        explicit = bool(_BROKERAGE_CASH_RE.search(name))
+        if explicit:
+            reasons.append("the name itself says brokerage / investing cash"); cashy = True
         paired = None
         if cashy:
             my = stem(name)
@@ -115,6 +141,16 @@ def classify_accounts(accounts, positions):
             paired = best[1] if best else None
         if not cashy:
             verdict, conf = "not_cash", "high"       # an investment, loan, card or other account: nothing cash-like about it
+        elif wallet:
+            verdict, conf = "bank_cash", "medium"
+        elif hsa and not paired:
+            verdict, conf = "unsure", "low"
+        elif explicit and not paired:
+            fam = [o.get("name") for o in by_inst.get(inst, []) if o is not a and (
+                (o.get("holdings_count") or 0) > 0 or (inst, o.get("name")) in sec_accts)]
+            verdict, conf = "brokerage_cash", ("high" if fam else "medium")
+            if fam:
+                reasons.append(f"{len(fam)} investment account(s) at the same institution (exact match by number is not possible from names)")
         elif paired:
             verdict, conf = "brokerage_cash", "high" if not bank_word else "medium"
             reasons.append(f"same institution and name family as the investment account '{paired}'")

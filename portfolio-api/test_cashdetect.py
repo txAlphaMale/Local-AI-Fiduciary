@@ -72,6 +72,69 @@ class TestAccounts(unittest.TestCase):
         self.assertIn("provider type/subtype", " ".join(r[0]["reasons"]))
 
 
+class TestRealCapturePatterns(unittest.TestCase):
+    """Names from the first real capture (2026-11-10, Plaid-style): these were misread by the first version of the rules."""
+    ACCTS = [
+        acct("Rewards Checking (...1670)", "American Express", "Checking", 0, 800), acct("Blue Cash Everyday® (...3003)", "American Express", "Credit Card", 0, 300),
+        acct("Customized Cash Rewards Visa Signature (...5151)", "Bank of America", "Investments", 0, 120),
+        acct("PLATINUM CARD (...7076)", "Wells Fargo", "Investments", 0, 90),
+        acct("Apple Cash", "Apple Card, Cash, and Savings", "Checking", 0, 40), acct("PayPal", "PayPal", "Checking", 0, 15), acct("Michelle Venmo", "Venmo - Personal", "Checking", 0, 5),
+        acct("Health Savings Account (...8095)", "Voya Retirement Plans", "Checking", 0, 1278),
+        acct("EVERYDAY CHECKING (...3913)", "Wells Fargo", "Checking", 0, 9000), acct("WAY2SAVE SAVINGS (...4524)", "Wells Fargo", "Savings", 0, 6000),
+        acct("IRA BROKERAGE CASH (...1400)", "Wells Fargo", "Checking", 0, 113), acct("BROKERAGE CASH (...5346)", "Wells Fargo", "Checking", 0, 5),
+        acct("WELLSTRADE IRA (...6140)", "Wells Fargo", "Investments", 0, 236157), acct("WELLSTRADE (...9571)", "Wells Fargo", "Investments", 0, 17316),
+        acct("Individual Brokerage -2317 (...2317)", "E*TRADE from Morgan Stanley", "Investments", 0, 1292)]
+    POS = [pos("WELLSTRADE IRA (...6140)", "Wells Fargo", "VTI", "ETF", 1000), pos("WELLSTRADE (...9571)", "Wells Fargo", "AAPL", "Stock", 500),
+           pos("Individual Brokerage -2317 (...2317)", "E*TRADE from Morgan Stanley", "CASH", "Cash", 1292, price=1.0),
+           pos("Individual Brokerage -2317 (...2317)", "E*TRADE from Morgan Stanley", "NVDA", "Stock", 50)]
+
+    def by(self):
+        out = {}
+        for r in cd.classify_accounts(self.ACCTS, self.POS):
+            out[r["name"]] = r
+        return out
+
+    def test_cards_and_loans_are_never_cash_even_with_cash_in_the_name(self):
+        b = self.by()
+        for n in ("Blue Cash Everyday® (...3003)", "Customized Cash Rewards Visa Signature (...5151)", "PLATINUM CARD (...7076)"):
+            self.assertEqual(b[n]["verdict"], "not_cash", n)
+        liab = cd.classify_accounts([dict(acct("Odd name", "X", "Investments", 0, 5), is_asset=False)], [])
+        self.assertEqual(liab[0]["verdict"], "not_cash")
+
+    def test_wallets_are_bank_cash(self):
+        b = self.by()
+        for n in ("Apple Cash", "PayPal", "Michelle Venmo"):
+            self.assertEqual(b[n]["verdict"], "bank_cash", n)
+
+    def test_checking_and_savings_are_bank_cash(self):
+        b = self.by()
+        for n in ("Rewards Checking (...1670)", "EVERYDAY CHECKING (...3913)", "WAY2SAVE SAVINGS (...4524)"):
+            self.assertEqual(b[n]["verdict"], "bank_cash", n)
+
+    def test_accounts_named_brokerage_cash_are_brokerage_cash_without_needing_a_name_match(self):
+        b = self.by()
+        for n in ("IRA BROKERAGE CASH (...1400)", "BROKERAGE CASH (...5346)"):
+            self.assertEqual((b[n]["verdict"], b[n]["confidence"]), ("brokerage_cash", "high"), n)
+
+    def test_a_health_savings_account_is_left_for_the_owner_to_decide(self):
+        r = self.by()["Health Savings Account (...8095)"]
+        self.assertEqual((r["verdict"], r["confidence"]), ("unsure", "low"))
+        self.assertIn("health savings", " ".join(r["reasons"]))
+
+    def test_investment_accounts_stay_not_cash(self):
+        b = self.by()
+        for n in ("WELLSTRADE IRA (...6140)", "WELLSTRADE (...9571)", "Individual Brokerage -2317 (...2317)"):
+            self.assertEqual(b[n]["verdict"], "not_cash", n)
+
+    def test_report_totals_for_the_capture_shape(self):
+        r = cd.report(self.ACCTS, self.POS, 1292.0, 0.0)
+        g = r["guessed_totals"]
+        self.assertEqual(g["brokerage_cash"], round(1292 + 113 + 5, 2))      # E*TRADE cash line + the two Wells brokerage-cash accounts
+        self.assertEqual(g["bank_cash"], 800 + 40 + 15 + 5 + 9000 + 6000)    # checking, savings, wallets
+        self.assertEqual(g["unsure"], 1278.0)                                # the HSA
+        self.assertEqual([h["ticker"] for h in r["cash_holdings"]], ["CASH"])
+
+
 class TestHoldings(unittest.TestCase):
     def test_money_market_ticker_is_brokerage_cash_even_when_typed_as_a_fund(self):
         c = cd.classify_holding(pos("MC VG IRA", "Vanguard", "VMFXX", "Mutual Fund", 5000, price=1.0, name="Vanguard Federal Money Market Fund", day=0.0), True)
