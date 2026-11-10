@@ -140,6 +140,15 @@ class TestCashIsNotAnInvestment(unittest.TestCase):
         none = self.js("const m=mixAssetClass({asset_class_value:{Equity:5000}},%s); console.log(JSON.stringify(m.items.map(i=>[i.label.startsWith('Cash')?'Cash':i.label,i.value])));" % d)
         self.assertEqual(none, [["Equity", 5000], ["Cash", 118]])
 
+    def test_money_market_funds_leave_their_fund_rows_and_the_funds_slice(self):
+        d = "{consolidated:[{ticker:'VFIAX',value:4000,type:'Mutual Fund'},{ticker:'VMFXX',value:1000,type:'Mutual Fund'}], bank_cash:0, brokerage_cash:1000, cash_equiv_value:1000, cash_equiv_tickers:['VMFXX']}"
+        direct = self.js("const m=mixHoldings(%s,null,null,false); console.log(JSON.stringify([m.items.map(i=>[i.label,i.value]), m.total]));" % d)
+        self.assertEqual(direct[0], [["VFIAX", 4000], ["Cash (in brokerage accounts)", 1000]]); self.assertEqual(direct[1], 5000)
+        lt = self.js("const lt={invested_value:5000,true_exposure:[{ticker:'AAA',total_value:4000},{ticker:'VMFXX',total_value:1000}]}; const m=mixHoldings(%s,lt,null,true); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));" % d)
+        self.assertEqual(lt, [["AAA", 4000], ["Cash (in brokerage accounts)", 1000]])
+        sec = self.js("const m=mixSector({by_sector:[{sector:'Tech',value:3000},{sector:'Funds (no look-through)',value:5000}]},%s); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));" % d)
+        self.assertEqual(sec, [["Mutual funds & ETFs (not sector-classified)", 4000], ["Tech", 3000], ["Cash (in brokerage accounts)", 1000]])
+
     def test_without_d_nothing_changes(self):
         out = self.js("const m=mixSector({by_sector:[{sector:'Cash',value:900}]}); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));")
         self.assertEqual(out, [["Cash", 900]])

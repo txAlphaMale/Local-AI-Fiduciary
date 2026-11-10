@@ -3051,19 +3051,27 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     # for FREE CASH SITTING IN BROKERAGE ACCOUNTS. "Brokerage cash" = a Cash line in an account that also holds securities; a Cash-only account
     # (savings, checking, emergency fund) is bank cash and is left out of the widgets. The engines keep using by_type / by_institution unchanged
     # (policy drift needs the cash sleeve); only the display fields below are new.
-    _sec_accts = {(p.get("institution"), p.get("account")) for p in positions if (p.get("type") or "") != "Cash"}
-    _is_cash = lambda p: (p.get("type") or "") == "Cash"
-    _brokerage_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) in _sec_accts]
-    _bank_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) not in _sec_accts]
+    _cb = cashdetect.cash_breakdown(accounts, positions)
     _cash_accts = cashdetect.counted_brokerage_cash_accounts(accounts, positions)   # cash sweeps listed as their own (holdings-less) accounts
-    acct_cash = round(sum(a.get("balance") or 0 for a in _cash_accts), 2)
-    brokerage_cash = round(sum(p["value"] or 0 for p in _brokerage_cash_pos) + acct_cash, 2)
-    bank_cash = round(sum(p["value"] or 0 for p in _bank_cash_pos), 2)
+    acct_cash = _cb["brokerage_cash_accounts"]
+    brokerage_cash = _cb["brokerage_cash"]          # cash lines in brokerage accounts + separate cash-sweep accounts + money-market funds
+    bank_cash = _cb["bank_cash"]
+    _bank_keys = {(x["institution"], x["account"]) for x in _cb["bank_lines"]}
+    _bank_cash_pos = [p for p in positions if str(p.get("type") or "").lower() == "cash" and (p.get("institution"), p.get("account")) in _bank_keys]
+    _equiv_tickers = set(_cb["cash_equiv_tickers"])
     _disp = [p for p in positions if not any(p is b for b in _bank_cash_pos)]
     _d_inst, _d_type = {}, {}
     for p in _disp:
         _d_inst[p["institution"] or "?"] = round(_d_inst.get(p["institution"] or "?", 0) + (p["value"] or 0), 2)
         _d_type[p["type"] or "Other"] = round(_d_type.get(p["type"] or "Other", 0) + (p["value"] or 0), 2)
+    for x in _cb["equivalent_lines"]:           # a money-market FUND counts as cash here, not as a mutual fund
+        _p = next((p for p in positions if p.get("ticker") == x["ticker"] and p.get("account") == x["account"] and p.get("institution") == x["institution"]), None)
+        if _p is not None:
+            _tk = _p["type"] or "Other"
+            _d_type[_tk] = round(max(0.0, _d_type.get(_tk, 0) - (x["value"] or 0)), 2)
+            _d_type["Cash"] = round(_d_type.get("Cash", 0) + (x["value"] or 0), 2)
+    for k in [k for k, v in _d_type.items() if v <= 0]:
+        del _d_type[k]
     for a in balance_only:
         _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
     _bo_keys = {(a.get("institution"), a.get("name")) for a in balance_only}
@@ -3101,6 +3109,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         # need them there; the header tile shows invested_value minus this so cash is not presented as an investment.
         "cash_value": round(sum(p["value"] or 0 for p in positions if (p.get("type") or "") == "Cash"), 2),
         "brokerage_cash": brokerage_cash, "brokerage_cash_accounts": acct_cash, "bank_cash": bank_cash, "alloc_display": alloc_display,
+        "cash_equiv_value": _cb["cash_equiv_value"], "cash_equiv_tickers": _cb["cash_equiv_tickers"],
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
         "total_gain_pct": round(total_gain / total_cost * 100, 2) if total_cost else None,
