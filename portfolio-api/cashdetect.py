@@ -169,11 +169,17 @@ def _guess_accounts(accounts, positions):
             reasons.append(f"provider type/subtype is {typ or sub}"); cashy = True
         bank_word = bool(_BANK_ACCT_RE.search(name))
         wallet = bool(_WALLET_RE.search(name))
-        hsa = bool(_HSA_RE.search(name))
+        hsa = bool(_HSA_RE.search(name)) or bool(_HSA_RE.search(sub)) or sub.lower() == "hsa"
+        if hsa and (a.get("holdings_count") or 0) == 0 and (inst, name) not in sec_accts:
+            # A health savings account is its own thing (2026-11-10, Jason): a MEDICAL RESERVE first, a retirement asset only for the part above
+            # foreseeable healthcare costs and only from 65. It is never brokerage cash or bank cash, whatever its name or a paired account
+            # says, and its balance stays in net worth. The person's own designation (applied afterwards) can still override this.
+            out.append(_row(a, has_securities=False, verdict="hsa", confidence="high",
+                            reasons=["health savings account: a medical reserve, not cash and not an ordinary investment account "
+                                     "(counted in net worth; kept in its own bucket by the retirement planners)"], paired_with=None))
+            continue
         if wallet:
             reasons.append("payment wallet (Venmo / PayPal / Apple Cash style)"); cashy = True
-        elif hsa and (a.get("holdings_count") or 0) == 0 and (inst, name) not in sec_accts:
-            reasons.append("health savings account: its balance may be cash or invested, only you can say"); cashy = True
         elif bank_word:
             reasons.append("account name looks like a bank account"); cashy = True
         explicit = bool(_BROKERAGE_CASH_RE.search(name))
@@ -204,8 +210,6 @@ def _guess_accounts(accounts, positions):
             verdict, conf = "not_cash", "high"       # an investment, loan, card or other account: nothing cash-like about it
         elif wallet:
             verdict, conf = "bank_cash", "medium"
-        elif hsa and not paired:
-            verdict, conf = "unsure", "low"
         elif explicit and not paired:
             fam = [o.get("name") for o in by_inst.get(inst, []) if o is not a and (
                 (o.get("holdings_count") or 0) > 0 or (inst, o.get("name")) in sec_accts)]

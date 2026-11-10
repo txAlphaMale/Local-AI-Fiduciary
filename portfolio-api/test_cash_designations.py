@@ -36,16 +36,16 @@ class TestRules(unittest.TestCase):
         accts = accts or [self.hsa, self.fund]
         return {r["name"]: r for r in cd.classify_accounts(accts, self.pos, des)}
 
-    def test_without_a_designation_the_hsa_is_a_low_confidence_guess(self):
+    def test_without_a_designation_the_hsa_is_a_medical_reserve(self):
         r = self.row({})["Voya HSA Cash"]
-        self.assertEqual((r["verdict"], r["confidence"]), ("unsure", "low"))
+        self.assertEqual((r["verdict"], r["confidence"]), ("hsa", "high"))
 
     def test_designation_beats_the_guess_and_is_high_confidence(self):
         for d, verdict in (("investment", "not_cash"), ("brokerage_cash", "brokerage_cash"), ("bank_cash", "bank_cash"), ("exclude", "excluded")):
             r = self.row({K(self.hsa): d})["Voya HSA Cash"]
             self.assertEqual((r["verdict"], r["confidence"], r["designation"]), (verdict, "high", d))
             self.assertTrue(r["reasons"][0].startswith("set by you"))
-            self.assertEqual(r["guess"], "unsure")                                  # the rules' opinion is kept for display
+            self.assertEqual(r["guess"], "hsa")                                     # the rules' opinion is kept for display
 
     def test_brokerage_cash_designation_feeds_the_cash_slice(self):
         des = {K(self.hsa): "brokerage_cash"}

@@ -37,7 +37,7 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
@@ -62,6 +62,7 @@ import shortint    # G15 deferred half (P1) — FINRA consolidated short interes
 import cashdebt    # GAP-2 (P1) — emergency fund, idle-cash drag, payoff-vs-invest, refi, avalanche
 import performance # GAP-3 (P1) — TWR + policy-benchmark relative returns over standard periods
 import washsale    # GAP-4 (P1) — share-event ledger → wash-sale verdicts + replacement pairs for TLH
+import hsa         # HSA = medical reserve first; retirement surplus only above the healthcare need and from 65
 import benefits    # GAP-5 (P1) — 401k match/headroom, HSA, Roth IRA, mega-backdoor capacity (2026-grounded)
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
 import realestate   # rental real-estate deal underwriter (G9) — NOI/cap/DSCR/CoC/after-tax IRR
@@ -193,7 +194,7 @@ DEFAULT_POLICY = {"targets_by_type": {}, "max_position_pct": 10.0, "drift_thresh
                   # _sleeve() heuristic checks this before falling back to the Finnhub profile lookup.
                   "intl_tickers": {}}
 RETIRE_FILE = os.environ.get("RETIRE_FILE", "/data/retirement.json")
-DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0,
+DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None, "healthcare_expense_mode": "off",
                   "annual_expenses_override": None, "annual_savings_override": None,
                   "current_age": None, "target_age": 60, "exclude_account_types": ["Real Estate"],
                   "income_target_yield_pct": 3.5, "optimistic_real_return_pct": 8.0,
@@ -271,6 +272,8 @@ class PolicyUpdate(BaseModel):
 
 
 class RetirementConfigUpdate(BaseModel):
+    healthcare_expense_mode: Optional[Literal["off", "add"]] = None   # "add": the estimated yearly retirement healthcare cost is added to expenses
+    healthcare_need_override: Optional[float] = Field(None, ge=0, le=5_000_000)   # household's own lifetime healthcare need (replaces the Fidelity estimate)
     withdrawal_rate_pct: Optional[float] = Field(None, ge=0, le=25)
     expected_real_return_pct: Optional[float] = Field(None, ge=-20, le=30)
     annual_expenses_override: Optional[float] = Field(None, ge=0)
@@ -4788,7 +4791,7 @@ _leverage_lock = threading.Lock()
 def _leverage():
     """Ruin curve + borrow-vs-sell on the pledgeable (taxable) book, using reconstructed returns."""
     d = _data()
-    bal = _balances_by_tax_status()
+    bal = _balances_by_tax_status(include_balance_only=False)      # collateral needs real, listed positions
     collateral = bal.get("taxable", 0.0)      # only taxable/brokerage assets can be pledged
     cons = [c for c in d.get("consolidated", [])
             if c.get("ticker") and (c.get("type") or "") != "Cash"]
@@ -9879,6 +9882,31 @@ def get_ss(claim_age: float = None, other_income: float = None):
         return JSONResponse({"error": f"ss estimate failed: {_errref(e)}"}, status_code=500)
 
 
+def _hsa_summary(d=None, cfg=None):
+    """The household's HSA through hsa.py: balance (all HSA accounts, one number each as the provider sends it), healthcare need,
+    medical reserve vs retirement surplus, and what retirement projections may count. Read-only."""
+    d = d if d is not None else _data()
+    cfg = cfg if cfg is not None else _read_retire()
+    accts = [a for a in d.get("accounts") or []
+             if a.get("is_asset") is not False and a.get("include_nw") and (a.get("balance") or 0) > 0
+             and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "hsa"]
+    balance = round(sum(a.get("balance") or 0 for a in accts), 2)
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
+    sp_age = _derive_age(cfg.get("spouse_birth_year"), cfg.get("spouse_age"))
+    people = [age] + ([sp_age] if (cfg.get("spouse_birth_year") or cfg.get("spouse_age")) else [])
+    n = hsa.need(people, override=cfg.get("healthcare_need_override"))
+    sp = hsa.split(balance, age, n["total"])
+    return {"accounts": [{"institution": a.get("institution"), "account": a.get("name"), "balance": a.get("balance")} for a in accts],
+            "need": n, "age": age, **sp,
+            "note": "An HSA is a medical reserve first. Only the part above the foreseeable healthcare need, and only from age 65, is counted "
+                    "as retirement money; the rest stays in net worth but out of retirement spending. Informational, not tax advice."}
+
+
+@app.get("/api/hsa")
+def get_hsa():
+    return _hsa_summary()
+
+
 def _investable_assets(d, exclude_types):
     ex = {str(t).lower() for t in (exclude_types or [])}
     total = 0.0
@@ -10336,6 +10364,12 @@ def _retirement():
     wr = (cfg.get("withdrawal_rate_pct") or 4.0) / 100.0
     r = (cfg.get("expected_real_return_pct") or 5.0) / 100.0
     investable = _investable_assets(d, cfg.get("exclude_account_types"))
+    _hs = _hsa_summary(d, cfg)
+    _ex = {str(t).lower() for t in (cfg.get("exclude_account_types") or [])}
+    if _hs["balance"] and not any(str(a.get("type") or "").lower() in _ex for a in d.get("accounts") or []
+                                  if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "hsa"):
+        # the HSA is a medical reserve: take it out of retirement-spendable money and add back only the surplus the 65 rule allows
+        investable = round(investable - _hs["balance"] + _hs["counted_for_retirement"], 2)
 
     exp_override = cfg.get("annual_expenses_override")
     sav_override = cfg.get("annual_savings_override")
@@ -10343,6 +10377,14 @@ def _retirement():
     if exp_override is None or sav_override is None:
         cf_inc, cf_exp = _cashflow_annual()
     annual_expenses = exp_override if exp_override is not None else cf_exp
+    # Healthcare as a yearly expense line (2026-11-10): the typical retirement-year cost (Fidelity estimate or the household's own figure,
+    # spread over 65-90). Shown always; added to the expenses behind the FI number / funded ratio only when the household turns it on, because
+    # Monarch's trailing expenses already contain today's premiums and medical bills, so adding it can double count.
+    _hc = hsa.annual_cost(_hs["need"]["people"], override=cfg.get("healthcare_need_override"))
+    _hc_on = cfg.get("healthcare_expense_mode") == "add" and _hc["annual"] is not None
+    base_expenses = annual_expenses
+    if _hc_on and annual_expenses is not None:
+        annual_expenses = round(annual_expenses + _hc["annual"], 2)
     exp_source = "override" if exp_override is not None else ("monarch_cashflow" if cf_exp is not None else None)
     if sav_override is not None:
         annual_savings = sav_override
@@ -10364,6 +10406,11 @@ def _retirement():
     assumptions = {"withdrawal_rate_pct": cfg.get("withdrawal_rate_pct"),
                    "expected_real_return_pct": cfg.get("expected_real_return_pct"),
                    "annual_expenses": annual_expenses, "expenses_source": exp_source,
+                   "annual_expenses_base": base_expenses, "healthcare_expense_mode": cfg.get("healthcare_expense_mode") or "off",
+                   "healthcare_need_override": cfg.get("healthcare_need_override"),
+                   "healthcare_line": {**_hc, "included": bool(_hc_on and base_expenses is not None),
+                                       "fi_number_without": (round(base_expenses / wr, 2) if (base_expenses and wr) else None),
+                                       "fi_number_with": (round((base_expenses + _hc["annual"]) / wr, 2) if (base_expenses and wr and _hc["annual"] is not None) else None)},
                    "annual_savings": annual_savings,
                    # current_age/spouse_age (2026-07-23, superseding the same-day fix that added a
                    # manual "Spouse age" input): DERIVED from birth_year/spouse_birth_year via
@@ -10403,7 +10450,7 @@ def _retirement():
                    "spouse_ss_estimated_fra_benefit": cfg.get("spouse_ss_estimated_fra_benefit")}
 
     if not annual_expenses:
-        return {"generated_at": int(time.time()), "investable_assets": investable, "fi_number": None,
+        return {"generated_at": int(time.time()), "investable_assets": investable, "hsa": _hs, "fi_number": None,
                 "assumptions": assumptions, "notes": notes,
                 "note": "Set annual_expenses_override in the retirement config (Monarch cash-flow expenses "
                         "weren't available) — the FI number needs your target annual expenses."}
@@ -10613,7 +10660,7 @@ def _retirement():
         except Exception:
             funded = None
 
-    return {"generated_at": int(time.time()), "investable_assets": investable, "fi_number": fi_number,
+    return {"generated_at": int(time.time()), "investable_assets": investable, "hsa": _hs, "fi_number": fi_number,
             "progress_pct": progress_pct, "years_to_fi": years, "fi_year": fi_year, "fi_age": fi_age,
             "annual_savings": annual_savings, "coast_fi": coast, "sensitivity": sens,
             "portfolio_signals": signals, "scenarios": scenarios, "income": income,
@@ -12560,8 +12607,12 @@ SEPP_RATE_PCT = float(os.environ.get("SEPP_RATE_PCT", "5.0"))    # 72(t) rate = 
 BRIDGE_TAX_PCT = float(os.environ.get("BRIDGE_TAX_PCT", "15.0"))  # effective ordinary-income rate on Roth conversions
 
 
-def _balances_by_tax_status():
-    """Investable securities value grouped by account tax status (taxable/roth/deferred/hsa)."""
+def _balances_by_tax_status(include_balance_only=True):
+    """Investable value grouped by account tax status (taxable/roth/deferred/hsa): the securities the provider lists PLUS, by default, the
+    balance of investment accounts that report only a balance and no holdings (a 401(k) or HSA that syncs one number). Those used to count
+    as $0 here, which understated the bridge plan and the Roth ladder. `include_balance_only=False` keeps the securities-only view for
+    callers that need real positions (the borrow-against-portfolio collateral). The HSA stays in its own bucket: it is a medical reserve
+    first and is never added to the retirement-spendable buckets (see HSA-AUDIT)."""
     d = _data()
     acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
@@ -12571,6 +12622,14 @@ def _balances_by_tax_status():
         status = acct_status.get(name) or _account_tax_status(name, "Investments")
         if status in bal:
             bal[status] += sum((h.get("value") or 0) for h in acct.get("holdings", []))
+    if include_balance_only:
+        listed = {a.get("account") for a in d.get("by_account", [])}
+        for a in d.get("accounts", []):
+            if ((a.get("holdings_count") or 0) == 0 and a.get("include_nw") and a.get("is_asset") is not False
+                    and a.get("name") not in listed and (a.get("balance") or 0) > 0):
+                st = acct_status.get(a.get("name"))
+                if st in bal:
+                    bal[st] += a.get("balance") or 0
     return {k: round(v, 2) for k, v in bal.items()}
 
 
