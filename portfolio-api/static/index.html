@@ -2243,6 +2243,31 @@ const attrEsc = x => (x==null?'':String(x)).replace(/"/g,'&quot;').replace(/</g,
 // Full HTML escape for text AND attribute contexts. Usernames and audit-log fields (a failed login's attempted username is stored verbatim by an
 // UNAUTHENTICATED request) are attacker-controlled: never put them in innerHTML unescaped.
 const escHtml = x => (x==null?'':String(x)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+// ---- Inline event-handler attributes are not used (2026-11-09, risk R-23): the page's CSP sets script-src-attr 'none', so an injected
+// <img onerror> or an onclick attribute cannot run. Markup that needs a handler carries a data-on-<event> attribute naming an action (+ data-args as JSON)
+// instead, written with A(event, name, arg1, ...). One delegated listener per event type runs the named action from the fixed
+// registry ACT below (never an arbitrary string, never eval). An action returning false calls preventDefault (link/form behaviour).
+const ACT={};
+function A(ev, name, ...args){
+  return ' data-on-'+ev+'="'+escHtml(name)+'"'+(args.length?' data-args="'+escHtml(JSON.stringify(args))+'"':'');
+}
+(['_frMfaSetupDone','_frRecoveryKeyContinue','_goalLiveUpdate','acaWhatif','accountsCreateViewer','addIncSrcRow','applyTaxInputs','authFirstRunSubmit','authLoginSubmit','authRecoveryReset','authRecoveryStart','certAcmeChallengeToggle','certAcmeEnroll','certAcmeRenew','certGenCsr','certGenCsrReset','certGenSelfSigned','certImportCert','certModeToggle','certToggleAutoRenew','ledgerArchive','ledgerBuy','ledgerContribute','ledgerCreateModeToggle','ledgerCreateSubmit','ledgerCreateToggle','ledgerDelete','ledgerRecurring','ledgerReset','ledgerSeed','ledgerSeedAll','ledgerSeedToggle','ledgerSell','ledgerStopRecurring','removeIncSrcRow','render','researchIdea','resetSchedule','saveDonees','saveHomeBasis','savePolicy','saveRetire','saveScanner','saveSchedule','scenarioCreateModeToggle','scenarioCreateRiskChanged','scenarioCreateSubmit','scenarioCreateToggle','scenarioSaveGoal','securityChangePassword','securityMfaVerify','securityRenameAccount','securityResetAccount','ssWhatif','stratContribute','stratRecurring','stratReset','stratRun','stratSeed','stratSeedAll','stratSeedToggle','stratStopRecurring']).forEach(n=>{ ACT[n]=(el,ev,...a)=>window[n](...a); });
+ACT.researchIdeaEnter=(el,ev)=>{ if(ev.key==='Enter') researchIdea((el.value||'').trim().toUpperCase()); };
+ACT.researchIdeaFromInput=()=>researchIdea((document.getElementById('scan-any').value||'').trim().toUpperCase());
+ACT.runScheduleNow=(el,ev,kind)=>runScheduleNow(kind, el);
+ACT.hideById=(el,ev,id)=>{ const t=document.getElementById(id); if(t) t.style.display='none'; };
+ACT.enableIf=(el,ev,id)=>{ const t=document.getElementById(id); if(t) t.disabled=!el.checked; };
+ACT.frMfaSetupSkip=()=>{ _frMfaSetupSkip(); return false; };
+ACT.notYouSignIn=()=>{ _pendingLoginCreds=null; renderLogin(false); return false; };
+ACT.showRecovery=()=>{ renderRecovery(); return false; };
+ACT.showLogin=()=>{ renderLogin(false); return false; };
+['click','change','input','keydown'].forEach(t=>document.addEventListener(t, ev=>{
+  const n=ev.target && ev.target.closest ? ev.target.closest('[data-on-'+t+']') : null; if(!n) return;
+  const fn=ACT[n.getAttribute('data-on-'+t)]; if(!fn) return;
+  let args=[]; try{ args=JSON.parse(n.getAttribute('data-args')||'[]'); }catch(_){ args=[]; }
+  if(fn(n, ev, ...args)===false) ev.preventDefault();
+}));
+
 function fundInfoMap(){ return (EXP&&EXP.positions) ? Object.fromEntries(EXP.positions.filter(p=>'fund_mix' in p||'expense_ratio_pct' in p).map(p=>[p.ticker,p])) : {}; }
 function fundSectorCell(p, FI){
   if(!(p.ticker in FI)) return `<span class="muted" title="exposure data for this fund is still being computed (it refreshes in the background)">…</span>`;
@@ -2668,10 +2693,10 @@ function scannerContent(){
     `<div style="margin-bottom:var(--space-2);">Strategy <input id="scan-strat" type="text" value="${(r.strategy||'').replace(/"/g,'&quot;')}" style="width:430px;"/></div>`+
     `<div style="margin-bottom:var(--space-2);vertical-align:top;">Discovery queries <span class="muted" style="font-size:var(--font-size-sm);">(one per line; newsfeed idea sources)</span><br/><textarea id="scan-disco" rows="3" style="width:430px;vertical-align:top;">${(r.discovery_queries||[]).join('\n').replace(/</g,'&lt;')}</textarea></div>`+
     `<div style="margin-bottom:var(--space-2);">Alert on holdings — top <input id="scan-alertlim" type="number" value="${r.alert_holdings_limit!=null?r.alert_holdings_limit:15}" style="width:52px;"/> by weight <span class="muted" style="font-size:var(--font-size-sm);">(news/8-K alerts on your largest positions)</span></div>`+
-    `<button onclick="saveScanner()">↳ SAVE & RESCAN</button>`+
+    `<button ${A('click','saveScanner')}>↳ SAVE & RESCAN</button>`+
     `<div style="margin-top:var(--space-3);padding-top:var(--space-2);border-top:1px solid var(--color-border-strong);">Analyze any ticker `+
-      `<input id="scan-any" type="text" placeholder="PLTR" onkeydown="if(event.key==='Enter')researchIdea((this.value||'').trim().toUpperCase())" style="width:90px;text-transform:uppercase;"/> `+
-      `<button onclick="researchIdea((document.getElementById('scan-any').value||'').trim().toUpperCase())">▸ analyze</button> `+
+      `<input id="scan-any" type="text" placeholder="PLTR" ${A('keydown','researchIdeaEnter')} style="width:90px;text-transform:uppercase;"/> `+
+      `<button ${A('click','researchIdeaFromInput')}>▸ analyze</button> `+
       `<span class="muted" style="font-size:var(--font-size-sm);">full B/S/H brief for any symbol — incl. holdings the growth screen filters out (adds insider + 13F watched-holder lines)</span></div>`;
   wrap.appendChild(ed);
   // on-demand analysis target (always present, even with no screened ideas — so 'analyze any ticker' works)
@@ -2698,7 +2723,7 @@ function scannerContent(){
       `<td>${i.net_margin_pct!=null?i.net_margin_pct+'%':'—'}</td>`+
       `<td>${i.pe_forward!=null?(+i.pe_forward).toFixed(1):'—'}</td>`+
       `<td class="l">${ana}</td>`+
-      `<td class="l"><button onclick="researchIdea('${i.ticker}')" style="font-size:var(--font-size-sm);padding:var(--space-1) var(--space-2);">▸ analyze</button>`+
+      `<td class="l"><button ${A('click','researchIdea',i.ticker)} style="font-size:var(--font-size-sm);padding:var(--space-1) var(--space-2);">▸ analyze</button>`+
         `${why?` <span class="muted" style="font-size:var(--font-size-xs)" title="${why.replace(/"/g,'&quot;')}">why?</span>`:''}`+
         `${(i.error||!i.available)?` <span class="muted" style="font-size:var(--font-size-xs)">${i.error?'err':'unsupported'}</span>`:''}</td>`;
     return tr;
@@ -3006,7 +3031,7 @@ function scheduleContent(){
   const when=ts=>{ try{ return new Date(ts*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(_){ return ''; } };
   (s.jobs||[]).forEach(j=>{ const tr=el('tr');
     const reset=j.is_default?`<span class="muted" style="font-size:var(--font-size-sm);">default</span>`
-      :`<button onclick="resetSchedule('${j.kind}')" style="font-size:var(--font-size-sm);" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
+      :`<button ${A('click','resetSchedule',j.kind)} style="font-size:var(--font-size-sm);" title="restore ${p2(j.default_hour)}:${p2(j.default_minute)}">↺ reset</button>`;
     const lr=j.last_run;
     const lastCell=lr?`<span class="${lr.status==='done'?'':'neg'}">${dur(lr.seconds)}</span><br><span class="muted" style="font-size:var(--font-size-sm);">${esc(when(lr.finished))}${lr.status==='done'?'':(lr.status==='skipped'?' · SKIPPED (already running)':' · FAILED')}${lr.source==='auto'?' · auto-refresh':(lr.source&&lr.source!=='scheduler'?' · manual':'')}</span>`
       :`<span class="muted" style="font-size:var(--font-size-sm);">no history yet</span>`;
@@ -3017,8 +3042,8 @@ function scheduleContent(){
       `<input id="sch-m-${j.kind}" type="number" min="0" max="59" value="${p2(j.minute)}" style="width:44px;"/></td>`+
       `<td class="l" style="white-space:normal;line-height:1.3;">${lastCell}</td><td style="white-space:nowrap;">${typCell}</td>`+
       `<td class="l" style="white-space:normal;"><div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;justify-content:flex-end;">`+
-      `<button onclick="saveSchedule('${j.kind}')">↳ SAVE</button>${reset}`+
-      `<button class="mut-btn" onclick="runScheduleNow('${j.kind}', this)" title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></div></td>`;
+      `<button ${A('click','saveSchedule',j.kind)}>↳ SAVE</button>${reset}`+
+      `<button class="mut-btn" ${A('click','runScheduleNow',j.kind)} title="Enqueue this job immediately, outside its schedule">▸ RUN NOW</button></div></td>`;
     t.appendChild(tr); });
   const scroller=el('div'); scroller.style.cssText='max-width:100%;overflow-x:auto;'; scroller.appendChild(t);
   wrap.appendChild(scroller);
@@ -3066,7 +3091,7 @@ function estateContent(){
   wrap.appendChild(sun);
   // primary-residence cost basis: lets the ledger quantify the home's wiped gain (value − basis)
   const hb=el('div'); hb.style.cssText='font-size:var(--font-size-base);margin:4px 0;';
-  hb.innerHTML=`<span class="muted">Primary residence cost basis (purchase + improvements):</span> $<input id="est-homebasis" type="number" min="0" step="1000" value="${g.home_basis!=null?g.home_basis:''}" placeholder="unset" style="width:96px;"/> <button onclick="saveHomeBasis()">↳ SAVE</button>`;
+  hb.innerHTML=`<span class="muted">Primary residence cost basis (purchase + improvements):</span> $<input id="est-homebasis" type="number" min="0" step="1000" value="${g.home_basis!=null?g.home_basis:''}" placeholder="unset" style="width:96px;"/> <button ${A('click','saveHomeBasis')}>↳ SAVE</button>`;
   wrap.appendChild(hb);
   const cpn=el('div'); cpn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-3);color:var(--color-accent);';
   cpn.textContent='⚑ '+(su.community_property_note||''); wrap.appendChild(cpn);
@@ -3086,7 +3111,7 @@ function estateContent(){
   const gc=g.gifting||{};
   wrap.appendChild(el('div','ph','GIFTING RUNWAY · ANNUAL EXCLUSION'));
   const gce=el('div'); gce.style.cssText='font-size:var(--font-size-md);margin:6px 0;';
-  gce.innerHTML=`Donees (heirs/beneficiaries): <input id="est-donees" type="number" min="0" step="1" value="${gc.donees!=null?gc.donees:''}" style="width:54px;"/> <button onclick="saveDonees()">↳ SAVE</button>`;
+  gce.innerHTML=`Donees (heirs/beneficiaries): <input id="est-donees" type="number" min="0" step="1" value="${gc.donees!=null?gc.donees:''}" style="width:54px;"/> <button ${A('click','saveDonees')}>↳ SAVE</button>`;
   wrap.appendChild(gce);
   if(gc.donees>0){
     const gs2=el('div'); gs2.style.cssText='display:flex;gap:var(--space-7);flex-wrap:wrap;margin:8px 0;';
@@ -3240,12 +3265,12 @@ function incSrcTableHtml(who){
     `<td><select id="incsrc-${who}-${i}-type" style="width:130px;">`+INCSRC_TYPES.map(([v,l])=>`<option value="${v}"${(r.type||'w2')===v?' selected':''}>${l}</option>`).join('')+`</select></td>`+
     `<td><input id="incsrc-${who}-${i}-amt" type="number" step="500" value="${r.annual_amount!=null?r.annual_amount:''}" placeholder="$/yr" style="width:100px;"/></td>`+
     `<td><input id="incsrc-${who}-${i}-notes" type="text" value="${esc(r.notes||'')}" placeholder="notes" style="width:110px;"/></td>`+
-    `<td><button type="button" onclick="removeIncSrcRow('${who}',${i})" title="Remove this source" style="font-size:var(--font-size-sm);padding:0 var(--space-2);">✕</button></td>`+
+    `<td><button type="button" ${A('click','removeIncSrcRow',who,i)} title="Remove this source" style="font-size:var(--font-size-sm);padding:0 var(--space-2);">✕</button></td>`+
     `</tr>`).join('');
   if(!rows) rows=`<tr><td colspan="5" class="muted" style="font-size:var(--font-size-sm);padding:4px 0;">No itemized sources yet — the single income field above still works on its own.</td></tr>`;
   return `<table style="margin:4px 0;"><tr><th class="l">Label</th><th class="l">Type</th><th class="l">$/yr</th><th class="l">Notes</th><th></th></tr>${rows}`+
     `<tr><td colspan="5" style="padding-top:4px;">`+
-    `<button type="button" onclick="addIncSrcRow('${who}')" style="font-size:var(--font-size-sm);">+ add income source</button> `+
+    `<button type="button" ${A('click','addIncSrcRow',who)} style="font-size:var(--font-size-sm);">+ add income source</button> `+
     (arr.length?`<span class="muted" style="font-size:var(--font-size-sm);">total: $${Math.round(total).toLocaleString()}/yr — replaces the single field above once saved</span>`:'')+
     `</td></tr></table>`;
 }
@@ -3375,7 +3400,7 @@ function planContent(r){
       `<div style="margin-bottom:var(--space-2);">Household size <input id="ret-hh" type="number" step="1" value="${pv(a.household_size)}" placeholder="2" style="width:54px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(people on the return — drives ACA FPL)</span> &nbsp; Benchmark Silver premium <input id="ret-slcsp" type="number" step="1" value="${pv(a.aca_slcsp_annual)}" placeholder="SLCSP $/yr" style="width:110px;"/> <span class="muted" style="font-size:var(--font-size-sm);">($/yr, for a $ PTC estimate)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">You — Birth year <input id="ret-by" type="number" step="1" value="${pv(a.birth_year)}" placeholder="1975" style="width:64px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(age ${a.current_age!=null?a.current_age:'—'})</span> &nbsp; SS claim age <input id="ret-ca" type="number" step="1" value="${pv(a.ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-ssb" type="number" step="1" value="${pv(a.ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
       `<div style="margin-bottom:var(--space-2);">Spouse — Birth year <input id="ret-sby" type="number" step="1" value="${pv(a.spouse_birth_year)}" placeholder="1977" style="width:64px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(age ${a.spouse_age!=null?a.spouse_age:'—'})</span> &nbsp; SS claim age <input id="ret-sca" type="number" step="1" value="${pv(a.spouse_ss_claim_age)}" placeholder="67" style="width:54px;"/> &nbsp; Est. benefit at FRA <input id="ret-sssb" type="number" step="1" value="${pv(a.spouse_ss_estimated_fra_benefit)}" placeholder="$/mo (ssa.gov)" style="width:110px;"/></div>`+
-      `<button onclick="saveRetire()">↳ SAVE ASSUMPTIONS</button>`;
+      `<button ${A('click','saveRetire')}>↳ SAVE ASSUMPTIONS</button>`;
     wrap.appendChild(ed);
     return wrap;
   };
@@ -3499,7 +3524,7 @@ function planContent(r){
     const sn=el('div','muted'); sn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:6px 0 6px;';
     sn.textContent=sy.note||''; wrap.appendChild(sn);
     const swf=el('div'); swf.style.cssText='font-size:var(--font-size-base);margin:0 0 14px;';
-    swf.innerHTML=`<span class="muted">What-if (not saved):</span> claim age <input id="ssw-age" type="number" placeholder="${(ppl[0]&&ppl[0].claim_age)||67}" style="width:48px;"/> · other taxable income <input id="ssw-inc" type="number" placeholder="$/yr" style="width:82px;"/> <button onclick="ssWhatif()">↻ recompute</button> <span id="ssw-out"></span>`;
+    swf.innerHTML=`<span class="muted">What-if (not saved):</span> claim age <input id="ssw-age" type="number" placeholder="${(ppl[0]&&ppl[0].claim_age)||67}" style="width:48px;"/> · other taxable income <input id="ssw-inc" type="number" placeholder="$/yr" style="width:82px;"/> <button ${A('click','ssWhatif')}>↻ recompute</button> <span id="ssw-out"></span>`;
     wrap.appendChild(swf);
     return wrap;
   };
@@ -3532,7 +3557,7 @@ function planContent(r){
         wrap.appendChild(ac2);
         const an=el('div','muted'); an.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);'; an.textContent=ac.interpretation||''; wrap.appendChild(an);
         const awf=el('div'); awf.style.cssText='font-size:var(--font-size-base);margin:0 0 8px;';
-        awf.innerHTML=`<span class="muted">What-if (not saved):</span> MAGI <input id="acaw-magi" type="number" placeholder="${ac.magi!=null?Math.round(ac.magi):'$'}" style="width:84px;"/> · household <input id="acaw-hh" type="number" placeholder="2" style="width:44px;"/> · SLCSP <input id="acaw-slcsp" type="number" placeholder="$/yr" style="width:78px;"/> <button onclick="acaWhatif()">↻ recompute</button> <span id="acaw-out"></span>`;
+        awf.innerHTML=`<span class="muted">What-if (not saved):</span> MAGI <input id="acaw-magi" type="number" placeholder="${ac.magi!=null?Math.round(ac.magi):'$'}" style="width:84px;"/> · household <input id="acaw-hh" type="number" placeholder="2" style="width:44px;"/> · SLCSP <input id="acaw-slcsp" type="number" placeholder="$/yr" style="width:78px;"/> <button ${A('click','acaWhatif')}>↻ recompute</button> <span id="acaw-out"></span>`;
         wrap.appendChild(awf);
       }
       const bn=el('div','muted'); bn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-4);'; bn.textContent=(br.assessment||'')+' '+(rl.note||''); wrap.appendChild(bn);
@@ -4830,7 +4855,7 @@ function iamContent(){
     `<div style="margin-bottom:6px;">New username <input id="sec-newuser" type="text" style="width:220px;" value="${escHtml(u.username)}" autocomplete="username"/></div>`+
     `<div style="margin-bottom:6px;">Current password <input id="sec-renpass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
     `<div id="sec-ren-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
-    `<button onclick="securityRenameAccount()">↳ RENAME</button>`;
+    `<button ${A('click','securityRenameAccount')}>↳ RENAME</button>`;
   wrap.appendChild(renWrap);
 
   wrap.appendChild(el('div','ph','CHANGE PASSWORD'));
@@ -4839,7 +4864,7 @@ function iamContent(){
     `<div style="margin-bottom:6px;">Current password <input id="sec-curpass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
     `<div style="margin-bottom:6px;">New password (min 8 characters) <input id="sec-newpass" type="password" style="width:220px;" autocomplete="new-password"/></div>`+
     `<div id="sec-pw-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
-    `<button onclick="securityChangePassword()">↳ UPDATE PASSWORD</button>`;
+    `<button ${A('click','securityChangePassword')}>↳ UPDATE PASSWORD</button>`;
   wrap.appendChild(pwWrap);
 
   wrap.appendChild(el('div','ph','TWO-FACTOR AUTHENTICATION (TOTP)'));
@@ -4882,7 +4907,7 @@ function iamContent(){
     `<div style="margin-bottom:6px;">Current password <input id="sec-reset-pass" type="password" style="width:220px;" autocomplete="current-password"/></div>`+
     `<div style="margin-bottom:6px;">Type your username (<code>${escHtml(u.username)}</code>) to confirm <input id="sec-reset-confirm" type="text" style="width:220px;"/></div>`+
     `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
-    `<button onclick="securityResetAccount()">⚠ DELETE ACCOUNT &amp; RESET</button>`;
+    `<button ${A('click','securityResetAccount')}>⚠ DELETE ACCOUNT &amp; RESET</button>`;
   wrap.appendChild(resetWrap);
   return wrap;
 }
@@ -5476,7 +5501,7 @@ function _accountsPanel(){
     `<div style="margin-bottom:6px;">Username <input id="acct-new-user" type="text" style="width:220px;" autocomplete="off"/></div>`+
     `<div style="margin-bottom:6px;">Password (min 8 characters) <input id="acct-new-pass" type="password" style="width:220px;" autocomplete="new-password"/></div>`+
     `<div id="acct-new-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
-    `<button onclick="accountsCreateViewer()">＋ ADD VIEW-ONLY ACCOUNT</button>`;
+    `<button ${A('click','accountsCreateViewer')}>＋ ADD VIEW-ONLY ACCOUNT</button>`;
   box.appendChild(addWrap);
   return box;
 }
@@ -5495,8 +5520,8 @@ function _certPanel(st){
       `Common name: <b>${st.common_name||'—'}</b>${st.sans&&st.sans.length>1?' · SANs: '+st.sans.join(', '):''}<br/>`+
       `Issuer: ${st.issuer||'—'}${st.self_issued?' (self-issued)':''}<br/>`+
       (st.expires_at?`Expires: ${new Date(st.expires_at*1000).toLocaleDateString()} (${st.days_remaining!=null?st.days_remaining+' days remaining':'—'})<br/>`:'')+
-      (st.method==='acme'?`Auto-renew: <label><input type="checkbox" class="mut-btn" id="cert-autorenew" ${st.auto_renew?'checked':''} onchange="certToggleAutoRenew()"/> on</label> `+
-        `<button class="mut-btn" onclick="certAcmeRenew()">↻ RENEW NOW</button><br/>`:'')+
+      (st.method==='acme'?`Auto-renew: <label><input type="checkbox" class="mut-btn" id="cert-autorenew" ${st.auto_renew?'checked':''} ${A('change','certToggleAutoRenew')}/> on</label> `+
+        `<button class="mut-btn" ${A('click','certAcmeRenew')}>↻ RENEW NOW</button><br/>`:'')+
       (st.restart_required?`<span class="muted">Applying — the server is restarting itself in place; if this dashboard was loaded over plain HTTP, browse to the HTTPS address next.</span><br/>`:'');
     box.appendChild(s);
     const clearBtn=el('button','mut-btn','REMOVE CERTIFICATE (revert to plain HTTP)');
@@ -5510,7 +5535,7 @@ function _certPanel(st){
   }
 
   const modeWrap=el('div');
-  modeWrap.innerHTML=`Set up <select id="cert-mode" onchange="certModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+  modeWrap.innerHTML=`Set up <select id="cert-mode" ${A('change','certModeToggle')} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
     `<option value="self">Self-signed (instant)</option>`+
     `<option value="acme">Let's Encrypt / ACME (preferred)</option>`+
     `<option value="manual">Manual — generate CSR</option></select>`;
@@ -5518,7 +5543,7 @@ function _certPanel(st){
 
   const selfBox=el('div'); selfBox.id='cert-self-fields'; selfBox.style.marginTop='var(--space-2);';
   selfBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Every LAN IP/hostname you use to reach this box, comma-separated (e.g. 192.168.1.50, fiduciary.lan, localhost):</div>`+
-    `<input id="cert-self-hosts" type="text" placeholder="192.168.1.50, fiduciary.lan, localhost" style="width:340px;"/> <button onclick="certGenSelfSigned()">GENERATE</button>`+
+    `<input id="cert-self-hosts" type="text" placeholder="192.168.1.50, fiduciary.lan, localhost" style="width:340px;"/> <button ${A('click','certGenSelfSigned')}>GENERATE</button>`+
     `<div id="cert-self-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
   box.appendChild(selfBox);
 
@@ -5526,7 +5551,7 @@ function _certPanel(st){
   const acmeNote=st.acme_available?'':' — <span class="neg">acme.sh not found in this image; self-signed and manual certificates still work</span>';
   acmeBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Needs a real public DNS name pointed at this host${acmeNote}.</div>`+
     `<div style="margin-bottom:6px;">Domain <input id="cert-acme-domain" type="text" placeholder="dashboard.example.com" style="width:220px;"/></div>`+
-    `<div style="margin-bottom:6px;">Challenge <select id="cert-acme-challenge" onchange="certAcmeChallengeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<div style="margin-bottom:6px;">Challenge <select id="cert-acme-challenge" ${A('change','certAcmeChallengeToggle')} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
       `<option value="http-01">HTTP-01 (needs port 80 reachable from the internet)</option>`+
       `<option value="dns-01">DNS-01 (no public reachability needed, needs DNS provider API credentials)</option></select></div>`+
     `<div id="cert-acme-dns-fields" style="display:none;margin-bottom:6px;">`+
@@ -5535,7 +5560,7 @@ function _certPanel(st){
       `<textarea id="cert-acme-dns-creds" rows="3" style="width:340px;" placeholder="CF_Token=...\nCF_Account_ID=..."></textarea>`+
     `</div>`+
     `<label style="font-size:var(--font-size-sm);"><input type="checkbox" id="cert-acme-staging"/> use staging CA (untrusted test cert, for verifying this works first)</label><br/>`+
-    `<button onclick="certAcmeEnroll()" style="margin-top:6px;">ENROLL</button>`+
+    `<button ${A('click','certAcmeEnroll')} style="margin-top:6px;">ENROLL</button>`+
     `<div id="cert-acme-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
   box.appendChild(acmeBox);
 
@@ -5544,12 +5569,12 @@ function _certPanel(st){
     manualBox.innerHTML=`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">A CSR is pending. Paste the signed certificate you received back (and the CA's chain, if given separately) to install it:</div>`+
       `<div style="margin-bottom:6px;">Certificate (PEM)<br/><textarea id="cert-import-cert" rows="6" style="width:400px;"></textarea></div>`+
       `<div style="margin-bottom:6px;">Chain (PEM, optional)<br/><textarea id="cert-import-chain" rows="4" style="width:400px;"></textarea></div>`+
-      `<button onclick="certImportCert()">INSTALL CERTIFICATE</button> <button onclick="certGenCsrReset()">start a new CSR instead</button>`+
+      `<button ${A('click','certImportCert')}>INSTALL CERTIFICATE</button> <button ${A('click','certGenCsrReset')}>start a new CSR instead</button>`+
       `<div id="cert-manual-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
   } else {
     manualBox.innerHTML=`<div style="margin-bottom:6px;">Common name <input id="cert-csr-cn" type="text" placeholder="dashboard.example.com" style="width:220px;"/></div>`+
       `<div style="margin-bottom:6px;">Extra SANs, comma-separated (optional) <input id="cert-csr-sans" type="text" style="width:220px;"/></div>`+
-      `<button onclick="certGenCsr()">GENERATE CSR</button>`+
+      `<button ${A('click','certGenCsr')}>GENERATE CSR</button>`+
       `<div id="cert-manual-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`+
       `<div id="cert-csr-out" style="margin-top:8px;"></div>`;
   }
@@ -5781,9 +5806,9 @@ async function securityMfaSetup(containerId){
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">Scan this with your authenticator app, then enter the 6-digit code it shows:</div>`+
       `<img src="${d.qr_data_uri}" style="width:180px;height:180px;border-radius:var(--radius-md);margin-bottom:8px;display:block;"/>`+
       (secretMatch?`<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:8px;">Can't scan? Enter this key manually: <code>${secretMatch[1]}</code><span id="${containerId}-secret-copy"></span></div>`:'')+
-      `<input id="${containerId}-code" type="text" placeholder="123456" style="width:120px;"/> <button onclick="securityMfaVerify('${containerId}')">✓ VERIFY &amp; ENABLE</button>`+
+      `<input id="${containerId}-code" type="text" placeholder="123456" style="width:120px;"/> <button ${A('click','securityMfaVerify',containerId)}>✓ VERIFY &amp; ENABLE</button>`+
       `<div id="${containerId}-verify-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-top:4px;"></div>`;
-    // Copy icon appended programmatically (not string-interpolated into an onclick=""), so the
+    // Copy icon appended programmatically (not string-interpolated into an inline handler attribute), so the
     // secret's exact characters never round-trip through HTML-attribute escaping.
     if(secretMatch){
       const cp=document.getElementById(containerId+'-secret-copy');
@@ -5811,7 +5836,7 @@ async function securityMfaVerify(containerId){
         `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:6px;">${d.note}</div>`+
         `<div style="display:flex;align-items:center;margin-bottom:4px;"><span class="muted" style="font-size:var(--font-size-sm);">Backup codes</span><span id="${containerId}-codes-copy"></span></div>`+
         `<div style="font-family:monospace;font-size:var(--font-size-md);line-height:1.6;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">${d.backup_codes.join('<br/>')}</div>`+
-        `<button onclick="${onboarding?'_frMfaSetupDone()':'render()'}">✓ I'VE SAVED THESE — DONE</button>`;
+        `<button ${A('click', onboarding?'_frMfaSetupDone':'render')}>✓ I'VE SAVED THESE — DONE</button>`;
       const cp=document.getElementById(containerId+'-codes-copy');
       if(cp) cp.appendChild(copyBtn(()=>d.backup_codes.join('\n'), 'Copy all 10 backup codes'));
     }
@@ -5867,7 +5892,7 @@ async function securityRecoveryKeyRegenerate(){
         `<div style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--color-panel-alt);padding:var(--space-2);border-radius:var(--radius-md);margin-bottom:8px;">`+
           `<span style="font-family:monospace;font-size:var(--font-size-md);letter-spacing:1px;word-break:break-all;">${d.recovery_key}</span>`+
           `<span id="sec-rk-copy"></span></div>`+
-        `<button onclick="render()">✓ I'VE SAVED THIS — DONE</button>`;
+        `<button ${A('click','render')}>✓ I'VE SAVED THIS — DONE</button>`;
       const cp=document.getElementById('sec-rk-copy');
       if(cp) cp.appendChild(copyBtn(d.recovery_key, 'Copy recovery key'));
     }
@@ -7473,7 +7498,7 @@ function driftContent(){
     `<div style="margin-bottom:var(--space-2);">Max single-name cap <input id="pol-maxcap" type="number" value="${pol.max_position_pct||10}" style="width:46px;"/>%`+
     ` &nbsp; Drift band <input id="pol-drift" type="number" value="${pol.drift_threshold_pct||5}" style="width:46px;"/>%</div>`+
     `<div style="margin-bottom:var(--space-2);">Per-ticker caps (conviction holdings) <input id="pol-caps" type="text" value="${capsStr}" placeholder="PLTR:40, RKLB:40" style="width:260px;"/></div>`+
-    `<button onclick="savePolicy()">↳ SAVE POLICY</button>`;
+    `<button ${A('click','savePolicy')}>↳ SAVE POLICY</button>`;
   wrap.appendChild(ed);
   ed.addEventListener('input', _updatePolSums);
   _updatePolSums();
@@ -8440,22 +8465,22 @@ function _goalFieldsHtml(prefix, goal){
   return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3) var(--space-4);margin-bottom:var(--space-3);">`+
     `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
     `<span>TIME HORIZON</span><span id="${prefix}-out-horizon">${g.time_horizon_years} yr</span></label>`+
-    `<input id="${prefix}-horizon" type="range" min="${bd.time_horizon_years[0]}" max="${bd.time_horizon_years[1]}" step="1" value="${g.time_horizon_years}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<input id="${prefix}-horizon" type="range" min="${bd.time_horizon_years[0]}" max="${bd.time_horizon_years[1]}" step="1" value="${g.time_horizon_years}" style="width:100%;accent-color:var(--color-accent);" ${A('input','_goalLiveUpdate',prefix)}/></div>`+
     `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
     `<span>CASH BUFFER TARGET</span><span id="${prefix}-out-cash">${g.cash_buffer_pct}%</span></label>`+
-    `<input id="${prefix}-cash" type="range" min="${bd.cash_buffer_pct[0]}" max="${bd.cash_buffer_pct[1]}" step="1" value="${g.cash_buffer_pct}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<input id="${prefix}-cash" type="range" min="${bd.cash_buffer_pct[0]}" max="${bd.cash_buffer_pct[1]}" step="1" value="${g.cash_buffer_pct}" style="width:100%;accent-color:var(--color-accent);" ${A('input','_goalLiveUpdate',prefix)}/></div>`+
     `<div><label style="display:flex;justify-content:space-between;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">`+
     `<span>MAX POSITION SIZE</span><span id="${prefix}-out-maxpos">${g.max_position_pct}%</span></label>`+
-    `<input id="${prefix}-maxpos" type="range" min="${bd.max_position_pct[0]}" max="${bd.max_position_pct[1]}" step="1" value="${g.max_position_pct}" style="width:100%;accent-color:var(--color-accent);" oninput="_goalLiveUpdate('${prefix}')"/></div>`+
+    `<input id="${prefix}-maxpos" type="range" min="${bd.max_position_pct[0]}" max="${bd.max_position_pct[1]}" step="1" value="${g.max_position_pct}" style="width:100%;accent-color:var(--color-accent);" ${A('input','_goalLiveUpdate',prefix)}/></div>`+
     `<div><label style="display:block;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">TURNOVER TOLERANCE</label>`+
-    `<select id="${prefix}-turnover" onchange="_goalLiveUpdate('${prefix}')" style="width:100%;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${turnOpts}</select></div>`+
+    `<select id="${prefix}-turnover" ${A('change','_goalLiveUpdate',prefix)} style="width:100%;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${turnOpts}</select></div>`+
     `</div>`+
     `<div style="margin-bottom:var(--space-3);">`+
     `<label style="display:block;color:var(--color-text-muted);font-size:var(--font-size-sm);margin-bottom:3px;">TARGET RETURN / BENCHMARK</label>`+
-    `<select id="${prefix}-benchmode" onchange="_goalLiveUpdate('${prefix}')" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<select id="${prefix}-benchmode" ${A('change','_goalLiveUpdate',prefix)} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
     `<option value="benchmark"${!isAbs?' selected':''}>Beat S&amp;P 500</option>`+
     `<option value="absolute"${isAbs?' selected':''}>Target absolute annual %</option></select> `+
-    `<input id="${prefix}-benchval" type="number" value="${g.target_return_pct!=null?g.target_return_pct:12}" oninput="_goalLiveUpdate('${prefix}')" `+
+    `<input id="${prefix}-benchval" type="number" value="${g.target_return_pct!=null?g.target_return_pct:12}" ${A('input','_goalLiveUpdate',prefix)} `+
     `style="width:60px;background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);display:${isAbs?'inline-block':'none'};"/> `+
     `<span id="${prefix}-benchsuffix" class="muted" style="font-size:var(--font-size-sm);display:${isAbs?'inline':'none'};">%/yr</span></div>`+
     `<div style="margin-bottom:var(--space-3);">`+
@@ -8552,9 +8577,9 @@ function scenarioCreatePanel(){
   wrap.innerHTML=
     `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">NEW AI SCENARIO</div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Name <input id="sc-name" type="text" placeholder="e.g. Aggro Growth" style="width:180px;"/> `+
-    `&nbsp; Risk mandate <select id="sc-risk" onchange="scenarioCreateRiskChanged()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${rpOpts}</select></div>`+
+    `&nbsp; Risk mandate <select id="sc-risk" ${A('change','scenarioCreateRiskChanged')} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">${rpOpts}</select></div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Start `+
-    `<select id="sc-mode" onchange="scenarioCreateModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<select id="sc-mode" ${A('change','scenarioCreateModeToggle')} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
     `<option value="scratch">from scratch (cash only)</option><option value="seed">seeded from my real holdings</option></select></div>`+
     `<div id="sc-scratch-fields" style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Starting cash $<input id="sc-cash" type="number" value="2000" style="width:90px;"/></div>`+
     `<div id="sc-seed-fields" style="display:none;margin-bottom:var(--space-2);">`+
@@ -8564,7 +8589,7 @@ function scenarioCreatePanel(){
     `</div>`+
     `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">GOAL PARAMETERS</div>`+
     _goalFieldsHtml('sc', _goalDefaultsFor('moderate'))+
-    `<div><button class="mut-btn" onclick="scenarioCreateSubmit()">✓ CREATE</button> <button onclick="scenarioCreateToggle()">cancel</button></div>`;
+    `<div><button class="mut-btn" ${A('click','scenarioCreateSubmit')}>✓ CREATE</button> <button ${A('click','scenarioCreateToggle')}>cancel</button></div>`;
   setTimeout(()=>{ _goalWireChips('sc'); _goalLiveUpdate('sc'); }, 0);
   return wrap;
 }
@@ -8670,8 +8695,8 @@ function scenarioSwitcher(){
     const goalPanel=el('div'); goalPanel.id=goalPrefix;
     goalPanel.style.cssText='display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--color-border-strong);min-width:280px;max-width:360px;';
     goalPanel.innerHTML=_goalFieldsHtml(goalPrefix, s.goal)+
-      `<div><button class="mut-btn" onclick="scenarioSaveGoal('${s.id}')">✓ SAVE GOAL</button> `+
-      `<button onclick="document.getElementById('${goalPrefix}').style.display='none';">cancel</button></div>`;
+      `<div><button class="mut-btn" ${A('click','scenarioSaveGoal',s.id)}>✓ SAVE GOAL</button> `+
+      `<button ${A('click','hideById',goalPrefix)}>cancel</button></div>`;
     card.appendChild(goalPanel);
     goalEditPrefixes.push(goalPrefix);
     row.appendChild(card);
@@ -8738,7 +8763,7 @@ function taxContent(bracket, audit){
     const ctrl=el('div'); ctrl.style.cssText='margin:4px 0 12px;font-size:var(--font-size-base);';
     ctrl.innerHTML=`Assumed ordinary income <input id="tax-inc" type="number" value="${(TAX_INCOME!=null&&TAX_INCOME!==0)?TAX_INCOME:''}" placeholder="$/yr" style="width:120px;"/> `+
       `&nbsp; LTCG realized <input id="tax-ltcg" type="number" value="${(TAX_LTCG!=null&&TAX_LTCG!==0)?TAX_LTCG:''}" placeholder="0" style="width:110px;"/> `+
-      `&nbsp; <button onclick="applyTaxInputs()">↳ APPLY</button> `+
+      `&nbsp; <button ${A('click','applyTaxInputs')}>↳ APPLY</button> `+
       `<span class="muted" style="font-size:var(--font-size-sm);">drives brackets, effective rate and 0% LTCG budget</span>`;
     wrap.appendChild(ctrl);
     const ef=(b.effective && typeof b.effective==='object')?b.effective:{};
@@ -8827,19 +8852,19 @@ function stratContent(r){
   const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
   const archived=r.status==='archived';
   ctrl.innerHTML=
-    `<button onclick="stratRun()">▶ RUN REVIEW</button>`+
+    `<button ${A('click','stratRun')}>▶ RUN REVIEW</button>`+
     `<span class="muted">|</span>`+
     (archived ? `<span class="muted">Archived — reactivate this scenario in the switcher above to edit it again.</span>` :
-    (`<span>Reset $<input id="strat-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button onclick="stratReset()">↺ RESET</button> <button onclick="stratSeedToggle()">⊕ SEED</button></span>`+
+    (`<span>Reset $<input id="strat-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button ${A('click','stratReset')}>↺ RESET</button> <button ${A('click','stratSeedToggle')}>⊕ SEED</button></span>`+
     `<span class="muted">|</span>`+
-    `<span>Add $<input id="strat-add" type="number" placeholder="500" style="width:74px;"/> <button onclick="stratContribute()">+ CASH</button></span>`+
+    `<span>Add $<input id="strat-add" type="number" placeholder="500" style="width:74px;"/> <button ${A('click','stratContribute')}>+ CASH</button></span>`+
     `<span class="muted">|</span>`+
     `<span>Recurring $<input id="strat-rec" type="number" placeholder="${rec?rec.amount:'100'}" style="width:64px;"/> `+
       `<select id="strat-cad" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
       `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
       `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
       `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
-      `<button onclick="stratRecurring()">SET</button>${rec?' <button onclick="stratStopRecurring()">STOP</button>':''}</span>`));
+      `<button ${A('click','stratRecurring')}>SET</button>${rec?` <button ${A('click','stratStopRecurring')}>STOP</button>`:''}</span>`));
   wrap.appendChild(ctrl);
   if(!archived){
     // seed-from-holdings picker (hidden until ⊕ SEED)
@@ -8852,7 +8877,7 @@ function stratContent(r){
       `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="seed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="seed-cash" type="number" value="0" style="width:80px;"/></div>`+
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS the paper book.</div>`+
-      `<div><button onclick="stratSeed()">✓ SEED &amp; RESET</button> <button onclick="stratSeedAll(true)">all</button> <button onclick="stratSeedAll(false)">none</button> <button onclick="stratSeedToggle()">cancel</button></div>`;
+      `<div><button ${A('click','stratSeed')}>✓ SEED &amp; RESET</button> <button ${A('click','stratSeedAll',true)}>all</button> <button ${A('click','stratSeedAll',false)}>none</button> <button ${A('click','stratSeedToggle')}>cancel</button></div>`;
     wrap.appendChild(seedPanel);
   }
   const runStatus=el('div','muted'); runStatus.id='strat-runstatus'; runStatus.style.cssText='font-size:var(--font-size-sm);min-height:13px;margin-bottom:var(--space-3);'; wrap.appendChild(runStatus);
@@ -8994,7 +9019,7 @@ function ledgerCreatePanel(){
     `<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">NEW LEDGER</div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Name <input id="lc-name" type="text" placeholder="My Ledger" style="width:180px;"/></div>`+
     `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Start `+
-    `<select id="lc-mode" onchange="ledgerCreateModeToggle()" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
+    `<select id="lc-mode" ${A('change','ledgerCreateModeToggle')} style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
     `<option value="scratch">from scratch (cash only)</option><option value="seed">seeded from my real holdings</option></select></div>`+
     `<div id="lc-scratch-fields" style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Starting cash $<input id="lc-cash" type="number" value="2000" style="width:90px;"/></div>`+
     `<div id="lc-seed-fields" style="display:none;margin-bottom:var(--space-2);">`+
@@ -9002,7 +9027,7 @@ function ledgerCreatePanel(){
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${_seedTickerBoxes('lc-seedck')}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts.</div>`+
     `</div>`+
-    `<div><button class="mut-btn" onclick="ledgerCreateSubmit()">✓ CREATE</button> <button onclick="ledgerCreateToggle()">cancel</button></div>`;
+    `<div><button class="mut-btn" ${A('click','ledgerCreateSubmit')}>✓ CREATE</button> <button ${A('click','ledgerCreateToggle')}>cancel</button></div>`;
   return wrap;
 }
 function ledgerArchive(){
@@ -9038,9 +9063,9 @@ function ledgerBuySellForm(){
   const wrap=el('div'); wrap.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
   wrap.innerHTML=
     `<span>Ticker <input id="ledger-ticker" type="text" placeholder="AAPL" style="width:70px;text-transform:uppercase;"/></span>`+
-    `<span>$<input id="ledger-dollars" type="number" placeholder="500" style="width:80px;"/> <button class="mut-btn" onclick="ledgerBuy()">BUY</button></span>`+
+    `<span>$<input id="ledger-dollars" type="number" placeholder="500" style="width:80px;"/> <button class="mut-btn" ${A('click','ledgerBuy')}>BUY</button></span>`+
     `<span class="muted">|</span>`+
-    `<span>Shares (blank = all) <input id="ledger-shares" type="number" placeholder="" style="width:70px;"/> <button class="mut-btn" onclick="ledgerSell()">SELL</button></span>`;
+    `<span>Shares (blank = all) <input id="ledger-shares" type="number" placeholder="" style="width:70px;"/> <button class="mut-btn" ${A('click','ledgerSell')}>SELL</button></span>`;
   return wrap;
 }
 function userLedgerPanel(){
@@ -9078,18 +9103,18 @@ function userLedgerPanel(){
     const rec=r.recurring;
     const ctrl=el('div'); ctrl.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;font-size:var(--font-size-md);';
     ctrl.innerHTML=
-      `<span>Reset $<input id="ledger-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button class="mut-btn" onclick="ledgerReset()">↺ RESET</button> <button class="mut-btn" onclick="ledgerSeedToggle()">⊕ SEED</button></span>`+
+      `<span>Reset $<input id="ledger-reset" type="number" value="${r.starting_cash||2000}" style="width:74px;"/> <button class="mut-btn" ${A('click','ledgerReset')}>↺ RESET</button> <button class="mut-btn" ${A('click','ledgerSeedToggle')}>⊕ SEED</button></span>`+
       `<span class="muted">|</span>`+
-      `<span>Add $<input id="ledger-add" type="number" placeholder="500" style="width:74px;"/> <button class="mut-btn" onclick="ledgerContribute()">+ CASH</button></span>`+
+      `<span>Add $<input id="ledger-add" type="number" placeholder="500" style="width:74px;"/> <button class="mut-btn" ${A('click','ledgerContribute')}>+ CASH</button></span>`+
       `<span class="muted">|</span>`+
       `<span>Recurring $<input id="ledger-rec" type="number" placeholder="${rec?rec.amount:'100'}" style="width:64px;"/> `+
         `<select id="ledger-cad" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);">`+
         `<option value="weekly"${rec&&rec.cadence==='weekly'?' selected':''}>weekly</option>`+
         `<option value="biweekly"${rec&&rec.cadence==='biweekly'?' selected':''}>biweekly</option>`+
         `<option value="monthly"${!rec||rec.cadence==='monthly'?' selected':''}>monthly</option></select> `+
-        `<button class="mut-btn" onclick="ledgerRecurring()">SET</button>${rec?' <button class="mut-btn" onclick="ledgerStopRecurring()">STOP</button>':''}</span>`+
+        `<button class="mut-btn" ${A('click','ledgerRecurring')}>SET</button>${rec?` <button class="mut-btn" ${A('click','ledgerStopRecurring')}>STOP</button>`:''}</span>`+
       `<span class="muted">|</span>`+
-      `<span><button class="mut-btn" onclick="ledgerArchive()">⏸ DISABLE</button> <button class="mut-btn" onclick="ledgerDelete()" style="color:var(--color-negative)">✕ DELETE</button></span>`;
+      `<span><button class="mut-btn" ${A('click','ledgerArchive')}>⏸ DISABLE</button> <button class="mut-btn" ${A('click','ledgerDelete')} style="color:var(--color-negative)">✕ DELETE</button></span>`;
     wrap.appendChild(ctrl);
     const seedable=((DATA&&DATA.consolidated)||[]).filter(c=>c.ticker && c.type!=='Cash' && c.type!=='Mutual Fund').sort((a,b)=>(b.value||0)-(a.value||0));
     let boxes='';
@@ -9100,7 +9125,7 @@ function userLedgerPanel(){
       `<div style="margin-bottom:var(--space-2);font-size:var(--font-size-md);">Cost basis <select id="lseed-basis" style="background:var(--color-panel-alt);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-md);"><option value="current">current price (return starts at 0)</option><option value="real">real basis (carry embedded gains)</option></select> &nbsp; Extra cash $<input id="lseed-cash" type="number" value="0" style="width:80px;"/></div>`+
       `<div style="margin-bottom:var(--space-2);max-height:120px;overflow:auto;">${boxes||'<span class="muted">No tradable holdings found.</span>'}</div>`+
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">Mutual funds &amp; cash are excluded (no live tradable price). Uses your real share counts. This RESETS your ledger.</div>`+
-      `<div><button onclick="ledgerSeed()">✓ SEED &amp; RESET</button> <button onclick="ledgerSeedAll(true)">all</button> <button onclick="ledgerSeedAll(false)">none</button> <button onclick="ledgerSeedToggle()">cancel</button></div>`;
+      `<div><button ${A('click','ledgerSeed')}>✓ SEED &amp; RESET</button> <button ${A('click','ledgerSeedAll',true)}>all</button> <button ${A('click','ledgerSeedAll',false)}>none</button> <button ${A('click','ledgerSeedToggle')}>cancel</button></div>`;
     wrap.appendChild(seedPanel);
     if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; ri.innerHTML=`<span style="color:var(--color-accent)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
   }
@@ -10872,7 +10897,7 @@ function renderFirstRun(){
     // is a deliberate uncheck, not the default path.
     `<div style="margin-bottom:var(--space-3);font-size:var(--font-size-sm);"><label><input type="checkbox" id="fr-mfa-now" checked/> Enroll in multi-factor authentication (MFA) now <span class="muted">— recommended, this app manages your full financial picture</span></label></div>`+
     `<div id="fr-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-    `<button onclick="authFirstRunSubmit()" style="width:100%;">CREATE ACCOUNT</button>`;
+    `<button ${A('click','authFirstRunSubmit')} style="width:100%;">CREATE ACCOUNT</button>`;
   wrap.appendChild(form);
   body.appendChild(wrap);
   const p2=document.getElementById('fr-pass2'); if(p2) p2.onkeydown=e=>{ if(e.key==='Enter') authFirstRunSubmit(); };
@@ -10913,8 +10938,8 @@ function renderFirstRunRecoveryKey(recoveryKey, note, wantsMfa){
     `<div style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--color-panel-alt);padding:var(--space-3);border-radius:var(--radius-md);margin-bottom:var(--space-3);">`+
       `<span style="font-family:monospace;font-size:var(--font-size-lg);letter-spacing:1px;word-break:break-all;">${recoveryKey}</span>`+
       `<span id="fr-rk-copy"></span></div>`+
-    `<label style="font-size:var(--font-size-sm);display:block;margin-bottom:var(--space-3);"><input type="checkbox" id="fr-rk-ack" onchange="document.getElementById('fr-rk-continue').disabled=!this.checked;"/> I've saved this somewhere safe (password manager, or printed and locked away)</label>`+
-    `<button id="fr-rk-continue" onclick="_frRecoveryKeyContinue(${wantsMfa?'true':'false'})" style="width:100%;" disabled>CONTINUE</button>`;
+    `<label style="font-size:var(--font-size-sm);display:block;margin-bottom:var(--space-3);"><input type="checkbox" id="fr-rk-ack" ${A('change','enableIf','fr-rk-continue')}/> I've saved this somewhere safe (password manager, or printed and locked away)</label>`+
+    `<button id="fr-rk-continue" ${A('click','_frRecoveryKeyContinue',!!wantsMfa)} style="width:100%;" disabled>CONTINUE</button>`;
   wrap.appendChild(box);
   body.appendChild(wrap);
   const cp=document.getElementById('fr-rk-copy');
@@ -10935,7 +10960,7 @@ function renderFirstRunMfaPrompt(){
   const area=el('div'); area.id='fr-mfa-setup-area'; area.setAttribute('data-onboarding','1');
   wrap.appendChild(area);
   const skip=el('div'); skip.style.cssText='margin-top:var(--space-4);text-align:center;';
-  skip.innerHTML=`<a href="#" onclick="_frMfaSetupSkip();return false;" class="muted" style="font-size:var(--font-size-sm);">Skip for now — set this up later in SETTINGS → IAM</a>`;
+  skip.innerHTML=`<a href="#" ${A('click','frMfaSetupSkip')} class="muted" style="font-size:var(--font-size-sm);">Skip for now — set this up later in SETTINGS → IAM</a>`;
   wrap.appendChild(skip);
   body.appendChild(wrap);
   securityMfaSetup('fr-mfa-setup-area');
@@ -10964,14 +10989,14 @@ function renderLogin(mfaRequired){
       `<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-3);">Signed in as <b>${escHtml(_pendingLoginCreds.username)}</b> — enter your authenticator code to continue.</div>`+
       `<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="li-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`+
       `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-      `<button onclick="authLoginSubmit()" style="width:100%;">VERIFY &amp; SIGN IN</button>`;
+      `<button ${A('click','authLoginSubmit')} style="width:100%;">VERIFY &amp; SIGN IN</button>`;
   } else {
     _pendingLoginCreds=null;   // starting fresh — any previously cached password is discarded
     form.innerHTML=
       `<div style="margin-bottom:var(--space-3);">Username<br/><input id="li-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
       `<div style="margin-bottom:var(--space-3);">Password<br/><input id="li-pass" type="password" style="width:100%;margin-top:4px;" autocomplete="current-password"/></div>`+
       `<div id="li-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-      `<button onclick="authLoginSubmit()" style="width:100%;">SIGN IN</button>`;
+      `<button ${A('click','authLoginSubmit')} style="width:100%;">SIGN IN</button>`;
   }
   wrap.appendChild(form);
   if(mfaRequired && _pendingLoginCreds){
@@ -10979,7 +11004,7 @@ function renderLogin(mfaRequired){
     // etc.) instead of being stuck re-entering a code for an account they didn't mean to sign
     // into — discards the cached credentials, same as any other abandoned login attempt.
     const back=el('div'); back.style.cssText='margin-top:var(--space-3);text-align:center;';
-    back.innerHTML=`<a href="#" onclick="_pendingLoginCreds=null;renderLogin(false);return false;" class="muted" style="font-size:var(--font-size-sm);">← Not you? Sign in with a different account</a>`;
+    back.innerHTML=`<a href="#" ${A('click','notYouSignIn')} class="muted" style="font-size:var(--font-size-sm);">← Not you? Sign in with a different account</a>`;
     wrap.appendChild(back);
   }
   // Account Recovery Tier 1 (2026-07-24 backlog, design from RESUME-TRACKER.md 2026-07-23f) —
@@ -10990,7 +11015,7 @@ function renderLogin(mfaRequired){
   // recovery is for a forgotten PASSWORD, not a missing code).
   if(!(mfaRequired && _pendingLoginCreds)){
     const forgot=el('div'); forgot.style.cssText='margin-top:var(--space-3);text-align:center;';
-    forgot.innerHTML=`<a href="#" onclick="renderRecovery();return false;" class="muted" style="font-size:var(--font-size-sm);">Forgot password? (requires MFA)</a>`;
+    forgot.innerHTML=`<a href="#" ${A('click','showRecovery')} class="muted" style="font-size:var(--font-size-sm);">Forgot password? (requires MFA)</a>`;
     wrap.appendChild(forgot);
   }
   body.appendChild(wrap);
@@ -11042,10 +11067,10 @@ function renderRecovery(){
     `<div style="margin-bottom:var(--space-3);">Username<br/><input id="rec-user" type="text" style="width:100%;margin-top:4px;" autocomplete="username"/></div>`+
     `<div style="margin-bottom:var(--space-3);">Authenticator code (or a backup code)<br/><input id="rec-code" type="text" style="width:100%;margin-top:4px;" autocomplete="one-time-code"/></div>`+
     `<div id="rec-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-    `<button onclick="authRecoveryStart()" style="width:100%;">VERIFY &amp; CONTINUE</button>`;
+    `<button ${A('click','authRecoveryStart')} style="width:100%;">VERIFY &amp; CONTINUE</button>`;
   wrap.appendChild(area);
   const back=el('div'); back.style.cssText='margin-top:var(--space-4);text-align:center;';
-  back.innerHTML=`<a href="#" onclick="renderLogin(false);return false;" class="muted" style="font-size:var(--font-size-sm);">← Back to sign in</a>`;
+  back.innerHTML=`<a href="#" ${A('click','showLogin')} class="muted" style="font-size:var(--font-size-sm);">← Back to sign in</a>`;
   wrap.appendChild(back);
   body.appendChild(wrap);
 }
@@ -11064,7 +11089,7 @@ async function authRecoveryStart(){
       `<div style="margin-bottom:var(--space-3);">New password (min 8 characters)<br/><input id="rec-newpass" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
       `<div style="margin-bottom:var(--space-3);">Confirm password<br/><input id="rec-newpass2" type="password" style="width:100%;margin-top:4px;" autocomplete="new-password"/></div>`+
       `<div id="rec-err2" class="neg" style="font-size:var(--font-size-sm);min-height:16px;margin-bottom:var(--space-2);"></div>`+
-      `<button onclick="authRecoveryReset()" style="width:100%;">SET NEW PASSWORD</button>`;
+      `<button ${A('click','authRecoveryReset')} style="width:100%;">SET NEW PASSWORD</button>`;
   }catch(e){ err.textContent='Request failed: '+e; }
 }
 async function authRecoveryReset(){
