@@ -22,7 +22,7 @@ PREFS_DB = os.environ.get("PREFS_DB", "/data/prefs.db")
 # ticker) is deliberately NOT synced.
 SYNC_KEYS = frozenset({
     "fidDashOrder", "fidGraphs", "fidTabOrder", "fidSubOrder", "fidTheme", "fidCustomThemes", "fidMixView",
-    "fidChMode", "fidChWin", "fidChFrom", "fidChTo", "fidCalcIn", "fidCalcWiSel", "fidScenarioId", "fidTourDone",
+    "fidChMode", "fidChWin", "fidChFrom", "fidChTo", "fidCalcIn", "fidCalcWiSel", "fidScenarioId", "fidTourDone", "fidColWidths",
 })
 MAX_VALUE = 60_000
 MAX_TOTAL = 200_000

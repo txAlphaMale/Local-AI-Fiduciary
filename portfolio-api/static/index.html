@@ -265,10 +265,15 @@
   /* Printing / saving a page as PDF (2026-11-10): wide tables used to be clipped to their first two columns (overflow-x:auto does not print). */
   @page{size:landscape;margin:10mm;}
   @media print{
-    table{display:table !important;overflow:visible !important;width:100% !important;table-layout:auto;font-size:10px !important;}
+    table{display:table !important;overflow:visible !important;width:100% !important;table-layout:auto !important;font-size:10px !important;}
+    .col-rs{display:none !important;}
     td,th{white-space:normal !important;word-break:break-word;}
     button,.tabbar,#gear,#refresh{display:none !important;}
   }
+  tr.wrapcells td{white-space:normal;word-break:break-word;vertical-align:top;}
+  th .col-rs{position:absolute;right:-3px;top:0;bottom:0;width:7px;cursor:col-resize;user-select:none;touch-action:none;z-index:2;}
+  th .col-rs::after{content:'';position:absolute;left:3px;top:20%;bottom:20%;width:1px;background:var(--color-border-strong);}
+  th .col-rs:hover::after,th .col-rs.on::after{background:var(--color-accent);width:2px;left:2px;}
   .dash-arrange{outline:1px dashed var(--color-accent);outline-offset:-1px;cursor:grab;}
   .dash-handle{display:flex;align-items:center;gap:var(--space-2);padding:2px 6px;margin-bottom:4px;font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-accent);background:var(--overlay-accent-weak);border-radius:var(--radius-md);user-select:none;}
   .dash-handle button{padding:0 6px;font-size:var(--font-size-sm);}
@@ -471,7 +476,7 @@ let AUTH_STATUS=null;
 // tab order, theme, calculator inputs...) are mirrored to the server per signed-in account (GET/POST /api/prefs). localStorage stays as the
 // local copy. On sign-in the server copy wins where both exist; local-only keys are uploaded (so existing customisations migrate); changes are
 // sent a moment after you make them. Off on the public demo (one shared login). Keep PREFS_KEYS in step with prefs.SYNC_KEYS on the server.
-const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone'];
+const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths'];
 let PREFS_READY=false, PREFS_ENABLED=true, _prefsQ={set:{},remove:{}}, _prefsT=null;
 (function(){
   try{
@@ -4977,6 +4982,38 @@ function iamContent(){
   wrap.appendChild(resetWrap);
   return wrap;
 }
+// ---- Adjustable table columns (2026-11-10, Jason): drag the divider at the right edge of a header to resize that column. Widths are saved per
+// table in the 'fidColWidths' preference (so they follow the account, like the other layout preferences); RESET restores the defaults.
+// resizableTable(table, id, defaultPercents): the header row must be the table's first row. Fixed layout + a <colgroup> makes the widths real
+// (cells wrap inside their column instead of one long cell squeezing the rest); the wrapper scrolls sideways if you make the table wider.
+function colWidthsLoad(id){ try{ const o=JSON.parse(localStorage.getItem('fidColWidths')||'{}'); return Array.isArray(o[id])?o[id]:null; }catch(_){ return null; } }
+function colWidthsSave(id,arr){ try{ const o=JSON.parse(localStorage.getItem('fidColWidths')||'{}'); if(arr) o[id]=arr; else delete o[id]; localStorage.setItem('fidColWidths',JSON.stringify(o)); }catch(_){} }
+function resizableTable(table, id, defaultPct){
+  const ths=[...table.rows[0].cells];
+  const saved=colWidthsLoad(id), useSaved=!!(saved && saved.length===ths.length && saved.every(w=>w>=40));
+  table.style.tableLayout='fixed'; table.style.width=useSaved?saved.reduce((a,b)=>a+b,0)+'px':'100%';
+  const cg=document.createElement('colgroup');
+  ths.forEach((th,i)=>{ const c=document.createElement('col'); c.style.width=useSaved?saved[i]+'px':defaultPct[i]+'%'; cg.appendChild(c); });
+  table.insertBefore(cg, table.firstChild);
+  ths.forEach((th,i)=>{
+    th.style.position='relative'; const h=document.createElement('span'); h.className='col-rs'; h.title='Drag to resize this column'; th.appendChild(h);
+    h.addEventListener('pointerdown',ev=>{
+      ev.preventDefault(); ev.stopPropagation(); try{ h.setPointerCapture(ev.pointerId); }catch(_){}
+      h.classList.add('on');
+      const widths=ths.map(t=>t.getBoundingClientRect().width), startX=ev.clientX, startW=widths[i];
+      widths.forEach((w,k)=>{ cg.children[k].style.width=w+'px'; }); table.style.width=widths.reduce((a,b)=>a+b,0)+'px';   // freeze every column at its current width, then resize one
+      const move=e=>{ const w=Math.max(50,startW+(e.clientX-startX)); widths[i]=w; cg.children[i].style.width=w+'px'; table.style.width=widths.reduce((a,b)=>a+b,0)+'px'; };
+      const up=()=>{ h.classList.remove('on'); h.removeEventListener('pointermove',move); h.removeEventListener('pointerup',up); h.removeEventListener('pointercancel',up); colWidthsSave(id,widths.map(Math.round)); };
+      h.addEventListener('pointermove',move); h.addEventListener('pointerup',up); h.addEventListener('pointercancel',up);
+    });
+  });
+  const wrap=document.createElement('div'); wrap.style.cssText='overflow-x:auto;max-width:100%;'; wrap.appendChild(table); wrap.dataset.colTable=id;
+  return wrap;
+}
+function colWidthsResetBtn(ids, then){
+  const b=el('button',null,'RESET COLUMN WIDTHS'); b.title='Put the table columns back to their default widths';
+  b.onclick=()=>{ ids.forEach(i=>colWidthsSave(i,null)); (then||render)(); }; return b;
+}
 // ---- CASH CHECK (2026-11-10): read-only diagnostic of how the app would tell brokerage cash from bank cash on YOUR accounts. Admin only.
 let CASHCHK=null, CASHCHK_ERR=null;
 function cashCheckLoad(){
@@ -5009,25 +5046,25 @@ function cashCheckContent(){
   const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
   const b1=el('button',null,'COPY REPORT (account numbers masked)'); b1.onclick=()=>{ try{ navigator.clipboard.writeText(cashCheckText(true)); b1.textContent='copied'; }catch(_){ b1.textContent='copy failed'; } };
   const b2=el('button',null,'↻ REFRESH'); b2.onclick=()=>{ CASHCHK=null; render(); };
-  bar.appendChild(b1); bar.appendChild(b2); wrap.appendChild(bar);
+  bar.appendChild(b1); bar.appendChild(b2); bar.appendChild(colWidthsResetBtn(['cashcheck-accounts','cashcheck-holdings'])); wrap.appendChild(bar);
   const badge={brokerage_cash:['BROKERAGE CASH','var(--color-positive)'],bank_cash:['BANK CASH','var(--color-text-muted)'],unsure:['UNSURE','var(--color-negative)'],investment:['investment','var(--color-text-dim)'],not_cash:['not cash','var(--color-text-dim)']};
   const vcell=a=>{ const b=badge[a.verdict]||[a.verdict,'']; return `<span style="color:${b[1]};letter-spacing:1px;font-size:var(--font-size-sm);">${escHtml(b[0])}</span> <span class="muted" style="font-size:var(--font-size-xs)">${escHtml(a.confidence)}</span>`; };
   wrap.appendChild(el('div','ph','ACCOUNTS · WHAT THE PROVIDER SENDS AND WHAT THE RULES GUESS'));
   const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TYPE / SUBTYPE</th><th>HOLDINGS</th><th>BALANCE</th><th class="l">PROVIDER STATE</th><th class="l">GUESS</th><th class="l">WHY</th>'; t.appendChild(hr);
   (r.accounts||[]).slice().sort((a,b)=>(a.verdict==='not_cash')-(b.verdict==='not_cash')||String(a.institution).localeCompare(String(b.institution))).forEach(a=>{
-    const tr=el('tr'); tr.innerHTML=`<td class="l">${escHtml(a.institution||'')}</td><td class="l sym">${escHtml(a.name)}</td><td class="l muted" style="font-size:var(--font-size-sm)">${escHtml((a.type||'—')+(a.subtype?' / '+a.subtype:''))}</td>`+
+    const tr=el('tr'); tr.className='wrapcells'; tr.innerHTML=`<td class="l">${escHtml(a.institution||'')}</td><td class="l sym">${escHtml(a.name)}</td><td class="l muted" style="font-size:var(--font-size-sm)">${escHtml((a.type||'—')+(a.subtype?' / '+a.subtype:''))}</td>`+
       `<td>${a.holdings_count}</td><td>${usd0(a.balance)}${a.current_balance!=null&&Math.abs(a.current_balance-a.balance)>0.005?'<div class="muted" style="font-size:var(--font-size-xs)">current '+usd0(a.current_balance)+'</div>':''}</td>`+
       `<td class="l muted" style="white-space:normal;font-size:var(--font-size-sm);line-height:1.3;">${escHtml((a.flags||[]).join(', ')||'—')}${a.data_provider?'<div>via '+escHtml(a.data_provider)+'</div>':''}${a.last_updated?'<div>updated '+escHtml(String(a.last_updated).slice(0,10))+'</div>':''}</td><td class="l">${vcell(a)}</td><td class="l" style="white-space:normal;font-size:var(--font-size-sm);line-height:1.35;">${escHtml((a.reasons||[]).join('; '))}${a.paired_with?'<div class="muted">pairs with: '+escHtml(a.paired_with)+'</div>':''}</td>`;
     t.appendChild(tr);
   });
-  wrap.appendChild(t);
+  wrap.appendChild(resizableTable(t,'cashcheck-accounts',[13,19,9,6,8,13,10,22]));
   wrap.appendChild(el('div','ph','CASH-LOOKING HOLDINGS (money-market funds, sweeps, typed Cash)'));
   const hs=r.cash_holdings||[];
   if(!hs.length){ wrap.appendChild(el('div','muted','None found.')); }
   else{
     const t2=el('table'); const h2=el('tr'); h2.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TICKER</th><th class="l">NAME</th><th class="l">TYPE</th><th>VALUE</th><th class="l">GUESS</th><th class="l">WHY</th>'; t2.appendChild(h2);
-    hs.forEach(h=>{ const tr=el('tr'); tr.innerHTML=`<td class="l">${escHtml(h.institution||'')}</td><td class="l">${escHtml(h.account||'')}</td><td class="l sym">${escHtml(h.ticker||'')}</td><td class="l" style="white-space:normal">${escHtml(h.name||'')}</td><td class="l muted">${escHtml(h.type||'')}</td><td>${usd0(h.value)}</td><td class="l">${vcell(h)}</td><td class="l" style="white-space:normal;font-size:var(--font-size-sm)">${escHtml((h.reasons||[]).join('; '))}</td>`; t2.appendChild(tr); });
-    wrap.appendChild(t2);
+    hs.forEach(h=>{ const tr=el('tr'); tr.className='wrapcells'; tr.innerHTML=`<td class="l">${escHtml(h.institution||'')}</td><td class="l">${escHtml(h.account||'')}</td><td class="l sym">${escHtml(h.ticker||'')}</td><td class="l" style="white-space:normal">${escHtml(h.name||'')}</td><td class="l muted">${escHtml(h.type||'')}</td><td>${usd0(h.value)}</td><td class="l">${vcell(h)}</td><td class="l" style="white-space:normal;font-size:var(--font-size-sm)">${escHtml((h.reasons||[]).join('; '))}</td>`; t2.appendChild(tr); });
+    wrap.appendChild(resizableTable(t2,'cashcheck-holdings',[13,18,8,17,8,8,10,18]));
   }
   return wrap;
 }
