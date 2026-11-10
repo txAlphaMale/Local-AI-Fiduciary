@@ -3197,7 +3197,7 @@ def _build_monarch():
                     and a.get("include_nw")
                     and a.get("is_asset") is not False
                     and round(a.get("balance") or 0) != 0
-                    and _account_tax_status(a.get("name"), a.get("type")) != "na"]
+                    and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) != "na"]
     d = _derive(accounts, positions, by_account, inv, net_worth, total_assets,
                 total_liabilities, balance_only=balance_only)
     d["connections_needing_login"] = connections_needing_login
@@ -5804,7 +5804,7 @@ def get_estate():
         st = sinfo["code"]
         married = tax.norm_status(cfg.get("filing_status") or "mfj") == "mfj"
         growth = cfg.get("expected_real_return_pct") or 5.0
-        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                        for a in d.get("accounts", [])}
         accounts, taxable_positions = [], []
         for acct in d.get("by_account", []):
@@ -5890,7 +5890,7 @@ def get_continuity():
         # Same account-list construction as /api/estate (kept as a second copy deliberately —
         # this endpoint's shape is a document, not an analysis, and shouldn't couple to any
         # future change in estate's own response shape).
-        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+        acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                        for a in d.get("accounts", [])}
         accounts = []
         for acct in d.get("by_account", []):
@@ -8425,7 +8425,7 @@ def _cash_total(d):
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             continue
-        if _account_tax_status(a.get("name"), a.get("type")) != "na":
+        if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) != "na":
             continue   # HSA / IRA / 401(k) / Roth / 529 wrapper — not spendable cash
         if _is_cash_account(a):
             tot += a.get("balance") or 0
@@ -8467,7 +8467,7 @@ def _ef_tier(a):
     balance inside it happens to be invested in."""
     if a.get("is_asset") is False:
         return None
-    st = _account_tax_status(a.get("name"), a.get("type"))
+    st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
     if st == "roth":
         return "roth_basis"
     if st in ("deferred", "hsa"):
@@ -8559,7 +8559,7 @@ def _unreviewed_cash(d, cfg):
     for a in d.get("accounts") or []:
         if a.get("is_asset") is False:
             continue
-        if _account_tax_status(a.get("name"), a.get("type")) != "na":
+        if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) != "na":
             continue
         if not _is_cash_account(a):
             continue
@@ -10681,7 +10681,7 @@ def get_accounts_config():
     rows = []
     for a in d.get("accounts", []):
         name = a.get("name")
-        st = _account_tax_status(name, a.get("type"))
+        st = _account_tax_status(name, a.get("type"), a.get("subtype"))
         fl = _account_flags(name, cfg)
         rows.append({"name": name, "type": a.get("type"), "institution": a.get("institution"),
                      "tax_status": st, "balance": a.get("balance"),
@@ -10760,7 +10760,7 @@ def _registry_group(a):
     Any future account classifier in this file wants this same ordering."""
     if a.get("is_asset") is False:
         return "liability"
-    st = _account_tax_status(a.get("name"), a.get("type"))
+    st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
     if st == "taxable":
         return "taxable"
     if st in ("roth", "deferred", "hsa"):
@@ -10790,7 +10790,7 @@ def get_account_registry():
     for a in d.get("accounts") or []:
         nm = a.get("name") or "?"
         grp = _registry_group(a)
-        st = _account_tax_status(nm, a.get("type"))
+        st = _account_tax_status(nm, a.get("type"), a.get("subtype"))
         tier = _ef_tier(a)
         r = {"name": nm, "institution": a.get("institution"), "type": a.get("type"),
              "balance": a.get("balance"), "is_asset": a.get("is_asset") is not False,
@@ -10870,7 +10870,7 @@ async def post_account_registry(req: Request):
         cur = dict(ac["accounts"].get(nm) or {})
         for k in ("drip", "fractional_ok"):
             if k in body:
-                if _account_tax_status(nm, acct.get("type")) == "na":
+                if _account_tax_status(nm, acct.get("type"), acct.get("subtype")) == "na":
                     rejected.append({"field": k, "reason": "Not an investment account — DRIP and "
                                                            "fractional-share settings don't apply."})
                     continue
@@ -12057,7 +12057,7 @@ def _dividend_drip_split():
     d = _data()
     briefs = (_read_analysis().get("briefs") or {})
     accts_cfg = _read_accounts_cfg()
-    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
     out = {"total": 0.0, "reinvested": 0.0, "cash": 0.0,
            "taxable_reinvested": 0.0, "advantaged_reinvested": 0.0,
@@ -12313,10 +12313,21 @@ TLH_MIN_LOSS = float(os.environ.get("TLH_MIN_LOSS", "50"))       # ignore trivia
 LOC_MIN_YIELD = float(os.environ.get("LOC_MIN_YIELD", "3.0"))    # % dividend yield => "tax-inefficient"
 
 
-def _account_tax_status(name, atype):
+def _account_tax_status(name, atype, subtype=None):
     """Classify an account: taxable | roth | deferred | hsa | na (non-investment).
-    Roth/HSA/IRA/401k/etc. = tax-advantaged; a plain brokerage = taxable."""
+    Roth/HSA/IRA/401k/etc. = tax-advantaged; a plain brokerage = taxable.
+    `subtype` is the provider's own account subtype when it sends one (Monarch: "Roth IRA", "IRA", "401k", "HSA", "Brokerage", ...). A
+    tax-advantaged subtype is more specific than a name that merely mentions IRA (2026-11-10: "IRA BROKERAGE CASH" synced from a Roth IRA's
+    cash sweep read as a traditional IRA), so it wins; any other subtype (Checking, Brokerage, none) falls through to the name rules."""
     n = (name or "").upper()
+    st = (subtype or "").upper()
+    if st:
+        if "ROTH" in st or "TFSA" in st:
+            return "roth"
+        if "HSA" in st or "HEALTH SAVINGS" in st:
+            return "hsa"
+        if any(k in st for k in ("IRA", "401", "403", "457", "TSP", "THRIFT", "SEP", "SIMPLE", "529", "PENSION", "RRSP", "ROLLOVER", "RETIREMENT")):
+            return "deferred"
     if "ROTH" in n:
         return "roth"
     if "HSA" in n or "HEALTH SAVINGS" in n:
@@ -12333,7 +12344,7 @@ def _tax_audit():
     (tax-inefficient high-yield holdings sitting in taxable accounts). Reuses portfolio + research data."""
     d = _data()
     briefs = (_read_analysis().get("briefs") or {})
-    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
     accts_cfg = _read_accounts_cfg()
     harvest, location = [], []
@@ -12456,7 +12467,7 @@ BRIDGE_TAX_PCT = float(os.environ.get("BRIDGE_TAX_PCT", "15.0"))  # effective or
 def _balances_by_tax_status():
     """Investable securities value grouped by account tax status (taxable/roth/deferred/hsa)."""
     d = _data()
-    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"))
+    acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
     bal = {"taxable": 0.0, "roth": 0.0, "deferred": 0.0, "hsa": 0.0}
     for acct in d.get("by_account", []):
