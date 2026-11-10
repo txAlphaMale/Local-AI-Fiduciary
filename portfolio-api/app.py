@@ -8368,6 +8368,71 @@ def get_cash_check(request: Request):
     return rep
 
 
+@app.get("/api/widget-trace")
+def get_widget_trace(request: Request):
+    """Admin-only, read-only: how the dashboard's allocation/mix widgets were populated from the provider's data. For every account the
+    provider balance next to the sum of its holdings and where (if anywhere) it lands in the donuts; for every position which slice it feeds;
+    plus the totals the donuts are drawn from. Built from the same cached snapshot the dashboard uses, so it shows what the widgets saw."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    d = _data()
+    accounts, positions = d.get("accounts") or [], d.get("positions") or []
+    bo_keys = {(a.get("institution"), a.get("account")) for a in (d.get("investment_balance_accounts") or [])}
+    cb = cashdetect.cash_breakdown(accounts, positions)
+    kind = {}
+    for label, lines in (("brokerage cash", cb["brokerage_lines"]), ("bank cash (left out of the donuts)", cb["bank_lines"]),
+                         ("money-market fund counted as cash", cb["equivalent_lines"])):
+        for x in lines:
+            kind[(x["institution"], x["account"], x["ticker"])] = label
+    held, nheld, nbank = {}, {}, {}
+    pos_rows = []
+    for p in positions:
+        k = (p.get("institution"), p.get("account"))
+        held[k] = round(held.get(k, 0.0) + (p.get("value") or 0.0), 2)
+        nheld[k] = nheld.get(k, 0) + 1
+        how = kind.get((p.get("institution"), p.get("account"), p.get("ticker")), "investment")
+        if how.startswith("bank cash"):
+            nbank[k] = nbank.get(k, 0) + 1
+        slice_ = ("Cash (in brokerage accounts)" if how in ("brokerage cash", "money-market fund counted as cash")
+                  else ("(not in any donut)" if how.startswith("bank cash") else (p.get("type") or "Other")))
+        pos_rows.append({"institution": p.get("institution"), "account": p.get("account"), "ticker": p.get("ticker"), "name": p.get("name"),
+                         "type": p.get("type"), "value": p.get("value"), "price": p.get("price"), "counted_as": how, "asset_type_slice": slice_})
+    counted = {(a["institution"], a["account"]) for a in cb["account_lines"]}
+    acct_rows = []
+    for a in accounts:
+        k = (a.get("institution"), a.get("name"))
+        holds_val = held.get(k, 0.0)
+        if nheld.get(k) and nbank.get(k) == nheld.get(k):
+            where = "bank cash only: left out of every donut"
+        elif (a.get("holdings_count") or 0) > 0 or nheld.get(k):
+            where = "holdings feed every donut" + (" (its bank-cash lines are left out)" if nbank.get(k) else "")
+        elif k in counted:
+            where = "cash-sweep account: counted in the cash slice" + (" and (as a balance-only investment account) its institution slice" if k in bo_keys else " and its institution slice")
+        elif k in bo_keys:
+            where = "balance-only investment account: institution donut only (no asset type known)"
+        elif a.get("is_asset") is False:
+            where = "liability: not in any donut"
+        else:
+            where = "not in any donut (cash / bank / other asset)"
+        acct_rows.append({"institution": a.get("institution"), "account": a.get("name"), "type": a.get("type"), "subtype": a.get("subtype"),
+                          "is_asset": a.get("is_asset"), "include_nw": a.get("include_nw"), "hidden": a.get("hidden"), "flags_deactivated": a.get("deactivated"),
+                          "provider_balance": a.get("balance"), "holdings_value": holds_val if nheld.get(k) else None,
+                          "holdings_count_reported": a.get("holdings_count"), "holdings_listed": nheld.get(k, 0),
+                          "delta": (round((a.get("balance") or 0) - holds_val, 2) if nheld.get(k) else None), "where": where})
+    ad = d.get("alloc_display") or {}
+    return {"generated_at": int(time.time()), "provider": os.environ.get("PORTFOLIO_PROVIDER", "csv"),
+            "cached_age_s": int(time.time() - _cache["ts"]) if _cache.get("ts") else None,
+            "totals": {"net_worth": d.get("net_worth"), "total_assets": d.get("total_assets"), "invested_value_positions": d.get("invested_value"),
+                       "institution_donut_total": ad.get("total"), "asset_type_donut_total": ad.get("type_total"),
+                       "brokerage_cash": d.get("brokerage_cash"), "brokerage_cash_accounts": d.get("brokerage_cash_accounts"),
+                       "cash_equiv_value": d.get("cash_equiv_value"), "bank_cash_left_out": d.get("bank_cash")},
+            "slices": {"institution": ad.get("by_institution"), "asset_type": ad.get("by_type")},
+            "engine_fields": {"by_institution": d.get("by_institution"), "by_type": d.get("by_type")},
+            "accounts": acct_rows, "positions": pos_rows,
+            "note": "Read-only trace. 'delta' is the provider's account balance minus the sum of the holdings listed for it: a non-zero delta means the "
+                    "holdings and the balance disagree (cash not listed as a holding, stale prices, or missing positions)."}
+
+
 @app.get("/api/benefits/limits")
 def get_benefit_limits():
     """The contribution limits the app computes with (benefits.LIMITS_2026, from the dated-constant registry) plus the 401(k)

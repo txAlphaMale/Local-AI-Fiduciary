@@ -2124,9 +2124,8 @@ function mixPanel(title, cid, mix, wikiId, toggle){
   MIXCHARTS.push({id:cid, items:mix.items});
   const lg=el('div','legend');
   mix.items.forEach((it,i)=>{
-    const pc=mix.total?(it.value/mix.total*100).toFixed(1):'0';
     const sp=el('span'); sp.className=it.flag?'neg':'';
-    sp.innerHTML=`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>`+attrEsc(shortInst(it.label))+' '+pc+'%'+(it.flag?' ⚠':'');
+    sp.innerHTML=`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>`+attrEsc(shortInst(it.label))+' '+pctLabel(it.value,mix.total)+(it.flag?' ⚠':'');
     if(it.flag) sp.title='over your limit — the cockpit flags this';
     lg.appendChild(sp);
   });
@@ -2144,14 +2143,22 @@ function mixToggle(){
   });
   return bar;
 }
+// The ring and its legend MUST come from the same items (2026-11-10): the rings used to be drawn from the engine fields (by_institution / by_type)
+// while only the legends read the display allocation, so the cash changes never showed in the ring. ALLOCCHARTS feeds drawCharts().
+let ALLOCCHARTS=[];
+function pctLabel(value,total){                   // tiny slices read '<0.1% ($118)' instead of a misleading 0.0%
+  if(!total) return '0%';
+  const v=value/total*100;
+  return (v>0 && v<0.1) ? '<0.1% ($'+Math.round(value).toLocaleString()+')' : v.toFixed(1)+'%';
+}
 function allocPanel(title,cid,items,total){
   const p=el('div','panel');
   p.appendChild(el('div','ph',title));
   p.appendChild(el('div','chartbox','<canvas id="'+cid+'"></canvas>'));
+  ALLOCCHARTS.push({id:cid, items:items.slice(0,8)});
   const lg=el('div','legend');
   items.slice(0,8).forEach((it,i)=>{
-    const pc=total?(it.value/total*100).toFixed(1):0;
-    lg.appendChild(el('span',null,`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>${shortInst(it.label)} ${pc}%`));
+    lg.appendChild(el('span',null,`<span class="sw" style="background:${PIE[i%PIE.length]}"></span>${attrEsc(shortInst(it.label))} ${pctLabel(it.value,total)}`));
   });
   p.appendChild(lg);
   return p;
@@ -2291,7 +2298,7 @@ function dashboardContent(){
   // on the wide column prevents the nested grid from overflowing on narrow viewports.
   const body=el('div'); body.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:10px;margin-top:10px;align-items:start;';
   const small=el('div','grid cols');
-  MIXCHARTS=[];
+  MIXCHARTS=[]; ALLOCCHARTS=[];
   const tileFactory={
     'alloc-inst':()=>allocPanel('ALLOCATION · INSTITUTION','c-inst', (d.alloc_display||{}).by_institution||d.by_institution, (d.alloc_display||{}).total||d.allocation_total||d.invested_value),
     'alloc-type':()=>allocPanel('ALLOCATION · ASSET TYPE','c-type', (d.alloc_display||{}).by_type||d.by_type, (d.alloc_display||{}).type_total||d.invested_value),
@@ -5021,16 +5028,32 @@ function colWidthsResetBtn(ids, then){
   b.onclick=()=>{ ids.forEach(i=>colWidthsSave(i,null)); (then||render)(); }; return b;
 }
 // ---- CASH CHECK (2026-11-10): read-only diagnostic of how the app would tell brokerage cash from bank cash on YOUR accounts. Admin only.
-let CASHCHK=null, CASHCHK_ERR=null;
+let CASHCHK=null, CASHCHK_ERR=null, WTRACE=null;
 function cashCheckLoad(){
   CASHCHK_ERR=null;
+  fetch('/api/widget-trace').then(r=>r.ok?r.json():null).then(t=>{ WTRACE=t||{}; }).catch(()=>{ WTRACE={}; });
   fetch('/api/cash-check').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ CASHCHK=d; if(TAB==='settings') render(); })
     .catch(e=>{ CASHCHK_ERR=String(e); CASHCHK=CASHCHK||{}; if(TAB==='settings') render(); });
+}
+function donutSlices(){                          // [{widget, total, items:[{label,value}]}] computed with the SAME builders the dashboard uses
+  const d=DATA||{}, ad=d.alloc_display||{}, out=[];
+  out.push({widget:'ALLOCATION · INSTITUTION', total:ad.total, items:ad.by_institution||d.by_institution||[]});
+  out.push({widget:'ALLOCATION · ASSET TYPE', total:ad.type_total, items:ad.by_type||d.by_type||[]});
+  try{ const m=mixHoldings(d,LT,INSIGHTS,MIX_VIEW==='funds'); out.push({widget:'MIX · HOLDINGS ('+(MIX_VIEW==='funds'?'incl. fund contents':'direct')+')', total:m.total, items:m.items}); }catch(e){ out.push({widget:'MIX · HOLDINGS', total:0, items:[], err:String(e)}); }
+  try{ const m=mixSector(EXP,d); out.push({widget:'MIX · SECTOR', total:m.total, items:m.items}); }catch(e){ out.push({widget:'MIX · SECTOR', total:0, items:[], err:String(e)}); }
+  try{ const m=mixAssetClass(LT,d); out.push({widget:'MIX · ASSET CLASS', total:m.total, items:m.items}); }catch(e){ out.push({widget:'MIX · ASSET CLASS', total:0, items:[], err:String(e)}); }
+  return out;
 }
 function cashCheckText(masked){
   const r=CASHCHK||{}, m=s=>{ s=String(s==null?'':s); return masked?s.replace(/(xx+|\*+|#)\s*\d{2,6}/gi,'XX••••'):s; };
   const L=['CASH CHECK · provider '+(r.provider||'?')+' · guesses only','guessed totals: '+JSON.stringify(r.guessed_totals||{})+' · counted today: '+JSON.stringify(r.counted_today||{}),'','ACCOUNTS'];
   (r.accounts||[]).forEach(a=>L.push([m(a.institution),m(a.name),'type='+(a.type||'')+(a.subtype?'/'+a.subtype:''),'holdings='+a.holdings_count,'balance='+a.balance+(a.current_balance!=null?' (current '+a.current_balance+')':''),'state='+((a.flags||[]).join(',')||'normal')+(a.data_provider?' via '+a.data_provider:'')+(a.last_updated?' updated '+String(a.last_updated).slice(0,10):''),'-> '+a.verdict+' ('+a.confidence+')',(a.reasons||[]).join('; '),a.paired_with?('pair: '+m(a.paired_with)):''].join(' | ')));
+  L.push('','DONUT TRACE: slices in dollars (what each donut was drawn from)');
+  donutSlices().forEach(w=>{ L.push(w.widget+' · total '+Math.round(w.total||0)); (w.items||[]).forEach(i=>L.push('   '+m(i.label)+' = '+Math.round(i.value)+(w.total?' ('+(i.value/w.total*100).toFixed(2)+'%)':''))); });
+  const wt=WTRACE||{};
+  if(wt.totals){ L.push('','DONUT TRACE: totals '+JSON.stringify(wt.totals),'engine fields (what the rings used to use): '+JSON.stringify({by_type:(wt.engine_fields||{}).by_type})); }
+  L.push('','DONUT TRACE: accounts (provider balance | holdings value | delta | where it lands)');
+  (wt.accounts||[]).forEach(a=>L.push([m(a.institution),m(a.account),'type='+(a.type||'')+(a.subtype?'/'+a.subtype:''),'balance='+a.provider_balance,'holdings='+(a.holdings_value==null?'-':a.holdings_value),'delta='+(a.delta==null?'-':a.delta),'reported='+a.holdings_count_reported+' listed='+a.holdings_listed,a.hidden?'hidden':'',a.where].join(' | ')));
   L.push('','CASH-LOOKING HOLDINGS');
   (r.cash_holdings||[]).forEach(h=>L.push([m(h.institution),m(h.account),h.ticker,h.name,'type='+(h.type||''),'value='+h.value,'price='+h.price,'-> '+h.verdict+' ('+h.confidence+')',(h.reasons||[]).join('; ')].join(' | ')));
   return L.join('\n');
@@ -5053,6 +5076,24 @@ function cashCheckContent(){
   const b1=el('button',null,'COPY REPORT (account numbers masked)'); b1.onclick=()=>{ try{ navigator.clipboard.writeText(cashCheckText(true)); b1.textContent='copied'; }catch(_){ b1.textContent='copy failed'; } };
   const b2=el('button',null,'↻ REFRESH'); b2.onclick=()=>{ CASHCHK=null; render(); };
   bar.appendChild(b1); bar.appendChild(b2); bar.appendChild(colWidthsResetBtn(['cashcheck-accounts','cashcheck-holdings'])); wrap.appendChild(bar);
+  // ---- DONUT TRACE: what each donut was drawn from, in dollars, and how every account reconciles to its holdings ----
+  wrap.appendChild(el('div','ph','DONUT TRACE · WHAT EACH DONUT WAS DRAWN FROM (dollars, not rounded percentages)'));
+  const slices=donutSlices(), st=el('table'); const sh=el('tr'); sh.innerHTML='<th class="l">DONUT</th><th class="l">SLICE</th><th>VALUE</th><th>SHARE</th>'; st.appendChild(sh);
+  slices.forEach(w=>{ if(w.err){ const tr=el('tr'); tr.innerHTML=`<td class="l">${escHtml(w.widget)}</td><td class="l neg" colspan="3">builder error: ${escHtml(w.err)}</td>`; st.appendChild(tr); return; }
+    (w.items||[]).forEach((i,k)=>{ const tr=el('tr'); tr.className='wrapcells'; tr.innerHTML=`<td class="l muted">${k===0?escHtml(w.widget)+' · total '+usd0(w.total):''}</td><td class="l">${escHtml(i.label)}</td><td>${usd0(i.value)}</td><td>${w.total?(i.value/w.total*100).toFixed(2)+'%':'—'}</td>`; st.appendChild(tr); }); });
+  wrap.appendChild(resizableTable(st,'cashcheck-slices',[30,40,15,15]));
+  const wt=WTRACE||{}, tt=wt.totals||{};
+  if(wt.totals){
+    wrap.appendChild(_cTiles([['NET WORTH',usd0(tt.net_worth)],['HOLDINGS (positions)',usd0(tt.invested_value_positions),null,'what the donuts and INVESTED start from'],
+      ['INSTITUTION DONUT',usd0(tt.institution_donut_total)],['ASSET-TYPE DONUT',usd0(tt.asset_type_donut_total)],
+      ['BROKERAGE CASH',usd0(tt.brokerage_cash),null,'accounts '+usd0(tt.brokerage_cash_accounts)+' · money-market '+usd0(tt.cash_equiv_value)]]));
+    const at=el('table'); const ah=el('tr'); ah.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TYPE / SUBTYPE</th><th>PROVIDER BALANCE</th><th>HOLDINGS VALUE</th><th>DELTA</th><th class="l">WHERE IT LANDS</th>'; at.appendChild(ah);
+    (wt.accounts||[]).slice().sort((a,b)=>Math.abs(b.delta||0)-Math.abs(a.delta||0)||(b.provider_balance||0)-(a.provider_balance||0)).forEach(a=>{ const tr=el('tr'); tr.className='wrapcells';
+      const bad=a.delta!=null && Math.abs(a.delta)>1;
+      tr.innerHTML=`<td class="l">${escHtml(a.institution||'')}</td><td class="l sym">${escHtml(a.account||'')}${a.hidden?' <span class="muted">(hidden)</span>':''}</td><td class="l muted" style="font-size:var(--font-size-sm)">${escHtml((a.type||'—')+(a.subtype?' / '+a.subtype:''))}</td><td>${usd0(a.provider_balance)}</td><td>${a.holdings_value==null?'—':usd0(a.holdings_value)}</td><td class="${bad?'neg':'muted'}">${a.delta==null?'—':usd0(a.delta)}</td><td class="l" style="font-size:var(--font-size-sm)">${escHtml(a.where||'')}</td>`; at.appendChild(tr); });
+    wrap.appendChild(resizableTable(at,'cashcheck-reconcile',[13,22,11,10,10,8,26]));
+    const nn=el('div','muted'); nn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:4px 0 14px;max-width:900px;'; nn.textContent=(wt.note||'')+(wt.cached_age_s!=null?' Snapshot age: '+Math.round(wt.cached_age_s/60)+' min.':''); wrap.appendChild(nn);
+  } else wrap.appendChild(el('div','muted','Account reconciliation is loading… (reopen this tab in a moment)'));
   const badge={brokerage_cash:['BROKERAGE CASH','var(--color-positive)'],bank_cash:['BANK CASH','var(--color-text-muted)'],unsure:['UNSURE','var(--color-negative)'],investment:['investment','var(--color-text-dim)'],not_cash:['not cash','var(--color-text-dim)']};
   const vcell=a=>{ const b=badge[a.verdict]||[a.verdict,'']; return `<span style="color:${b[1]};letter-spacing:1px;font-size:var(--font-size-sm);">${escHtml(b[0])}</span> <span class="muted" style="font-size:var(--font-size-xs)">${escHtml(a.confidence)}</span>`; };
   wrap.appendChild(el('div','ph','ACCOUNTS · WHAT THE PROVIDER SENDS AND WHAT THE RULES GUESS'));
@@ -9342,8 +9383,7 @@ function drawCharts(d){
         backgroundColor:items.map((_,i)=>resolveColor(PIE[i%PIE.length])),borderWidth:0}]},
       options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}}));
   };
-  mk('c-inst', d.by_institution.slice(0,8));
-  mk('c-type', d.by_type.slice(0,8));
+  ALLOCCHARTS.forEach(a=>mk(a.id, a.items));       // the same items the legends show (see allocPanel)
   MIXCHARTS.forEach(m=>{                          // flagged slices (over a limit) get a red ring so they read as the cockpit's warning
     const c=document.getElementById(m.id); if(!c) return;
     charts.push(new Chart(c,{type:'doughnut',

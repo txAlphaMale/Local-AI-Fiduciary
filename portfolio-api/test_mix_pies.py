@@ -22,7 +22,7 @@ def _line(prefix):
 
 PRELUDE = ("const FUNDS_SECTOR = 'Mutual funds & ETFs (not sector-classified)'; const SECTOR_CAP_PCT = 35;\n"
            + _line("const BROKER_CASH_LABEL=") + "\n" + _line("const _bankCash=") + "\n"
-           + _fn("mixTopN") + _fn("mixHoldings") + _fn("mixSector") + _fn("mixAssetClass"))
+           + _fn("mixTopN") + _fn("mixHoldings") + _fn("mixSector") + _fn("mixAssetClass") + _fn("pctLabel"))
 
 
 @unittest.skipUnless(shutil.which("node"), "node not installed")
@@ -94,8 +94,16 @@ class TestWiring(unittest.TestCase):
                        "INCL. FUND CONTENTS", "W('mix-pies'", "over your limit — the cockpit flags this", "FUNDS_SECTOR = 'Mutual funds & ETFs (not sector-classified)'"):
             self.assertIn(needle, HTML)
 
-    def test_the_two_existing_pies_are_untouched(self):
-        self.assertIn("mk('c-inst', d.by_institution.slice(0,8));\n  mk('c-type', d.by_type.slice(0,8));", HTML)
+    def test_rings_and_legends_come_from_the_same_items(self):
+        """Regression (2026-11-10): the rings were drawn from d.by_institution / d.by_type (engine fields) while the legends read the display
+        allocation, so the cash changes never reached the rings. The old version of this test pinned that exact bug."""
+        draw = HTML.split("function drawCharts(d){")[1].split("drawPerfCharts();")[0]
+        self.assertIn("ALLOCCHARTS.forEach(a=>mk(a.id, a.items));", draw)
+        self.assertNotIn("d.by_institution", draw); self.assertNotIn("d.by_type", draw)
+        panel = HTML.split("function allocPanel(title,cid,items,total){")[1].split("return p;")[0]
+        self.assertIn("ALLOCCHARTS.push({id:cid, items:items.slice(0,8)});", panel)
+        self.assertEqual(panel.count("items.slice(0,8)"), 2)                       # ring and legend use the same eight items
+        self.assertIn("MIXCHARTS=[]; ALLOCCHARTS=[];", HTML.split("function dashboardContent(){")[1].split("\nfunction ")[0])   # reset on every render
 
 
 @unittest.skipUnless(shutil.which("node"), "node not installed")
@@ -148,6 +156,10 @@ class TestCashIsNotAnInvestment(unittest.TestCase):
         self.assertEqual(lt, [["AAA", 4000], ["Cash (in brokerage accounts)", 1000]])
         sec = self.js("const m=mixSector({by_sector:[{sector:'Tech',value:3000},{sector:'Funds (no look-through)',value:5000}]},%s); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));" % d)
         self.assertEqual(sec, [["Mutual funds & ETFs (not sector-classified)", 4000], ["Tech", 3000], ["Cash (in brokerage accounts)", 1000]])
+
+    def test_tiny_slices_are_shown_in_dollars_not_as_0_point_0_percent(self):
+        out = self.js("console.log(JSON.stringify([pctLabel(118,604000), pctLabel(0,604000), pctLabel(60400,604000), pctLabel(5,0), pctLabel(2000,604000)]));")
+        self.assertEqual(out, ["<0.1% ($118)", "0.0%", "10.0%", "0%", "0.3%"])
 
     def test_without_d_nothing_changes(self):
         out = self.js("const m=mixSector({by_sector:[{sector:'Cash',value:900}]}); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));")
