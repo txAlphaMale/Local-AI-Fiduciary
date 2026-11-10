@@ -28,6 +28,7 @@ import os
 
 import taxtables
 import tax
+import hsa
 import aca
 import ss
 import estate
@@ -120,6 +121,11 @@ PARAM_SPECS = [
      "year": lambda: roth.IRMAA_YEAR, "kind": "indexed", "source": lambda: roth.IRMAA_SOURCE,
      "source_url": "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
      "module": "roth"},
+    {"key": "hsa.healthcare_need", "label": "Retiree healthcare cost estimate (per person, lifetime)",
+     "value": lambda: hsa.table(), "year": lambda: hsa.table()["year"], "kind": "indexed",
+     "source": lambda: hsa.table()["source"] or "Fidelity retiree health care cost estimate",
+     "source_url": "https://institutional.fidelity.com/advisors/insights/spotlights/retirement-income-planning/retirement-planning-health-care-costs",
+     "module": "hsa"},
     {"key": "benefits.contribution_limits", "label": "401(k)/415(c)/HSA/IRA contribution limits",
      "value": lambda: benefits.LIMITS_2026, "year": lambda: benefits.LIMITS_YEAR, "kind": "indexed",
      "source": lambda: "IRS Notice 2025-67 + Rev. Proc. (HSA) — verified 2026-07-17",

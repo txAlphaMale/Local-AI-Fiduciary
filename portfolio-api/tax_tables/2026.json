@@ -118,6 +118,14 @@
       "source_url": "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
       "irmaa_source": "CMS 2026 Medicare Parts B premium fact sheet \u2014 standard $202.90/mo; MFJ IRMAA tiers $218k/$274k/$342k/$410k/$750k (single half), multipliers 1.4/2.0/2.6/3.2/3.4x"
     },
+    "hsa.healthcare_need": {
+      "values": {"per_person_total": 185500.0},
+      "status": "secondary",
+      "confirmed": true,
+      "verified": "2026-11-10",
+      "source": "Fidelity 2026 Retiree Health Care Cost Estimate: about $185,500 per 65-year-old retiring in 2026, after tax, lifetime; excludes long-term care and most dental. A couple is twice the single figure (Fidelity's 2025 edition: $172,500 single, $345,000 couple). Reported by secondary sources; re-check against fidelity.com each year.",
+      "source_url": "https://institutional.fidelity.com/advisors/insights/spotlights/retirement-income-planning/retirement-planning-health-care-costs"
+    },
     "benefits.contribution_limits": {
       "values": {"k401_employee": 24500.0, "k401_catchup_50": 8000.0, "k401_catchup_60_63": 11250.0, "catchup_roth_wage_floor": 150000.0, "sec415c_total": 72000.0, "hsa_self": 4400.0, "hsa_family": 8750.0, "hsa_catchup_55": 1000.0, "ira_limit": 7500.0, "ira_catchup": 1100.0, "roth_ira_mfj_phaseout": [242000.0, 252000.0]},
       "status": "primary",

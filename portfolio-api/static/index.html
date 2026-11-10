@@ -6775,6 +6775,16 @@ function benefitsContent(){
       `<br/><span class="muted" style="font-size:var(--font-size-sm);">${esc(h.note||'')}</span>`;
     wrap.appendChild(s2);
   }
+  { // HSA as a MEDICAL RESERVE first; only the part above the healthcare need, from age 65, counts as retirement money (see /api/hsa)
+    const s2b=el('div'); s2b.style.cssText='font-size:var(--font-size-sm);margin:2px 0 8px;line-height:1.5;'; wrap.appendChild(s2b);
+    fetch('/api/hsa').then(r=>r.ok?r.json():null).then(x=>{
+      if(!x||!x.balance){ s2b.remove(); return; }
+      const n=x.need||{}, t=n.table||{};
+      s2b.innerHTML=`<b>HSA role</b> — balance <b>${u(x.balance)}</b>: <b>${u(x.reserve)}</b> medical reserve`+
+        (x.surplus>0?`, <b>${u(x.surplus)}</b> above the healthcare need (${x.counted_for_retirement>0?'<span class="pos">counted as retirement money</span>':'<span class="muted">not yet retirement money</span>'})`:'')+
+        `<br/><span class="muted">Healthcare need ${n.total==null?'unknown':u(n.total)} (${esc(n.source||'')}${t.year&&n.source&&n.source.indexOf('Fidelity')===0?', '+esc(String(t.year))+' estimate, after tax, excludes long-term care':''}). ${esc(x.basis||'')}</span>`;
+    }).catch(()=>{ s2b.remove(); });
+  }
   const ri=S.roth_ira||{};
   if(ri.status){ const s3=el('div'); s3.style.cssText='font-size:var(--font-size-md);margin:6px 0;line-height:1.6;';
     // 2026-07-30 pacing stretch goal: renders next to the pre-existing YTD-contributed line
