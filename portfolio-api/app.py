@@ -81,6 +81,7 @@ import store        # LOCAL-HOSTING-HARDENING-PLAN.md §4 (2026-07-23e) — Stor
 import llm          # RESUME-TRACKER 2026-07-24 — LLM-agnostic backend adapter (_llm_chat/_llm_embed)
 import tls          # in-app HTTPS cert management (2026-07-23f) — self-signed / ACME / manual CSR
 import prefs  # per-user interface preferences kept on the server (layout, order, theme)
+import cashdetect  # read-only guesses at which accounts/holdings are cash (CASH CHECK panel)
 import notes  # decision notes: the household's saved Q&A with a revisit date
 import secrets_crypto  # 2026-07-24 — Fernet encryption at rest for SECRET_SPECS values in the DB
 import vault          # TASK-001 — encrypted document vault
@@ -3133,6 +3134,9 @@ def _build_monarch():
             "name": a.get("displayName"),
             "institution": (a.get("institution") or {}).get("name"),
             "type": (a.get("type") or {}).get("display"),
+            "type_name": (a.get("type") or {}).get("name"),            # raw provider names, kept for the CASH CHECK diagnostic only
+            "subtype": (a.get("subtype") or {}).get("display"),
+            "subtype_name": (a.get("subtype") or {}).get("name"),
             "balance": round(bal, 2),
             "holdings_count": a.get("holdingsCount") or 0,
             "is_asset": a.get("isAsset"),
@@ -8322,6 +8326,20 @@ def get_benefits():
     res["facts"] = facts
     res["generated_at"] = int(time.time())
     return res
+
+
+@app.get("/api/cash-check")
+def get_cash_check(request: Request):
+    """Admin-only diagnostic (a viewer can call every other GET, so the role is checked here): the accounts and cash-looking holdings the
+    app receives from the provider, with its guess at which are brokerage cash, bank cash or investments and WHY. Read-only: nothing it
+    reports changes any number the dashboard or planning engines use."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    d = _data()
+    rep = cashdetect.report(d.get("accounts") or [], d.get("positions") or [], d.get("brokerage_cash"), d.get("bank_cash"))
+    rep["provider"] = os.environ.get("PORTFOLIO_PROVIDER", "csv")
+    rep["generated_at"] = int(time.time())
+    return rep
 
 
 @app.get("/api/benefits/limits")
