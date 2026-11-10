@@ -99,7 +99,7 @@ def _row(a, **kw):
     base.update(kw)
     zero = (a.get("balance") in (0, 0.0, None)) and base["holdings_count"] == 0
     if base.get("verdict") not in ("not_cash",) and zero:
-        base["reasons"] = list(base.get("reasons") or []) + ["the provider reports a $0 balance: it may be hidden, disconnected, or the institution does not send this balance"]
+        base["reasons"] = list(base.get("reasons") or []) + ["the provider reports a $0 balance: it may be hidden, disconnected, or the institution does not send the current balance. In Monarch, open the account and try turning on 'Use available balance instead of current balance' (Wells Fargo brokerage cash accounts need it)"]
     if base["flags"]:
         base["reasons"] = list(base.get("reasons") or []) + ["provider state: " + ", ".join(base["flags"])]
     return base
