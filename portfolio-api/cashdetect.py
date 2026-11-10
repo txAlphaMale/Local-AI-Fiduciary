@@ -81,6 +81,30 @@ def classify_holding(h, account_has_securities):
     return {"verdict": verdict, "confidence": "high" if score >= 3 else ("medium" if score == 2 else "low"), "reasons": reasons}
 
 
+def _flags(a):
+    """Provider-side state worth knowing when a balance looks wrong (hidden/deactivated/sync off/manual)."""
+    out = []
+    for key, label in (("hidden", "hidden in the provider's list"), ("deactivated", "deactivated"), ("sync_disabled", "sync switched off"),
+                       ("manual", "manually entered")):
+        if a.get(key):
+            out.append(label)
+    return out
+
+
+def _row(a, **kw):
+    base = {"name": a.get("name") or "", "institution": a.get("institution"), "type": a.get("type"), "subtype": a.get("subtype"),
+            "holdings_count": a.get("holdings_count") or 0, "balance": a.get("balance"),
+            "current_balance": a.get("current_balance"), "last_updated": a.get("last_updated"),
+            "data_provider": a.get("data_provider"), "flags": _flags(a)}
+    base.update(kw)
+    zero = (a.get("balance") in (0, 0.0, None)) and base["holdings_count"] == 0
+    if base.get("verdict") not in ("not_cash",) and zero:
+        base["reasons"] = list(base.get("reasons") or []) + ["the provider reports a $0 balance: it may be hidden, disconnected, or the institution does not send this balance"]
+    if base["flags"]:
+        base["reasons"] = list(base.get("reasons") or []) + ["provider state: " + ", ".join(base["flags"])]
+    return base
+
+
 def classify_accounts(accounts, positions):
     """Per-account guesses. `accounts`: [{name, institution, type, subtype, holdings_count, balance, ...}]; `positions` carry
     account + institution. Pairing links a cash-looking account to an investment account of the same institution and name family."""
@@ -96,10 +120,8 @@ def classify_accounts(accounts, positions):
             (bool(_LIABILITY_NAME_RE.search(name)) and (inst, name) not in sec_accts and (a.get("holdings_count") or 0) == 0
              and not _BROKERAGE_CASH_RE.search(name))
         if liability:                       # a card or loan is never cash, whatever its name says ("Blue Cash Everyday")
-            out.append({"name": name, "institution": inst, "type": a.get("type"), "subtype": a.get("subtype"),
-                        "holdings_count": a.get("holdings_count") or 0, "balance": a.get("balance"),
-                        "has_securities": False, "verdict": "not_cash", "confidence": "high",
-                        "reasons": ["credit card, loan or other liability"], "paired_with": None})
+            out.append(_row(a, has_securities=False, verdict="not_cash", confidence="high",
+                            reasons=["credit card, loan or other liability"], paired_with=None))
             continue
         reasons, cashy = [], False
         if _CASH_ACCT_RE.search(name):
@@ -161,10 +183,7 @@ def classify_accounts(accounts, positions):
             reasons.append("cash-looking but no matching investment account found: bank cash or a brokerage's cash?")
         else:
             verdict, conf = "brokerage_cash", "medium"
-        out.append({"name": name, "institution": inst, "type": a.get("type"), "subtype": a.get("subtype"),
-                    "holdings_count": a.get("holdings_count") or 0, "balance": a.get("balance"),
-                    "has_securities": (inst, name) in sec_accts, "verdict": verdict, "confidence": conf,
-                    "reasons": reasons, "paired_with": paired})
+        out.append(_row(a, has_securities=(inst, name) in sec_accts, verdict=verdict, confidence=conf, reasons=reasons, paired_with=paired))
     return out
 
 
