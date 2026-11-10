@@ -14896,7 +14896,27 @@ from fastapi.responses import StreamingResponse
 CHAT_DB = os.environ.get("CHAT_DB", "/data/chat.db")
 CHAT_MAX_HISTORY = int(os.environ.get("CHAT_MAX_HISTORY", "24"))   # user/assistant turns fed back to the model
 CHAT_MAX_ITER = int(os.environ.get("CHAT_MAX_ITER", "12"))         # tool-loop steps per user message
-CHAT_QUEUE_TIMEOUT = int(os.environ.get("CHAT_QUEUE_TIMEOUT", "900"))  # max seconds a chat waits for the GPU lock before giving up
+# Queue wait is NOT limited by default (2026-11-10, Jason): the hardware is slow and a chat can sit behind a 30-minute brief, so a clock that ran while it
+# was merely QUEUED would expire a perfectly healthy request. 0 = wait as long as it takes (Stop still cancels at once). Set seconds only to opt in to a limit.
+# The running time is not capped either: the LLM stream only fails after STRAT_LLM_TIMEOUT seconds of total silence, and that clock starts when the request
+# starts generating (never while it is queued).
+CHAT_QUEUE_TIMEOUT = int(os.environ.get("CHAT_QUEUE_TIMEOUT", "0"))
+
+
+def _queue_deadline():
+    return time.time() + CHAT_QUEUE_TIMEOUT if CHAT_QUEUE_TIMEOUT > 0 else float("inf")
+
+
+def _fmt_elapsed(s):
+    """15m / 15m 30s / 45s / 1h 2m: the elapsed-time stamp shown on chat answers."""
+    s = max(0, int(round(s or 0)))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m" if m else f"{h}h"
+    if m:
+        return f"{m}m {sec}s" if sec else f"{m}m"
+    return f"{sec}s"
 
 
 def _chat_conn():
@@ -15606,6 +15626,15 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         yield _sse("error", {"error": f"unknown persona '{persona_key}'"})
         return
     cancel_event = threading.Event()
+    t_req = time.time()          # when the request arrived; the time until the model starts is QUEUE time, not run time
+    run = {"t": None}            # set when the model actually starts on this request
+
+    def _mark_run():
+        if run["t"] is None:
+            run["t"] = time.time()
+            if run["t"] - t_req >= 2:          # only tell the client when it actually waited
+                return _sse("status", {"state": "working", "message": "started"})
+        return None
     if req_id:
         with _CHAT_CANCEL_LOCK:
             _CHAT_CANCEL[req_id] = cancel_event
@@ -15625,7 +15654,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                               "message": "A strategist/advisory run is using the model — your message is "
                                          "queued and will start automatically when it finishes."})
         acquired = False
-        deadline = time.time() + CHAT_QUEUE_TIMEOUT
+        deadline = _queue_deadline()
         while time.time() < deadline:
             if cancel_event.is_set():
                 yield _sse("cancelled", {"reason": "stopped while queued"})
@@ -15651,13 +15680,16 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             yield _sse("status", {"state": "vision", "message": "reading the attached image…"})
             if _GPU.locked():
                 yield _sse("status", {"state": "waiting", "message": _gpu_wait_message()})
-            v_deadline = time.time() + CHAT_QUEUE_TIMEOUT
+            v_deadline = _queue_deadline()
             if not _gpu_acquire_visible(cancel_event, v_deadline):
                 if cancel_event.is_set():
                     yield _sse("cancelled", {"reason": "stopped while queued for image analysis"})
                 else:
                     yield _sse("error", {"error": "GPU still busy after waiting a while — please try again shortly"})
                 return
+            _ev = _mark_run()
+            if _ev:
+                yield _ev
             try:
                 vres = _vision_identify_tickers(images, user_msg)
             finally:
@@ -15706,13 +15738,16 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             # _strat_lock.
             if _GPU.locked():
                 yield _sse("status", {"state": "waiting", "message": _gpu_wait_message()})
-            gpu_deadline = time.time() + CHAT_QUEUE_TIMEOUT
+            gpu_deadline = _queue_deadline()
             if not _gpu_acquire_visible(cancel_event, gpu_deadline):
                 if cancel_event.is_set():
                     cancelled = True
                     break
                 yield _sse("error", {"error": "GPU still busy after waiting a while — please try again shortly"})
                 return
+            _ev = _mark_run()
+            if _ev:
+                yield _ev
             try:
                 for chunk in llm._llm_chat(messages, persona["model"], tools=persona["tools"],
                                            stream=True, temperature=persona.get("temp", 0.3),
@@ -15780,10 +15815,12 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             yield _sse("cancelled", {"session_id": session_id})
             return
 
-        _chat_add_message(session_id, "assistant", final_content)
+        t_end = time.time()
+        stamp = {"elapsed_s": int(round(t_end - (run["t"] or t_req))), "queued_s": int(round((run["t"] or t_req) - t_req))}
+        _chat_add_message(session_id, "assistant", final_content, tool_json=json.dumps(stamp))
         threading.Thread(target=_chat_summarise_old, args=(session_id,), daemon=True, name="chat-summary").start()
         _chat_touch_session(session_id)
-        yield _sse("done", {"session_id": session_id})
+        yield _sse("done", {"session_id": session_id, **stamp})
     finally:
         _strat_lock.release()
         _forget()

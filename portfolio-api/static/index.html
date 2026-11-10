@@ -9808,7 +9808,7 @@ async function chatReattach(persona, sid){
       cs.streaming=false; asst.streaming=false;
       if(gotIdle || (!asst.content && (!asst.tools||!asst.tools.length))){
         fetch('/api/chat/session/'+sid).then(r=>r.json()).then(d=>{ if(myId!==cs.streamId) return;
-          cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role,content:m.content||'',tools:[]}));
+          cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant').map(chatMsgFromServer);
           if(p===CHAT_PERSONA){ render(); chatScroll(); } }).catch(()=>{});
       } else if(p===CHAT_PERSONA){ render(); chatScroll(); }
       chatLoadSessions();
@@ -9854,7 +9854,7 @@ function chatOpen(sid,persona){
     const cs=CS(p);
     cs.sid=sid; if(persona) CHAT_PERSONA=persona;
     cs.msgs=((d&&d.messages)||[]).filter(m=>m.role==='user'||m.role==='assistant')
-      .map(m=>({role:m.role,content:m.content||'',tools:[]}));
+      .map(chatMsgFromServer);
     render(); chatScroll();
     // If this conversation is still generating in the background (e.g. after a page refresh), reconnect
     // to the live stream instead of showing only the last-saved turn.
@@ -9917,6 +9917,32 @@ function chatTools(asst){
 // (chat-live-content/chat-live-tools/chat-scroll) naturally no-op when persona isn't the one
 // displayed, since those element ids only exist in the DOM for whichever persona render() last
 // drew — the underlying `asst`/`cs` objects still accumulate correctly in the background either way.
+// Elapsed-time stamps (2026-11-10, Jason): "15m", "15m 30s". The clock that matters is RUN time; time spent queued behind another job is shown
+// separately and never counts as the request being slow or stuck.
+function fmtDur(s){ s=Math.max(0,Math.round(s||0)); const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), x=s%60;
+  return h?(m?h+'h '+m+'m':h+'h'):(m?(x?m+'m '+x+'s':m+'m'):x+'s'); }
+function chatMsgFromServer(m){
+  let st=null; if(m.role==='assistant' && m.tool_json){ try{ const j=JSON.parse(m.tool_json); if(j && j.elapsed_s!=null) st=j; }catch(_){} }
+  return {role:m.role,content:m.content||'',tools:[],stamp:st};
+}
+function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; return 'answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':''); }
+const CHAT_LONG_RUN_S=1200;   // a hint (never a cutoff) once a request has been RUNNING this long
+function chatLiveElapsed(asst){
+  if(!asst||!asst.t0) return '';
+  const now=Date.now();
+  if(asst.phase==='queued') return '⏳ queued '+fmtDur((now-asst.t0)/1000)+' (the clock starts when the model starts on your message)';
+  const run=(now-(asst.tRun||asst.t0))/1000;
+  return '⚙ working '+fmtDur(run)+(asst.tRun&&asst.tRun-asst.t0>=2000?' · queued '+fmtDur((asst.tRun-asst.t0)/1000)+' first':'')+
+    (run>=CHAT_LONG_RUN_S?' · longer than usual for one answer: slow hardware or a long tool chain, Stop cancels, otherwise keep waiting':'');
+}
+function chatTick(){
+  ['fiduciary','strategist'].forEach(p=>{
+    const cs=CS(p), last=cs.msgs&&cs.msgs[cs.msgs.length-1];
+    if(p!==CHAT_PERSONA || !cs.streaming || !last || !last.streaming) return;
+    const e=document.getElementById('chat-live-elapsed'); if(e) e.textContent=chatLiveElapsed(last);
+  });
+}
+setInterval(chatTick,1000);
 function chatFrame(frame,asst,persona){
   let ev='message', data='';
   frame.split('\n').forEach(line=>{
@@ -9929,7 +9955,11 @@ function chatFrame(frame,asst,persona){
   else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
-  else if(ev==='status'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); chatScroll(); }
+  else if(ev==='status'){
+    if(o.state==='waiting'){ asst.phase='queued'; }
+    else if(o.state==='working'){ asst.phase='working'; asst.tRun=Date.now(); }
+    if(o.state!=='working'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); }
+    chatTick(); chatScroll(); }
   else if(ev==='vision'){   // RESUME-TRACKER 2026-07-18j: reuse the existing tool-chip UI, no new rendering path needed
     const tickers=o.tickers||[];
     const label = o.error ? ('👁 image analysis failed: '+(o.note||'error'))
@@ -9938,7 +9968,7 @@ function chatFrame(frame,asst,persona){
     chatTools(asst);
   }
   else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
-  else if(ev==='done'){ cs.sid=o.session_id||cs.sid; }
+  else if(ev==='done'){ cs.sid=o.session_id||cs.sid; if(o.elapsed_s!=null) asst.stamp={elapsed_s:o.elapsed_s,queued_s:o.queued_s||0}; }
   else if(ev==='cancelled'){ cs.sid=o.session_id||cs.sid; if(!asst.content) asst.content='_(stopped)_'; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }
@@ -9954,7 +9984,7 @@ async function chatSend(){
   ta.value='';
   chatClearImages();
   cs.msgs.push({role:'user',content:msg||'(image)',images:images});
-  cs.msgs.push({role:'assistant',content:'',tools:[],streaming:true});
+  cs.msgs.push({role:'assistant',content:'',tools:[],streaming:true,t0:Date.now(),phase:'working',tRun:Date.now()});
   cs.streaming=true;
   const myId=++cs.streamId;      // this send's generation; a newer send/nav (for THIS persona) supersedes it
   // req_id lets Stop actually cancel THIS generation server-side (see chatInterrupt / /api/chat/cancel)
@@ -10129,6 +10159,8 @@ function chatContent(){
       if(m.streaming){ c.id='chat-live-content'; c.textContent = m.content || (m.think ? '💭 thinking… '+m.think.slice(-400) : '▍ working…'); }
       else c.innerHTML=mdToHtml(m.content);
       row.appendChild(c);
+      if(m.streaming && m.t0){ const le=el('div','muted'); le.id='chat-live-elapsed'; le.style.cssText='font-size:var(--font-size-xs);margin-top:4px;'; le.textContent=chatLiveElapsed(m); row.appendChild(le); }
+      else if(!m.streaming && m.stamp){ const se=el('div','muted'); se.style.cssText='font-size:var(--font-size-xs);margin-top:4px;'; se.textContent=chatStampText(m.stamp); row.appendChild(se); }
       if(NOTE_FORM && NOTE_FORM.idx===mi) row.appendChild(noteFormEl());
     } else {
       if(m.images && m.images.length){   // RESUME-TRACKER 2026-07-18j: show what was attached, transcript-side
