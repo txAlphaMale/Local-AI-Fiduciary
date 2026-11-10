@@ -129,6 +129,17 @@ class TestCashIsNotAnInvestment(unittest.TestCase):
         out = self.js("const m=mixAssetClass({asset_class_value:{Equity:5000,Cash:1000}},{bank_cash:700}); console.log(JSON.stringify(m.items.map(i=>[i.label.startsWith('Cash')?'Cash':i.label,i.value])));")
         self.assertEqual(out, [["Equity", 5000], ["Cash", 300]])
 
+    def test_cash_held_as_separate_brokerage_cash_accounts_joins_every_widget(self):
+        d = "{consolidated:[{ticker:'VTI',value:1000,type:'ETF'}], bank_cash:0, brokerage_cash:118, brokerage_cash_accounts:118}"
+        direct = self.js("const m=mixHoldings(%s,null,null,false); console.log(JSON.stringify([m.items.map(i=>[i.label,i.value]), m.total]));" % d)
+        self.assertEqual(direct[0], [["VTI", 1000], ["Cash (in brokerage accounts)", 118]]); self.assertEqual(direct[1], 1118)
+        sector = self.js("const m=mixSector({by_sector:[{sector:'Tech',value:1000}]},%s); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));" % d)
+        self.assertEqual(sector, [["Tech", 1000], ["Cash (in brokerage accounts)", 118]])
+        klass = self.js("const m=mixAssetClass({asset_class_value:{Equity:5000,Cash:50}},%s); console.log(JSON.stringify(m.items.map(i=>[i.label.startsWith('Cash')?'Cash':i.label,i.value])));" % d)
+        self.assertEqual(klass, [["Equity", 5000], ["Cash", 168]])                         # 50 inside funds + 118 in separate cash accounts
+        none = self.js("const m=mixAssetClass({asset_class_value:{Equity:5000}},%s); console.log(JSON.stringify(m.items.map(i=>[i.label.startsWith('Cash')?'Cash':i.label,i.value])));" % d)
+        self.assertEqual(none, [["Equity", 5000], ["Cash", 118]])
+
     def test_without_d_nothing_changes(self):
         out = self.js("const m=mixSector({by_sector:[{sector:'Cash',value:900}]}); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));")
         self.assertEqual(out, [["Cash", 900]])

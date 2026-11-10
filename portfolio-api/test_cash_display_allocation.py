@@ -56,5 +56,62 @@ class TestCashDisplay(unittest.TestCase):
         self.assertEqual([r["label"] for r in d["alloc_display"]["by_type"]], ["ETF"])
 
 
+class TestBrokerageCashAccounts(unittest.TestCase):
+    """Monarch lists a brokerage's cash sweep as its OWN account (no holdings); high-confidence ones feed the 'Cash (in brokerage accounts)' slice."""
+    def acct(self, name, inst, typ, bal, hc=0, sub=None, **kw):
+        return dict({"name": name, "institution": inst, "type": typ, "subtype": sub, "holdings_count": hc, "balance": bal, "include_nw": True, "is_asset": True}, **kw)
+
+    def derive(self, extra=None):
+        accts = [self.acct("WELLSTRADE IRA (...6140)", "Wells Fargo", "Investments", 1000.0, hc=1),
+                 self.acct("IRA BROKERAGE CASH (...1400)", "Wells Fargo", "Investments", 113.0, sub="Roth IRA"),
+                 self.acct("BROKERAGE CASH (...5346)", "Wells Fargo", "Cash", 5.0, sub="Checking", hidden=True),
+                 self.acct("WAY2SAVE SAVINGS (...4524)", "Wells Fargo", "Cash", 1862.0, sub="Savings"),
+                 self.acct("Health Savings Account (...8095)", "Voya", "Investments", 3418.0, sub="Other"),
+                 self.acct("PayPal", "PayPal", "Cash", 8.0, sub="Mobile Payment System"),
+                 self.acct("Blue Cash Everyday (...3003)", "American Express", "Credit Card", 300.0, is_asset=False)] + (extra or [])
+        pos = [{"ticker": "VTI", "name": "Vanguard Total Market", "type": "ETF", "value": 1000.0, "cost_total": 800.0, "gain": 200.0, "gain_pct": 25.0,
+                "quantity": 5.0, "price": 200.0, "day_pct": 0.1, "account": "WELLSTRADE IRA (...6140)", "institution": "Wells Fargo",
+                "suspect": False, "is_cit": False, "price_source": None}]
+        bo = [a for a in accts if a["holdings_count"] == 0 and a["type"] == "Investments" and a["balance"]]
+        return appmod._derive(accts, pos, [{"account": "WELLSTRADE IRA (...6140)", "institution": "Wells Fargo", "value": 1000.0, "holdings": pos}], [accts[0]],
+                              6000.0, 6500.0, 300.0, balance_only=bo)
+
+    def test_only_high_confidence_cash_accounts_are_counted(self):
+        d = self.derive()
+        self.assertEqual(d["brokerage_cash_accounts"], 118.0)                       # 113 (Roth IRA cash sweep) + 5 (hidden brokerage cash)
+        self.assertEqual(d["brokerage_cash"], 118.0)
+        self.assertEqual(d["bank_cash"], 0.0)                                       # savings/wallet are neither counted nor positions
+
+    def test_the_asset_type_donut_gets_the_cash_slice_and_stays_honest(self):
+        t = {r["label"]: r["value"] for r in self.derive()["alloc_display"]["by_type"]}
+        self.assertEqual(t, {"ETF": 1000.0, "Cash (in brokerage accounts)": 118.0})
+
+    def test_institution_donut_counts_each_account_once(self):
+        i = {r["label"]: r["value"] for r in self.derive()["alloc_display"]["by_institution"]}
+        self.assertEqual(i["Wells Fargo"], 1000.0 + 113.0 + 5.0)                    # 1400 already arrives as a balance-only account; 5346 is added once
+        self.assertEqual(i["Voya"], 3418.0)                                         # the unsure HSA keeps its existing treatment
+        self.assertNotIn("PayPal", i); self.assertNotIn("American Express", i)
+
+    def test_medium_confidence_and_deactivated_accounts_are_not_counted(self):
+        d = self.derive([self.acct("Mystery Cash", "Elsewhere", "Cash", 500.0),                       # unpaired: unsure/low
+                         self.acct("Old IRA Cash (...1)", "Wells Fargo", "Cash", 700.0, deactivated=True)])
+        self.assertEqual(d["brokerage_cash_accounts"], 118.0)
+
+    def test_engines_see_no_change_in_invested_value_or_by_type(self):
+        d = self.derive()
+        self.assertEqual(d["invested_value"], 1000.0)
+        self.assertEqual({r["label"]: r["value"] for r in d["by_type"]}, {"ETF": 1000.0})
+
+    def test_the_cash_check_report_marks_which_accounts_feed_the_widgets(self):
+        import cashdetect as cd
+        accts = [self.acct("WELLSTRADE IRA (...6140)", "Wells Fargo", "Investments", 1000.0, hc=1), self.acct("IRA BROKERAGE CASH (...1400)", "Wells Fargo", "Investments", 113.0),
+                 self.acct("WAY2SAVE SAVINGS (...4524)", "Wells Fargo", "Cash", 1862.0)]
+        rep = cd.report(accts, [{"account": "WELLSTRADE IRA (...6140)", "institution": "Wells Fargo", "ticker": "VTI", "type": "ETF", "value": 1000.0}], 0, 0)
+        by = {r["name"]: r for r in rep["accounts"]}
+        self.assertTrue(by["IRA BROKERAGE CASH (...1400)"]["counted_in_widgets"])
+        self.assertFalse(by["WAY2SAVE SAVINGS (...4524)"]["counted_in_widgets"])
+        self.assertIn("counted in the dashboard", " ".join(by["IRA BROKERAGE CASH (...1400)"]["reasons"]))
+
+
 if __name__ == "__main__":
     unittest.main()

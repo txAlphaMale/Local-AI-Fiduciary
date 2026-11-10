@@ -2057,7 +2057,7 @@ function mixTopN(rows, n){                         // rows: [{label,value,flag?}
 // d.brokerage_cash / d.bank_cash come from the server (a Cash line in an account that also holds securities vs a Cash-only account such as
 // savings or checking). Called without d (older callers/tests) nothing is adjusted.
 const BROKER_CASH_LABEL='Cash (in brokerage accounts)';
-const _bankCash=d=>+((d&&d.bank_cash)||0), _brokerCash=d=>+((d&&d.brokerage_cash)||0);
+const _bankCash=d=>+((d&&d.bank_cash)||0), _brokerCash=d=>+((d&&d.brokerage_cash)||0), _acctCash=d=>+((d&&d.brokerage_cash_accounts)||0);   // _acctCash: brokerage cash held as separate holdings-less accounts
 function mixHoldings(d, lt, ins, includeFunds){
   const capped=new Set(((ins&&ins.concentration)||[]).map(c=>c.ticker));
   const adj=!!(d && (d.bank_cash!=null || d.brokerage_cash!=null));
@@ -2072,7 +2072,8 @@ function mixHoldings(d, lt, ins, includeFunds){
     });
     if(unres.value>0) rows.push(unres);
     const itemised=rows.reduce((t,r)=>t+r.value,0);
-    total=(lt.invested_value||itemised)-(adj?_bankCash(d):0);
+    total=(lt.invested_value||itemised)-(adj?_bankCash(d):0)+(adj?_acctCash(d):0);
+    if(adj && _acctCash(d)>0 && !rows.some(r=>r.label===BROKER_CASH_LABEL)) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});
     if(total>itemised+1) rows.push({label:'Smaller holdings', value:total-itemised, flag:false});
     note='Includes what is inside your funds (SEC look-through, top names).';
   } else {
@@ -2094,6 +2095,7 @@ function mixSector(exp, d){
     if(adj && label==='Cash') return {label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false};
     return {label, value:s.value||0, flag:false};
   }).filter(r=>r.value>0 || !adj);
+  if(adj && _brokerCash(d)>0 && !rows.some(r=>r.label===BROKER_CASH_LABEL)) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});
   const total=rows.reduce((t,r)=>t+r.value,0);
   rows.forEach(r=>{ if(total && r.value/total*100>SECTOR_CAP_PCT && !['Cash',FUNDS_SECTOR,'Other / unclassified'].includes(r.label)) r.flag=true; });
   return {items:mixTopN(rows,8), total, available:total>0,
@@ -2102,8 +2104,10 @@ function mixSector(exp, d){
 function mixAssetClass(lt, d){
   const acv=(lt&&lt.asset_class_value)||null;
   if(!acv) return {items:[], total:0, available:false, note:'Asset-class mix needs the fund look-through — run it under RISK · EXPOSURE → LOOK-THROUGH.'};
-  const bank=_bankCash(d);                       // savings/checking cash is not an investment: take it out of the Cash class (cash held inside funds stays)
-  const rows=Object.keys(acv).map(k=>({label:k==='Cash'&&bank?BROKER_CASH_LABEL.replace(' (in brokerage accounts)',' (brokerage + inside funds)'):k, value:Math.max(0,(acv[k]||0)-(k==='Cash'?bank:0)), flag:false})).filter(r=>r.value>0);
+  const bank=_bankCash(d), acct=_acctCash(d);    // savings/checking cash is not an investment: take it out of the Cash class (cash held inside funds stays); cash held in separate brokerage cash accounts is added
+  const adjCash=!!(bank||acct);
+  const rows=Object.keys(acv).map(k=>({label:k==='Cash'&&adjCash?BROKER_CASH_LABEL.replace(' (in brokerage accounts)',' (brokerage + inside funds)'):k, value:Math.max(0,(acv[k]||0)-(k==='Cash'?bank:0)+(k==='Cash'?acct:0)), flag:false})).filter(r=>r.value>0);
+  if(acct>0 && !('Cash' in acv)) rows.push({label:BROKER_CASH_LABEL.replace(' (in brokerage accounts)',' (brokerage + inside funds)'), value:acct, flag:false});
   const total=rows.reduce((t,r)=>t+r.value,0);
   const part=lt.funds_total?(lt.funds_resolved||0)+' of '+lt.funds_total+' funds looked through':'';
   return {items:mixTopN(rows,8), total, available:total>0, note:'Equity / bonds / cash from the SEC look-through of your funds'+(part?' ('+part+')':'')+'.'};
@@ -5042,7 +5046,7 @@ function cashCheckContent(){
     ['GUESSED BROKERAGE CASH',usd0(g.brokerage_cash),'pos','cash-looking holdings + cash accounts paired with a brokerage'],
     ['GUESSED BANK CASH',usd0(g.bank_cash),null,'savings / checking style'],
     ['UNSURE',usd0(g.unsure),(g.unsure>0?'neg':null),'cash-looking, no pairing found'],
-    ['COUNTED TODAY',usd0(c.brokerage_cash),null,'in the donut\'s brokerage-cash slice (bank cash '+usd0(c.bank_cash)+' excluded)']]));
+    ['COUNTED TODAY',usd0(c.brokerage_cash),null,'in the donuts\' brokerage-cash slice, incl. high-confidence cash accounts (bank cash '+usd0(c.bank_cash)+' excluded)']]));
   const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
   const b1=el('button',null,'COPY REPORT (account numbers masked)'); b1.onclick=()=>{ try{ navigator.clipboard.writeText(cashCheckText(true)); b1.textContent='copied'; }catch(_){ b1.textContent='copy failed'; } };
   const b2=el('button',null,'↻ REFRESH'); b2.onclick=()=>{ CASHCHK=null; render(); };
