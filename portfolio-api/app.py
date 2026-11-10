@@ -3055,7 +3055,9 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     _is_cash = lambda p: (p.get("type") or "") == "Cash"
     _brokerage_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) in _sec_accts]
     _bank_cash_pos = [p for p in positions if _is_cash(p) and (p.get("institution"), p.get("account")) not in _sec_accts]
-    brokerage_cash = round(sum(p["value"] or 0 for p in _brokerage_cash_pos), 2)
+    _cash_accts = cashdetect.counted_brokerage_cash_accounts(accounts, positions)   # cash sweeps listed as their own (holdings-less) accounts
+    acct_cash = round(sum(a.get("balance") or 0 for a in _cash_accts), 2)
+    brokerage_cash = round(sum(p["value"] or 0 for p in _brokerage_cash_pos) + acct_cash, 2)
     bank_cash = round(sum(p["value"] or 0 for p in _bank_cash_pos), 2)
     _disp = [p for p in positions if not any(p is b for b in _bank_cash_pos)]
     _d_inst, _d_type = {}, {}
@@ -3064,6 +3066,12 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         _d_type[p["type"] or "Other"] = round(_d_type.get(p["type"] or "Other", 0) + (p["value"] or 0), 2)
     for a in balance_only:
         _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
+    _bo_keys = {(a.get("institution"), a.get("name")) for a in balance_only}
+    for a in _cash_accts:                       # a counted cash account that is not already in the balance-only list joins its institution once
+        if (a.get("institution"), a.get("name")) not in _bo_keys:
+            _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
+    if acct_cash:
+        _d_type["Cash"] = round(_d_type.get("Cash", 0) + acct_cash, 2)
     alloc_display = {
         "by_institution": [{"label": k, "value": v} for k, v in sorted(_d_inst.items(), key=lambda x: -x[1])],
         "by_type": [{"label": ("Cash (in brokerage accounts)" if k == "Cash" else k), "value": v}
@@ -3092,7 +3100,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         # Cash-type lines (savings, checking, brokerage cash) are inside invested_value because the risk/drift/plan engines
         # need them there; the header tile shows invested_value minus this so cash is not presented as an investment.
         "cash_value": round(sum(p["value"] or 0 for p in positions if (p.get("type") or "") == "Cash"), 2),
-        "brokerage_cash": brokerage_cash, "bank_cash": bank_cash, "alloc_display": alloc_display,
+        "brokerage_cash": brokerage_cash, "brokerage_cash_accounts": acct_cash, "bank_cash": bank_cash, "alloc_display": alloc_display,
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
         "total_gain_pct": round(total_gain / total_cost * 100, 2) if total_cost else None,

@@ -187,10 +187,27 @@ def classify_accounts(accounts, positions):
     return out
 
 
+def counted_brokerage_cash_accounts(accounts, positions):
+    """The accounts whose BALANCE feeds the dashboard's 'Cash (in brokerage accounts)' slice: cash accounts with no holdings of their own
+    (Monarch lists a brokerage's cash sweep as a separate account) that the rules are highly confident belong to a brokerage. Only high
+    confidence counts; medium/low guesses, bank cash, unsure, wallets, liabilities and deactivated accounts never do. Returns the account dicts."""
+    out = []
+    for a, r in zip(accounts, classify_accounts(accounts, positions)):
+        if (r["verdict"] == "brokerage_cash" and r["confidence"] == "high" and r["holdings_count"] == 0
+                and (a.get("balance") or 0) > 0 and not a.get("deactivated")):
+            out.append(a)
+    return out
+
+
 def report(accounts, positions, counted_brokerage_cash, counted_bank_cash):
     """The full diagnostic: per-account and per-holding guesses, dollar roll-ups, and what the dashboard counts today."""
     sec_accts = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
     acct_rows = classify_accounts(accounts, positions)
+    counted = {id(a) for a in counted_brokerage_cash_accounts(accounts, positions)}
+    for a, r in zip(accounts, acct_rows):
+        r["counted_in_widgets"] = id(a) in counted
+        if r["counted_in_widgets"]:
+            r["reasons"] = list(r["reasons"]) + ["its balance is counted in the dashboard's 'Cash (in brokerage accounts)' slice"]
     hold_rows = []
     for p in positions:
         c = classify_holding(p, (p.get("institution"), p.get("account")) in sec_accts)
