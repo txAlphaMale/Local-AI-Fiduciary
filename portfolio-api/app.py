@@ -3137,6 +3137,15 @@ def _build_monarch():
             "type_name": (a.get("type") or {}).get("name"),            # raw provider names, kept for the CASH CHECK diagnostic only
             "subtype": (a.get("subtype") or {}).get("display"),
             "subtype_name": (a.get("subtype") or {}).get("name"),
+            # Monarch's own state flags, kept for the CASH CHECK diagnostic: an account can be hidden from Monarch's list, deactivated or
+            # have sync switched off and still reach the app (with a stale or zero balance).
+            "mask": a.get("mask"),
+            "hidden": bool(a.get("isHidden") or a.get("hideFromList")),
+            "deactivated": bool(a.get("deactivatedAt")),
+            "sync_disabled": bool(a.get("syncDisabled")),
+            "manual": bool(a.get("isManual")),
+            "current_balance": a.get("currentBalance"),
+            "last_updated": a.get("displayLastUpdatedAt") or a.get("updatedAt"),
             "balance": round(bal, 2),
             "holdings_count": a.get("holdingsCount") or 0,
             "is_asset": a.get("isAsset"),

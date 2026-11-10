@@ -135,6 +135,35 @@ class TestRealCapturePatterns(unittest.TestCase):
         self.assertEqual([h["ticker"] for h in r["cash_holdings"]], ["CASH"])
 
 
+class TestProviderState(unittest.TestCase):
+    """Monarch can hand over accounts that are hidden, deactivated or sync-disabled (so you cannot find them in its own list)."""
+    def test_state_flags_balance_and_source_are_carried_and_explained(self):
+        a = dict(acct("IRA BROKERAGE CASH (...1400)", "Wells Fargo", "Cash", 0, 0.0), hidden=True, sync_disabled=True,
+                 data_provider="PLAID", last_updated="2026-09-01T12:00:00Z", current_balance=0.0)
+        r = cd.classify_accounts([a, acct("WELLSTRADE IRA (...3916)", "Wells Fargo", hc=2, bal=85000)],
+                                 [pos("WELLSTRADE IRA (...3916)", "Wells Fargo", "VTI", "ETF", 1000)])[0]
+        self.assertEqual(r["flags"], ["hidden in the provider's list", "sync switched off"])
+        self.assertEqual((r["data_provider"], r["last_updated"][:10]), ("PLAID", "2026-09-01"))
+        why = " ".join(r["reasons"])
+        self.assertIn("$0 balance", why); self.assertIn("provider state: hidden in the provider's list, sync switched off", why)
+        self.assertEqual(r["verdict"], "brokerage_cash")                 # the guess itself does not change
+
+    def test_a_normal_account_has_no_flags_and_a_nonzero_one_gets_no_zero_warning(self):
+        r = cd.classify_accounts([acct("Ally Savings", "Ally", "Cash", 0, 500)], [])[0]
+        self.assertEqual(r["flags"], []); self.assertNotIn("$0 balance", " ".join(r["reasons"]))
+
+    def test_liabilities_get_no_zero_balance_noise(self):
+        r = cd.classify_accounts([dict(acct("Visa", "Bank", "Credit Card", 0, 0.0), is_asset=False)], [])[0]
+        self.assertEqual(r["verdict"], "not_cash"); self.assertNotIn("$0 balance", " ".join(r["reasons"]))
+
+    def test_monarch_flags_are_captured_from_the_account_payload(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        for needle in ('"hidden": bool(a.get("isHidden") or a.get("hideFromList"))', '"deactivated": bool(a.get("deactivatedAt"))',
+                       '"sync_disabled": bool(a.get("syncDisabled"))', '"current_balance": a.get("currentBalance")'):
+            self.assertIn(needle, src)
+        self.assertIn("PROVIDER STATE", HTML)
+
+
 class TestHoldings(unittest.TestCase):
     def test_money_market_ticker_is_brokerage_cash_even_when_typed_as_a_fund(self):
         c = cd.classify_holding(pos("MC VG IRA", "Vanguard", "VMFXX", "Mutual Fund", 5000, price=1.0, name="Vanguard Federal Money Market Fund", day=0.0), True)
