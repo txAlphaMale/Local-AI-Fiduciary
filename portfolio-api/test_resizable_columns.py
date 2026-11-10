@@ -17,7 +17,7 @@ class TestResizableColumns(unittest.TestCase):
             pct = [int(x) for x in m.group(1).split(",")]
             self.assertEqual(sum(pct), 100, pct)
         heads = re.findall(r"<th[ >]", HTML.split("function cashCheckContent()")[1].split("function _errorsRefresh()")[0])
-        self.assertEqual(len(heads), 8 + 8 + 5)                                      # 8 account + 8 holding + 5 'what the donuts count' columns
+        self.assertEqual(len(heads), 8 + 8 + 5 + 4 + 7)                              # accounts + holdings + 'what the donuts count' + trace slices + trace reconciliation
 
     def test_widths_follow_the_account_like_other_layout_preferences(self):
         src = open(os.path.join(_HERE, "prefs.py"), encoding="utf-8").read()     # parsed as text: importing prefs needs the data-dir env other tests set up
