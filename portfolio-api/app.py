@@ -3051,8 +3051,11 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     # for FREE CASH SITTING IN BROKERAGE ACCOUNTS. "Brokerage cash" = a Cash line in an account that also holds securities; a Cash-only account
     # (savings, checking, emergency fund) is bank cash and is left out of the widgets. The engines keep using by_type / by_institution unchanged
     # (policy drift needs the cash sleeve); only the display fields below are new.
-    _cb = cashdetect.cash_breakdown(accounts, positions)
-    _cash_accts = cashdetect.counted_brokerage_cash_accounts(accounts, positions)   # cash sweeps listed as their own (holdings-less) accounts
+    _des = prefs.cash_designations()            # the person's own per-account designations always beat the rules' guesses
+    _cb = cashdetect.cash_breakdown(accounts, positions, _des)
+    _cash_accts = cashdetect.counted_brokerage_cash_accounts(accounts, positions, _des)   # cash sweeps listed as their own (holdings-less) accounts
+    _left_out = cashdetect.left_out_accounts(accounts, positions, _des)      # Exclude / Bank cash on a holdings-less account: net worth only
+    _lo_keys = {(a.get("institution"), a.get("name")) for a in _left_out}
     acct_cash = _cb["brokerage_cash_accounts"]
     brokerage_cash = _cb["brokerage_cash"]          # cash lines in brokerage accounts + separate cash-sweep accounts + money-market funds
     bank_cash = _cb["bank_cash"]
@@ -3073,6 +3076,8 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     for k in [k for k, v in _d_type.items() if v <= 0]:
         del _d_type[k]
     for a in balance_only:
+        if (a.get("institution"), a.get("name")) in _lo_keys:
+            continue
         _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
     _bo_keys = {(a.get("institution"), a.get("name")) for a in balance_only}
     for a in _cash_accts:                       # a counted cash account that is not already in the balance-only list joins its institution once
@@ -3084,7 +3089,9 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         "by_institution": [{"label": k, "value": v} for k, v in sorted(_d_inst.items(), key=lambda x: -x[1])],
         "by_type": [{"label": ("Cash (in brokerage accounts)" if k == "Cash" else k), "value": v}
                     for k, v in sorted(_d_type.items(), key=lambda x: -x[1])],
-        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2)}
+        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2),
+        "left_out": [{"institution": a.get("institution"), "account": a.get("name"), "value": a.get("balance"),
+                      "designation": _des.get(prefs.desig_key(a.get("institution"), a.get("name")))} for a in _left_out]}
     investment_balance_accounts = [
         {"account": a.get("name"), "institution": a.get("institution"),
          "value": a.get("balance"), "type": a.get("type")}
@@ -8362,7 +8369,11 @@ def get_cash_check(request: Request):
     if not _require_admin(request):
         return JSONResponse({"error": "admin only"}, status_code=403)
     d = _data()
-    rep = cashdetect.report(d.get("accounts") or [], d.get("positions") or [], d.get("brokerage_cash"), d.get("bank_cash"))
+    _des = prefs.cash_designations()
+    rep = cashdetect.report(d.get("accounts") or [], d.get("positions") or [], d.get("brokerage_cash"), d.get("bank_cash"), _des)
+    for r in rep["accounts"]:
+        r["key"] = prefs.desig_key(r.get("institution"), r.get("name"))
+    rep["designations"] = _des
     rep["provider"] = os.environ.get("PORTFOLIO_PROVIDER", "csv")
     rep["generated_at"] = int(time.time())
     return rep
@@ -8378,7 +8389,8 @@ def get_widget_trace(request: Request):
     d = _data()
     accounts, positions = d.get("accounts") or [], d.get("positions") or []
     bo_keys = {(a.get("institution"), a.get("account")) for a in (d.get("investment_balance_accounts") or [])}
-    cb = cashdetect.cash_breakdown(accounts, positions)
+    cb = cashdetect.cash_breakdown(accounts, positions, prefs.cash_designations())
+    _lo = {(a.get("institution"), a.get("name")) for a in cashdetect.left_out_accounts(accounts, positions, prefs.cash_designations())}
     kind = {}
     for label, lines in (("brokerage cash", cb["brokerage_lines"]), ("bank cash (left out of the donuts)", cb["bank_lines"]),
                          ("money-market fund counted as cash", cb["equivalent_lines"])):
@@ -8408,6 +8420,8 @@ def get_widget_trace(request: Request):
             where = "holdings feed every donut" + (" (its bank-cash lines are left out)" if nbank.get(k) else "")
         elif k in counted:
             where = "cash-sweep account: counted in the cash slice" + (" and (as a balance-only investment account) its institution slice" if k in bo_keys else " and its institution slice")
+        elif k in _lo:
+            where = "set by you to Exclude / Bank cash: net worth only, left out of the donuts"
         elif k in bo_keys:
             where = "balance-only investment account: institution donut only (no asset type known)"
         elif a.get("is_asset") is False:
@@ -15928,6 +15942,31 @@ def chat_session(sid: str):
 def chat_session_delete(sid: str):
     _chat_delete_session(sid)
     return {"ok": True}
+
+
+@app.get("/api/cash-designations")
+def get_cash_designations(request: Request):
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    return {"designations": prefs.cash_designations(), "choices": list(prefs.DESIGNATIONS)}
+
+
+@app.post("/api/cash-designations")
+async def set_cash_designations(request: Request):
+    """Admin-only by the global write gate. Body {"set": {"<institution>||<account>": "investment|brokerage_cash|bank_cash|exclude|auto"}}.
+    The dashboard snapshot is rebuilt on the next read so the donuts reflect it. The audit event records how many accounts changed, never names."""
+    if not _require_admin(request):
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    body = await request.json()
+    ch = body.get("set") if isinstance(body, dict) and isinstance(body.get("set"), dict) else {}
+    try:
+        stored = prefs.set_cash_designations(ch)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _cache["ts"] = 0                                    # rebuild the snapshot on the next read
+    audit.emit("cashdesignation.updated", request=request, actor=request.session.get("uid"), resource="/api/cash-designations",
+               detail={"changed": len(ch), "total": len(stored)})
+    return {"ok": True, "designations": stored}
 
 
 # ---- Interface preferences kept on the server (see prefs.py). Per signed-in account; off on the demo, whose single shared login

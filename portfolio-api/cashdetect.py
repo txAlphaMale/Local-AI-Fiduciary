@@ -105,7 +105,46 @@ def _row(a, **kw):
     return base
 
 
-def classify_accounts(accounts, positions):
+DESIGNATION_VERDICT = {"investment": "not_cash", "brokerage_cash": "brokerage_cash", "bank_cash": "bank_cash", "exclude": "excluded"}
+DESIGNATION_LABEL = {"investment": "Investment", "brokerage_cash": "Brokerage cash", "bank_cash": "Bank cash", "exclude": "Exclude from widgets"}
+
+
+def desig_key(institution, name):
+    return f"{institution or ''}||{name or ''}"
+
+
+def classify_accounts(accounts, positions, designations=None):
+    """Per-account verdicts: the rules' guess, overridden by the person's own designation when there is one. A designation always wins and
+    is high confidence. Brokerage cash / Exclude only make sense for an account with no holdings of its own (its balance is the thing being
+    placed); on an account that lists holdings they are ignored with a note, because its holdings already feed the widgets line by line."""
+    rows = _guess_accounts(accounts, positions)
+    if not designations:
+        return rows
+    for a, r in zip(accounts, rows):
+        d = designations.get(desig_key(a.get("institution"), a.get("name")))
+        r["designation"] = None
+        if not d:
+            continue
+        if (a.get("holdings_count") or 0) > 0 and d in ("brokerage_cash", "exclude"):
+            r["reasons"] = list(r["reasons"]) + [f"you set '{DESIGNATION_LABEL[d]}', but this account lists holdings of its own, so it is ignored (its holdings already feed the widgets)"]
+            continue
+        r["guess"] = r["verdict"]
+        r["designation"] = d
+        r["verdict"], r["confidence"] = DESIGNATION_VERDICT[d], "high"
+        r["reasons"] = [f"set by you: {DESIGNATION_LABEL[d]}"] + [f"the rules had guessed: {r['guess']} ({'; '.join(r['reasons']) or 'no cash signals'})"]
+    return rows
+
+
+def left_out_accounts(accounts, positions, designations):
+    """Holdings-less accounts the person sent to Exclude or Bank cash: their balance stays in net worth but is left out of the donuts."""
+    out = []
+    for a, r in zip(accounts, classify_accounts(accounts, positions, designations)):
+        if r.get("designation") in ("exclude", "bank_cash") and (a.get("holdings_count") or 0) == 0:
+            out.append(a)
+    return out
+
+
+def _guess_accounts(accounts, positions):
     """Per-account guesses. `accounts`: [{name, institution, type, subtype, holdings_count, balance, ...}]; `positions` carry
     account + institution. Pairing links a cash-looking account to an investment account of the same institution and name family."""
     sec_accts = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
@@ -187,19 +226,19 @@ def classify_accounts(accounts, positions):
     return out
 
 
-def counted_brokerage_cash_accounts(accounts, positions):
+def counted_brokerage_cash_accounts(accounts, positions, designations=None):
     """The accounts whose BALANCE feeds the dashboard's 'Cash (in brokerage accounts)' slice: cash accounts with no holdings of their own
     (Monarch lists a brokerage's cash sweep as a separate account) that the rules are highly confident belong to a brokerage. Only high
     confidence counts; medium/low guesses, bank cash, unsure, wallets, liabilities and deactivated accounts never do. Returns the account dicts."""
     out = []
-    for a, r in zip(accounts, classify_accounts(accounts, positions)):
+    for a, r in zip(accounts, classify_accounts(accounts, positions, designations)):
         if (r["verdict"] == "brokerage_cash" and r["confidence"] == "high" and r["holdings_count"] == 0
                 and (a.get("balance") or 0) > 0 and not a.get("deactivated")):
             out.append(a)
     return out
 
 
-def cash_breakdown(accounts, positions):
+def cash_breakdown(accounts, positions, designations=None):
     """How the dashboard's allocation/mix widgets treat cash, decided in ONE place (the widgets and CASH CHECK both use it).
       brokerage_lines: Cash-typed lines inside an account that holds securities OR inside an investment-type account that currently holds
                        only cash (e.g. a brokerage account waiting to invest);
@@ -207,7 +246,7 @@ def cash_breakdown(accounts, positions):
       account_lines:   holdings-less accounts the rules are highly confident are a brokerage's cash sweep (balance counts);
       equivalent_lines: money-market / sweep FUNDS typed as a fund (a Vanguard money-market fund) that count as brokerage cash.
     Each line is {account, institution, ticker, name, value, why}; totals are rounded dollars."""
-    rows = {(r["institution"], r["name"]): r for r in classify_accounts(accounts, positions)}
+    rows = {(r["institution"], r["name"]): r for r in classify_accounts(accounts, positions, designations)}
     sec = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
     brokerage, bank, equiv = [], [], []
     for p in positions:
@@ -216,7 +255,11 @@ def cash_breakdown(accounts, positions):
                 "value": p.get("value") or 0.0}
         if str(p.get("type") or "").lower() == "cash":
             r = rows.get(key)
-            if key in sec:
+            if r and r.get("designation") == "bank_cash":
+                bank.append(dict(line, why="you designated this account as bank cash"))
+            elif r and r.get("designation") == "investment":
+                brokerage.append(dict(line, why="you designated this account as an investment account"))
+            elif key in sec:
                 brokerage.append(dict(line, why="cash line in an account that also holds securities"))
             elif r and r["verdict"] == "bank_cash":
                 bank.append(dict(line, why="account looks like a bank account (savings, checking, emergency fund)"))
@@ -229,9 +272,11 @@ def cash_breakdown(accounts, positions):
             if h["verdict"] == "brokerage_cash" and h["confidence"] in ("high", "medium"):
                 equiv.append(dict(line, why="; ".join(h["reasons"])))
     accts = []
-    for a in counted_brokerage_cash_accounts(accounts, positions):
+    for a in counted_brokerage_cash_accounts(accounts, positions, designations):
+        mine = (designations or {}).get(desig_key(a.get("institution"), a.get("name"))) == "brokerage_cash"
         accts.append({"account": a.get("name"), "institution": a.get("institution"), "ticker": None, "name": a.get("name"),
-                      "value": a.get("balance") or 0.0, "why": "highly likely a brokerage cash sweep listed as its own account"})
+                      "value": a.get("balance") or 0.0,
+                      "why": "you designated this account as brokerage cash" if mine else "highly likely a brokerage cash sweep listed as its own account"})
     tot = lambda L: round(sum(x["value"] or 0.0 for x in L), 2)
     return {"brokerage_lines": brokerage, "bank_lines": bank, "account_lines": accts, "equivalent_lines": equiv,
             "brokerage_cash": round(tot(brokerage) + tot(accts) + tot(equiv), 2), "bank_cash": tot(bank),
@@ -239,11 +284,11 @@ def cash_breakdown(accounts, positions):
             "cash_equiv_tickers": sorted({x["ticker"] for x in equiv if x["ticker"]})}
 
 
-def report(accounts, positions, counted_brokerage_cash, counted_bank_cash):
+def report(accounts, positions, counted_brokerage_cash, counted_bank_cash, designations=None):
     """The full diagnostic: per-account and per-holding guesses, dollar roll-ups, and what the dashboard counts today."""
     sec_accts = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
-    acct_rows = classify_accounts(accounts, positions)
-    counted = {id(a) for a in counted_brokerage_cash_accounts(accounts, positions)}
+    acct_rows = classify_accounts(accounts, positions, designations)
+    counted = {id(a) for a in counted_brokerage_cash_accounts(accounts, positions, designations)}
     for a, r in zip(accounts, acct_rows):
         r["counted_in_widgets"] = id(a) in counted
         if r["counted_in_widgets"]:
@@ -263,7 +308,7 @@ def report(accounts, positions, counted_brokerage_cash, counted_bank_cash):
     for a in acct_rows:
         if a["verdict"] in guess and a["holdings_count"] == 0:
             guess[a["verdict"]] += a.get("balance") or 0.0
-    return {"accounts": acct_rows, "cash_holdings": hold_rows, "widget_cash": cash_breakdown(accounts, positions),
+    return {"accounts": acct_rows, "cash_holdings": hold_rows, "widget_cash": cash_breakdown(accounts, positions, designations),
             "guessed_totals": {k: round(v, 2) for k, v in guess.items()},
             "counted_today": {"brokerage_cash": counted_brokerage_cash, "bank_cash": counted_bank_cash},
             "note": "Guesses only. Nothing on the dashboard or in the planning engines changes because of this list; it exists so the rules "
