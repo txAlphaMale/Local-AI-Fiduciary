@@ -47,6 +47,7 @@ import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat t
 import aca     # ACA MAGI ledger + subsidy-cliff estimator (G1) — pairs with tax.py for the bridge
 import ss      # Social Security benefit + taxation engine (G2) — real-terms MC income floor
 import knowledge  # local user-populated RAG over a knowledge folder (N12) — search_knowledge tool
+import taxtables  # year-keyed tax/ACA/SS/estate/benefit figures as data (tax_tables/<year>.json)
 import grounding  # dated-constant registry + staleness watchdog (G13a)
 import estate     # estate & generational-wealth engine (G2) — step-up, gift-vs-hold, titling
 import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
@@ -2548,6 +2549,12 @@ def _scheduler_loop():
             # edit in TASK SCHEDULE (there's no "time" to set — either a print is out or it isn't),
             # so it's checked once daily at a fixed anchor rather than added to _SCHEDULE_DEFAULTS.
             # Only enqueues when something's actually due, unlike the generic loop above.
+            if taxtables.year_changed():          # January 1: the engines move to the new year's tables (data in tax_tables/)
+                try:
+                    taxtables.reload_all()
+                    print(f"[taxtables] figures reloaded for {taxtables._loaded_year}", flush=True)
+                except Exception as e:
+                    print(f"[taxtables] year reload failed: {_errref(e)}", flush=True)
             if now.hour == 8 and now.minute == 10:
                 _notes_reminder_sweep()
             if now.hour == 8 and now.minute == 20:

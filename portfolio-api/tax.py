@@ -31,43 +31,31 @@ deduction; 2026 figures already reflect it.
 """
 
 import states
+import taxtables
 
-TAX_YEAR = 2026
-SOURCE = "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation"
+# The figures below are DATA (tax_tables/<year>.json, resolved by taxtables.py): the module keeps these familiar names, fills them at import
+# for the calendar year in force, and refills them in reload_tables() when the year changes. Structure (unchanged):
+#   ORDINARY_BRACKETS: {status: [(marginal_rate, lower_bound), ...]} on TAXABLE income; each bracket ends where the next begins, the last is
+#   open-ended. LTCG_BRACKETS: {status: [(rate, lower_bound), ...]} on TOTAL taxable income (ordinary stacks first, LTCG on top).
+#   STANDARD_DEDUCTION / SENIOR_ADD: per status; the senior add-on is per qualifying person aged 65+.
+#   NIIT_RATE / NIIT_THRESHOLD: statutory (not inflation-indexed).
+def _load(today=None):
+    ob = taxtables.resolve("tax.ordinary_brackets", today)
+    lt = taxtables.resolve("tax.ltcg_brackets", today)
+    sd = taxtables.resolve("tax.standard_deduction", today)
+    nt = taxtables.resolve("tax.niit", today)
+    return {"TAX_YEAR": ob["year"], "SOURCE": (ob["extra"].get("tax_source") or ob["source"]),
+            "ORDINARY_BRACKETS": taxtables.brackets(ob["values"]), "LTCG_BRACKETS": taxtables.brackets(lt["values"]),
+            "STANDARD_DEDUCTION": dict(sd["values"]["base"]), "SENIOR_ADD": dict(sd["values"]["senior_add"]),
+            "NIIT_RATE": nt["values"]["rate"], "NIIT_THRESHOLD": dict(nt["values"]["threshold"])}
 
-# Ordinary income brackets as (marginal_rate, lower_bound_of_bracket) on TAXABLE income.
-# Upper bound of each bracket is the lower bound of the next. Last bracket is open-ended.
-ORDINARY_BRACKETS = {
-    "single": [
-        (0.10, 0), (0.12, 12_400), (0.22, 50_400), (0.24, 105_700),
-        (0.32, 201_775), (0.35, 256_225), (0.37, 640_600),
-    ],
-    "mfj": [
-        (0.10, 0), (0.12, 24_800), (0.22, 100_800), (0.24, 211_400),
-        (0.32, 403_550), (0.35, 512_450), (0.37, 768_700),
-    ],
-    "hoh": [
-        (0.10, 0), (0.12, 17_700), (0.22, 67_450), (0.24, 105_700),
-        (0.32, 201_775), (0.35, 256_200), (0.37, 640_600),
-    ],
-}
 
-# Long-term capital-gains / qualified-dividend brackets: (rate, lower_bound) on
-# TOTAL taxable income (ordinary income stacks first, LTCG on top).
-LTCG_BRACKETS = {
-    "single": [(0.00, 0), (0.15, 49_450), (0.20, 545_500)],
-    "mfj":    [(0.00, 0), (0.15, 98_900), (0.20, 613_700)],
-    "hoh":    [(0.00, 0), (0.15, 66_200), (0.20, 579_600)],
-}
+def reload_tables(today=None):
+    """Re-read the figures for the calendar year in force (called when the year changes; tests pass a date)."""
+    globals().update(_load(today))
 
-STANDARD_DEDUCTION = {"single": 16_100, "mfj": 32_200, "hoh": 24_150}
 
-# Extra standard deduction for age 65+ (per qualifying person), 2026.
-SENIOR_ADD = {"single": 2_050, "hoh": 2_050, "mfj": 1_650}
-
-# Net Investment Income Tax (statutory MAGI thresholds; NOT inflation-indexed).
-NIIT_RATE = 0.038
-NIIT_THRESHOLD = {"single": 200_000, "mfj": 250_000, "hoh": 200_000, "mfs": 125_000}
+globals().update(_load())
 
 _ALIASES = {
     "mfj": "mfj", "married": "mfj", "married_filing_jointly": "mfj", "joint": "mfj",

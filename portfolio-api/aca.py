@@ -35,30 +35,31 @@ Second-Lowest-Cost Silver Plan (SLCSP) benchmark and ages, which you supply.
 """
 
 import states
+import taxtables
 
-COVERAGE_YEAR = 2026
-SOURCE = "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA §36B applicable %"
+# DATA, not code (tax_tables/<year>.json via taxtables.py); names kept. FPL_2026 holds the poverty guidelines for the coverage year in
+# force (household 1..8, +FPL_INCREMENT per extra person; 48 contiguous states + DC; the coverage year uses the PRIOR year's published
+# guidelines). APPLICABLE_PCT_2026: bands (fpl_lo, fpl_hi, pct_lo, pct_hi), linearly interpolated within each band; the first band
+# (<133% FPL) is flat. PTC_FLOOR_PCT: below it no PTC (in TX a coverage gap). PTC_CLIFF_PCT: at/above it $0 subsidy (hard cliff).
 MEDICAID_EXPANSION_CEILING_PCT = 138.0   # expansion states cover up to ~this % FPL via Medicaid
 
-# FPL for 2026 COVERAGE (48 contiguous states + DC). Household 1..8; +increment above 8.
-FPL_2026 = {1: 15_650, 2: 21_150, 3: 26_650, 4: 32_150,
-            5: 37_650, 6: 43_150, 7: 48_650, 8: 54_150}
-FPL_INCREMENT = 5_500
 
-PTC_FLOOR_PCT = 100.0    # below this: no PTC (in TX, a coverage gap)
-PTC_CLIFF_PCT = 400.0    # 2026: hard cliff — at/above this, $0 subsidy
+def _load(today=None):
+    fp = taxtables.resolve("aca.fpl", today)
+    ap = taxtables.resolve("aca.applicable_pct", today)
+    cl = taxtables.resolve("aca.cliff_regime", today)
+    return {"COVERAGE_YEAR": fp["year"], "SOURCE": (fp["extra"].get("aca_source") or fp["source"]),
+            "FPL_2026": taxtables.int_keys(fp["values"]["fpl"]), "FPL_INCREMENT": fp["values"]["increment"],
+            "PTC_FLOOR_PCT": cl["values"]["floor_pct"], "PTC_CLIFF_PCT": cl["values"]["cliff_pct"],
+            "MEDICAID_EXPANSION_CEILING_PCT": cl["values"].get("medicaid_expansion_ceiling_pct", 138.0),
+            "APPLICABLE_PCT_2026": taxtables.tuples(ap["values"])}
 
-# 2026 applicable-percentage sliding scale (percent of MAGI you're expected to pay
-# toward the benchmark Silver plan). Bands are (fpl_lo, fpl_hi, pct_lo, pct_hi),
-# linearly interpolated within each band. First band (<133%) is flat 2.1%.
-APPLICABLE_PCT_2026 = [
-    (100.0, 133.0, 2.10, 2.10),
-    (133.0, 150.0, 3.14, 4.19),
-    (150.0, 200.0, 4.19, 6.60),
-    (200.0, 250.0, 6.60, 8.44),
-    (250.0, 300.0, 8.44, 9.96),
-    (300.0, 400.0, 9.96, 9.96),
-]
+
+def reload_tables(today=None):
+    globals().update(_load(today))
+
+
+globals().update(_load())
 
 
 def fpl(household_size):

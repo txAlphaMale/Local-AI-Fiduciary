@@ -13,17 +13,23 @@ LIMITS_2026 sources; registered in the G13 grounding watchdog). Educational, not
 """
 import datetime
 
-LIMITS_YEAR = 2026
-LIMITS_2026 = {
-    "k401_employee": 24500.0,        # §402(g) elective deferral
-    "k401_catchup_50": 8000.0,       # age 50+ (must be ROTH if prior-yr wages > $150k — SECURE 2.0)
-    "k401_catchup_60_63": 11250.0,   # super catch-up, ages 60-63
-    "catchup_roth_wage_floor": 150000.0,
-    "sec415c_total": 72000.0,        # employee + employer + after-tax (catch-ups excluded)
-    "hsa_self": 4400.0, "hsa_family": 8750.0, "hsa_catchup_55": 1000.0,
-    "ira_limit": 7500.0, "ira_catchup": 1100.0,
-    "roth_ira_mfj_phaseout": (242000.0, 252000.0),
-}
+import taxtables
+
+# DATA, not code (tax_tables/<year>.json via taxtables.py); names kept. LIMITS_2026 holds the contribution limits for the year in force
+# (a partially published year carries the unpublished fields forward from the previous year; the registry flags that as stale).
+def _load(today=None):
+    cl = taxtables.resolve("benefits.contribution_limits", today)
+    v = dict(cl["values"])
+    if "roth_ira_mfj_phaseout" in v:
+        v["roth_ira_mfj_phaseout"] = tuple(v["roth_ira_mfj_phaseout"])
+    return {"LIMITS_YEAR": cl["year"], "LIMITS_2026": v}
+
+
+def reload_tables(today=None):
+    globals().update(_load(today))
+
+
+globals().update(_load())
 SOURCE_URL = "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
 
 # Pay-frequency → periods/year, for the salary cross-check below. Found 2026-07-18 (Jason):

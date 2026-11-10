@@ -27,16 +27,25 @@ recommendation, and the multi-year ladder. Decision-support only — not tax adv
 # Surcharge = (multiplier - 1) x standard premium, per person on Medicare. Part D adds a smaller
 # separate IRMAA (national-average based) that we do NOT model in dollars (avoids guessing) —
 # a knob lets the user add a Part D estimate.
-IRMAA_YEAR = 2026
-IRMAA_PART_B_STD_MONTHLY = 202.90
-IRMAA_MULTIPLIERS = [1.0, 1.4, 2.0, 2.6, 3.2, 3.4]
-# Upper edge (exclusive) of each non-top tier's MAGI; index i is crossed when magi >= edge[i].
-IRMAA_THRESHOLDS = {
-    "single": [109_000, 137_000, 171_000, 205_000, 500_000],
-    "mfj":    [218_000, 274_000, 342_000, 410_000, 750_000],
-}
-IRMAA_SOURCE = ("CMS 2026 Medicare Parts B premium fact sheet — standard $202.90/mo; MFJ IRMAA "
-                "tiers $218k/$274k/$342k/$410k/$750k (single half), multipliers 1.4/2.0/2.6/3.2/3.4x")
+import taxtables
+
+# DATA, not code (tax_tables/<year>.json via taxtables.py); names kept. IRMAA looks back two years (the 2026 surcharge is set by 2024 MAGI).
+# Surcharge = (multiplier - 1) x standard premium, per person on Medicare. Part D adds a smaller separate IRMAA (national-average based)
+# that we do NOT model in dollars (avoids guessing); a knob lets the user add a Part D estimate. IRMAA_THRESHOLDS: upper edge (exclusive)
+# of each non-top tier's MAGI; index i is crossed when magi >= edge[i].
+def _load(today=None):
+    ir = taxtables.resolve("roth.irmaa", today)
+    return {"IRMAA_YEAR": ir["year"], "IRMAA_PART_B_STD_MONTHLY": ir["values"]["std_monthly"],
+            "IRMAA_MULTIPLIERS": list(ir["values"]["multipliers"]),
+            "IRMAA_THRESHOLDS": {k: list(v) for k, v in ir["values"]["thresholds"].items()},
+            "IRMAA_SOURCE": (ir["extra"].get("irmaa_source") or ir["source"])}
+
+
+def reload_tables(today=None):
+    globals().update(_load(today))
+
+
+globals().update(_load())
 
 
 def irmaa_annual_part_b(magi, status, people_on_medicare=2):

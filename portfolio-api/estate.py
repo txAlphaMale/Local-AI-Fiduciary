@@ -45,21 +45,26 @@ def _a_an(name):
     return "an" if name in _VOWEL_STATES else "a"
 
 
-TAX_YEAR = 2026
-SOURCE = ("OBBBA (P.L. 119-21, July 2025) §70106: $15M basic exclusion per person from 2026, "
-          "indexed after; IRC §§2010/2503/2505/1014; annual exclusion per Rev. Proc. 2025-32")
+import taxtables
 
-# Federal basic exclusion (estate + lifetime gift, unified) per PERSON for 2026.
-# OBBBA set it to a flat $15,000,000 for 2026, indexed for inflation in later years.
-# A married couple shields 2x with portability (DSUE) — surviving spouse must file
-# Form 706 at the first death to CLAIM the unused exclusion, even when no tax is due.
-ESTATE_EXEMPTION = 15_000_000
-GST_EXEMPTION = 15_000_000          # generation-skipping transfer exemption (same figure, NOT portable)
-TOP_RATE = 0.40                     # top federal estate/gift rate (statutory)
+# DATA, not code (tax_tables/<year>.json via taxtables.py); names kept. ESTATE_EXEMPTION: federal basic exclusion (estate + lifetime gift,
+# unified) per PERSON; a married couple shields 2x with portability (DSUE), but the surviving spouse must file Form 706 at the first death
+# to CLAIM the unused exclusion even when no tax is due. GST_EXEMPTION: generation-skipping exemption (same figure, NOT portable).
+# TOP_RATE: statutory top federal estate/gift rate. ANNUAL_EXCLUSION: per donee (gift-splitting with a spouse doubles it).
+# SUPERFUND_YEARS: section 529(c)(2)(B), elect 5 years of exclusions up front.
+def _load(today=None):
+    ex = taxtables.resolve("estate.exemption", today)
+    an = taxtables.resolve("estate.annual_exclusion", today)
+    return {"TAX_YEAR": ex["year"], "SOURCE": (ex["extra"].get("estate_source") or ex["source"]),
+            "ESTATE_EXEMPTION": ex["values"]["exemption"], "GST_EXEMPTION": ex["values"]["gst"], "TOP_RATE": ex["values"]["top_rate"],
+            "ANNUAL_EXCLUSION": an["values"]["exclusion"], "SUPERFUND_YEARS": an["values"]["superfund_years"]}
 
-# Annual gift-tax exclusion per donee (2026). Gift-splitting with a spouse doubles it.
-ANNUAL_EXCLUSION = 19_000
-SUPERFUND_YEARS = 5                 # §529(c)(2)(B): elect 5 years of exclusions up front
+
+def reload_tables(today=None):
+    globals().update(_load(today))
+
+
+globals().update(_load())
 
 
 def snapshot(net_estate, married=True, growth_real_pct=5.0, horizon_years=40, state=None):

@@ -1,0 +1,103 @@
+{
+  "year": 2027,
+  "groups": {
+    "tax.ordinary_brackets": {
+      "values": {"mfj": [[0.1, 0], [0.12, 25600], [0.22, 104050], [0.24, 218250], [0.32, 416650], [0.35, 529100], [0.37, 793650]], "single": [[0.1, 0], [0.12, 12800], [0.22, 52025], [0.24, 109125], [0.32, 208325], [0.35, 264550], [0.37, 661375]], "hoh": [[0.1, 0], [0.12, 18250], [0.22, 69650], [0.24, 109100], [0.32, 208300], [0.35, 264550], [0.37, 661350]]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-35, section 3.01, Tables 1-4 (released 2026-11-05)",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf",
+      "tax_source": "IRS Rev. Proc. 2026-35 (2027)"
+    },
+    "tax.ltcg_brackets": {
+      "values": {"single": [[0.0, 0], [0.15, 51050], [0.2, 563200]], "mfj": [[0.0, 0], [0.15, 102100], [0.2, 633600]], "hoh": [[0.0, 0], [0.15, 68350], [0.2, 598400]]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-35, section 3.03",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
+    },
+    "tax.standard_deduction": {
+      "values": {"base": {"single": 16600, "mfj": 33200, "hoh": 24925}, "senior_add": {"single": 2100, "hoh": 2100, "mfj": 1700}},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-35, section 3.15",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
+    },
+    "aca.fpl": {
+      "values": {"fpl": {"1": 15960, "2": 21640, "3": 27320, "4": 33000, "5": 38680, "6": 44360, "7": 50040, "8": 55720}, "increment": 5680},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "HHS Annual Update of the HHS Poverty Guidelines, Federal Register 2026-00755",
+      "source_url": "https://www.federalregister.gov/documents/2026/01/15/2026-00755/annual-update-of-the-hhs-poverty-guidelines",
+      "aca_source": "HHS/ASPE 2026 poverty guidelines (2027 coverage) + \u00a736B applicable % (Rev. Proc. 2026-26)"
+    },
+    "aca.applicable_pct": {
+      "values": [[100.0, 133.0, 2.15, 2.15], [133.0, 150.0, 3.23, 4.3], [150.0, 200.0, 4.3, 6.78], [200.0, 250.0, 6.78, 8.66], [250.0, 300.0, 8.66, 10.22], [300.0, 400.0, 10.22, 10.22]],
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-26, sections 3.01-3.02",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-26.pdf"
+    },
+    "estate.exemption": {
+      "values": {"exemption": 15480000, "gst": 15480000, "top_rate": 0.4},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-35, section 3.44",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf",
+      "estate_source": "IRS Rev. Proc. 2026-35 section 3.44 (basic exclusion for 2027); IRC sections 2010/2503/2505/1014"
+    },
+    "estate.annual_exclusion": {
+      "values": {"exclusion": 20000, "superfund_years": 5},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-35, section 3.46",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
+    },
+    "benefits.contribution_limits": {
+      "merge": true,
+      "values": {"hsa_self": 4500, "hsa_family": 9000},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-11-09",
+      "source": "IRS Rev. Proc. 2026-24 (HSA); IRS annual retirement-plan COLA notice (pending)",
+      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-24.pdf",
+      "note": "HSA limits only (Rev. Proc. 2026-24). The 401(k)/415(c)/IRA figures for 2027 are not published yet and carry forward from 2026, so this group stays flagged stale."
+    },
+    "ss.bend_points": {
+      "confirmed": false,
+      "values": {"bend_points": [1340, 8077], "rates": [0.9, 0.32, 0.15]},
+      "status": "secondary",
+      "verified": null,
+      "source": "SSA Office of the Chief Actuary, PIA formula",
+      "source_url": "https://www.ssa.gov/oact/cola/piaformula.html",
+      "note": "Reported by a search summary of ssa.gov; confirm on ssa.gov, then set confirmed to true."
+    },
+    "ss.cola_wagebase_max": {
+      "confirmed": false,
+      "merge": true,
+      "values": {"cola": 0.036, "wage_base": 192300},
+      "status": "secondary",
+      "verified": null,
+      "source": "SSA 2027 COLA fact sheet",
+      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2027.html",
+      "note": "COLA 3.6% and wage base 192,300 reported by a search summary; the 2027 maximum FRA benefit is not recorded (carries forward). Confirm on ssa.gov, then set confirmed to true."
+    },
+    "ss.earnings_test": {
+      "confirmed": false,
+      "merge": true,
+      "values": {"under_fra_annual": 25560, "fra_year_annual": 67920},
+      "status": "secondary",
+      "verified": null,
+      "source": "SSA 2027 COLA fact sheet",
+      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2027.html",
+      "note": "Reported by a search summary; confirm on ssa.gov, then set confirmed to true."
+    }
+  }
+}
