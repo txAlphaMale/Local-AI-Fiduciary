@@ -199,6 +199,46 @@ def counted_brokerage_cash_accounts(accounts, positions):
     return out
 
 
+def cash_breakdown(accounts, positions):
+    """How the dashboard's allocation/mix widgets treat cash, decided in ONE place (the widgets and CASH CHECK both use it).
+      brokerage_lines: Cash-typed lines inside an account that holds securities OR inside an investment-type account that currently holds
+                       only cash (e.g. a brokerage account waiting to invest);
+      bank_lines:      Cash-typed lines in bank-style accounts (savings, checking, emergency fund, provider type Cash);
+      account_lines:   holdings-less accounts the rules are highly confident are a brokerage's cash sweep (balance counts);
+      equivalent_lines: money-market / sweep FUNDS typed as a fund (a Vanguard money-market fund) that count as brokerage cash.
+    Each line is {account, institution, ticker, name, value, why}; totals are rounded dollars."""
+    rows = {(r["institution"], r["name"]): r for r in classify_accounts(accounts, positions)}
+    sec = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
+    brokerage, bank, equiv = [], [], []
+    for p in positions:
+        key = (p.get("institution"), p.get("account"))
+        line = {"account": p.get("account"), "institution": p.get("institution"), "ticker": p.get("ticker"), "name": p.get("name"),
+                "value": p.get("value") or 0.0}
+        if str(p.get("type") or "").lower() == "cash":
+            r = rows.get(key)
+            if key in sec:
+                brokerage.append(dict(line, why="cash line in an account that also holds securities"))
+            elif r and r["verdict"] == "bank_cash":
+                bank.append(dict(line, why="account looks like a bank account (savings, checking, emergency fund)"))
+            elif r and r["verdict"] in ("not_cash", "brokerage_cash") and str(r.get("type") or "").lower() in ("investments", "investment", "brokerage"):
+                brokerage.append(dict(line, why="an investment account that currently holds only cash"))
+            else:
+                bank.append(dict(line, why="cash-only account with no sign of being a brokerage"))
+        else:
+            h = classify_holding(p, True)
+            if h["verdict"] == "brokerage_cash" and h["confidence"] in ("high", "medium"):
+                equiv.append(dict(line, why="; ".join(h["reasons"])))
+    accts = []
+    for a in counted_brokerage_cash_accounts(accounts, positions):
+        accts.append({"account": a.get("name"), "institution": a.get("institution"), "ticker": None, "name": a.get("name"),
+                      "value": a.get("balance") or 0.0, "why": "highly likely a brokerage cash sweep listed as its own account"})
+    tot = lambda L: round(sum(x["value"] or 0.0 for x in L), 2)
+    return {"brokerage_lines": brokerage, "bank_lines": bank, "account_lines": accts, "equivalent_lines": equiv,
+            "brokerage_cash": round(tot(brokerage) + tot(accts) + tot(equiv), 2), "bank_cash": tot(bank),
+            "brokerage_cash_accounts": tot(accts), "cash_equiv_value": tot(equiv),
+            "cash_equiv_tickers": sorted({x["ticker"] for x in equiv if x["ticker"]})}
+
+
 def report(accounts, positions, counted_brokerage_cash, counted_bank_cash):
     """The full diagnostic: per-account and per-holding guesses, dollar roll-ups, and what the dashboard counts today."""
     sec_accts = {(p.get("institution"), p.get("account")) for p in positions if str(p.get("type") or "").lower() != "cash"}
@@ -223,7 +263,7 @@ def report(accounts, positions, counted_brokerage_cash, counted_bank_cash):
     for a in acct_rows:
         if a["verdict"] in guess and a["holdings_count"] == 0:
             guess[a["verdict"]] += a.get("balance") or 0.0
-    return {"accounts": acct_rows, "cash_holdings": hold_rows,
+    return {"accounts": acct_rows, "cash_holdings": hold_rows, "widget_cash": cash_breakdown(accounts, positions),
             "guessed_totals": {k: round(v, 2) for k, v in guess.items()},
             "counted_today": {"brokerage_cash": counted_brokerage_cash, "bank_cash": counted_bank_cash},
             "note": "Guesses only. Nothing on the dashboard or in the planning engines changes because of this list; it exists so the rules "

@@ -113,5 +113,52 @@ class TestBrokerageCashAccounts(unittest.TestCase):
         self.assertIn("counted in the dashboard", " ".join(by["IRA BROKERAGE CASH (...1400)"]["reasons"]))
 
 
+class TestCashBreakdown(unittest.TestCase):
+    """Cash-only investment accounts and money-market FUNDS count as brokerage cash; bank accounts do not."""
+    def acct(self, name, inst, typ, bal, hc=0, sub=None):
+        return {"name": name, "institution": inst, "type": typ, "subtype": sub, "holdings_count": hc, "balance": bal, "include_nw": True, "is_asset": True}
+
+    def pos(self, acct, inst, tkr, typ, val, price=100.0, name="", day=0.4):
+        return {"ticker": tkr, "name": name or tkr, "type": typ, "value": val, "cost_total": val, "gain": 0.0, "gain_pct": 0.0, "quantity": 1.0, "price": price,
+                "day_pct": day, "account": acct, "institution": inst, "suspect": False, "is_cit": False, "price_source": None}
+
+    def setUp(self):
+        self.accts = [self.acct("Individual Brokerage -2317 (...2317)", "E*TRADE", "Investments", 1292.0, hc=1),
+                      self.acct("MC VG IRA (...0439)", "Vanguard", "Investments", 50000.0, hc=2, sub="Roth IRA"),
+                      self.acct("WELLSTRADE IRA (...6140)", "Wells Fargo", "Investments", 5000.0, hc=1),
+                      self.acct("Emergency Fund", "Ally", "Investments", 22000.0, hc=1)]
+        self.pos_ = [self.pos("Individual Brokerage -2317 (...2317)", "E*TRADE", "CASH", "Cash", 1292.0, price=1.0, day=0.0),   # an account that holds ONLY cash for now
+                     self.pos("MC VG IRA (...0439)", "Vanguard", "VFIAX", "Mutual Fund", 40000.0, price=480.0, name="Vanguard 500 Index"),
+                     self.pos("MC VG IRA (...0439)", "Vanguard", "VMFXX", "Mutual Fund", 10000.0, price=1.0, name="Vanguard Federal Money Market Fund", day=0.0),
+                     self.pos("WELLSTRADE IRA (...6140)", "Wells Fargo", "VTI", "ETF", 5000.0, price=250.0),
+                     self.pos("Emergency Fund", "Ally", "CASH", "Cash", 22000.0, price=1.0, day=0.0)]
+
+    def test_classification(self):
+        import cashdetect as cd
+        b = cd.cash_breakdown(self.accts, self.pos_)
+        self.assertEqual([x["account"] for x in b["brokerage_lines"]], ["Individual Brokerage -2317 (...2317)"])
+        self.assertEqual([x["account"] for x in b["bank_lines"]], ["Emergency Fund"])
+        self.assertEqual([x["ticker"] for x in b["equivalent_lines"]], ["VMFXX"])
+        self.assertEqual(b["brokerage_cash"], 1292.0 + 10000.0); self.assertEqual(b["bank_cash"], 22000.0)
+
+    def test_the_donuts_move_the_money_market_fund_from_mutual_fund_to_cash_and_drop_bank_cash(self):
+        d = appmod._derive(self.accts, self.pos_, [], self.accts, 100000.0, 100000.0, 0.0)
+        t = {r["label"]: r["value"] for r in d["alloc_display"]["by_type"]}
+        self.assertEqual(t, {"Mutual Fund": 40000.0, "ETF": 5000.0, "Cash (in brokerage accounts)": 11292.0})
+        self.assertEqual((d["brokerage_cash"], d["bank_cash"], d["cash_equiv_value"], d["cash_equiv_tickers"]), (11292.0, 22000.0, 10000.0, ["VMFXX"]))
+        i = {r["label"]: r["value"] for r in d["alloc_display"]["by_institution"]}
+        self.assertNotIn("Ally", i); self.assertEqual(i["Vanguard"], 50000.0)       # the fund stays in its institution's slice
+
+    def test_engines_still_see_the_original_types(self):
+        d = appmod._derive(self.accts, self.pos_, [], self.accts, 100000.0, 100000.0, 0.0)
+        bt = {r["label"]: r["value"] for r in d["by_type"]}
+        self.assertEqual(bt["Mutual Fund"], 50000.0); self.assertEqual(bt["Cash"], 23292.0)
+
+    def test_report_lists_exactly_what_the_widgets_use(self):
+        import cashdetect as cd
+        w = cd.report(self.accts, self.pos_, 0, 0)["widget_cash"]
+        self.assertEqual(w["brokerage_cash"], 11292.0); self.assertEqual({x["ticker"] for x in w["equivalent_lines"]}, {"VMFXX"})
+
+
 if __name__ == "__main__":
     unittest.main()

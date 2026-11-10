@@ -2057,7 +2057,7 @@ function mixTopN(rows, n){                         // rows: [{label,value,flag?}
 // d.brokerage_cash / d.bank_cash come from the server (a Cash line in an account that also holds securities vs a Cash-only account such as
 // savings or checking). Called without d (older callers/tests) nothing is adjusted.
 const BROKER_CASH_LABEL='Cash (in brokerage accounts)';
-const _bankCash=d=>+((d&&d.bank_cash)||0), _brokerCash=d=>+((d&&d.brokerage_cash)||0), _acctCash=d=>+((d&&d.brokerage_cash_accounts)||0);   // _acctCash: brokerage cash held as separate holdings-less accounts
+const _bankCash=d=>+((d&&d.bank_cash)||0), _brokerCash=d=>+((d&&d.brokerage_cash)||0), _acctCash=d=>+((d&&d.brokerage_cash_accounts)||0), _equivSet=d=>new Set((d&&d.cash_equiv_tickers)||[]), _equivVal=d=>+((d&&d.cash_equiv_value)||0);   // _acctCash: brokerage cash held as separate holdings-less accounts
 function mixHoldings(d, lt, ins, includeFunds){
   const capped=new Set(((ins&&ins.concentration)||[]).map(c=>c.ticker));
   const adj=!!(d && (d.bank_cash!=null || d.brokerage_cash!=null));
@@ -2067,17 +2067,18 @@ function mixHoldings(d, lt, ins, includeFunds){
     lt.true_exposure.forEach(r=>{
       const t=(r.ticker||'');
       if(t.startsWith('FUND')||t.startsWith('RESID')){ unres.value+=r.total_value||0; return; }
+      if(adj && _equivSet(d).has(t)) return;
       if(adj && (t==='CASH' || r.name==='Cash')){ if(_brokerCash(d)>0) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false}); return; }
       rows.push({label:r.ticker||r.name||'?', value:r.total_value||0, flag:capped.has(r.ticker)});
     });
     if(unres.value>0) rows.push(unres);
+    if(adj && _brokerCash(d)>0 && !rows.some(r=>r.label===BROKER_CASH_LABEL)) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});   // cash in separate accounts or money-market funds has no CASH row of its own
     const itemised=rows.reduce((t,r)=>t+r.value,0);
     total=(lt.invested_value||itemised)-(adj?_bankCash(d):0)+(adj?_acctCash(d):0);
-    if(adj && _acctCash(d)>0 && !rows.some(r=>r.label===BROKER_CASH_LABEL)) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});
     if(total>itemised+1) rows.push({label:'Smaller holdings', value:total-itemised, flag:false});
     note='Includes what is inside your funds (SEC look-through, top names).';
   } else {
-    rows=(d.consolidated||[]).filter(c=>!(adj && c.type==='Cash')).map(c=>({label:c.ticker||c.name||'?', value:c.value||0, flag:capped.has(c.ticker)}));
+    rows=(d.consolidated||[]).filter(c=>!(adj && (c.type==='Cash' || _equivSet(d).has(c.ticker)))).map(c=>({label:c.ticker||c.name||'?', value:c.value||0, flag:capped.has(c.ticker)}));
     if(adj && _brokerCash(d)>0) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});
     total=rows.reduce((t,r)=>t+r.value,0);
     if(includeFunds) note='Fund look-through is not available yet — showing direct positions.';
@@ -2093,6 +2094,7 @@ function mixSector(exp, d){
   const rows=exp.by_sector.map(s=>{
     let label=s.sector||'Other'; if(/no look-through/i.test(label)) label=FUNDS_SECTOR; else if(label==='Other') label='Other / unclassified';
     if(adj && label==='Cash') return {label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false};
+    if(adj && label===FUNDS_SECTOR && _equivVal(d)>0) return {label, value:Math.max(0,(s.value||0)-_equivVal(d)), flag:false};   // money-market funds count as cash, not as a fund
     return {label, value:s.value||0, flag:false};
   }).filter(r=>r.value>0 || !adj);
   if(adj && _brokerCash(d)>0 && !rows.some(r=>r.label===BROKER_CASH_LABEL)) rows.push({label:BROKER_CASH_LABEL, value:_brokerCash(d), flag:false});
@@ -5062,6 +5064,18 @@ function cashCheckContent(){
     t.appendChild(tr);
   });
   wrap.appendChild(resizableTable(t,'cashcheck-accounts',[13,19,9,6,8,13,10,22]));
+  const wc=r.widget_cash||{};
+  wrap.appendChild(el('div','ph','WHAT THE DONUTS COUNT AS CASH (and what they leave out)'));
+  const wl=(title,list,col)=>{ if(!(list||[]).length) return null; const box=el('div'); box.style.cssText='margin-bottom:var(--space-3);';
+    const hd=el('div'); hd.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:3px;color:'+col+';'; hd.textContent=title; box.appendChild(hd);
+    const tb=el('table'); const h0=el('tr'); h0.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TICKER</th><th>VALUE</th><th class="l">WHY</th>'; tb.appendChild(h0);
+    list.forEach(x=>{ const tr=el('tr'); tr.className='wrapcells'; tr.innerHTML=`<td class="l">${escHtml(x.institution||'')}</td><td class="l">${escHtml(x.account||'')}</td><td class="l sym">${escHtml(x.ticker||'')}</td><td>${usd0(x.value)}</td><td class="l" style="font-size:var(--font-size-sm)">${escHtml(x.why||'')}</td>`; tb.appendChild(tr); });
+    box.appendChild(resizableTable(tb,'cashcheck-widget-'+title.slice(0,6).replace(/\W/g,''),[17,26,9,10,38])); return box; };
+  [wl('COUNTED · cash lines in brokerage accounts ('+usd0((wc.brokerage_lines||[]).reduce((t,x)=>t+(x.value||0),0))+')',wc.brokerage_lines,'var(--color-positive)'),
+   wl('COUNTED · cash sweeps listed as their own accounts ('+usd0(wc.brokerage_cash_accounts)+')',wc.account_lines,'var(--color-positive)'),
+   wl('COUNTED · money-market funds treated as cash ('+usd0(wc.cash_equiv_value)+')',wc.equivalent_lines,'var(--color-positive)'),
+   wl('LEFT OUT · bank cash ('+usd0(wc.bank_cash)+')',wc.bank_lines,'var(--color-text-muted)')].forEach(b=>{ if(b) wrap.appendChild(b); });
+  if(!wc.brokerage_cash && !wc.bank_cash) wrap.appendChild(el('div','muted','Nothing is counted as cash yet.'));
   wrap.appendChild(el('div','ph','CASH-LOOKING HOLDINGS (money-market funds, sweeps, typed Cash)'));
   const hs=r.cash_holdings||[];
   if(!hs.length){ wrap.appendChild(el('div','muted','None found.')); }
