@@ -73,7 +73,7 @@ class TestSummary(unittest.TestCase):
 
     def test_wired_into_the_reply_path(self):
         self.assertIn("Summary of the earlier part of this conversation", APP)
-        self.assertRegex(APP, r'_chat_add_message\(session_id, "assistant", final_content\)\n\s+threading\.Thread\(target=_chat_summarise_old')
+        self.assertRegex(APP, r'_chat_add_message\(session_id, "assistant", final_content(, tool_json=json\.dumps\(stamp\))?\)\n\s+threading\.Thread\(target=_chat_summarise_old')
 
 
 if __name__ == "__main__":
