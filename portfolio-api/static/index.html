@@ -262,6 +262,13 @@
   .chat-ptab{flex:1;text-align:center;cursor:pointer;font-size:var(--font-size-sm);letter-spacing:1px;padding:5px 0;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);color:var(--color-text-muted);}
   .chat-ptab.on{color:var(--color-accent);border-color:var(--color-accent);}
   .chat-list{flex:1;overflow:auto;}
+  /* Printing / saving a page as PDF (2026-11-10): wide tables used to be clipped to their first two columns (overflow-x:auto does not print). */
+  @page{size:landscape;margin:10mm;}
+  @media print{
+    table{display:table !important;overflow:visible !important;width:100% !important;table-layout:auto;font-size:10px !important;}
+    td,th{white-space:normal !important;word-break:break-word;}
+    button,.tabbar,#gear,#refresh{display:none !important;}
+  }
   .dash-arrange{outline:1px dashed var(--color-accent);outline-offset:-1px;cursor:grab;}
   .dash-handle{display:flex;align-items:center;gap:var(--space-2);padding:2px 6px;margin-bottom:4px;font-size:var(--font-size-sm);letter-spacing:1px;color:var(--color-accent);background:var(--overlay-accent-weak);border-radius:var(--radius-md);user-select:none;}
   .dash-handle button{padding:0 6px;font-size:var(--font-size-sm);}
