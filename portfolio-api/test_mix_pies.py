@@ -16,7 +16,12 @@ def _fn(name):
         if d == 0: return HTML[i:k]
 
 
+def _line(prefix):
+    return re.search(r"^%s[^\n]*$" % re.escape(prefix), HTML, re.M).group(0)
+
+
 PRELUDE = ("const FUNDS_SECTOR = 'Mutual funds & ETFs (not sector-classified)'; const SECTOR_CAP_PCT = 35;\n"
+           + _line("const BROKER_CASH_LABEL=") + "\n" + _line("const _bankCash=") + "\n"
            + _fn("mixTopN") + _fn("mixHoldings") + _fn("mixSector") + _fn("mixAssetClass"))
 
 
@@ -91,6 +96,42 @@ class TestWiring(unittest.TestCase):
 
     def test_the_two_existing_pies_are_untouched(self):
         self.assertIn("mk('c-inst', d.by_institution.slice(0,8));\n  mk('c-type', d.by_type.slice(0,8));", HTML)
+
+
+@unittest.skipUnless(shutil.which("node"), "node not installed")
+class TestCashIsNotAnInvestment(unittest.TestCase):
+    """2026-11-09 (Jason): the widgets exclude cash as an investment but keep one slice for free cash inside brokerage accounts."""
+    def js(self, body):
+        r = subprocess.run(["node", "-e", PRELUDE + body], capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    D = "{consolidated:[{ticker:'VTI',value:1000,type:'ETF'},{ticker:'CASH',value:900,type:'Cash'}], bank_cash:700, brokerage_cash:200}"
+
+    def test_direct_mix_drops_cash_lines_and_adds_one_brokerage_cash_slice(self):
+        out = self.js("const m=mixHoldings(%s,null,null,false); console.log(JSON.stringify([m.items.map(i=>[i.label,i.value]), m.total]));" % self.D)
+        self.assertEqual(out[0], [["VTI", 1000], ["Cash (in brokerage accounts)", 200]]); self.assertEqual(out[1], 1200)
+
+    def test_no_brokerage_cash_means_no_cash_slice(self):
+        out = self.js("const m=mixHoldings({consolidated:[{ticker:'VTI',value:1000,type:'ETF'},{ticker:'CASH',value:900,type:'Cash'}],bank_cash:900,brokerage_cash:0},null,null,false); console.log(JSON.stringify(m.items.map(i=>i.label)));")
+        self.assertEqual(out, ["VTI"])
+
+    def test_look_through_cash_row_is_replaced_and_total_excludes_bank_cash(self):
+        out = self.js("""const lt={invested_value:2100,true_exposure:[{ticker:'AAA',total_value:1000},{ticker:'CASH',name:'Cash',total_value:900},{ticker:'BBB',total_value:200}]};
+          const m=mixHoldings({bank_cash:700,brokerage_cash:200},lt,null,true); console.log(JSON.stringify([m.items.map(i=>[i.label,i.value]), m.total]));""")
+        self.assertIn(["Cash (in brokerage accounts)", 200], out[0]); self.assertEqual(out[1], 1400)
+
+    def test_sector_cash_row_becomes_brokerage_cash(self):
+        out = self.js("const m=mixSector({by_sector:[{sector:'Tech',value:800},{sector:'Cash',value:900}]},{bank_cash:700,brokerage_cash:200}); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));")
+        self.assertEqual(out, [["Tech", 800], ["Cash (in brokerage accounts)", 200]])
+
+    def test_asset_class_cash_loses_only_bank_cash(self):
+        out = self.js("const m=mixAssetClass({asset_class_value:{Equity:5000,Cash:1000}},{bank_cash:700}); console.log(JSON.stringify(m.items.map(i=>[i.label.startsWith('Cash')?'Cash':i.label,i.value])));")
+        self.assertEqual(out, [["Equity", 5000], ["Cash", 300]])
+
+    def test_without_d_nothing_changes(self):
+        out = self.js("const m=mixSector({by_sector:[{sector:'Cash',value:900}]}); console.log(JSON.stringify(m.items.map(i=>[i.label,i.value])));")
+        self.assertEqual(out, [["Cash", 900]])
 
 
 if __name__ == "__main__":

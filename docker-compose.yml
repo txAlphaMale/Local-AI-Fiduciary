@@ -174,6 +174,8 @@ services:
                                        # Docker), point its BACKUP_OUTPUT_DIR at this same ./backups
                                        # folder if you want one unified location -- not required.
     ports:
+      # Published on all host interfaces ON PURPOSE (owner decision 2026-11-10, see DECISIONS.md): every device on the home network
+      # must be able to reach the app. Do not port-forward these to the internet; use a VPN for access from outside.
       - "${DASH_PORT:-8097}:8097"
       - "${HTTPS_PORT:-8443}:8443"
       # Only needed for ACME's http-01 challenge (SETTINGS -> SECURITY -> Certificate -> Let's
