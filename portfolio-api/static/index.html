@@ -1850,6 +1850,7 @@ function render(){
     tc.appendChild(envOverrideBanner());
     tc.appendChild(panelSubtabs('settings',[
       {key:'accounts',label:'ACCOUNTS',build:()=>accountRegistryContent()},
+      _isAdminUser() && {key:'cashcheck',label:'CASH CHECK',build:()=>cashCheckContent()},
       {key:'theme',label:'THEME',build:()=>themeContent()},
       {key:'iam',label:'IAM',build:()=>iamContent()},
       {key:'security',label:'SECURITY',build:()=>securityContent()},
@@ -4967,6 +4968,59 @@ function iamContent(){
     `<div id="sec-reset-err" class="neg" style="font-size:var(--font-size-sm);min-height:16px;"></div>`+
     `<button ${A('click','securityResetAccount')}>⚠ DELETE ACCOUNT &amp; RESET</button>`;
   wrap.appendChild(resetWrap);
+  return wrap;
+}
+// ---- CASH CHECK (2026-11-10): read-only diagnostic of how the app would tell brokerage cash from bank cash on YOUR accounts. Admin only.
+let CASHCHK=null, CASHCHK_ERR=null;
+function cashCheckLoad(){
+  CASHCHK_ERR=null;
+  fetch('/api/cash-check').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ CASHCHK=d; if(TAB==='settings') render(); })
+    .catch(e=>{ CASHCHK_ERR=String(e); CASHCHK=CASHCHK||{}; if(TAB==='settings') render(); });
+}
+function cashCheckText(masked){
+  const r=CASHCHK||{}, m=s=>{ s=String(s==null?'':s); return masked?s.replace(/(xx+|\*+|#)\s*\d{2,6}/gi,'XX••••'):s; };
+  const L=['CASH CHECK · provider '+(r.provider||'?')+' · guesses only','guessed totals: '+JSON.stringify(r.guessed_totals||{})+' · counted today: '+JSON.stringify(r.counted_today||{}),'','ACCOUNTS'];
+  (r.accounts||[]).forEach(a=>L.push([m(a.institution),m(a.name),'type='+(a.type||'')+(a.subtype?'/'+a.subtype:''),'holdings='+a.holdings_count,'balance='+a.balance,'-> '+a.verdict+' ('+a.confidence+')',(a.reasons||[]).join('; '),a.paired_with?('pair: '+m(a.paired_with)):''].join(' | ')));
+  L.push('','CASH-LOOKING HOLDINGS');
+  (r.cash_holdings||[]).forEach(h=>L.push([m(h.institution),m(h.account),h.ticker,h.name,'type='+(h.type||''),'value='+h.value,'price='+h.price,'-> '+h.verdict+' ('+h.confidence+')',(h.reasons||[]).join('; ')].join(' | ')));
+  return L.join('\n');
+}
+function cashCheckContent(){
+  const wrap=el('div');
+  if(!_isAdminUser()){ wrap.appendChild(el('div','muted','Admin only.')); return wrap; }
+  if(CASHCHK===null){ cashCheckLoad(); wrap.appendChild(el('div','muted','Loading…')); return wrap; }
+  if(CASHCHK_ERR){ wrap.appendChild(el('div','err','Could not load the cash check ('+escHtml(CASHCHK_ERR)+').')); return wrap; }
+  const r=CASHCHK, usd0=n=>(n==null||isNaN(n))?'—':'$'+Math.round(n).toLocaleString();
+  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);max-width:900px;';
+  intro.textContent=r.note||''; wrap.appendChild(intro);
+  const g=r.guessed_totals||{}, c=r.counted_today||{};
+  wrap.appendChild(_cTiles([
+    ['GUESSED BROKERAGE CASH',usd0(g.brokerage_cash),'pos','cash-looking holdings + cash accounts paired with a brokerage'],
+    ['GUESSED BANK CASH',usd0(g.bank_cash),null,'savings / checking style'],
+    ['UNSURE',usd0(g.unsure),(g.unsure>0?'neg':null),'cash-looking, no pairing found'],
+    ['COUNTED TODAY',usd0(c.brokerage_cash),null,'in the donut\'s brokerage-cash slice (bank cash '+usd0(c.bank_cash)+' excluded)']]));
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
+  const b1=el('button',null,'COPY REPORT (account numbers masked)'); b1.onclick=()=>{ try{ navigator.clipboard.writeText(cashCheckText(true)); b1.textContent='copied'; }catch(_){ b1.textContent='copy failed'; } };
+  const b2=el('button',null,'↻ REFRESH'); b2.onclick=()=>{ CASHCHK=null; render(); };
+  bar.appendChild(b1); bar.appendChild(b2); wrap.appendChild(bar);
+  const badge={brokerage_cash:['BROKERAGE CASH','var(--color-positive)'],bank_cash:['BANK CASH','var(--color-text-muted)'],unsure:['UNSURE','var(--color-negative)'],investment:['investment','var(--color-text-dim)'],not_cash:['not cash','var(--color-text-dim)']};
+  const vcell=a=>{ const b=badge[a.verdict]||[a.verdict,'']; return `<span style="color:${b[1]};letter-spacing:1px;font-size:var(--font-size-sm);">${escHtml(b[0])}</span> <span class="muted" style="font-size:var(--font-size-xs)">${escHtml(a.confidence)}</span>`; };
+  wrap.appendChild(el('div','ph','ACCOUNTS · WHAT THE PROVIDER SENDS AND WHAT THE RULES GUESS'));
+  const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TYPE / SUBTYPE</th><th>HOLDINGS</th><th>BALANCE</th><th class="l">GUESS</th><th class="l">WHY</th>'; t.appendChild(hr);
+  (r.accounts||[]).slice().sort((a,b)=>(a.verdict==='not_cash')-(b.verdict==='not_cash')||String(a.institution).localeCompare(String(b.institution))).forEach(a=>{
+    const tr=el('tr'); tr.innerHTML=`<td class="l">${escHtml(a.institution||'')}</td><td class="l sym">${escHtml(a.name)}</td><td class="l muted" style="font-size:var(--font-size-sm)">${escHtml((a.type||'—')+(a.subtype?' / '+a.subtype:''))}</td>`+
+      `<td>${a.holdings_count}</td><td>${usd0(a.balance)}</td><td class="l">${vcell(a)}</td><td class="l" style="white-space:normal;font-size:var(--font-size-sm);line-height:1.35;">${escHtml((a.reasons||[]).join('; '))}${a.paired_with?'<div class="muted">pairs with: '+escHtml(a.paired_with)+'</div>':''}</td>`;
+    t.appendChild(tr);
+  });
+  wrap.appendChild(t);
+  wrap.appendChild(el('div','ph','CASH-LOOKING HOLDINGS (money-market funds, sweeps, typed Cash)'));
+  const hs=r.cash_holdings||[];
+  if(!hs.length){ wrap.appendChild(el('div','muted','None found.')); }
+  else{
+    const t2=el('table'); const h2=el('tr'); h2.innerHTML='<th class="l">INSTITUTION</th><th class="l">ACCOUNT</th><th class="l">TICKER</th><th class="l">NAME</th><th class="l">TYPE</th><th>VALUE</th><th class="l">GUESS</th><th class="l">WHY</th>'; t2.appendChild(h2);
+    hs.forEach(h=>{ const tr=el('tr'); tr.innerHTML=`<td class="l">${escHtml(h.institution||'')}</td><td class="l">${escHtml(h.account||'')}</td><td class="l sym">${escHtml(h.ticker||'')}</td><td class="l" style="white-space:normal">${escHtml(h.name||'')}</td><td class="l muted">${escHtml(h.type||'')}</td><td>${usd0(h.value)}</td><td class="l">${vcell(h)}</td><td class="l" style="white-space:normal;font-size:var(--font-size-sm)">${escHtml((h.reasons||[]).join('; '))}</td>`; t2.appendChild(tr); });
+    wrap.appendChild(t2);
+  }
   return wrap;
 }
 function _errorsRefresh(){
