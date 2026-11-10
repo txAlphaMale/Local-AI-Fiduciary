@@ -33,34 +33,32 @@ Data sources (verified July 2026):
   and are NOT inflation-indexed (IRC §86 / IRS Pub 915).
 """
 
-BENEFIT_YEAR = 2026
-SOURCE = "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC §86 (taxation)"
+import taxtables
 
-# 2026 PIA formula: marginal replacement rates applied to bands of AIME split at
-# the two bend points (monthly dollars). PIA is the benefit at Full Retirement Age.
-BEND_POINTS_2026 = (1_286, 7_749)
-PIA_RATES = (0.90, 0.32, 0.15)
+# DATA, not code (tax_tables/<year>.json via taxtables.py); names kept (the *_2026 names hold the year in force).
+# BEND_POINTS_2026 / PIA_RATES: PIA formula, marginal replacement rates applied to bands of AIME split at the two bend points (monthly
+#   dollars); PIA is the benefit at Full Retirement Age. COLA_2026: applied each January. OASDI_WAGE_BASE_2026: max earnings subject to
+#   (and credited for) SS. MAX_FRA_BENEFIT_2026: max monthly benefit for a worker retiring AT FRA.
+# EARNINGS_TEST_2026: retirement earnings test (only bites if you claim early AND keep working).
+# TAX_THRESHOLDS: benefit-taxation "provisional income" thresholds (statutory, NOT indexed); provisional income = other income
+#   (AGI-ish) + tax-exempt interest + 50% of SS. MFS: generally up to 85% taxable from dollar one.
+def _load(today=None):
+    bp = taxtables.resolve("ss.bend_points", today)
+    cw = taxtables.resolve("ss.cola_wagebase_max", today)
+    et = taxtables.resolve("ss.earnings_test", today)
+    th = taxtables.resolve("ss.taxation_thresholds", today)
+    return {"BENEFIT_YEAR": bp["year"], "SOURCE": (bp["extra"].get("ss_source") or bp["source"]),
+            "BEND_POINTS_2026": tuple(bp["values"]["bend_points"]), "PIA_RATES": tuple(bp["values"]["rates"]),
+            "COLA_2026": cw["values"]["cola"], "OASDI_WAGE_BASE_2026": cw["values"]["wage_base"],
+            "MAX_FRA_BENEFIT_2026": cw["values"]["max_fra_monthly"], "EARNINGS_TEST_2026": dict(et["values"]),
+            "TAX_THRESHOLDS": {k: tuple(v) for k, v in th["values"].items()}}
 
-COLA_2026 = 0.028                 # applied Jan 2026
-OASDI_WAGE_BASE_2026 = 184_500   # max earnings subject to (and credited for) SS
-MAX_FRA_BENEFIT_2026 = 4_152.0   # max monthly benefit for a worker retiring AT FRA in 2026
 
-# Retirement earnings test (only bites if you claim early AND keep working).
-EARNINGS_TEST_2026 = {
-    "under_fra_annual": 24_480,   # $1 withheld per $2 over
-    "under_fra_withhold_ratio": 2.0,
-    "fra_year_annual": 65_160,    # $1 withheld per $3 over, months before FRA only
-    "fra_year_withhold_ratio": 3.0,
-}
+def reload_tables(today=None):
+    globals().update(_load(today))
 
-# Benefit-taxation "provisional income" thresholds (statutory, NOT indexed).
-# provisional income = other income (AGI-ish) + tax-exempt interest + 50% of SS.
-TAX_THRESHOLDS = {
-    "single": (25_000, 34_000),
-    "hoh":    (25_000, 34_000),
-    "mfj":    (32_000, 44_000),
-    "mfs":    (0, 0),             # MFS: generally up to 85% taxable from dollar one
-}
+
+globals().update(_load())
 
 # Statutory claiming knobs.
 EARLY_RED_FIRST36_PER_MO = 5.0 / 9.0 / 100.0    # 0.5556%/mo for the first 36 months early

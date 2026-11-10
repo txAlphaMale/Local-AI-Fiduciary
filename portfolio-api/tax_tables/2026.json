@@ -1,0 +1,130 @@
+{
+  "year": 2026,
+  "groups": {
+    "tax.ordinary_brackets": {
+      "values": {"single": [[0.1, 0], [0.12, 12400], [0.22, 50400], [0.24, 105700], [0.32, 201775], [0.35, 256225], [0.37, 640600]], "mfj": [[0.1, 0], [0.12, 24800], [0.22, 100800], [0.24, 211400], [0.32, 403550], [0.35, 512450], [0.37, 768700]], "hoh": [[0.1, 0], [0.12, 17700], [0.22, 67450], [0.24, 105700], [0.32, 201775], [0.35, 256200], [0.37, 640600]]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation",
+      "source_url": "https://taxfoundation.org/data/all/federal/2026-tax-brackets/",
+      "tax_source": "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation"
+    },
+    "tax.ltcg_brackets": {
+      "values": {"single": [[0.0, 0], [0.15, 49450], [0.2, 545500]], "mfj": [[0.0, 0], [0.15, 98900], [0.2, 613700]], "hoh": [[0.0, 0], [0.15, 66200], [0.2, 579600]]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation",
+      "source_url": "https://taxfoundation.org/data/all/federal/2026-tax-brackets/"
+    },
+    "tax.standard_deduction": {
+      "values": {"base": {"single": 16100, "mfj": 32200, "hoh": 24150}, "senior_add": {"single": 2050, "hoh": 2050, "mfj": 1650}},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation",
+      "source_url": "https://taxfoundation.org/data/all/federal/2026-tax-brackets/"
+    },
+    "tax.niit": {
+      "values": {"rate": 0.038, "threshold": {"single": 200000, "mfj": 250000, "hoh": 200000, "mfs": 125000}},
+      "status": "statutory",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "IRC \u00a71411 (thresholds NOT inflation-indexed)",
+      "source_url": "https://www.irs.gov/individuals/net-investment-income-tax"
+    },
+    "aca.fpl": {
+      "values": {"fpl": {"1": 15650, "2": 21150, "3": 26650, "4": 32150, "5": 37650, "6": 43150, "7": 48650, "8": 54150}, "increment": 5500},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA \u00a736B applicable %",
+      "source_url": "https://aspe.hhs.gov/topics/poverty-economic-mobility/poverty-guidelines",
+      "aca_source": "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA \u00a736B applicable %"
+    },
+    "aca.applicable_pct": {
+      "values": [[100.0, 133.0, 2.1, 2.1], [133.0, 150.0, 3.14, 4.19], [150.0, 200.0, 4.19, 6.6], [200.0, 250.0, 6.6, 8.44], [250.0, 300.0, 8.44, 9.96], [300.0, 400.0, 9.96, 9.96]],
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA \u00a736B applicable %",
+      "source_url": "https://thefinancebuff.com/federal-poverty-levels-for-obamacare.html"
+    },
+    "aca.cliff_regime": {
+      "values": {"floor_pct": 100.0, "cliff_pct": 400.0, "medicaid_expansion_ceiling_pct": 138.0},
+      "status": "policy",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "ARPA/IRA enhanced PTC expired 2026-01-01; pre-ARPA \u00a736B rules apply",
+      "source_url": "https://www.kff.org/affordable-care-act/"
+    },
+    "ss.bend_points": {
+      "values": {"bend_points": [1286, 7749], "rates": [0.9, 0.32, 0.15]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC \u00a786 (taxation)",
+      "source_url": "https://www.ssa.gov/oact/cola/bendpoints.html",
+      "ss_source": "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC \u00a786 (taxation)"
+    },
+    "ss.cola_wagebase_max": {
+      "values": {"cola": 0.028, "wage_base": 184500, "max_fra_monthly": 4152.0},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC \u00a786 (taxation)",
+      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2026.html"
+    },
+    "ss.earnings_test": {
+      "values": {"under_fra_annual": 24480, "under_fra_withhold_ratio": 2.0, "fra_year_annual": 65160, "fra_year_withhold_ratio": 3.0},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC \u00a786 (taxation)",
+      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2026.html"
+    },
+    "ss.taxation_thresholds": {
+      "values": {"single": [25000, 34000], "hoh": [25000, 34000], "mfj": [32000, 44000], "mfs": [0, 0]},
+      "status": "statutory",
+      "confirmed": true,
+      "verified": "2026-07",
+      "source": "IRC \u00a786 (thresholds NOT inflation-indexed since 1983/1993)",
+      "source_url": "https://www.irs.gov/publications/p915"
+    },
+    "estate.exemption": {
+      "values": {"exemption": 15000000, "gst": 15000000, "top_rate": 0.4},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07-10",
+      "source": "OBBBA (P.L. 119-21, July 2025) \u00a770106: $15M basic exclusion per person from 2026, indexed after; IRC \u00a7\u00a72010/2503/2505/1014; annual exclusion per Rev. Proc. 2025-32",
+      "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/estate-tax",
+      "estate_source": "OBBBA (P.L. 119-21, July 2025) \u00a770106: $15M basic exclusion per person from 2026, indexed after; IRC \u00a7\u00a72010/2503/2505/1014; annual exclusion per Rev. Proc. 2025-32"
+    },
+    "estate.annual_exclusion": {
+      "values": {"exclusion": 19000, "superfund_years": 5},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07-10",
+      "source": "OBBBA (P.L. 119-21, July 2025) \u00a770106: $15M basic exclusion per person from 2026, indexed after; IRC \u00a7\u00a72010/2503/2505/1014; annual exclusion per Rev. Proc. 2025-32",
+      "source_url": "https://www.irs.gov/businesses/small-businesses-self-employed/frequently-asked-questions-on-gift-taxes"
+    },
+    "roth.irmaa": {
+      "values": {"std_monthly": 202.9, "multipliers": [1.0, 1.4, 2.0, 2.6, 3.2, 3.4], "thresholds": {"single": [109000, 137000, 171000, 205000, 500000], "mfj": [218000, 274000, 342000, 410000, 750000]}},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07-10",
+      "source": "CMS 2026 Medicare Parts B premium fact sheet \u2014 standard $202.90/mo; MFJ IRMAA tiers $218k/$274k/$342k/$410k/$750k (single half), multipliers 1.4/2.0/2.6/3.2/3.4x",
+      "source_url": "https://www.cms.gov/newsroom/fact-sheets/2026-medicare-parts-b-premiums-deductibles",
+      "irmaa_source": "CMS 2026 Medicare Parts B premium fact sheet \u2014 standard $202.90/mo; MFJ IRMAA tiers $218k/$274k/$342k/$410k/$750k (single half), multipliers 1.4/2.0/2.6/3.2/3.4x"
+    },
+    "benefits.contribution_limits": {
+      "values": {"k401_employee": 24500.0, "k401_catchup_50": 8000.0, "k401_catchup_60_63": 11250.0, "catchup_roth_wage_floor": 150000.0, "sec415c_total": 72000.0, "hsa_self": 4400.0, "hsa_family": 8750.0, "hsa_catchup_55": 1000.0, "ira_limit": 7500.0, "ira_catchup": 1100.0, "roth_ira_mfj_phaseout": [242000.0, 252000.0]},
+      "status": "primary",
+      "confirmed": true,
+      "verified": "2026-07-17",
+      "source": "IRS Notice 2025-67 + Rev. Proc. (HSA) \u2014 verified 2026-07-17",
+      "source_url": "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+    }
+  }
+}

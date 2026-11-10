@@ -26,6 +26,7 @@ import datetime
 import json
 import os
 
+import taxtables
 import tax
 import aca
 import ss
@@ -128,14 +129,18 @@ PARAM_SPECS = [
 
 
 def registry():
-    """One JSON-able record per dated constant, values read live from the owning module."""
+    """One JSON-able record per dated constant, values read live from the owning module (which fills them from tax_tables/<year>.json).
+    `verified`, `source_url` and the carry-forward facts come from the table entry the module is actually using."""
     out = []
     for s in PARAM_SPECS:
         try:
+            res = taxtables.resolve(s["key"], datetime.date(taxtables._loaded_year, 1, 1))   # the year the engines are using
             out.append({"key": s["key"], "label": s["label"], "value": s["value"](),
-                        "applies_to_year": s["year"](), "kind": s["kind"],
-                        "source": s["source"](), "source_url": s["source_url"],
-                        "verified": VERIFIED.get(s["module"])})
+                        "applies_to_year": (None if s["kind"] == "statutory" else res["year"]), "kind": s["kind"],
+                        "source": s["source"](), "source_url": res.get("source_url") or s["source_url"],
+                        "verified": res.get("verified") or VERIFIED.get(s["module"]),
+                        "partial": bool(res.get("partial")), "carried_fields": res.get("carried_fields") or [],
+                        "carried_from": res.get("carried_from")})
         except Exception as e:            # a broken spec should surface, not vanish
             out.append({"key": s["key"], "label": s["label"], "error": str(e)})
     return out
@@ -154,8 +159,13 @@ def alerts(today=None):
         elif kind in ("indexed", "policy") and yr and yr < today.year:
             stale.append(r["key"])
             out.append({"level": "stale", "key": r["key"],
-                        "msg": f"{r['label']} is for {yr} but it is {today.year} — re-verify "
-                               f"against the primary source ({r['source_url']}) and update the module."})
+                        "msg": f"{r['label']} is for {yr} but it is {today.year} — figures are carried forward until the new year's "
+                               f"are confirmed; re-verify against the primary source ({r['source_url']}) and add them to tax_tables/{today.year}.json."})
+        elif kind in ("indexed", "policy") and r.get("partial"):
+            stale.append(r["key"])
+            out.append({"level": "stale", "key": r["key"],
+                        "msg": f"{r['label']}: only part of {yr}'s figures are published/confirmed; {', '.join(r['carried_fields'][:6])} "
+                               f"are carried forward from {r['carried_from']} ({r['source_url']})."})
     if today.month == 12:
         out.append({"level": "info", "key": "annual_cycle",
                     "msg": f"Next-year figures are out (IRS Rev. Proc. ~Oct, SSA COLA ~Oct, HHS FPL ~Jan): "
@@ -183,9 +193,15 @@ def next_year(today=None):
     except (OSError, ValueError):
         return None
     labels = {s["key"]: s["label"] for s in PARAM_SPECS}
+    try:
+        groups = taxtables._file(today.year + 1).get("groups") or {}
+    except OSError:
+        groups = {}
     items = []
     for it in d.get("items") or []:
-        items.append(dict(it, label=labels.get(it.get("key"), it.get("key"))))
+        g = groups.get(it.get("key"))
+        state = ("not_in_tables" if g is None else ("awaiting_confirmation" if g.get("confirmed", True) is False else "active_from_jan_1"))
+        items.append(dict(it, label=labels.get(it.get("key"), it.get("key")), table_state=state))
     items.sort(key=lambda i: (_NEXT_STATUS_ORDER.get(i.get("status"), 9), i.get("label") or ""))
     counts = {}
     for it in items:

@@ -1,0 +1,109 @@
+{
+  "aca": {
+    "APPLICABLE_PCT_2026": [[100.0, 133.0, 2.1, 2.1], [133.0, 150.0, 3.14, 4.19], [150.0, 200.0, 4.19, 6.6], [200.0, 250.0, 6.6, 8.44], [250.0, 300.0, 8.44, 9.96], [300.0, 400.0, 9.96, 9.96]],
+    "COVERAGE_YEAR": 2026,
+    "FPL_2026": {
+      "1": 15650,
+      "2": 21150,
+      "3": 26650,
+      "4": 32150,
+      "5": 37650,
+      "6": 43150,
+      "7": 48650,
+      "8": 54150
+    },
+    "FPL_INCREMENT": 5500,
+    "MEDICAID_EXPANSION_CEILING_PCT": 138.0,
+    "PTC_CLIFF_PCT": 400.0,
+    "PTC_FLOOR_PCT": 100.0,
+    "SOURCE": "HHS/ASPE 2025 poverty guidelines (2026 coverage) + pre-ARPA \u00a736B applicable %"
+  },
+  "benefits": {
+    "LIMITS_2026": {
+      "catchup_roth_wage_floor": 150000.0,
+      "hsa_catchup_55": 1000.0,
+      "hsa_family": 8750.0,
+      "hsa_self": 4400.0,
+      "ira_catchup": 1100.0,
+      "ira_limit": 7500.0,
+      "k401_catchup_50": 8000.0,
+      "k401_catchup_60_63": 11250.0,
+      "k401_employee": 24500.0,
+      "roth_ira_mfj_phaseout": [242000.0, 252000.0],
+      "sec415c_total": 72000.0
+    },
+    "LIMITS_YEAR": 2026,
+    "SOURCE_URL": "https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500"
+  },
+  "estate": {
+    "ANNUAL_EXCLUSION": 19000,
+    "ESTATE_EXEMPTION": 15000000,
+    "GST_EXEMPTION": 15000000,
+    "SOURCE": "OBBBA (P.L. 119-21, July 2025) \u00a770106: $15M basic exclusion per person from 2026, indexed after; IRC \u00a7\u00a72010/2503/2505/1014; annual exclusion per Rev. Proc. 2025-32",
+    "SUPERFUND_YEARS": 5,
+    "TAX_YEAR": 2026,
+    "TOP_RATE": 0.4
+  },
+  "roth": {
+    "IRMAA_MULTIPLIERS": [1.0, 1.4, 2.0, 2.6, 3.2, 3.4],
+    "IRMAA_PART_B_STD_MONTHLY": 202.9,
+    "IRMAA_SOURCE": "CMS 2026 Medicare Parts B premium fact sheet \u2014 standard $202.90/mo; MFJ IRMAA tiers $218k/$274k/$342k/$410k/$750k (single half), multipliers 1.4/2.0/2.6/3.2/3.4x",
+    "IRMAA_THRESHOLDS": {
+      "mfj": [218000, 274000, 342000, 410000, 750000],
+      "single": [109000, 137000, 171000, 205000, 500000]
+    },
+    "IRMAA_YEAR": 2026
+  },
+  "ss": {
+    "BEND_POINTS_2026": [1286, 7749],
+    "BENEFIT_YEAR": 2026,
+    "COLA_2026": 0.028,
+    "EARNINGS_TEST_2026": {
+      "fra_year_annual": 65160,
+      "fra_year_withhold_ratio": 3.0,
+      "under_fra_annual": 24480,
+      "under_fra_withhold_ratio": 2.0
+    },
+    "MAX_FRA_BENEFIT_2026": 4152.0,
+    "OASDI_WAGE_BASE_2026": 184500,
+    "PIA_RATES": [0.9, 0.32, 0.15],
+    "SOURCE": "SSA 2026 fact sheet + Federal Register 2025-19763 (bend points); IRC \u00a786 (taxation)",
+    "TAX_THRESHOLDS": {
+      "hoh": [25000, 34000],
+      "mfj": [32000, 44000],
+      "mfs": [0, 0],
+      "single": [25000, 34000]
+    }
+  },
+  "tax": {
+    "LTCG_BRACKETS": {
+      "hoh": [[0.0, 0], [0.15, 66200], [0.2, 579600]],
+      "mfj": [[0.0, 0], [0.15, 98900], [0.2, 613700]],
+      "single": [[0.0, 0], [0.15, 49450], [0.2, 545500]]
+    },
+    "NIIT_RATE": 0.038,
+    "NIIT_THRESHOLD": {
+      "hoh": 200000,
+      "mfj": 250000,
+      "mfs": 125000,
+      "single": 200000
+    },
+    "ORDINARY_BRACKETS": {
+      "hoh": [[0.1, 0], [0.12, 17700], [0.22, 67450], [0.24, 105700], [0.32, 201775], [0.35, 256200], [0.37, 640600]],
+      "mfj": [[0.1, 0], [0.12, 24800], [0.22, 100800], [0.24, 211400], [0.32, 403550], [0.35, 512450], [0.37, 768700]],
+      "single": [[0.1, 0], [0.12, 12400], [0.22, 50400], [0.24, 105700], [0.32, 201775], [0.35, 256225], [0.37, 640600]]
+    },
+    "SENIOR_ADD": {
+      "hoh": 2050,
+      "mfj": 1650,
+      "single": 2050
+    },
+    "SOURCE": "IRS Rev. Proc. 2025-32 (2026), via Tax Foundation",
+    "STANDARD_DEDUCTION": {
+      "hoh": 24150,
+      "mfj": 32200,
+      "single": 16100
+    },
+    "TAX_YEAR": 2026
+  }
+}
