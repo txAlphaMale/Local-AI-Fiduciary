@@ -2888,7 +2888,7 @@ function researchIdea(t){
   const startedAt=Math.floor(Date.now()/1000);
   _addPending(t); RESEARCH_ERR=null;
   const box=document.getElementById('scan-analysis');
-  if(box){ box.innerHTML=''; box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+t));
+  if(box){ box.innerHTML=''; box.appendChild(el('div','ph','ON-DEMAND ANALYSIS · '+escHtml(t)));
     const wait=el('div','muted'); wait.style.cssText='font-size:var(--font-size-base);padding:6px 0;';
     wait.textContent='Analyzing '+t+'… the model runs for a minute or two (SEC fundamentals + analyst + news → LLM), then a second 🔍 groundedness pass fact-checks the brief. The result is saved server-side — you can leave this sub-tab or reload and it will appear here when it finishes.';
     box.appendChild(wait); box.scrollIntoView({behavior:'smooth',block:'nearest'}); }
