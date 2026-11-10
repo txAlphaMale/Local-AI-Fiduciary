@@ -31,6 +31,10 @@ STATUSES = ("open", "done")
 def _conn():
     os.makedirs(os.path.dirname(NOTES_DB) or ".", exist_ok=True)
     c = sqlite3.connect(NOTES_DB, timeout=30)
+    try:
+        os.chmod(NOTES_DB, 0o600)            # owner only, like store.db / auth.db / audit.db (it was 0644 by default)
+    except OSError:
+        pass
     c.row_factory = sqlite3.Row
     c.execute("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT, created INTEGER, updated INTEGER, "
               "title TEXT, body TEXT, question TEXT, session_id TEXT, snapshot TEXT, revisit_on TEXT, "

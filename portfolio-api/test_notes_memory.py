@@ -110,3 +110,14 @@ class TestAccessAndUi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDbFileModes(unittest.TestCase):
+    """The small chat-memory databases are owner-only (0600), like store/auth/audit; they used to be 0644."""
+    def test_modes(self):
+        import prefs
+        for opener, path in ((notes._conn, notes.NOTES_DB), (prefs._conn, prefs.PREFS_DB), (appmod._chat_conn, appmod.CHAT_DB)):
+            if os.path.exists(path):
+                os.chmod(path, 0o644)
+            opener().close()
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)

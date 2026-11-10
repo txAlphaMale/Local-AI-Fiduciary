@@ -14828,6 +14828,10 @@ CHAT_QUEUE_TIMEOUT = int(os.environ.get("CHAT_QUEUE_TIMEOUT", "900"))  # max sec
 
 def _chat_conn():
     c = sqlite3.connect(CHAT_DB, timeout=30)
+    try:
+        os.chmod(CHAT_DB, 0o600)             # owner only (the transcripts are encrypted too; this was 0644 by default)
+    except OSError:
+        pass
     c.row_factory = sqlite3.Row
     return c
 

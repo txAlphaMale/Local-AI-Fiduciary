@@ -32,6 +32,10 @@ _KEY_RE = re.compile(r"^fid[A-Za-z0-9]{1,40}$")
 def _conn():
     os.makedirs(os.path.dirname(PREFS_DB) or ".", exist_ok=True)
     c = sqlite3.connect(PREFS_DB, timeout=30)
+    try:
+        os.chmod(PREFS_DB, 0o600)            # owner only
+    except OSError:
+        pass
     c.execute("CREATE TABLE IF NOT EXISTS prefs(uid TEXT PRIMARY KEY, blob TEXT, updated INTEGER)")
     return c
 
