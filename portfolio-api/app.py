@@ -3154,7 +3154,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
                     for k, v in sorted(_d_type.items(), key=lambda x: -x[1])],
         "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2),
         "left_out": [{"institution": a.get("institution"), "account": a.get("name"), "value": a.get("balance"),
-                      "designation": _des.get(prefs.desig_key(a.get("institution"), a.get("name")))} for a in _left_out]}
+                      "designation": cashdetect.desig_lookup(_des, a)} for a in _left_out]}
     investment_balance_accounts = [
         {"account": a.get("name"), "institution": a.get("institution"),
          "value": a.get("balance"), "type": a.get("type")}
@@ -8438,7 +8438,7 @@ def get_cash_check(request: Request):
     _des = prefs.cash_designations()
     rep = cashdetect.report(d.get("accounts") or [], d.get("positions") or [], d.get("brokerage_cash"), d.get("bank_cash"), _des)
     for r in rep["accounts"]:
-        r["key"] = prefs.desig_key(r.get("institution"), r.get("name"))
+        r["key"] = cashdetect.desig_key(r.get("institution"), r.get("name"), r.get("id"))
     rep["designations"] = _des
     rep["provider"] = os.environ.get("PORTFOLIO_PROVIDER", "csv")
     rep["generated_at"] = int(time.time())

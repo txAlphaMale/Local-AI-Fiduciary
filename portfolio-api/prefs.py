@@ -81,8 +81,8 @@ DESIGNATIONS = ("investment", "brokerage_cash", "bank_cash", "exclude")
 MAX_DESIGNATIONS = 500
 
 
-def desig_key(institution, name):
-    return f"{institution or ''}||{name or ''}"
+def desig_key(institution, name, acct_id=None):
+    return f"id:{acct_id}" if acct_id else f"{institution or ''}||{name or ''}"
 
 
 def cash_designations():
@@ -102,7 +102,7 @@ def set_cash_designations(changes):
     """Merge {key: designation | None}; None clears one (back to Auto). Returns the stored dict. Raises ValueError on bad input."""
     cur = cash_designations()
     for k, v in (changes or {}).items():
-        if not isinstance(k, str) or "||" not in k or len(k) > 300:
+        if not isinstance(k, str) or len(k) > 300 or not (k.startswith("id:") and len(k) > 3 or "||" in k):
             raise ValueError("bad account key")
         if v is None or v == "auto":
             cur.pop(k, None)

@@ -17,7 +17,7 @@ HTML = open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8").read(
 APP = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
 
 
-def acct(name, inst="Voya", typ="Investments", sub="HSA", bal=4000.0, n=0, **kw):
+def acct(name, inst="Voya", typ="Investments", sub="HSA", bal=4000.0, n=0, **kw):   # kw may carry an account id
     return dict({"name": name, "institution": inst, "type": typ, "subtype": sub, "balance": bal, "holdings_count": n, "is_asset": True}, **kw)
 
 
@@ -79,6 +79,45 @@ class TestRules(unittest.TestCase):
         r = [x for x in rep["accounts"] if x["name"] == "Voya HSA Cash"][0]
         self.assertTrue(r["counted_in_widgets"])
         self.assertEqual(r["designation"], "brokerage_cash")
+
+
+class TestAccountIdKeys(unittest.TestCase):
+    """Two accounts can share an institution and a display name; a designation must stick to ONE of them (2026-11-10 retest finding)."""
+    def setUp(self):
+        self.a = acct("Health Savings Account", id="acc_A", bal=3418.0)
+        self.b = acct("Health Savings Account", id="acc_B", bal=0.0)
+
+    def test_key_prefers_the_id_and_falls_back_to_the_name(self):
+        self.assertEqual(cd.desig_key("Voya", "X", "acc_A"), "id:acc_A")
+        self.assertEqual(cd.desig_key("Voya", "X"), "Voya||X")
+
+    def test_a_setting_on_one_does_not_touch_its_same_named_sibling(self):
+        des = {cd.desig_key("Voya", "Health Savings Account", "acc_A"): "exclude"}
+        rows = cd.classify_accounts([self.a, self.b], [], des)
+        self.assertEqual((rows[0]["designation"], rows[1]["designation"]), ("exclude", None))
+        self.assertEqual([a["id"] for a in cd.left_out_accounts([self.a, self.b], [], des)], ["acc_A"])
+
+    def test_old_name_keys_still_work_and_the_id_key_wins(self):
+        legacy = {cd.desig_key("Voya", "Health Savings Account"): "bank_cash"}
+        self.assertEqual(cd.classify_accounts([self.a], [], legacy)[0]["designation"], "bank_cash")
+        both = dict(legacy, **{"id:acc_A": "investment"})
+        self.assertEqual(cd.classify_accounts([self.a], [], both)[0]["designation"], "investment")
+
+    def test_store_accepts_id_keys_and_rejects_junk(self):
+        self.assertEqual(prefs.set_cash_designations({"id:acc_A": "exclude"}), {"id:acc_A": "exclude"})
+        self.assertEqual(prefs.set_cash_designations({"id:acc_A": None}), {})
+        for bad in ("id:", "nokey"):
+            with self.assertRaises(ValueError):
+                prefs.set_cash_designations({bad: "exclude"})
+
+    def test_report_rows_carry_the_key_the_page_posts(self):
+        self.assertIn('r["key"] = cashdetect.desig_key(r.get("institution"), r.get("name"), r.get("id"))', APP)
+
+    def test_the_select_keeps_the_choice_while_data_reloads_and_copy_report_lists_gap_positions(self):
+        fn = HTML.split("function designationSelect(a)")[1].split("function cashCheckText")[0]
+        self.assertIn("row.designation=s.value||null", fn)
+        self.assertNotIn("CASHCHK=null", fn)
+        self.assertIn("POSITIONS IN ACCOUNTS WITH A PROVIDER-VS-HOLDINGS GAP", HTML)
 
 
 class TestStore(unittest.TestCase):
