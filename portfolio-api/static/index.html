@@ -5079,7 +5079,9 @@ function designationSelect(a){
     try{
       const r=await fetch('/api/cash-designations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:{[a.key]:s.value||'auto'}})});
       if(!r.ok) throw new Error(r.status);
-      CASHCHK=null; WTRACE=null; await load(true,true); if(TAB==='settings') render();
+      const row=((CASHCHK||{}).accounts||[]).find(x=>x.key===a.key); if(row) row.designation=s.value||null;     // keep showing the choice while the data reloads
+      a.designation=s.value||null; s.disabled=false;
+      WTRACE=null; cashCheckLoad(); await load(true,true);
     }catch(e){ s.disabled=false; alert('Could not save the setting ('+e.message+').'); }
   };
   return s;
@@ -5094,6 +5096,10 @@ function cashCheckText(masked){
   if(wt.totals){ L.push('','DONUT TRACE: totals '+JSON.stringify(wt.totals),'engine fields (what the rings used to use): '+JSON.stringify({by_type:(wt.engine_fields||{}).by_type})); }
   L.push('','DONUT TRACE: accounts (provider balance | holdings value | delta | where it lands)');
   (wt.accounts||[]).forEach(a=>L.push([m(a.institution),m(a.account),'type='+(a.type||'')+(a.subtype?'/'+a.subtype:''),'balance='+a.provider_balance,'holdings='+(a.holdings_value==null?'-':a.holdings_value),'delta='+(a.delta==null?'-':a.delta),'reported='+a.holdings_count_reported+' listed='+a.holdings_listed,a.hidden?'hidden':'',a.where].join(' | ')));
+  const gap=(wt.accounts||[]).filter(a=>a.delta!=null&&Math.abs(a.delta)>1);          // accounts whose holdings do not add up to the provider balance
+  if(gap.length){ L.push('','POSITIONS IN ACCOUNTS WITH A PROVIDER-VS-HOLDINGS GAP (to find what is missing)');
+    gap.forEach(g=>{ L.push(m(g.institution)+' | '+m(g.account)+' | balance='+g.provider_balance+' holdings='+g.holdings_value+' delta='+g.delta);
+      (wt.positions||[]).filter(p=>p.institution===g.institution&&p.account===g.account).forEach(p=>L.push('   '+[p.ticker,p.name,'type='+(p.type||''),'value='+p.value,'price='+p.price,'-> '+p.counted_as].join(' | '))); }); }
   L.push('','CASH-LOOKING HOLDINGS');
   (r.cash_holdings||[]).forEach(h=>L.push([m(h.institution),m(h.account),h.ticker,h.name,'type='+(h.type||''),'value='+h.value,'price='+h.price,'-> '+h.verdict+' ('+h.confidence+')',(h.reasons||[]).join('; ')].join(' | ')));
   return L.join('\n');

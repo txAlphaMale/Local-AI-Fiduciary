@@ -92,7 +92,7 @@ def _flags(a):
 
 
 def _row(a, **kw):
-    base = {"name": a.get("name") or "", "institution": a.get("institution"), "type": a.get("type"), "subtype": a.get("subtype"),
+    base = {"id": a.get("id"), "name": a.get("name") or "", "institution": a.get("institution"), "type": a.get("type"), "subtype": a.get("subtype"),
             "holdings_count": a.get("holdings_count") or 0, "balance": a.get("balance"),
             "current_balance": a.get("current_balance"), "last_updated": a.get("last_updated"),
             "data_provider": a.get("data_provider"), "flags": _flags(a)}
@@ -109,8 +109,21 @@ DESIGNATION_VERDICT = {"investment": "not_cash", "brokerage_cash": "brokerage_ca
 DESIGNATION_LABEL = {"investment": "Investment", "brokerage_cash": "Brokerage cash", "bank_cash": "Bank cash", "exclude": "Exclude from widgets"}
 
 
-def desig_key(institution, name):
-    return f"{institution or ''}||{name or ''}"
+def desig_key(institution, name, acct_id=None):
+    """The key a designation is stored under. The provider's account id when there is one (two accounts can share an institution and a display
+    name, and a rename must not lose the setting); otherwise 'institution||name'."""
+    return f"id:{acct_id}" if acct_id else f"{institution or ''}||{name or ''}"
+
+
+def desig_lookup(designations, a):
+    """The designation for account `a`: its id-based key first, then the older name-based key. None when there is none."""
+    if not designations:
+        return None
+    if a.get("id"):
+        d = designations.get(desig_key(None, None, a.get("id")))
+        if d:
+            return d
+    return designations.get(desig_key(a.get("institution"), a.get("name")))
 
 
 def classify_accounts(accounts, positions, designations=None):
@@ -121,7 +134,7 @@ def classify_accounts(accounts, positions, designations=None):
     if not designations:
         return rows
     for a, r in zip(accounts, rows):
-        d = designations.get(desig_key(a.get("institution"), a.get("name")))
+        d = desig_lookup(designations, a)
         r["designation"] = None
         if not d:
             continue
@@ -277,7 +290,7 @@ def cash_breakdown(accounts, positions, designations=None):
                 equiv.append(dict(line, why="; ".join(h["reasons"])))
     accts = []
     for a in counted_brokerage_cash_accounts(accounts, positions, designations):
-        mine = (designations or {}).get(desig_key(a.get("institution"), a.get("name"))) == "brokerage_cash"
+        mine = desig_lookup(designations, a) == "brokerage_cash"
         accts.append({"account": a.get("name"), "institution": a.get("institution"), "ticker": None, "name": a.get("name"),
                       "value": a.get("balance") or 0.0,
                       "why": "you designated this account as brokerage cash" if mine else "highly likely a brokerage cash sweep listed as its own account"})
