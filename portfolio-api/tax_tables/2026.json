@@ -126,6 +126,15 @@
       "source": "Fidelity 2026 Retiree Health Care Cost Estimate: about $185,500 per 65-year-old retiring in 2026, after tax, lifetime; excludes long-term care and most dental. A couple is twice the single figure (Fidelity's 2025 edition: $172,500 single, $345,000 couple). Reported by secondary sources; re-check against fidelity.com each year.",
       "source_url": "https://institutional.fidelity.com/advisors/insights/spotlights/retirement-income-planning/retirement-planning-health-care-costs"
     },
+    "ltc.cost_of_care": {
+      "values": {"home_health_aide": 77792.0, "assisted_living": 70800.0, "nursing_home_semi_private": 111325.0, "nursing_home_private": 127750.0,
+                 "adult_day": 26000.0, "survey_year": 2024, "p_paid_care": 0.48, "p_severe_needs": 0.70, "avg_years_any_care": 3.0},
+      "status": "secondary",
+      "confirmed": true,
+      "verified": "2026-11-10",
+      "source": "Genworth/CareScout 2024 Cost of Care Survey (released March 2025): national median annual cost, home health aide $77,792 (44 h/week), assisted living $70,800, nursing home semi-private $111,325, private $127,750. Probabilities: HHS ASPE, about 70% of people who reach 65 develop severe long-term care needs and 48% receive some paid care; ACL: care averages about 3 years. Prices reported via press coverage of the survey (secondary); re-check against Genworth/CareScout each year.",
+      "source_url": "https://investor.genworth.com/news-events/press-releases/detail/982/"
+    },
     "benefits.contribution_limits": {
       "values": {"k401_employee": 24500.0, "k401_catchup_50": 8000.0, "k401_catchup_60_63": 11250.0, "catchup_roth_wage_floor": 150000.0, "sec415c_total": 72000.0, "hsa_self": 4400.0, "hsa_family": 8750.0, "hsa_catchup_55": 1000.0, "ira_limit": 7500.0, "ira_catchup": 1100.0, "roth_ira_mfj_phaseout": [242000.0, 252000.0]},
       "status": "primary",

@@ -87,7 +87,7 @@ class TestTwentyTwentySevenActivates(unittest.TestCase):
         with Switch27():
             stale = {a["key"] for a in grounding.alerts(JAN27) if a["level"] == "stale"}
         self.assertEqual(stale, {"aca.cliff_regime", "ss.bend_points", "ss.cola_wagebase_max", "ss.earnings_test", "roth.irmaa",
-                                 "benefits.contribution_limits", "hsa.healthcare_need"})   # Fidelity publishes its new estimate each year
+                                 "benefits.contribution_limits", "hsa.healthcare_need", "ltc.cost_of_care"})   # Fidelity publishes its new estimate each year
 
 
 class TestResolution(unittest.TestCase):

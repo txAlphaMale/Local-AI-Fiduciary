@@ -29,6 +29,7 @@ import os
 import taxtables
 import tax
 import hsa
+import ltc
 import aca
 import ss
 import estate
@@ -126,6 +127,11 @@ PARAM_SPECS = [
      "source": lambda: hsa.table()["source"] or "Fidelity retiree health care cost estimate",
      "source_url": "https://institutional.fidelity.com/advisors/insights/spotlights/retirement-income-planning/retirement-planning-health-care-costs",
      "module": "hsa"},
+    {"key": "ltc.cost_of_care", "label": "Long-term care cost of care (national medians) and lifetime-need probabilities",
+     "value": lambda: ltc.table()["values"], "year": lambda: ltc.table()["year"], "kind": "indexed",
+     "source": lambda: ltc.table()["source"] or "Genworth/CareScout Cost of Care Survey",
+     "source_url": "https://investor.genworth.com/news-events/press-releases/detail/982/",
+     "module": "ltc"},
     {"key": "benefits.contribution_limits", "label": "401(k)/415(c)/HSA/IRA contribution limits",
      "value": lambda: benefits.LIMITS_2026, "year": lambda: benefits.LIMITS_YEAR, "kind": "indexed",
      "source": lambda: "IRS Notice 2025-67 + Rev. Proc. (HSA) — verified 2026-07-17",

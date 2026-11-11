@@ -118,7 +118,8 @@ class TestHealthcareExpenseLine(unittest.TestCase):
 
     def run_ret(self, **cfg_over):
         cfg = dict(appmod.DEFAULT_RETIRE, birth_year=datetime.date.today().year - 50, annual_expenses_override=60000.0,
-                   annual_savings_override=0.0, withdrawal_rate_pct=4.0, **cfg_over)
+                   annual_savings_override=0.0, withdrawal_rate_pct=4.0, ltc_expense_mode="off")        # long-term care has its own tests (test_ltc.py)
+        cfg.update(cfg_over)
         with mock.patch.object(appmod, "_data", return_value=_data_with()), mock.patch.object(appmod, "_read_retire", return_value=cfg), \
                 mock.patch.object(appmod, "_cashflow_annual", return_value=(None, None)):
             return appmod._retirement()
