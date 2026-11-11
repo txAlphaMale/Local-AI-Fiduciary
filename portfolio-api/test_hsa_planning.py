@@ -145,6 +145,11 @@ class TestHealthcareExpenseLine(unittest.TestCase):
         self.assertEqual(r["fi_number"], round(67420 / 0.04, 2))
         self.assertTrue(a["healthcare_line"]["included"])
 
+    def test_the_bridge_uses_plain_expenses_because_it_covers_the_years_before_medicare(self):
+        r = self.run_ret(healthcare_expense_mode="add", target_age=55)
+        self.assertEqual(r["assumptions"]["annual_expenses"], 67420.0)                  # the FI number includes the healthcare line ...
+        self.assertEqual(r["bridge"]["annual_expenses"], 60000.0)                       # ... the pre-59.5 bridge does not
+
     def test_an_override_changes_the_yearly_line(self):
         r = self.run_ret(healthcare_expense_mode="add", healthcare_need_override=100000.0)
         self.assertEqual(r["assumptions"]["annual_expenses"], 64000.0)                  # 100,000 / 25 = 4,000

@@ -2251,7 +2251,7 @@ function dashboardContent(){
     // gpu_wait_s (2026-07-19): how long this run sat queued for the GPU before generation even
     // started — visible on every run, not just a failed one, so a slow queue is easy to spot
     // over time without having to reproduce a timeout.
-    dt.textContent=new Date(nl.generated_at*1000).toLocaleString()+(nl.gpu_wait_s!=null?` · queued ${nl.gpu_wait_s}s for GPU`:'');
+    dt.textContent=new Date(nl.generated_at*1000).toLocaleString()+(nl.gen_s!=null?` · generated in ${fmtDur(nl.gen_s)}`:'')+(nl.gpu_wait_s!=null?` · ${nl.gpu_wait_s>=5?'waited '+fmtDur(nl.gpu_wait_s)+' for the GPU first':'no GPU wait'}`:'');
     nbox.appendChild(dt);
     const body=el('div'); body.style.cssText='font-size:var(--font-size-md);line-height:1.65;white-space:pre-wrap;';
     const txt=(nl.letter||'');
