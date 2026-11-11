@@ -7992,11 +7992,14 @@ def _do_narrative():
     # apart from genuinely slow generation on this hardware. gpu_wait_s below closes that gap.
     t_submit = time.time()
     gpu_wait_s = None
+    gen_s = None            # generation time only: starts when the model starts on this brief, never while it waits for the GPU
     try:
         with _gpu_slot():
             gpu_wait_s = round(time.time() - t_submit, 1)
+            t_gen = time.time()
             res = llm._llm_chat(messages, _text_model(), temperature=0.4, num_ctx=ANALYSIS_NUM_CTX,
                                 keep_alive=LLM_KEEP_ALIVE, timeout=NARR_LLM_TIMEOUT)
+            gen_s = round(time.time() - t_gen, 1)
         if not res.ok:
             err = (f"Ollama returned HTTP {res.status_code}: {res.error}" if res.status_code
                    else (res.error or "unknown LLM backend error"))
@@ -8024,7 +8027,7 @@ def _do_narrative():
     # gpu_wait_s persists on SUCCESSFUL runs too (not just the error path above) so Jason can see
     # typical GPU-queue delay over time in /api/narrative's history — useful for judging whether
     # NARR_LLM_TIMEOUT is comfortably sized without needing to reproduce an actual failure.
-    rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx, "gpu_wait_s": gpu_wait_s})
+    rows.append({"generated_at": int(time.time()), "letter": letter, "context": ctx, "gpu_wait_s": gpu_wait_s, "gen_s": gen_s})
     nd = {"letters": rows[-NARRATIVE_KEEP:], "last_error": None, "last_error_at": None}
     store.write_json(NARRATIVE_FILE, nd)
 
@@ -10700,7 +10703,9 @@ def _retirement():
         except Exception:
             monte_carlo["block_bootstrap"] = None
         try:
-            bridge = _bridge_plan(annual_expenses, age, retire_age)
+            # The bridge covers the years BEFORE 59.5/65, so it uses the plain expenses: the healthcare line is the Medicare-era (65+) cost,
+            # and pre-65 coverage is modeled separately (ACA block). Adding it here would overstate the bridge.
+            bridge = _bridge_plan(base_expenses if base_expenses is not None else annual_expenses, age, retire_age)
         except Exception:
             bridge = None
         # ---- Funded ratio (G1): same cash flows as the MC, valued as a balance sheet ----
