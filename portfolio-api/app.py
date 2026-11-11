@@ -62,6 +62,7 @@ import shortint    # G15 deferred half (P1) — FINRA consolidated short interes
 import cashdebt    # GAP-2 (P1) — emergency fund, idle-cash drag, payoff-vs-invest, refi, avalanche
 import performance # GAP-3 (P1) — TWR + policy-benchmark relative returns over standard periods
 import washsale    # GAP-4 (P1) — share-event ledger → wash-sale verdicts + replacement pairs for TLH
+import ltc         # long-term care planning: dated costs, scenarios, insurance offset, probability-weighted yearly line
 import hsa         # HSA = medical reserve first; retirement surplus only above the healthcare need and from 65
 import benefits    # GAP-5 (P1) — 401k match/headroom, HSA, Roth IRA, mega-backdoor capacity (2026-grounded)
 import thesis       # per-holding thesis & exit-trigger registry (G14) — exit-discipline-as-code
@@ -195,6 +196,7 @@ DEFAULT_POLICY = {"targets_by_type": {}, "max_position_pct": 10.0, "drift_thresh
                   "intl_tickers": {}}
 RETIRE_FILE = os.environ.get("RETIRE_FILE", "/data/retirement.json")
 DEFAULT_RETIRE = {"withdrawal_rate_pct": 4.0, "expected_real_return_pct": 5.0, "healthcare_need_override": None, "healthcare_expense_mode": "add",
+                  "ltc_scenario": "typical_path", "ltc_start_age": 82, "ltc_insurance_daily": None, "ltc_insurance_years": 3.0, "ltc_expense_mode": "add",
                   "annual_expenses_override": None, "annual_savings_override": None,
                   "current_age": None, "target_age": 60, "exclude_account_types": ["Real Estate"],
                   "income_target_yield_pct": 3.5, "optimistic_real_return_pct": 8.0,
@@ -272,6 +274,11 @@ class PolicyUpdate(BaseModel):
 
 
 class RetirementConfigUpdate(BaseModel):
+    ltc_scenario: Optional[Literal["typical_path", "home_care", "assisted_living", "nursing_home", "stress"]] = None
+    ltc_start_age: Optional[int] = Field(None, ge=60, le=105)
+    ltc_insurance_daily: Optional[float] = Field(None, ge=0, le=3000)       # long-term care policy: daily benefit ($)
+    ltc_insurance_years: Optional[float] = Field(None, ge=0, le=20)         # ... benefit period (years)
+    ltc_expense_mode: Optional[Literal["off", "add"]] = None                # "add": the probability-weighted yearly cost is added to retirement expenses
     healthcare_expense_mode: Optional[Literal["off", "add"]] = None   # "add": the estimated yearly retirement healthcare cost is added to expenses
     healthcare_need_override: Optional[float] = Field(None, ge=0, le=5_000_000)   # household's own lifetime healthcare need (replaces the Fidelity estimate)
     withdrawal_rate_pct: Optional[float] = Field(None, ge=0, le=25)
@@ -9963,6 +9970,25 @@ def get_hsa():
     return _hsa_summary()
 
 
+def _ltc_summary(d=None, cfg=None, investable=None, hs=None):
+    """Long-term care plan for the household through ltc.py. Read-only."""
+    d = d if d is not None else _data()
+    cfg = cfg if cfg is not None else _read_retire()
+    hs = hs if hs is not None else _hsa_summary(d, cfg)
+    if investable is None:
+        investable = _investable_assets(d, cfg.get("exclude_account_types"))
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
+    return ltc.compute(age, people=hs["need"]["people"], scenario=cfg.get("ltc_scenario") or "typical_path",
+                       start_age=cfg.get("ltc_start_age"), insurance_daily=cfg.get("ltc_insurance_daily"),
+                       insurance_years=cfg.get("ltc_insurance_years"), investable=investable,
+                       hsa_surplus=hs.get("surplus") or 0.0)
+
+
+@app.get("/api/ltc")
+def get_ltc():
+    return _ltc_summary()
+
+
 def _investable_assets(d, exclude_types):
     ex = {str(t).lower() for t in (exclude_types or [])}
     total = 0.0
@@ -10441,6 +10467,12 @@ def _retirement():
     base_expenses = annual_expenses
     if _hc_on and annual_expenses is not None:
         annual_expenses = round(annual_expenses + _hc["annual"], 2)
+    # Long-term care (2026-11-10): the probability-weighted yearly cost (48% chance of paid care x the uncovered scenario cost, per person, spread over
+    # 65-90). ON by default like the healthcare line, same reasoning; shown separately so it can be switched off in PLAN.
+    _lt = _ltc_summary(d, cfg, investable, _hs)
+    _lt_on = cfg.get("ltc_expense_mode") == "add" and _lt.get("ok")
+    if _lt_on and annual_expenses is not None:
+        annual_expenses = round(annual_expenses + _lt["expected"]["annual"], 2)
     exp_source = "override" if exp_override is not None else ("monarch_cashflow" if cf_exp is not None else None)
     if sav_override is not None:
         annual_savings = sav_override
@@ -10464,6 +10496,12 @@ def _retirement():
                    "annual_expenses": annual_expenses, "expenses_source": exp_source,
                    "annual_expenses_base": base_expenses, "healthcare_expense_mode": cfg.get("healthcare_expense_mode") or "off",
                    "healthcare_need_override": cfg.get("healthcare_need_override"),
+                   "ltc_mode": cfg.get("ltc_expense_mode") or "off",
+                   "ltc_line": ({"annual": _lt["expected"]["annual"], "included": bool(_lt_on and base_expenses is not None), "scenario": _lt["scenario"],
+                                 "label": _lt["label"], "uncovered": _lt["uncovered"], "total_cost": _lt["total_cost"],
+                                 "p_paid_care": _lt["expected"]["p_paid_care"], "start_age": _lt["start_age"],
+                                 "insurance_pays": _lt["insurance_pays"]} if _lt.get("ok") else None),
+                   "ltc_config": {k: cfg.get(k) for k in ("ltc_scenario", "ltc_start_age", "ltc_insurance_daily", "ltc_insurance_years")},
                    "healthcare_line": {**_hc, "included": bool(_hc_on and base_expenses is not None),
                                        "fi_number_without": (round(base_expenses / wr, 2) if (base_expenses and wr) else None),
                                        "fi_number_with": (round((base_expenses + _hc["annual"]) / wr, 2) if (base_expenses and wr and _hc["annual"] is not None) else None)},
@@ -15256,6 +15294,9 @@ FIDUCIARY_PROMPT = (
     "ACCOUNTS vs HOLDINGS: an account is a container (a 401(k), a brokerage account, a checking account, a loan); a holding is a security "
     "inside one. For 'how many accounts' or per-account balances call get_accounts and quote its explicit counts; never answer an account "
     "question by counting holdings.\n"
+    "LONG-TERM CARE: custodial care (help with daily living, supervision) is NOT paid by Medicare; Medicaid pays only after assets are spent "
+    "down. For 'how would I pay for a nursing home / assisted living / home care' call get_ltc and quote its scenario, the uncovered cost "
+    "and where it sits against the portfolio and HSA surplus; say these are national medians and probabilities, not a forecast.\n"
     "MEMORY: you have no memory of your own between chats. Earlier decisions live in {user}'s SAVED NOTES (get_notes) and in past "
     "conversations (search_past_chats): call them when {user} says 'earlier', 'last time', 'we decided', 'revisit' or asks about a "
     "question that may have come up before, and say where the information came from and when. Old answers can be stale; compare the "
@@ -15286,6 +15327,16 @@ FIDUCIARY_TOOLS = [
         "description": "The household's ACCOUNTS (names without account numbers, institution, type, balance, tax status, whether it is a "
                        "liability) with explicit counts. Use this, not get_holdings, for 'how many accounts', 'what accounts do I have' "
                        "and per-account balances. Holdings are securities; accounts are containers.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_ltc",
+        "description": "The household's LONG-TERM CARE plan: cost of care by type (home health aide, assisted living, nursing home) in today's "
+                       "dollars, the chosen scenario over its years, any insurance offset, the uncovered cost, the probability-weighted yearly "
+                       "line, and how it compares with investable assets and the HSA surplus. Use it for any question about paying for "
+                       "long-term care, nursing homes, assisted living or home care. Medicare does not pay for custodial care.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_hsa",
+        "description": "The household's HSA: balance, the healthcare need, how much is a medical reserve versus a retirement surplus "
+                       "(counted only above the need and from age 65). Use it for HSA questions.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_policy",
         "description": "The Investment Policy Statement (IPS): target asset-class sleeves and policy.",
@@ -15478,6 +15529,10 @@ def _fiduciary_dispatch(name, args):
     try:
         if name == "get_accounts":
             return _accounts_for_chat()
+        if name == "get_ltc":
+            return _ltc_summary()
+        if name == "get_hsa":
+            return _hsa_summary()
         if name == "get_holdings":
             d = _data()
             top = sorted((d.get("consolidated") or []), key=lambda c: c.get("value") or 0, reverse=True)

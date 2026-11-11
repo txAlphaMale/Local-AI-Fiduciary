@@ -23,3 +23,7 @@ Risk register: R-7 (exposure on all interfaces is an accepted, owner-decided ris
 
 ## 2026-11-09: The chat can read memory but never write it
 **Decision:** saved notes and past chats are readable by the Fiduciary through read-only tools; only the signed-in admin saves, edits or deletes a note. The Fiduciary has no write tool of any kind.
+
+## 2026-11-10: An HSA is a medical reserve first; healthcare and long-term care are planned for early
+**Decision (Jason):** a small HSA is a medical fund (net worth only, not retirement spending money). Only the part above the foreseeable healthcare need, and only from age 65, counts as retirement money; before 65 it shows as locked. The tool should help younger users plan for healthcare early, so the Fidelity-based yearly retirement healthcare cost and the probability-weighted long-term care cost are ON by default (each can be switched off in PLAN > ASSUMPTIONS; each can also be overridden or configured there).
+**How:** `hsa.py` (reserve vs surplus, yearly healthcare cost), `ltc.py` (cost of care, scenarios, insurance offset, expected yearly cost), dated constants `hsa.healthcare_need` and `ltc.cost_of_care` in `tax_tables/` (flagged STALE each January until re-verified). Only the single balance Monarch provides is used; the app does not guess how much of an HSA is invested. The pre-59.5/65 bridge plan uses plain expenses (the healthcare and long-term care lines are Medicare-era costs).
