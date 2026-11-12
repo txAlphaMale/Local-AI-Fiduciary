@@ -125,7 +125,10 @@ class TestAccountIdKeys(unittest.TestCase):
 
     def test_the_select_keeps_the_choice_while_data_reloads_and_copy_report_lists_gap_positions(self):
         fn = HTML.split("function designationSelect(a)")[1].split("function cashCheckText")[0]
-        self.assertIn("row.designation=s.value||null", fn)
+        self.assertRegex(fn, r"\n\s+if\(row\) row\.designation=s\.value\|\|null;")      # a real statement, not swallowed by a comment on the line above
+        self.assertIn("There is no Save button on purpose", fn)
+        self.assertIn("✓ saved", fn)
+        self.assertIn("not saved (", fn)
         self.assertNotIn("CASHCHK=null", fn)
         self.assertIn("POSITIONS IN ACCOUNTS WITH A PROVIDER-VS-HOLDINGS GAP", HTML)
 
