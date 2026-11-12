@@ -17,7 +17,7 @@ def _fn(name):
 
 
 def _js(body):
-    consts = re.search(r"^const DASH_DEFAULT=.*?^  gainers:'TOP GAINERS', losers:'TOP LOSERS', daymovers:'DAY MOVERS'};", HTML, re.S | re.M).group(0)
+    consts = re.search(r"^const DASH_DEFAULT=.*?^  health:'HEALTHCARE RESERVE', gainers:'TOP GAINERS', losers:'TOP LOSERS', daymovers:'DAY MOVERS'};", HTML, re.S | re.M).group(0)
     src = "\n".join([consts, _fn("dashOrderParse"), _fn("dashMergeOrder"), body])
     out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -32,12 +32,12 @@ class TestOrderLogic(unittest.TestCase):
     def test_default_puts_net_worth_first_then_spy_then_cost(self):
         d = self.parse(None)
         self.assertEqual(d["rows"], ["letter", "networth", "spy", "cost"])
-        self.assertEqual(len(d["tiles"]), 8)
+        self.assertEqual(len(d["tiles"]), 9)
 
     def test_saved_order_is_kept_and_new_or_missing_keys_are_appended(self):
         d = self.parse('{"rows":["cost","letter"],"tiles":["gainers"]}')
         self.assertEqual(d["rows"], ["cost", "letter", "networth", "spy"])
-        self.assertEqual(d["tiles"][0], "gainers"); self.assertEqual(len(d["tiles"]), 8)
+        self.assertEqual(d["tiles"][0], "gainers"); self.assertEqual(len(d["tiles"]), 9)
 
     def test_garbage_unknown_duplicate_never_breaks(self):
         for raw in (None, "", "{", "[]", "null", '"x"', '{"rows":"abc"}', '{"rows":[1,2,{}]}'):
