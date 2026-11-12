@@ -580,7 +580,7 @@ const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cache
 let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
 let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BUDGETS=null, BUDGETS_LOADING=false, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
 // always reflects the saved state), then mutated in place by add/remove-row clicks and synced
@@ -1872,6 +1872,7 @@ function render(){
       {key:'secrets',label:'SECRETS & KEYS',build:()=>secretsContent()},
       {key:'prompts',label:'PERSONA PROMPTS',build:()=>promptsContent()},
       {key:'schedule',label:'TASK SCHEDULE',build:()=>scheduleContent()},
+      {key:'budgets',label:'API BUDGETS',build:()=>budgetContent()},
       {key:'knowledge',label:'KNOWLEDGE',build:()=>knowledgeContent()},
     ]));
   }
@@ -3221,6 +3222,95 @@ function saveSchedule(kind){
 function resetSchedule(kind){
   fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reset:kind})})
     .then(r=>r.json()).then(()=>load(false)).catch(e=>alert('Reset failed: '+e));
+}
+
+// API BUDGETS (SETTINGS sub-tab): state of the budget gate in front of Tavily and Finnhub (budget.py), the Tavily
+// credit spend for the cycle by source, and the knobs behind /api/budgets. Loaded on demand, not with the main load().
+function loadBudgets(){
+  if(BUDGETS_LOADING) return; BUDGETS_LOADING=true;
+  fetch('/api/budgets').then(r=>r.json()).then(d=>{ BUDGETS=(d&&d.providers)||[]; })
+    .catch(()=>{ BUDGETS=BUDGETS||[]; })
+    .then(()=>{ BUDGETS_LOADING=false; if(TAB==='settings') render(); });
+}
+function _budPost(body, okMsg){
+  return fetch('/api/budgets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json().then(d=>({ok:r.ok,d}))).then(x=>{
+      if(!x.ok){ alert('Save failed: '+((x.d&&x.d.error)||'error')); return; }
+      BUDGETS=x.d.providers||BUDGETS; if(TAB==='settings') render(); });
+}
+function _budNum(id){ const v=(document.getElementById(id)||{}).value; return (v===''||v==null)?null:Number(v); }
+function saveBudget(name){
+  const body={provider:name, batch_daily:_budNum('bud-bd-'+name)};
+  const hc=document.getElementById('bud-hc-'+name); if(hc) body.hard_cap_usd=_budNum('bud-hc-'+name);
+  const bc=document.getElementById('bud-bc-'+name); if(bc) body.batch_cycle_credits=_budNum('bud-bc-'+name);
+  const rn=(document.getElementById('bud-rn-'+name)||{}).value; body.renewal=rn?rn:null;
+  for(const k of ['batch_daily','hard_cap_usd','batch_cycle_credits']){
+    if(k in body && body[k]!==null && !(body[k]>=0)){ alert(k.replace(/_/g,' ')+' must be a number, 0 or more (blank = default).'); return; } }
+  _budPost(body);
+}
+function probeBudget(name, btn){
+  if(btn){ btn.disabled=true; btn.textContent='probing…'; }
+  fetch('/api/budgets/probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:name})})
+    .then(r=>r.json()).then(d=>{ if(d&&d.providers) BUDGETS=d.providers;
+      const r=d&&d.result||{}; if(d&&!d.ok&&r.detail) alert('Probe: '+r.detail); if(TAB==='settings') render(); })
+    .catch(e=>{ alert('Probe failed: '+e); if(btn){ btn.disabled=false; btn.textContent='▸ PROBE NOW'; } });
+}
+function budgetContent(){
+  const wrap=el('div'); wrap.id='budget-panel';
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  wrap.appendChild(el('div','ph','API BUDGETS · HOW MUCH THE APP MAY SPEND ON OUTSIDE SERVICES'));
+  const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
+  info.textContent='Every Tavily and Finnhub call goes through a gate. When a service reports that you are out of quota or over its rate, the gate pauses it, tests it again after a back-off, and resumes when it answers. A paused lookup is reported as deferred, never as "no data". Idea hunting runs in the background and is held to a smaller daily and cycle budget than the chat you use interactively.';
+  wrap.appendChild(info);
+  if(BUDGETS==null){ wrap.appendChild(el('div','muted','Loading…')); loadBudgets(); return wrap; }
+  const rf=el('button','mut-btn','↻ REFRESH'); rf.style.marginBottom='var(--space-3)';
+  rf.onclick=()=>{ BUDGETS=null; render(); }; wrap.appendChild(rf);
+  if(!BUDGETS.length){ wrap.appendChild(el('div','muted','Budget status is unavailable.')); return wrap; }
+  const fnum=n=>(n==null?'—':Number(n).toLocaleString());
+  const day=ts=>{ if(!ts) return ''; try{ return new Date(ts*1000).toISOString().slice(0,10); }catch(_){ return ''; } };
+  BUDGETS.forEach(b=>{
+    const box=el('div'); box.className='bud-card'; box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
+    const open=b.state==='open', probing=b.state==='probing';
+    const badge=open?'<span class="pos">● OPEN</span>':(probing?'<span class="muted">◐ TESTING</span>':'<span class="neg">■ PAUSED</span>');
+    const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-2);';
+    h.innerHTML='<b>'+esc(b.label||b.provider)+'</b> &nbsp; '+badge; box.appendChild(h);
+    const lines=[];
+    if(!open){
+      lines.push('Why: '+esc(b.reason||b.kind||'unknown')+(b.kind?' ('+esc(b.kind)+')':''));
+      lines.push(b.resumes_in?'Next test in: <b>'+esc(b.resumes_in)+'</b> (back-off step '+esc(b.backoff_level)+')':'Waiting for the next test.');
+    }
+    lines.push('Calls in the last minute: <b>'+fnum(b.calls_last_minute)+'</b> of '+fnum(b.interactive_per_min)+' (chat and reports) · idea hunting limited to '+fnum(b.batch_per_min)+' a minute');
+    lines.push('Idea-hunting calls today: <b>'+fnum(b.batch_calls_today)+'</b> of '+fnum(b.batch_daily_budget));
+    if(b.last_error) lines.push('<span class="muted">Last error: '+esc(typeof b.last_error==='string'?b.last_error:JSON.stringify(b.last_error))+'</span>');
+    const sp=b.spend;
+    if(sp){
+      lines.push('This billing cycle (from '+esc(day(sp.cycle_start))+'): <b>'+fnum(sp.credits_used)+'</b> credits used · free allowance '+fnum(sp.free_allowance)+
+        ' · paid so far <b>$'+Number(sp.est_overage_usd||0).toFixed(2)+'</b> · '+fnum(sp.credits_left_before_cap)+' credits left before your $'+Number(sp.hard_cap_usd||0).toFixed(2)+' cap');
+      const src=Object.entries(sp.by_source||{}).sort((a,c)=>c[1]-a[1]);
+      lines.push('Credits by source: '+(src.length?src.map(([k,v])=>esc(k)+' '+fnum(v)).join(' · '):'none yet'));
+      if(sp.last_cycle) lines.push('<span class="muted">Last cycle: '+esc(typeof sp.last_cycle==='object'?JSON.stringify(sp.last_cycle):sp.last_cycle)+'</span>');
+    }
+    const body=el('div'); body.style.cssText='font-size:var(--font-size-base);line-height:1.6;'; body.innerHTML=lines.map(l=>'<div>'+l+'</div>').join('');
+    box.appendChild(body);
+    const row=(label,id,val,ph,hint,type)=>{ const r=el('div'); r.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:3px 0;flex-wrap:wrap;font-size:var(--font-size-md);';
+      const l=el('span'); l.style.cssText='width:290px;'; l.textContent=label;
+      const i=document.createElement('input'); i.type=type||'number'; i.id=id; i.min='0'; i.step='any'; i.value=(val==null?'':val); i.placeholder=ph||''; i.style.cssText='width:150px;';
+      const m=el('span','muted'); m.style.cssText='font-size:var(--font-size-sm);'; m.textContent=hint||'';
+      r.appendChild(l); r.appendChild(i); r.appendChild(m); return r; };
+    const ctl=el('div'); ctl.style.cssText='margin-top:var(--space-3);padding-top:var(--space-2);border-top:1px solid var(--color-border-strong);';
+    ctl.appendChild(row('Idea-hunting calls per day','bud-bd-'+b.provider,b.batch_daily_budget,'','blank = default'));
+    if(sp){
+      ctl.appendChild(row('Spend cap per cycle (USD, beyond free)','bud-hc-'+b.provider,sp.hard_cap_usd,'','the app stops here; keep it below the cap set on the Tavily account'));
+      ctl.appendChild(row('Idea-hunting credits per cycle','bud-bc-'+b.provider,sp.batch_cycle_credits,'','default is the free allowance, so background research never costs money'));
+    }
+    ctl.appendChild(row('Renewal date','bud-rn-'+b.provider,day(b.renewal),'YYYY-MM-DD','anchors the billing cycle; blank = calendar month','date'));
+    const bar=el('div'); bar.style.cssText='margin-top:var(--space-2);';
+    const sv=el('button','mut-btn','↳ SAVE'); sv.onclick=()=>saveBudget(b.provider); bar.appendChild(sv);
+    if(b.has_probe){ const pb=el('button','mut-btn','▸ PROBE NOW'); pb.style.marginLeft='var(--space-2)'; pb.title='free check of the service; re-opens the gate if it answers';
+      pb.onclick=()=>probeBudget(b.provider, pb); bar.appendChild(pb); }
+    ctl.appendChild(bar); box.appendChild(ctl); wrap.appendChild(box);
+  });
+  return wrap;
 }
 
 function estateContent(){
