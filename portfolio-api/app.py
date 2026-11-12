@@ -3148,11 +3148,22 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
             _d_inst[a.get("institution") or "?"] = round(_d_inst.get(a.get("institution") or "?", 0) + (a.get("balance") or 0), 2)
     if acct_cash:
         _d_type["Cash"] = round(_d_type.get("Cash", 0) + acct_cash, 2)
+    # Medical reserve (2026-11-12, Jason): an HSA that syncs only a balance has no security type, so it never appeared in the asset-type donut while
+    # it did appear in the institution donut. It gets its own, plainly named slice (display only; engines read by_type/by_institution, not this).
+    # Only while the person has not overridden it: Investment, Brokerage cash, Bank cash and Exclude keep their own meaning.
+    _hsa_med = [a for a in balance_only
+                if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "hsa"
+                and (a.get("institution"), a.get("name")) not in _lo_keys and not cashdetect.desig_lookup(_des, a)]
+    medical_reserve = round(sum(a.get("balance") or 0 for a in _hsa_med), 2)
+    if medical_reserve > 0:
+        _d_type["Medical reserve (HSA)"] = medical_reserve
+    hsa_balance = round(sum(a.get("balance") or 0 for a in accounts if a.get("is_asset") is not False and a.get("include_nw")
+                            and (a.get("balance") or 0) > 0 and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "hsa"), 2)
     alloc_display = {
         "by_institution": [{"label": k, "value": v} for k, v in sorted(_d_inst.items(), key=lambda x: -x[1])],
         "by_type": [{"label": ("Cash (in brokerage accounts)" if k == "Cash" else k), "value": v}
                     for k, v in sorted(_d_type.items(), key=lambda x: -x[1])],
-        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2),
+        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2), "medical_reserve": medical_reserve,
         "left_out": [{"institution": a.get("institution"), "account": a.get("name"), "value": a.get("balance"),
                       "designation": cashdetect.desig_lookup(_des, a)} for a in _left_out]}
     investment_balance_accounts = [
@@ -3178,7 +3189,7 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
         # Cash-type lines (savings, checking, brokerage cash) are inside invested_value because the risk/drift/plan engines
         # need them there; the header tile shows invested_value minus this so cash is not presented as an investment.
         "cash_value": round(sum(p["value"] or 0 for p in positions if (p.get("type") or "") == "Cash"), 2),
-        "brokerage_cash": brokerage_cash, "brokerage_cash_accounts": acct_cash, "bank_cash": bank_cash, "alloc_display": alloc_display,
+        "brokerage_cash": brokerage_cash, "brokerage_cash_accounts": acct_cash, "bank_cash": bank_cash, "alloc_display": alloc_display, "hsa_balance": hsa_balance,
         "cash_equiv_value": _cb["cash_equiv_value"], "cash_equiv_tickers": _cb["cash_equiv_tickers"],
         "total_cost": total_cost,
         "total_unrealized_gain": total_gain,
@@ -9960,7 +9971,10 @@ def _hsa_summary(d=None, cfg=None):
     people = [age] + ([sp_age] if (cfg.get("spouse_birth_year") or cfg.get("spouse_age")) else [])
     n = hsa.need(people, override=cfg.get("healthcare_need_override"))
     sp = hsa.split(balance, age, n["total"])
-    return {"accounts": [{"institution": a.get("institution"), "account": a.get("name"), "balance": a.get("balance")} for a in accts],
+    ac = hsa.annual_cost(n["people"], override=cfg.get("healthcare_need_override"))
+    return {"annual_cost": ac, "years_covered": (round(balance / ac["annual"], 1) if ac.get("annual") else None),
+            "pct_of_need": (round(sp["reserve"] / n["total"] * 100, 1) if n.get("total") else None),
+            "accounts": [{"institution": a.get("institution"), "account": a.get("name"), "balance": a.get("balance")} for a in accts],
             "need": n, "age": age, **sp,
             "note": "An HSA is a medical reserve first. Only the part above the foreseeable healthcare need, and only from age 65, is counted "
                     "as retirement money; the rest stays in net worth but out of retirement spending. Informational, not tax advice."}

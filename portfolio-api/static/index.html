@@ -2169,6 +2169,32 @@ function allocPanel(title,cid,items,total){
   return p;
 }
 
+// HEALTHCARE RESERVE tile (2026-11-12, Jason): the HSA as a medical reserve against the estimated healthcare need, plus a line for long-term care.
+// Drawn only when the household has an HSA with a balance (d.hsa_balance); the figures come from /api/hsa and /api/ltc so they follow the PLAN settings.
+function healthPanel(d){
+  if(!(d.hsa_balance>0)) return null;
+  const p=el('div','panel'); p.appendChild(el('div','ph','HEALTHCARE RESERVE'));
+  const body=el('div'); body.style.cssText='font-size:var(--font-size-sm);line-height:1.5;'; body.appendChild(el('div','muted','loading…')); p.appendChild(body);
+  const usd=n=>n==null?'—':'$'+Math.round(n).toLocaleString();
+  Promise.all([fetch('/api/hsa').then(r=>r.ok?r.json():null), fetch('/api/ltc').then(r=>r.ok?r.json():null)]).then(([h,l])=>{
+    body.innerHTML='';
+    if(!h||!h.balance){ body.appendChild(el('div','muted','No HSA balance to show.')); return; }
+    const n=h.need||{}, pct=h.pct_of_need, w=pct==null?0:Math.max(0.8,Math.min(100,pct));
+    const top=el('div'); top.innerHTML='<b>'+usd(h.balance)+'</b> HSA <span class="muted">· medical reserve'+(h.surplus>0?' + '+usd(h.surplus)+' above the need':'')+'</span>'; body.appendChild(top);
+    const bar=el('div'); bar.style.cssText='height:10px;border-radius:5px;background:var(--color-border-strong);margin:6px 0;overflow:hidden;';
+    const fill=el('div'); fill.style.cssText='height:100%;width:'+w+'%;background:var(--color-positive);'; bar.appendChild(fill);
+    bar.setAttribute('role','progressbar'); bar.setAttribute('aria-valuenow',String(pct==null?0:pct)); bar.setAttribute('aria-valuemin','0'); bar.setAttribute('aria-valuemax','100'); body.appendChild(bar);
+    const line=el('div'); line.textContent=(pct==null?'No healthcare estimate available.':pct+'% of your estimated retirement healthcare need ('+usd(n.total)+')')+
+      (h.years_covered!=null?' · about '+h.years_covered+' year'+(h.years_covered===1?'':'s')+' of typical healthcare cost ('+usd((h.annual_cost||{}).annual)+'/yr)':''); body.appendChild(line);
+    const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-xs);margin-top:4px;';
+    sub.textContent=(n.source||'')+(n.table&&n.table.year&&String(n.source||'').indexOf('Fidelity')===0?' '+n.table.year+', after tax, excludes long-term care':'')+'. '+(h.surplus>0?(h.basis||''):'Only the part above the need counts as retirement money, and only from age 65.'); body.appendChild(sub);
+    if(l&&l.ok){ const lt=el('div'); lt.style.cssText='margin-top:8px;border-top:1px solid var(--color-border-strong);padding-top:6px;';
+      lt.innerHTML='<b>Long-term care</b> <span class="muted">· '+escHtml(l.label)+'</span><br>'+usd(l.total_cost)+' in today\'s dollars'+(l.insurance_pays>0?', '+usd(l.insurance_pays)+' covered by your policy':'')+
+        ' · expected '+usd(l.expected.annual)+'/yr ('+Math.round((l.expected.p_paid_care||0)*100)+'% chance of paid care). Medicare does not cover custodial care.'; body.appendChild(lt); }
+  }).catch(()=>{ body.innerHTML=''; body.appendChild(el('div','muted','Could not load the healthcare reserve.')); });
+  return p;
+}
+
 function accountsPanel(d){
   const p=el('div','panel');
   const _ah=el('div','ph','ACCOUNTS'); _ah.appendChild(wikiLink('accounts-panel')); p.appendChild(_ah);
@@ -2312,6 +2338,7 @@ function dashboardContent(){
   const tileFactory={
     'alloc-inst':()=>allocPanel('ALLOCATION · INSTITUTION','c-inst', (d.alloc_display||{}).by_institution||d.by_institution, (d.alloc_display||{}).total||d.allocation_total||d.invested_value),
     'alloc-type':()=>allocPanel('ALLOCATION · ASSET TYPE','c-type', (d.alloc_display||{}).by_type||d.by_type, (d.alloc_display||{}).type_total||d.invested_value),
+    health:()=>healthPanel(d),
     'mix-hold':()=>mixPanel('MIX · HOLDINGS','c-mix-hold', mixHoldings(d, LT, INSIGHTS, MIX_VIEW==='funds'), 'mix-pies', mixToggle()),
     'mix-sector':()=>mixPanel('MIX · SECTOR','c-mix-sector', mixSector(EXP, d), 'mix-pies'),
     'mix-class':()=>mixPanel('MIX · ASSET CLASS','c-mix-class', mixAssetClass(LT, d), 'mix-pies'),
@@ -9589,10 +9616,10 @@ const graphOn=k=>GRAPHS[k]!==false;
 // panel: drag it, or use the arrows (which also work on a phone, where drag-and-drop does not). Two independent lists: the full-width
 // rows (weekly letter + the three trend charts) and the tile grid (allocation/mix pies and movers). ACCOUNTS stays docked on the right.
 // The order is a per-browser preference (localStorage, like the graph toggles); panels hidden by the GRAPHS switches keep their slot.
-const DASH_DEFAULT={rows:['letter','networth','spy','cost'], tiles:['alloc-inst','alloc-type','mix-hold','mix-sector','mix-class','gainers','losers','daymovers']};
+const DASH_DEFAULT={rows:['letter','networth','spy','cost'], tiles:['alloc-inst','alloc-type','health','mix-hold','mix-sector','mix-class','gainers','losers','daymovers']};
 const DASH_LABEL={letter:'WEEKLY LETTER', networth:'NET WORTH', spy:'PORTFOLIO vs SPY', cost:'VALUE vs COST BASIS',
   'alloc-inst':'ALLOCATION · INSTITUTION','alloc-type':'ALLOCATION · ASSET TYPE','mix-hold':'MIX · HOLDINGS','mix-sector':'MIX · SECTOR','mix-class':'MIX · ASSET CLASS',
-  gainers:'TOP GAINERS', losers:'TOP LOSERS', daymovers:'DAY MOVERS'};
+  health:'HEALTHCARE RESERVE', gainers:'TOP GAINERS', losers:'TOP LOSERS', daymovers:'DAY MOVERS'};
 function dashOrderParse(raw){               // never throws: unreadable, unknown or missing keys fall back to / are appended from the defaults
   const o={rows:DASH_DEFAULT.rows.slice(), tiles:DASH_DEFAULT.tiles.slice()};
   try{

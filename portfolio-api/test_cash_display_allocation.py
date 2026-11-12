@@ -84,7 +84,7 @@ class TestBrokerageCashAccounts(unittest.TestCase):
 
     def test_the_asset_type_donut_gets_the_cash_slice_and_stays_honest(self):
         t = {r["label"]: r["value"] for r in self.derive()["alloc_display"]["by_type"]}
-        self.assertEqual(t, {"ETF": 1000.0, "Cash (in brokerage accounts)": 118.0})
+        self.assertEqual(t, {"ETF": 1000.0, "Cash (in brokerage accounts)": 118.0, "Medical reserve (HSA)": 3418.0})   # the balance-only HSA, plainly named
 
     def test_institution_donut_counts_each_account_once(self):
         i = {r["label"]: r["value"] for r in self.derive()["alloc_display"]["by_institution"]}
