@@ -540,8 +540,15 @@ def payoff_simulator(debts, extra_monthly=0.0, max_months=600):
         # the queue.
         retired_at = {}
         extra_pool_monthly = _f(extra_monthly, 0.0) or 0.0
+        # `schedule` (2026-11-12, Jason: the rollover was not obvious on the page): one event per payoff -- which debt cleared, in which month, how much
+        # monthly payment it freed, and which debt that freed payment goes to next with that debt's NEW total monthly payment (its own minimum plus
+        # everything freed so far plus the extra budget). `start_target` is who receives the extra budget from month 1.
+        schedule = []
+        _first = sorted(sim, key=order_key)[0]
+        start_target = {"debt": _first["name"], "payment": round(_first["min_payment"] + extra_pool_monthly, 2)}
         while any(d["balance"] > 0.01 for d in sim) and months < max_months:
             months += 1
+            month_events = []
             for d in sim:
                 if d["balance"] > 0:
                     interest = d["balance"] * (d["rate_pct"] / 100.0 / 12.0)
@@ -556,6 +563,7 @@ def payoff_simulator(debts, extra_monthly=0.0, max_months=600):
                     d["balance"] = 0.0
                     retired_at.setdefault(d["name"], months)
                     extra_pool_monthly += d["min_payment"]   # freed permanently, from this month on
+                    month_events.append({"debt": d["name"], "freed": round(d["min_payment"], 2)})
             remaining = sorted((d for d in sim if d["balance"] > 0.01), key=order_key)
             pool = extra_pool_monthly
             for d in remaining:
@@ -568,10 +576,20 @@ def payoff_simulator(debts, extra_monthly=0.0, max_months=600):
                     d["balance"] = 0.0
                     retired_at.setdefault(d["name"], months)
                     extra_pool_monthly += d["min_payment"]   # this one also frees up, for NEXT month
+                    month_events.append({"debt": d["name"], "freed": round(d["min_payment"], 2)})
+            if month_events:
+                nxt = sorted((d for d in sim if d["balance"] > 0.01), key=order_key)
+                for e in month_events:
+                    e["month"] = months
+                    e["rolls_to"] = nxt[0]["name"] if nxt else None
+                    e["rolls_to_payment"] = round(nxt[0]["min_payment"] + extra_pool_monthly, 2) if nxt else None
+                    e["freed_total"] = round(extra_pool_monthly, 2)         # everything now freed/extra, all aimed at the top debt
+                schedule.extend(month_events)
         resolved = months < max_months
         return {"months": months if resolved else None, "resolved": resolved,
                 "total_interest": round(total_interest, 2),
-                "retired_at": (retired_at if resolved else {})}
+                "retired_at": (retired_at if resolved else {}),
+                "schedule": (schedule if resolved else []), "start_target": start_target}
 
     av = _simulate(lambda d: -d["rate_pct"])
     sn = _simulate(lambda d: d["balance"])

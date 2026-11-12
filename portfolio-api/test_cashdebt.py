@@ -16,6 +16,7 @@ Covers the two 2026-08-08 additions and the invariants they must not break:
   · idle_cash() — that designated NON-cash reserve reduces how much cash is spoken for, and
     that drag is still computed on cash alone.
 """
+import os
 import unittest
 
 import cashdebt as cd
@@ -172,6 +173,45 @@ class TestPayoffSimulator(unittest.TestCase):
         po = cd.payoff_simulator(self.DEBTS + [{"name": "C", "balance": 900, "rate_pct": 22.0,
                                                 "min_payment": 40.0}])
         self.assertLessEqual(po["avalanche"]["total_interest"], po["snowball"]["total_interest"])
+
+
+class TestPayoffSchedule(unittest.TestCase):
+    """2026-11-12 (Jason): the rollover of freed-up payments has to be visible, not just implied by a month count."""
+    DEBTS = [{"name": "Loan", "balance": 14857, "rate_pct": 7.7, "min_payment": 561.6},
+             {"name": "NelNet", "balance": 15752, "rate_pct": 5.125, "min_payment": 300},
+             {"name": "BofA", "balance": 15879, "rate_pct": 0, "min_payment": 600},
+             {"name": "Custom", "balance": 7000, "rate_pct": 0, "min_payment": 600},
+             {"name": "CareCredit", "balance": 262, "rate_pct": 0, "min_payment": 90}]
+
+    def test_the_example_from_the_page(self):
+        av = cd.payoff_simulator(self.DEBTS)["avalanche"]
+        self.assertEqual(av["retired_at"]["Loan"], 19)                                       # 30 payments alone, 19 in the plan
+        self.assertEqual(av["start_target"], {"debt": "Loan", "payment": 561.6})
+        ev = {e["debt"]: e for e in av["schedule"]}
+        self.assertEqual((ev["CareCredit"]["month"], ev["CareCredit"]["freed"], ev["CareCredit"]["rolls_to"], ev["CareCredit"]["rolls_to_payment"]),
+                         (3, 90.0, "Loan", 651.6))                                           # the $90 joins the loan payment as soon as it frees up
+        self.assertEqual((ev["Custom"]["month"], ev["Custom"]["rolls_to_payment"]), (12, 1251.6))     # 561.6 + 90 + 600
+        self.assertEqual((ev["Loan"]["month"], ev["Loan"]["rolls_to"]), (19, "NelNet"))               # then the whole pile moves to the next debt by rate
+
+    def test_the_last_payoffs_say_debt_free_and_extra_budget_raises_the_first_payment(self):
+        av = cd.payoff_simulator(self.DEBTS)["avalanche"]
+        self.assertTrue(all(e["rolls_to"] is None for e in av["schedule"] if e["month"] == av["months"]))
+        po = cd.payoff_simulator(self.DEBTS, extra_monthly=200)
+        self.assertEqual(po["avalanche"]["start_target"]["payment"], 761.6)
+        self.assertLess(po["avalanche"]["retired_at"]["Loan"], 19)
+
+    def test_events_match_retired_at_and_snowball_has_its_own_schedule(self):
+        po = cd.payoff_simulator(self.DEBTS)
+        for strat in ("avalanche", "snowball"):
+            s = po[strat]
+            self.assertEqual({e["debt"]: e["month"] for e in s["schedule"]}, s["retired_at"], strat)
+        self.assertEqual(po["snowball"]["start_target"]["debt"], "CareCredit")                  # smallest balance first
+
+    def test_page_explains_which_strategy_and_the_rollover(self):
+        html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"), encoding="utf-8").read()
+        for needle in ("AVALANCHE PLAN, HIGHEST RATE FIRST", "This table follows the AVALANCHE strategy", "HOW THE PLAN WORKS",
+                       "add its monthly payment to the top debt", "alone → in plan", "pav0.schedule", "TIMELINE"):
+            self.assertIn(needle, html, needle)
 
 
 class TestEFSources(unittest.TestCase):
