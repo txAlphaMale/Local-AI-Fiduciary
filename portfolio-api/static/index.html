@@ -476,7 +476,7 @@ let AUTH_STATUS=null;
 // tab order, theme, calculator inputs...) are mirrored to the server per signed-in account (GET/POST /api/prefs). localStorage stays as the
 // local copy. On sign-in the server copy wins where both exist; local-only keys are uploaded (so existing customisations migrate); changes are
 // sent a moment after you make them. Off on the public demo (one shared login). Keep PREFS_KEYS in step with prefs.SYNC_KEYS on the server.
-const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths'];
+const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths','fidDebtStrategy'];
 let PREFS_READY=false, PREFS_ENABLED=true, _prefsQ={set:{},remove:{}}, _prefsT=null;
 (function(){
   try{
@@ -6965,6 +6965,19 @@ function _pmtsCell(x){
   return top+plan;
 }
 
+// Debt payoff strategy view (2026-11-12, Jason): the table, its "in plan" months and the HOW THE PLAN WORKS box can be shown for either strategy.
+let CD_STRATEGY='avalanche'; try{ CD_STRATEGY=localStorage.getItem('fidDebtStrategy')==='snowball'?'snowball':'avalanche'; }catch(_){ CD_STRATEGY='avalanche'; }
+function cdStrategyToggle(){
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);margin:0 0 var(--space-2);font-size:var(--font-size-sm);flex-wrap:wrap;';
+  [['avalanche','AVALANCHE · highest rate first'],['snowball','SNOWBALL · smallest balance first']].forEach(([k,lb])=>{
+    const b=el('span',null,lb); const on=CD_STRATEGY===k; b.setAttribute('role','button'); b.setAttribute('aria-pressed',on?'true':'false'); b.tabIndex=0;
+    b.style.cssText='cursor:pointer;letter-spacing:1px;padding:1px 8px;border-radius:var(--radius-md);'+(on?'background:var(--overlay-accent-weak);color:var(--color-accent);':'color:var(--color-text-muted);');
+    const pick=()=>{ CD_STRATEGY=k; try{ localStorage.setItem('fidDebtStrategy',k); }catch(_){} render(); };
+    b.onclick=pick; b.onkeydown=ev=>{ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); pick(); } };
+    bar.appendChild(b);
+  });
+  return bar;
+}
 function cashdebtContent(){
   // GAP-2 household-CFO desk: EF gauge, idle-cash drag, payoff-vs-invest, refi, avalanche.
   const r=CASHDEBT||{}, wrap=el('div');
@@ -7054,9 +7067,14 @@ function cashdebtContent(){
   wrap.appendChild(s4);
   const av=r.avalanche||{};
   if((av.rows||[]).length){
-    wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · AVALANCHE PLAN, HIGHEST RATE FIRST (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
+    const SNOW=(CD_STRATEGY==='snowball' && (av.snowball_order||[]).length>0);
+    wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · '+(SNOW?'SNOWBALL PLAN, SMALLEST BALANCE FIRST':'AVALANCHE PLAN, HIGHEST RATE FIRST')+' (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
+    wrap.appendChild(cdStrategyToggle());
     { const which=el('div','muted'); which.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);max-width:980px;';
-      which.textContent='This table follows the AVALANCHE strategy: debts you owe are listed highest interest rate first, then paid-in-full cards, then $0 debts. The other strategy, SNOWBALL (smallest balance first), is compared in the simulator below the table but is not what the order or the "in plan" months show.'; wrap.appendChild(which); }
+      which.textContent=SNOW
+        ? 'This table follows the SNOWBALL strategy: debts you owe are listed smallest balance first, so the quick wins come early; then paid-in-full cards, then $0 debts. The "in plan" months are the snowball plan. Switch to AVALANCHE (highest rate first) to compare; the simulator below shows both totals.'
+        : 'This table follows the AVALANCHE strategy: debts you owe are listed highest interest rate first, then paid-in-full cards, then $0 debts. Switch to SNOWBALL (smallest balance first) to compare; the simulator below shows both totals.';
+      wrap.appendChild(which); }
     // RESUME-TRACKER 2026-07-20 (Jason: rate-only ranking is "lazy"): $-RANK surfaces real dollar
     // cost alongside APR — a large low-rate balance can rank #1 here even while sitting near the
     // bottom of the APR-sorted rows above it, which is exactly the case Jason flagged.
@@ -7066,7 +7084,8 @@ function cashdebtContent(){
       wrap.appendChild(dn);
     }
     const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PAYMENTS LEFT<br/><span class="muted" style="font-size:var(--font-size-xs);">alone → in plan</span></th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
-    av.rows.forEach(x=>{ const tr=el('tr');
+    const rowsShown=SNOW ? (av.snowball_order||[]).map(n=>av.rows.find(x=>x.name===n)).filter(Boolean) : av.rows;
+    rowsShown.forEach(x0=>{ const x=SNOW?Object.assign({},x0,{plan_months:x0.plan_months_snowball}):x0; const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':((x.priority==='carry'||x.priority==='paid-in-full')?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
       const minCell=`<input class="cd-minp" data-nm="${esc(x.name)}" type="number" step="5" value="${x.min_payment!=null?x.min_payment:''}" placeholder="min $" style="width:60px;"/>`;
@@ -7085,19 +7104,25 @@ function cashdebtContent(){
   }
   // ---- HOW THE PLAN WORKS (2026-11-12, Jason): the rollover of freed-up payments was in the numbers but not explained anywhere ----
   const po=r.payoff_simulator||{};
-  { const pav0=po.avalanche||{}, sched=pav0.schedule||[], st0=pav0.start_target;
+  { const SN=(CD_STRATEGY==='snowball' && ((av.snowball_order||[]).length>0)), pav0=po[SN?'snowball':'avalanche']||{}, sched=pav0.schedule||[], st0=pav0.start_target;
     if(po.available && st0 && pav0.resolved){
       const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin:var(--space-3) 0;font-size:var(--font-size-base);line-height:1.55;max-width:980px;';
       const uc=n=>n==null?'—':'$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});      // payments to the cent: $651.60, not $652
       const rowOf=n=>((av.rows||[]).find(x=>x.name===n))||{};
       const top=rowOf(st0.debt);
-      let h='<div class="ph" style="border:none;margin:0 0 var(--space-1);padding:0;">HOW THE PLAN WORKS</div>'+
+      let h='<div class="ph" style="border:none;margin:0 0 var(--space-1);padding:0;">HOW THE PLAN WORKS · '+(SN?'SNOWBALL':'AVALANCHE')+'</div>'+
         '<ol style="margin:0 0 var(--space-2) 18px;padding:0;">'+
         '<li>Pay the <b>minimum</b> on every debt (the MIN PMT column).</li>'+
-        '<li>Aim <b>every extra dollar</b> at the top debt, <b>'+esc(st0.debt)+'</b>, which pays <b>'+uc(st0.payment)+'/mo</b> now (its minimum'+((po.extra_monthly||0)>0?' plus your '+uc(po.extra_monthly)+' extra':', no extra budget set')+').</li>'+
+        '<li>Aim <b>every extra dollar</b> at the top debt, <b>'+esc(st0.debt)+'</b> ('+(SN?'the smallest balance':'the highest rate')+'), which pays <b>'+uc(st0.payment)+'/mo</b> now (its minimum'+((po.extra_monthly||0)>0?' plus your '+uc(po.extra_monthly)+' extra':', no extra budget set')+').</li>'+
         '<li>Each time a debt is paid off, <b>add its monthly payment to the top debt</b> straight away. That is why a debt clears sooner "in plan" than "alone".</li></ol>';
-      if(top.remaining_payments!=null && top.plan_months!=null && top.plan_months<top.remaining_payments)
-        h+='<div style="margin-bottom:var(--space-2);"><b>'+esc(st0.debt)+'</b> would take <b>'+top.remaining_payments+' payments</b> on its own. With the freed-up payments added, it is gone in <b class="pos">'+top.plan_months+' months</b>.</div>';
+      const topPlan=SN?top.plan_months_snowball:top.plan_months;
+      if(top.remaining_payments!=null && topPlan!=null && topPlan<top.remaining_payments)
+        h+='<div style="margin-bottom:var(--space-2);"><b>'+esc(st0.debt)+'</b> would take <b>'+top.remaining_payments+' payments</b> on its own. With the freed-up payments added, it is gone in <b class="pos">'+topPlan+' months</b>.</div>';
+      { const A=po.avalanche||{}, S=po.snowball||{};
+        if(A.resolved && S.resolved){
+          const diff=Math.round((S.total_interest||0)-(A.total_interest||0));
+          h+='<div style="margin-bottom:var(--space-2);"><span class="muted">Side by side:</span> avalanche <b>'+A.months+' mo</b>, '+u(A.total_interest)+' interest · snowball <b>'+S.months+' mo</b>, '+u(S.total_interest)+' interest'+
+            (diff>0?'. Snowball costs <b>'+u(diff)+' more</b> in interest here; its appeal is clearing the smallest debts first, if early wins help you keep going.':(diff<0?'. Snowball costs '+u(-diff)+' less here.':'. Same interest either way here.'))+'</div>'; } }
       const byMonth={}; sched.forEach(e=>{ (byMonth[e.month]=byMonth[e.month]||[]).push(e); });
       const months=Object.keys(byMonth).map(Number).sort((a,b)=>a-b);
       h+='<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:2px;">TIMELINE</div><ul style="margin:0 0 0 18px;padding:0;">'+months.map(m=>{
@@ -7114,8 +7139,8 @@ function cashdebtContent(){
     const row=(label,res)=>{ const tr=el('tr');
       tr.innerHTML=`<td class="l sym">${label}</td><td>${res.resolved?res.months+' mo':'>'+ (600)+' mo (doesn’t resolve at this pace)'}</td><td>${u(res.total_interest)}</td>`;
       return tr; };
-    t2.appendChild(row('AVALANCHE (highest rate first)', pav));
-    t2.appendChild(row('SNOWBALL (smallest balance first)', psn));
+    t2.appendChild(row('AVALANCHE (highest rate first)'+(CD_STRATEGY==='snowball'?'':'  ◀ shown above'), pav));
+    t2.appendChild(row('SNOWBALL (smallest balance first)'+(CD_STRATEGY==='snowball'?'  ◀ shown above':''), psn));
     wrap.appendChild(t2);
     if(po.interest_saved_by_avalanche!=null){
       const sv=el('div'); sv.style.cssText='font-size:var(--font-size-base);margin-top:var(--space-1);';

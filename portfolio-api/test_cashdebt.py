@@ -214,6 +214,44 @@ class TestPayoffSchedule(unittest.TestCase):
             self.assertIn(needle, html, needle)
 
 
+class TestStrategyToggle(unittest.TestCase):
+    """2026-11-12 (Jason): the table, its 'in plan' months and the plan box can be shown for either strategy."""
+    DEBTS = TestPayoffSchedule.DEBTS + [{"name": "Apple", "balance": 21, "rate_pct": 0},                       # no minimum: outside the plan
+                                        {"name": "Citi", "balance": 1592, "rate_pct": 19.49, "pay_in_full": True},
+                                        {"name": "REI", "balance": 0, "rate_pct": 24.74, "min_payment": 0}]
+
+    def run_(self):
+        return cd.run({"debts": self.DEBTS, "debt_extra_monthly": 0})
+
+    def test_snowball_order_is_smallest_balance_first_then_outside_the_plan_then_paid_in_full_then_zero(self):
+        self.assertEqual(self.run_()["avalanche"]["snowball_order"],
+                         ["CareCredit", "Custom", "Loan", "NelNet", "BofA", "Apple", "Citi", "REI"])
+
+    def test_avalanche_order_is_unchanged(self):
+        self.assertEqual([r["name"] for r in self.run_()["avalanche"]["rows"]][:5], ["Loan", "NelNet", "BofA", "Custom", "CareCredit"])
+
+    def test_every_row_carries_both_strategies_plan_months(self):
+        by = {r["name"]: r for r in self.run_()["avalanche"]["rows"]}
+        self.assertEqual((by["Loan"]["plan_months"], by["Loan"]["plan_months_snowball"]), (19, 22))        # avalanche clears the loan sooner
+        self.assertEqual((by["BofA"]["plan_months"], by["BofA"]["plan_months_snowball"]), (26, 18))        # snowball clears the big 0% card sooner
+        self.assertIsNone(by["Apple"]["plan_months_snowball"])                                              # not simulated
+
+    def test_the_snowball_schedule_rolls_each_payoff_onto_the_next_smallest(self):
+        sch = self.run_()["payoff_simulator"]["snowball"]["schedule"]
+        self.assertEqual([(e["debt"], e["month"], e["rolls_to"]) for e in sch][:2], [("CareCredit", 3, "Custom"), ("Custom", 11, "BofA")])
+        self.assertEqual(sch[0]["rolls_to_payment"], 690.0)
+
+    def test_page_has_the_toggle_saves_it_and_follows_it(self):
+        base = os.path.dirname(os.path.abspath(__file__))
+        html = open(os.path.join(base, "static", "index.html"), encoding="utf-8").read()
+        prefs_src = open(os.path.join(base, "prefs.py"), encoding="utf-8").read()
+        for needle in ("function cdStrategyToggle()", "localStorage.setItem('fidDebtStrategy',k)", "SNOWBALL PLAN, SMALLEST BALANCE FIRST", "av.snowball_order",
+                       "plan_months:x0.plan_months_snowball", "HOW THE PLAN WORKS · '+(SN?'SNOWBALL':'AVALANCHE')", "shown above", "aria-pressed"):
+            self.assertIn(needle, html, needle)
+        self.assertIn("'fidDebtStrategy'", html.split("const PREFS_KEYS=[")[1].split("];")[0])
+        self.assertIn('"fidDebtStrategy"', prefs_src.split("SYNC_KEYS = frozenset(")[1].split("})")[0])      # follows the account to every browser
+
+
 class TestEFSources(unittest.TestCase):
     SRC = [{"name": "Checking", "balance": 8081, "tier": "cash"},
            {"name": "Brokerage", "balance": 62000, "tier": "taxable", "cap": 25000},
