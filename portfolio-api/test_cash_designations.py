@@ -110,6 +110,16 @@ class TestAccountIdKeys(unittest.TestCase):
             with self.assertRaises(ValueError):
                 prefs.set_cash_designations({bad: "exclude"})
 
+    def test_clearing_via_the_id_key_alone_leaves_an_old_name_key_alive_so_the_page_clears_both(self):
+        legacy = cd.desig_key("Voya", "Health Savings Account")
+        prefs.set_cash_designations({legacy: "investment"})
+        prefs.set_cash_designations({"id:acc_A": "auto"})                              # what the first id-key release posted for Auto
+        self.assertEqual(cd.classify_accounts([self.a], [], prefs.cash_designations())[0]["designation"], "investment")   # the bug
+        prefs.set_cash_designations({"id:acc_A": "auto", legacy: "auto"})              # what the page posts now
+        self.assertIsNone(cd.classify_accounts([self.a], [], prefs.cash_designations())[0].get("designation"))
+        self.assertIn('r["legacy_key"] = cashdetect.desig_key(r.get("institution"), r.get("name"))', APP)
+        self.assertIn("m[a.legacy_key]='auto'", HTML)
+
     def test_report_rows_carry_the_key_the_page_posts(self):
         self.assertIn('r["key"] = cashdetect.desig_key(r.get("institution"), r.get("name"), r.get("id"))', APP)
 

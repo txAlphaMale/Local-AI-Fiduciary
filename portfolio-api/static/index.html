@@ -5077,9 +5077,9 @@ function designationSelect(a){
   s.onchange=async()=>{
     s.disabled=true;
     try{
-      const r=await fetch('/api/cash-designations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:{[a.key]:s.value||'auto'}})});
+      const r=await fetch('/api/cash-designations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:(()=>{ const m={[a.key]:s.value||'auto'}; if(a.legacy_key&&a.legacy_key!==a.key) m[a.legacy_key]='auto'; return m; })()})});     // also drops any older name-keyed setting, which would otherwise survive 'Auto'
       if(!r.ok) throw new Error(r.status);
-      const row=((CASHCHK||{}).accounts||[]).find(x=>x.key===a.key); if(row) row.designation=s.value||null;     // keep showing the choice while the data reloads
+      const row=((CASHCHK||{}).accounts||[]).find(x=>x.key===a.key);   // (a.key = account id) if(row) row.designation=s.value||null;     // keep showing the choice while the data reloads
       a.designation=s.value||null; s.disabled=false;
       WTRACE=null; cashCheckLoad(); await load(true,true);
     }catch(e){ s.disabled=false; alert('Could not save the setting ('+e.message+').'); }

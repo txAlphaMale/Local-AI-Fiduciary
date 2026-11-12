@@ -8439,6 +8439,7 @@ def get_cash_check(request: Request):
     rep = cashdetect.report(d.get("accounts") or [], d.get("positions") or [], d.get("brokerage_cash"), d.get("bank_cash"), _des)
     for r in rep["accounts"]:
         r["key"] = cashdetect.desig_key(r.get("institution"), r.get("name"), r.get("id"))
+        r["legacy_key"] = cashdetect.desig_key(r.get("institution"), r.get("name"))       # the pre-id name key: cleared whenever the setting changes
     rep["designations"] = _des
     rep["provider"] = os.environ.get("PORTFOLIO_PROVIDER", "csv")
     rep["generated_at"] = int(time.time())
