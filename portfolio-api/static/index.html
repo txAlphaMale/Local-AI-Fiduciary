@@ -1815,7 +1815,7 @@ function render(){
   if(TAB==='dashboard'){
     tc.appendChild(dashboardContent());
   } else if(TAB==='research'){
-    const hasDisc=(typeof DISCO!=='undefined' && DISCO && DISCO.discovered && DISCO.discovered.length);
+    const hasDisc=(typeof DISCO!=='undefined' && DISCO && ((DISCO.discovered && DISCO.discovered.length) || (DISCO.funnel && DISCO.funnel.articles!=null)));   // the tab stays when the gate empties it, so its funnel can explain why
     const hasAlerts=(typeof DISCO!=='undefined' && DISCO && DISCO.alerts && DISCO.alerts.length);
     tc.appendChild(panelSubtabs('research',[
       hasAlerts && {key:'alerts',label:'NEWS ALERTS',build:()=>alertsContent()},
@@ -2833,8 +2833,8 @@ function scannerContent(){
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';
     const fitc=i.fit_score>=3?'pos':(i.fit_score===2?'':'neg');
     const ana=i.analyst_rating?`${i.analyst_rating}${i.analyst_buy_pct!=null?' '+i.analyst_buy_pct+'%':''}`:'—';
-    const why=(i.excluded_because||[]).join('; ');
-    tr.innerHTML=`<td class="sym">${escHtml(i.ticker)}${i.already_held?' <span class="muted" style="font-size:var(--font-size-xs)">held</span>':''}${i.composite_score!=null?` <span class="muted" style="font-size:var(--font-size-xs)" title="composite quality+value+momentum (0-100): Q ${(i.composite_subscores||{}).quality} · V ${(i.composite_subscores||{}).value} · M ${(i.composite_subscores||{}).momentum}">·c${i.composite_score}</span>`:''}</td>`+
+    const why=(i.excluded_because||[]).concat((i.failed_checks&&i.failed_checks.length)?['did not pass: '+i.failed_checks.join(', ')]:[]).join('; ');
+    tr.innerHTML=`<td class="sym">${escHtml(i.ticker)}${i.already_held?' <span class="muted" style="font-size:var(--font-size-xs)">held</span>':''}${i.paper_held?' <span class="muted" style="font-size:var(--font-size-xs)" title="the Strategist holds this in the paper ledger">paper</span>':''}${i.source&&i.source!=='your watchlist'?` <span class="muted" style="font-size:var(--font-size-xs)" title="where this candidate came from">· ${escHtml(i.source)}</span>`:''}${i.composite_score!=null?` <span class="muted" style="font-size:var(--font-size-xs)" title="composite quality+value+momentum (0-100): Q ${(i.composite_subscores||{}).quality} · V ${(i.composite_subscores||{}).value} · M ${(i.composite_subscores||{}).momentum}">·c${i.composite_score}</span>`:''}</td>`+
       `<td>${i.price!=null?'$'+(+i.price).toFixed(2):'—'}</td>`+
       `<td class="${fitc}">${fit}</td>`+
       `<td class="${(i.expected_return_pct||0)>=0?'pos':'neg'}" title="${i.target_mean!=null?'analyst target $'+(+i.target_mean).toFixed(2):''}">${i.expected_return_pct!=null?(i.expected_return_pct>0?'+':'')+i.expected_return_pct+'%':'—'}</td>`+
@@ -2853,8 +2853,22 @@ function scannerContent(){
     h.innerHTML='<th class="l">SYM</th><th>PX</th><th>FIT</th><th title="analyst-target-implied 12mo upside — noisy, not a promise">EXP RET</th><th>REV g</th><th>FCF m</th><th>NET m</th><th>FWD P/E</th><th class="l">ANALYST</th><th class="l"></th>';
     t.appendChild(h); rows.forEach(i=>t.appendChild(ideaRow(i))); return t;
   };
+  const addFunnel=()=>{
+    const fu=r.funnel; if(!fu) return;
+    const n=el('div','muted'); n.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-sm);line-height:1.5;';
+    const parts=[`${fu.from_watchlist} from your watchlist`];
+    parts.push(fu.peers_enabled?`${fu.from_peers} peers of your ${fu.peer_lookups} largest holdings`:'holding peers are OFF (tick “include peers of my holdings” to add them)');
+    if(fu.skipped_over_cap) parts.push(`${fu.skipped_over_cap} not screened (25-name cap)`);
+    parts.push(`${fu.with_data} had screenable data${fu.no_data?` (${fu.no_data} did not)`:''}`);
+    if(fu.over_price_cap) parts.push(`${fu.over_price_cap} outside your price cap`);
+    if(fu.below_min_fit) parts.push(`${fu.below_min_fit} below the ${r.min_fit}-of-4 fit minimum`);
+    const fb=Object.entries(fu.failed_by_criterion||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k} ${v}`).join(', ');
+    n.textContent='FUNNEL · '+parts.join(' → ')+` → ${fu.passed} shown`+(fb?` · checks failed: ${fb}`:'');
+    wrap.appendChild(n);
+  };
   if(!(r.ideas&&r.ideas.length) && !unscreened.length && !unavail.length){
     wrap.appendChild(el('div','muted','No watchlist ideas from the screen — use “Analyze any ticker” above for holdings the growth screen filters out, or see the DISCOVERED / NEWS ALERTS sub-tabs.'));
+    addFunnel();
     return wrap;
   }
   if(r.ideas&&r.ideas.length) wrap.appendChild(mkTable(r.ideas));
@@ -2872,6 +2886,7 @@ function scannerContent(){
       ' — check for a typo, a delisting, or a symbol the free data tiers do not cover.';
     wrap.appendChild(u);
   }
+  addFunnel();
   if(r.note){ const n=el('div','muted'); n.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-sm);line-height:1.4;'; n.textContent=r.note; wrap.appendChild(n); }
   return wrap;
 }
@@ -3018,13 +3033,40 @@ function researchIdea(t){
     .catch(e=>{ clearTimeout(to); /* leave the poll running: an aborted/failed direct fetch may still be completing + persisting server-side */ });
 }
 
+// Phase 1 (2026-11-12): how the news-discovery funnel narrowed, plus the names the gate dropped (collapsed, each with its reason).
+function discFunnelNodes(wrap){
+  const f=(typeof DISCO!=='undefined' && DISCO && DISCO.funnel)||null; if(!f || f.articles==null) return;
+  const n=el('div','muted'); n.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin:var(--space-2) 0 var(--space-3);';
+  const parts=[`${f.queries||0} news searches → ${f.articles} articles → ${f.extracted||0} tickers named`];
+  if(f.held_skipped) parts.push(`${f.held_skipped} you already hold`);
+  if(f.paper_skipped) parts.push(`${f.paper_skipped} already in the paper ledger`);
+  if(f.no_data) parts.push(`${f.no_data} with no screenable data`);
+  if(f.over_price_cap) parts.push(`${f.over_price_cap} outside your price cap`);
+  if(f.below_min_fit) parts.push(`${f.below_min_fit} below the ${f.min_fit}-of-4 fit minimum`);
+  parts.push(`${f.kept||0} shown${f.briefed!=null?` (${f.briefed} with a full brief)`:''}`);
+  n.textContent='FUNNEL · '+parts.join(' · '); wrap.appendChild(n);
+  const dr=f.dropped||[];
+  if(dr.length){
+    const d=document.createElement('details'); d.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+    const s=document.createElement('summary'); s.className='muted'; s.style.cursor='pointer'; s.textContent=`Dropped by the screen (${dr.length}) — click to see why`; d.appendChild(s);
+    dr.forEach(x=>{ const r=el('div','muted'); r.style.cssText='padding:2px 0;line-height:1.4;';
+      r.innerHTML=`<span style="color:var(--color-accent)">${escHtml(x.ticker)}</span> ${x.price!=null?'$'+(+x.price).toFixed(2)+' · ':''}${escHtml((x.reasons||[]).join('; '))}${x.discovery_reason?` <span style="opacity:.7">· news said: ${escHtml(x.discovery_reason)}</span>`:''}`;
+      d.appendChild(r); });
+    wrap.appendChild(d);
+  }
+}
+
 function discoveredContent(){
   const wrap=el('div');
   if(typeof DISCO==='undefined' || !DISCO || !DISCO.discovered || !DISCO.discovered.length){
+    if(DISCO && DISCO.funnel && DISCO.funnel.articles!=null){
+      wrap.appendChild(el('div','muted','Nothing from the newsfeed passed your screen this run. The funnel below shows where each name fell out.'));
+      discFunnelNodes(wrap); return wrap; }
     wrap.appendChild(el('div','muted','No newsfeed-discovered ideas yet — run discovery (or the daily job) to populate this.')); return wrap; }
   const dsc=s=>(s==null?'':s).toString().replace(/</g,'&lt;');
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);'; sub.textContent='discovered from the newsfeed · research ideas, not advice'; wrap.appendChild(sub);
   const cl=el('div'); cl.innerHTML=_cacheAgeLabel(DISCO.cache_fetched_at, DISCO.cache_stale, null, DISCO.fetch_error); wrap.appendChild(cl);
+  discFunnelNodes(wrap);
   DISCO.discovered.forEach(i=>{
     const m=i.llm||{}, g=i.grounded||{};
     const fit=i.fit_score!=null?`${i.fit_score}/${i.max_score}`:'—';

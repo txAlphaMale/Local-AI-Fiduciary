@@ -12419,6 +12419,46 @@ def _screen_one(sym, crit):
             "fit_score": fit_score, "max_score": max_score, "checks": checks}
 
 
+def _paper_held_tickers():
+    """Tickers any non-archived paper scenario currently holds (shares > 0). Idea lists skip these:
+    the Strategist already owns them in the ledger, so they are not "new" opportunities."""
+    out = set()
+    try:
+        for sc in ((_read_registry() or {}).get("scenarios") or {}).values():
+            if (sc or {}).get("status") == "archived":
+                continue
+            for t, pos in ((sc or {}).get("positions") or {}).items():
+                if (pos or {}).get("shares") and pos["shares"] > 0:
+                    out.add(str(t).upper())
+    except Exception:
+        pass
+    return out
+
+
+def _failed_checks(one):
+    """Plain-language list of the criteria a screened ticker failed, e.g. ["rev_growth 4.1", "analyst n/a"]."""
+    out = []
+    for c in (one.get("checks") or []):
+        if not c.get("pass"):
+            v = c.get("value")
+            out.append(f"{c.get('criterion')} {v if v is not None else 'n/a'}")
+    return out
+
+
+def _price_cap_reason(price, crit):
+    """Reason string when `price` is outside the configured per-share cap, else None."""
+    maxp, minp = crit.get("max_share_price"), crit.get("min_share_price")
+    if maxp is None and minp is None:
+        return None
+    if price is None:
+        return "share price unknown (price cap is set)"
+    if maxp is not None and price > maxp:
+        return f"share price ${price:.2f} above your ${maxp} cap"
+    if minp is not None and price < minp:
+        return f"share price ${price:.2f} below your ${minp} minimum"
+    return None
+
+
 def _opportunities():
     cfg = _read_scanner()
     crit = cfg.get("criteria") or {}
@@ -12429,17 +12469,28 @@ def _opportunities():
     # should be. Captured HERE, before the peer expansion below appends to `tickers`, so
     # "user_added" means exactly "came from cfg['watchlist']" and can never leak onto a peer.
     user_added = set(tickers)
-    held = set()
+    held, held_order = set(), []
     try:
-        held = {c.get("ticker") for c in _data()["consolidated"] if c.get("ticker")}
+        # consolidated is sorted by value, so "the 10 largest holdings" is deterministic. (This used to
+        # slice an unordered set, so WHICH ten holdings got peer-expanded could change run to run.)
+        held_order = [c.get("ticker") for c in _data()["consolidated"] if c.get("ticker")]
+        held = set(held_order)
     except Exception:
         pass
+    paper_held = _paper_held_tickers()
+    source = {t: "your watchlist" for t in tickers}      # where each candidate came from (shown in the UI)
+    n_watch = len(tickers)
+    peer_lookups = 0
     if cfg.get("include_holding_peers"):
-        for h in list(held)[:10]:
+        for h in held_order[:10]:
+            peer_lookups += 1
             for p in (_finnhub("stock/peers", h) or [])[:5]:
                 pu = str(p).upper()
                 if pu and pu not in tickers and pu not in held:
                     tickers.append(pu)
+                    source[pu] = f"peer of {h}"
+    n_peers = len(tickers) - n_watch
+    truncated = max(0, len(tickers) - 25)
     ideas = []
     for t in tickers[:25]:
         try:
@@ -12448,10 +12499,12 @@ def _opportunities():
             # classes and other non-SEC securities have no public fundamentals) -- permanent and NOT a fault.
             # "error" = the lookup itself blew up (network, rate limit, bug) -- unexpected and fixable.
             ideas.append({**one, "status": "ok" if one.get("available") else "unsupported",
-                          "already_held": t in held, "user_added": t in user_added})
+                          "already_held": t in held, "paper_held": t in paper_held,
+                          "user_added": t in user_added, "source": source.get(t),
+                          "failed_checks": _failed_checks(one) if one.get("available") else []})
         except Exception as e:
             ideas.append({"ticker": t, "available": False, "status": "error", "error": _errref(e),
-                          "user_added": t in user_added})
+                          "user_added": t in user_added, "source": source.get(t)})
     # Rank by the quality-weighted forward return (opportunity_score), then raw fit, then
     # expected return — replaces the old "fit then revenue-growth" order so the best
     # expected return PER DOLLAR (never per share) floats up. Fit gate still applies below.
@@ -12502,7 +12555,23 @@ def _opportunities():
         if (i.get("fit_score") or 0) < OPP_MIN_FIT:
             why.append(f"fit {i.get('fit_score') or 0}/{i.get('max_score') or 4} below the {OPP_MIN_FIT} minimum")
         unscreened_watchlist.append({**i, "excluded_because": why or ["outside the top-ranked cap"]})
+    # Funnel: how many candidates entered and where each one fell out, so a short list is explained.
+    _avail = [i for i in all_ideas if i.get("available")]
+    _crit_fail = {}
+    for i in _avail:
+        for c in (i.get("checks") or []):
+            if not c.get("pass"):
+                _crit_fail[c.get("criterion")] = _crit_fail.get(c.get("criterion"), 0) + 1
+    funnel = {"from_watchlist": n_watch, "from_peers": n_peers, "peer_lookups": peer_lookups,
+              "peers_enabled": bool(cfg.get("include_holding_peers")),
+              "skipped_over_cap": truncated, "screened": screened,
+              "no_data": sum(1 for i in all_ideas if not i.get("available")),
+              "with_data": len(_avail),
+              "over_price_cap": sum(1 for i in _avail if not _price_ok(i)),
+              "below_min_fit": sum(1 for i in _avail if (i.get("fit_score") or 0) < OPP_MIN_FIT),
+              "failed_by_criterion": _crit_fail, "passed": len(ideas)}
     return {"generated_at": int(time.time()), "criteria": crit, "strategy": cfg.get("strategy_description"),
+            "funnel": funnel,
             "watchlist": cfg.get("watchlist") or [], "include_holding_peers": bool(cfg.get("include_holding_peers")),
             "discovery_queries": cfg.get("discovery_queries") or [], "alert_holdings_limit": cfg.get("alert_holdings_limit"),
             "screened": screened, "count": len(ideas),
@@ -13498,13 +13567,17 @@ def _holdings_alerts(d, limit):
     return alerts
 
 
-def _discover(d, crit, _tavily_meta_acc=None):
+def _discover(d, crit, _tavily_meta_acc=None, _funnel_acc=None):
     """Tavily news + one LLM extraction -> candidate tickers, then screen them (excludes held
     names). `_tavily_meta_acc`, if given a list, gets each query's cache {fetched_at, stale} dict
     appended -- lets the caller (_do_discovery) surface an overall "data as of" for the panel
     without changing this function's own return shape."""
     cfg = _read_scanner()
     snippets = []
+    fn = _funnel_acc if _funnel_acc is not None else {}
+    fn.update({"queries": len((cfg.get("discovery_queries") or [])[:4]), "articles": 0, "extracted": 0,
+               "held_skipped": 0, "paper_skipped": 0, "no_data": 0, "below_min_fit": 0,
+               "over_price_cap": 0, "kept": 0, "briefed": 0, "min_fit": OPP_MIN_FIT, "dropped": []})
     for q in (cfg.get("discovery_queries") or [])[:4]:
         arts, meta = _tavily_results(q, days=10, max_results=5, with_meta=True)
         if _tavily_meta_acc is not None:
@@ -13513,9 +13586,11 @@ def _discover(d, crit, _tavily_meta_acc=None):
             ttl = (a.get("title") or "")
             if ttl:
                 snippets.append(f"- {ttl}. {(a.get('content') or a.get('snippet') or '')[:180]}")
+    fn["articles"] = len(snippets)
     if not snippets:
         return []
     held = {c.get("ticker") for c in (d.get("consolidated") or []) if c.get("ticker")}
+    paper_held = _paper_held_tickers()
     prompt = ("From the financial news snippets below, extract up to 10 US-listed stock TICKER symbols that "
               "represent potential growth/opportunity candidates a growth investor might research. Prefer specific, "
               "lesser-known names over mega-caps. Return ONLY JSON: "
@@ -13524,24 +13599,60 @@ def _discover(d, crit, _tavily_meta_acc=None):
     parsed = _parse_json_obj(raw) if raw else None
     cands = (parsed or {}).get("candidates") if isinstance(parsed, dict) else None
     out, seen = [], set()
+    dropped = fn["dropped"]
+
+    def _drop(t, why, c, sc=None):
+        dropped.append({"ticker": t, "reasons": why, "discovery_reason": (c.get("reason") or "")[:160],
+                        "fit_score": (sc or {}).get("fit_score"), "max_score": (sc or {}).get("max_score"),
+                        "price": (sc or {}).get("price")})
+
     for c in (cands or [])[:12]:
         t = str((c or {}).get("ticker") or "").upper().strip()
-        if not t or t in seen or t in held:
+        if not t or t in seen:
             continue
         seen.add(t)
+        fn["extracted"] += 1
+        if t in held:
+            fn["held_skipped"] += 1
+            _drop(t, ["you already hold it"], c)
+            continue
+        if t in paper_held:
+            fn["paper_skipped"] += 1
+            _drop(t, ["already in the Strategist's paper ledger"], c)
+            continue
         try:
             sc = _screen_one(t, crit)
-            sc["discovery_reason"] = (c.get("reason") or "")[:160]
-            out.append(sc)
         except Exception:
+            fn["no_data"] += 1
+            _drop(t, ["screen failed (data lookup error)"], c)
             continue
-    maxp, minp = crit.get("max_share_price"), crit.get("min_share_price")
-    if maxp:
-        out = [x for x in out if not x.get("price") or x["price"] <= maxp]
-    if minp:
-        out = [x for x in out if not x.get("price") or x["price"] >= minp]
+        sc["discovery_reason"] = (c.get("reason") or "")[:160]
+        sc["source"] = "news discovery"
+        # GATE (2026-11-12, Jason): discovery used to show everything it extracted, so a 0/4 "Sell"
+        # sat beside real candidates. Same bar as the scanner now: data available, within the price
+        # cap, fit >= OPP_MIN_FIT. Names that miss it are NOT thrown away silently -- they are kept
+        # in `dropped` with the reason and shown (collapsed) in the tab.
+        why = []
+        if not sc.get("available"):
+            fn["no_data"] += 1
+            why.append("no public SEC fundamentals to screen (fund/ETF, foreign or unsupported symbol)")
+        else:
+            pc = _price_cap_reason(sc.get("price"), crit)
+            if pc:
+                fn["over_price_cap"] += 1
+                why.append(pc)
+            if (sc.get("fit_score") or 0) < OPP_MIN_FIT:
+                fn["below_min_fit"] += 1
+                why.append(f"fit {sc.get('fit_score') or 0}/{sc.get('max_score') or 4} is below the {OPP_MIN_FIT} minimum"
+                           + (" (" + "; ".join(_failed_checks(sc)) + ")" if _failed_checks(sc) else ""))
+        if why:
+            _drop(t, why, c, sc)
+        else:
+            out.append(sc)
     out.sort(key=lambda x: -(x.get("fit_score") or 0))
     out = out[:OPP_MAX_IDEAS]
+    fn["kept"] = len(out)
+    fn["dropped"] = dropped[:30]
     # Attach a FULL research brief (thesis / bull / bear / risks) to the top discovered names,
     # same pipeline the daily analysis runs on holdings. LLM per ticker -> capped by DISC_BRIEF_LIMIT.
     for sc in out[:DISC_BRIEF_LIMIT]:
@@ -13558,6 +13669,7 @@ def _discover(d, crit, _tavily_meta_acc=None):
             sc["llm"] = _llm(t, nm, None, None, g, _news(t, nm), fund, val)
         except Exception as e:
             sc["llm"] = {"error": _errref(e)}
+    fn["briefed"] = min(len(out), DISC_BRIEF_LIMIT)
     return out
 
 
@@ -13570,7 +13682,8 @@ def _do_discovery():
         cfg = _read_scanner()
         tavily_meta = []
         _fail0 = _NEWS_DIAG["fail_count"]
-        discovered = _discover(d, cfg.get("criteria") or {}, _tavily_meta_acc=tavily_meta)
+        funnel = {}
+        discovered = _discover(d, cfg.get("criteria") or {}, _tavily_meta_acc=tavily_meta, _funnel_acc=funnel)
         fetch_times = [m["fetched_at"] for m in tavily_meta if m.get("fetched_at") is not None]
         out = {"generated_at": int(time.time()),
                # RESUME-TRACKER (2026-07-30, "last-known-good cache" Part 2): when the underlying
@@ -13581,6 +13694,7 @@ def _do_discovery():
                "cache_stale": any(m.get("stale") for m in tavily_meta),
                "alerts": _holdings_alerts(d, cfg.get("alert_holdings_limit") or 15),
                "discovered": discovered,
+               "funnel": funnel,
                "note": "News-discovered ideas + material-news alerts on holdings. Read-only research, not advice."}
         # 2026-10-19: surface fetch failures IN the report (see _news_note) so the UI can say why
         # news is stale instead of only that it is.
