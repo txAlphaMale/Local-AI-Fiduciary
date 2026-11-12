@@ -49,13 +49,28 @@ class TestSlice(unittest.TestCase):
         self.assertEqual(d["hsa_balance"], 3418.47)
         self.assertEqual({r["label"]: r["value"] for r in d["by_type"]}, {"ETF": 1000.0})            # engines never see the slice
 
-    def test_the_persons_designation_takes_it_away(self):
+    def test_the_persons_designation_takes_the_medical_slice_away(self):
         for des in ("exclude", "bank_cash", "investment", "brokerage_cash"):
             d = self.derive(des)
             t = {r["label"] for r in d["alloc_display"]["by_type"]}
             self.assertNotIn("Medical reserve (HSA)", t, des)
             self.assertEqual(d["alloc_display"]["medical_reserve"], 0.0, des)
             self.assertEqual(d["hsa_balance"], 3418.47, des)                                           # the tracker tile still knows the HSA exists
+
+    def test_w1_the_two_donuts_tie_under_every_designation(self):
+        """Cowork retest 2026-11-12: Investment on the balance-only HSA dropped it from the asset-type donut but not the institution donut."""
+        for des in (None, "investment", "brokerage_cash", "exclude", "bank_cash"):
+            ad = self.derive(des)["alloc_display"]
+            self.assertEqual(ad["type_total"], ad["total"], des)
+        inv = self.derive("investment")["alloc_display"]
+        self.assertEqual({r["label"]: r["value"] for r in inv["by_type"]}["Investments (no holdings reported)"], 3418.47)
+        self.assertEqual(inv["untyped_investments"], 3418.47)
+        self.assertEqual(self.derive()["alloc_display"]["untyped_investments"], 0.0)                    # Auto: the HSA is the medical reserve instead
+        self.assertNotIn("Investments (no holdings reported)", {r["label"] for r in self.derive("exclude")["alloc_display"]["by_type"]})
+
+    def test_engines_never_see_the_untyped_slice(self):
+        d = self.derive("investment")
+        self.assertEqual({r["label"]: r["value"] for r in d["by_type"]}, {"ETF": 1000.0})
 
 
 class TestSummary(unittest.TestCase):
