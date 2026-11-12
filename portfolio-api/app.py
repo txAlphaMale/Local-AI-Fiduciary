@@ -3157,13 +3157,22 @@ def _derive(accounts, positions, by_account, inv, net_worth, total_assets, total
     medical_reserve = round(sum(a.get("balance") or 0 for a in _hsa_med), 2)
     if medical_reserve > 0:
         _d_type["Medical reserve (HSA)"] = medical_reserve
+    # W1 (Cowork retest 2026-11-12): every OTHER balance-only investment account (an HSA set to Investment, a 401(k) or IRA that syncs only a balance)
+    # is in the institution donut but had no asset type, so the two donuts disagreed by its balance. It now gets one honestly named slice, so they tie.
+    # Left out: accounts the person excluded, cash sweeps (already in the cash slice) and the medical-reserve HSA above.
+    _cash_keys = {(a.get("institution"), a.get("name")) for a in _cash_accts}
+    _med_keys = {(a.get("institution"), a.get("name")) for a in _hsa_med}
+    untyped = round(sum(a.get("balance") or 0 for a in balance_only
+                        if (a.get("institution"), a.get("name")) not in _lo_keys | _cash_keys | _med_keys), 2)
+    if untyped > 0:
+        _d_type["Investments (no holdings reported)"] = untyped
     hsa_balance = round(sum(a.get("balance") or 0 for a in accounts if a.get("is_asset") is not False and a.get("include_nw")
                             and (a.get("balance") or 0) > 0 and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "hsa"), 2)
     alloc_display = {
         "by_institution": [{"label": k, "value": v} for k, v in sorted(_d_inst.items(), key=lambda x: -x[1])],
         "by_type": [{"label": ("Cash (in brokerage accounts)" if k == "Cash" else k), "value": v}
                     for k, v in sorted(_d_type.items(), key=lambda x: -x[1])],
-        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2), "medical_reserve": medical_reserve,
+        "total": round(sum(_d_inst.values()), 2), "type_total": round(sum(_d_type.values()), 2), "medical_reserve": medical_reserve, "untyped_investments": untyped,
         "left_out": [{"institution": a.get("institution"), "account": a.get("name"), "value": a.get("balance"),
                       "designation": cashdetect.desig_lookup(_des, a)} for a in _left_out]}
     investment_balance_accounts = [
