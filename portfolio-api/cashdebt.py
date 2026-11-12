@@ -637,8 +637,16 @@ def run(inputs, knobs=None):
     # the panel recommends, so mixing in snowball months would be comparing two different plans
     # inside one column.
     _retired = ((payoff.get("avalanche") or {}).get("retired_at") or {}) if payoff.get("available") else {}
+    _retired_sn = ((payoff.get("snowball") or {}).get("retired_at") or {}) if payoff.get("available") else {}
     for _r in av["rows"]:
         _r["plan_months"] = _retired.get(_r["name"])
+        _r["plan_months_snowball"] = _retired_sn.get(_r["name"])          # for the page's strategy toggle
+    # Row order for the SNOWBALL view (2026-11-12): debts you owe that are interest-bearing, smallest balance first; then those paid in full each
+    # month; then $0 debts. Same grouping rule as the avalanche order, only the key inside the first group differs.
+    _sim = set(payoff.get("debts_simulated") or []) if payoff.get("available") else set()
+    av["snowball_order"] = [r["name"] for r in sorted(av["rows"], key=lambda x: (x["balance"] <= 0, bool(x["pay_in_full"]),
+                                                                              x["name"] not in _sim,       # debts missing an APR or minimum are not in the plan
+                                                                              x["balance"], -(x["rate_pct"] or -1)))]
     alerts = []
     if ef["status"] == "critical":
         alerts.append({"level": "action", "msg": f"Emergency fund covers only "
