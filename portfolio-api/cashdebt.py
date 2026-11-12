@@ -467,12 +467,16 @@ def avalanche(debts, invest_hurdle_pct):
                      "remaining_payments_note": rp["note"],
                      "plan_months": None})   # filled by run() from the simulator, when available
     _PRIORITY_ORDER = {"pay-first": 0, "carry": 1, "set-rate": 2, "paid-in-full": 3}
-    rows.sort(key=lambda x: (_PRIORITY_ORDER.get(x["priority"], 9), -(x["rate_pct"] or -1)))
+    # A debt with nothing owed never sits above one that has a balance (2026-11-12, Jason: a $0 card with a 24% APR was listed above a $15,000
+    # loan). So: (1) rows with a balance, interest-bearing ones first, in the priority-then-rate order described above; (2) rows with a balance
+    # the household pays in full each month; (3) rows with a $0 balance, last, still highest rate first so they stay readable. Balance then
+    # breaks ties between equal rates, so a bigger balance at the same APR comes first.
+    rows.sort(key=lambda x: (x["balance"] <= 0, bool(x["pay_in_full"]), _PRIORITY_ORDER.get(x["priority"], 9), -(x["rate_pct"] or -1), -x["balance"]))
     by_dollar = sorted([r for r in rows if r["annual_interest"] is not None],
                        key=lambda x: -x["annual_interest"])
     for rank, r in enumerate(by_dollar, start=1):
         r["dollar_rank"] = rank
-    top_rate_name = rows[0]["name"] if rows and rows[0]["rate_pct"] is not None else None
+    top_rate_name = rows[0]["name"] if rows and rows[0]["rate_pct"] is not None and rows[0]["balance"] > 0 else None
     top_dollar_name = by_dollar[0]["name"] if by_dollar else None
     return {"rows": rows, "invest_hurdle_pct": invest_hurdle_pct,
             "top_dollar_cost": by_dollar[0] if by_dollar else None,
