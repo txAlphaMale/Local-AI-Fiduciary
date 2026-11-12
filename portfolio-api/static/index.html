@@ -7054,7 +7054,9 @@ function cashdebtContent(){
   wrap.appendChild(s4);
   const av=r.avalanche||{};
   if((av.rows||[]).length){
-    wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · AVALANCHE (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
+    wrap.appendChild(el('div','ph','NON-MORTGAGE DEBTS · AVALANCHE PLAN, HIGHEST RATE FIRST (vs '+(av.invest_hurdle_pct||'—')+'% hurdle)'));
+    { const which=el('div','muted'); which.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);max-width:980px;';
+      which.textContent='This table follows the AVALANCHE strategy: debts you owe are listed highest interest rate first, then paid-in-full cards, then $0 debts. The other strategy, SNOWBALL (smallest balance first), is compared in the simulator below the table but is not what the order or the "in plan" months show.'; wrap.appendChild(which); }
     // RESUME-TRACKER 2026-07-20 (Jason: rate-only ranking is "lazy"): $-RANK surfaces real dollar
     // cost alongside APR — a large low-rate balance can rank #1 here even while sitting near the
     // bottom of the APR-sorted rows above it, which is exactly the case Jason flagged.
@@ -7063,7 +7065,7 @@ function cashdebtContent(){
       dn.textContent=`⚑ Highest real dollar cost is ${av.top_dollar_cost.name} (${u(av.top_dollar_cost.annual_interest)}/yr) — not the top-APR row below.`;
       wrap.appendChild(dn);
     }
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PMTS LEFT</th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PAYMENTS LEFT<br/><span class="muted" style="font-size:var(--font-size-xs);">alone → in plan</span></th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     av.rows.forEach(x=>{ const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':((x.priority==='carry'||x.priority==='paid-in-full')?'pos':'muted');
       const aprCell=`<input class="cd-dr" data-nm="${esc(x.name)}" type="number" step="0.1" value="${x.rate_pct!=null?x.rate_pct:''}" placeholder="APR" style="width:54px;"/>%`;
@@ -7081,8 +7083,30 @@ function cashdebtContent(){
       t.appendChild(tr); });
     wrap.appendChild(t);
   }
-  // ---- payoff simulator: avalanche vs snowball, month-by-month (RESUME-TRACKER 2026-07-20) ----
+  // ---- HOW THE PLAN WORKS (2026-11-12, Jason): the rollover of freed-up payments was in the numbers but not explained anywhere ----
   const po=r.payoff_simulator||{};
+  { const pav0=po.avalanche||{}, sched=pav0.schedule||[], st0=pav0.start_target;
+    if(po.available && st0 && pav0.resolved){
+      const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-2) var(--space-3);margin:var(--space-3) 0;font-size:var(--font-size-base);line-height:1.55;max-width:980px;';
+      const uc=n=>n==null?'—':'$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});      // payments to the cent: $651.60, not $652
+      const rowOf=n=>((av.rows||[]).find(x=>x.name===n))||{};
+      const top=rowOf(st0.debt);
+      let h='<div class="ph" style="border:none;margin:0 0 var(--space-1);padding:0;">HOW THE PLAN WORKS</div>'+
+        '<ol style="margin:0 0 var(--space-2) 18px;padding:0;">'+
+        '<li>Pay the <b>minimum</b> on every debt (the MIN PMT column).</li>'+
+        '<li>Aim <b>every extra dollar</b> at the top debt, <b>'+esc(st0.debt)+'</b>, which pays <b>'+uc(st0.payment)+'/mo</b> now (its minimum'+((po.extra_monthly||0)>0?' plus your '+uc(po.extra_monthly)+' extra':', no extra budget set')+').</li>'+
+        '<li>Each time a debt is paid off, <b>add its monthly payment to the top debt</b> straight away. That is why a debt clears sooner "in plan" than "alone".</li></ol>';
+      if(top.remaining_payments!=null && top.plan_months!=null && top.plan_months<top.remaining_payments)
+        h+='<div style="margin-bottom:var(--space-2);"><b>'+esc(st0.debt)+'</b> would take <b>'+top.remaining_payments+' payments</b> on its own. With the freed-up payments added, it is gone in <b class="pos">'+top.plan_months+' months</b>.</div>';
+      const byMonth={}; sched.forEach(e=>{ (byMonth[e.month]=byMonth[e.month]||[]).push(e); });
+      const months=Object.keys(byMonth).map(Number).sort((a,b)=>a-b);
+      h+='<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:2px;">TIMELINE</div><ul style="margin:0 0 0 18px;padding:0;">'+months.map(m=>{
+        const ev=byMonth[m], names=ev.map(e=>esc(e.debt)+' ('+uc(e.freed)+'/mo)').join(' and '), last=ev[ev.length-1];
+        return '<li><b>Month '+m+'</b>: '+names+' paid off. '+(last.rolls_to?('Its payment moves to <b>'+esc(last.rolls_to)+'</b>, which then pays <b>'+uc(last.rolls_to_payment)+'/mo</b>.'):'<b class="pos">Everything listed is paid off.</b>')+'</li>'; }).join('')+'</ul>';
+      h+='<div class="muted" style="font-size:var(--font-size-sm);margin-top:var(--space-1);">Estimate: monthly interest on the remaining balance, rates and minimums as entered above, no new charges. Add an extra monthly amount in HOUSEHOLD FACTS below to see it shorten.</div>';
+      box.innerHTML=h; wrap.appendChild(box);
+    } }
+  // ---- payoff simulator: avalanche vs snowball, month-by-month (RESUME-TRACKER 2026-07-20) ----
   if(po.available){
     wrap.appendChild(el('div','ph','PAYOFF SIMULATOR · AVALANCHE vs SNOWBALL'));
     const pav=po.avalanche||{}, psn=po.snowball||{};
