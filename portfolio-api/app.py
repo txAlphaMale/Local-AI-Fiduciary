@@ -6627,6 +6627,7 @@ BUDGET_FILE = os.environ.get("BUDGET_FILE", "/data/budgets.json")
 _budget = budget_mod.Budget(load=lambda: store.read_json_strict(BUDGET_FILE),
                             save=lambda d: store.write_json(BUDGET_FILE, d))
 _budget.register_probe("tavily", _tavily_probe)
+edgar.set_gate(_budget)   # SEC requests honor the same gate (pause on 403/429, probe, recover)
 
 
 _TAV_SRC = threading.local()
