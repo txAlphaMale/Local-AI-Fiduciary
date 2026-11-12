@@ -71,33 +71,29 @@
       "note": "HSA limits only (Rev. Proc. 2026-24). The 401(k)/415(c)/IRA figures for 2027 are not published yet and carry forward from 2026, so this group stays flagged stale."
     },
     "ss.bend_points": {
-      "confirmed": false,
+      "confirmed": true,
       "values": {"bend_points": [1340, 8077], "rates": [0.9, 0.32, 0.15]},
-      "status": "secondary",
-      "verified": null,
-      "source": "SSA Office of the Chief Actuary, PIA formula",
-      "source_url": "https://www.ssa.gov/oact/cola/piaformula.html",
-      "note": "Reported by a search summary of ssa.gov; confirm on ssa.gov, then set confirmed to true."
+      "status": "primary",
+      "verified": "2026-11-12",
+      "source": "SSA Office of the Chief Actuary, Benefit Formula Bend Points (2027 row: $1,340 / $8,077), read on ssa.gov by Cowork on 2026-11-12 (RESULT-016). The 90% / 32% / 15% rates are statutory.",
+      "source_url": "https://www.ssa.gov/oact/cola/bendpoints.html"
     },
     "ss.cola_wagebase_max": {
-      "confirmed": false,
+      "confirmed": true,
       "merge": true,
       "values": {"cola": 0.036, "wage_base": 192300},
-      "status": "secondary",
-      "verified": null,
-      "source": "SSA 2027 COLA fact sheet",
-      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2027.html",
-      "note": "COLA 3.6% and wage base 192,300 reported by a search summary; the 2027 maximum FRA benefit is not recorded (carries forward). Confirm on ssa.gov, then set confirmed to true."
+      "status": "primary",
+      "verified": "2026-11-12",
+      "source": "SSA COLA series (COLA effective December 2026 = 3.6%, applied in 2027) and Contribution and Benefit Base (2027: $192,300), read on ssa.gov by Cowork on 2026-11-12 (RESULT-016). The 2027 maximum benefit at full retirement age is not recorded and carries forward from 2026.",
+      "source_url": "https://www.ssa.gov/oact/cola/cbb.html"
     },
     "ss.earnings_test": {
-      "confirmed": false,
-      "merge": true,
-      "values": {"under_fra_annual": 25560, "fra_year_annual": 67920},
-      "status": "secondary",
-      "verified": null,
-      "source": "SSA 2027 COLA fact sheet",
-      "source_url": "https://www.ssa.gov/news/en/cola/factsheets/2027.html",
-      "note": "Reported by a search summary; confirm on ssa.gov, then set confirmed to true."
+      "confirmed": true,
+      "values": {"under_fra_annual": 25560, "under_fra_withhold_ratio": 2.0, "fra_year_annual": 67920, "fra_year_withhold_ratio": 3.0},
+      "status": "primary",
+      "verified": "2026-11-12",
+      "source": "SSA Retirement Earnings Test Exempt Amounts (2027 row: $25,560 under full retirement age with $1 withheld per $2 over, $67,920 in the year of reaching it with $1 per $3 over), read on ssa.gov by Cowork on 2026-11-12 (RESULT-016).",
+      "source_url": "https://www.ssa.gov/oact/cola/rtea.html"
     }
   }
 }

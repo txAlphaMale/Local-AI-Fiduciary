@@ -62,13 +62,18 @@ class TestTwentyTwentySevenActivates(unittest.TestCase):
             self.assertEqual(ss.TAX_THRESHOLDS["mfj"], (32000, 44000))
             self.assertEqual(estate.TOP_RATE, 0.40)
 
-    def test_unconfirmed_social_security_figures_are_ignored_until_a_person_confirms(self):
+    def test_the_confirmed_2027_social_security_figures_take_effect(self):
+        """Confirmed on ssa.gov by Cowork 2026-11-12 (RESULT-016): bend points, COLA + wage base, earnings test."""
         with Switch27():
-            self.assertEqual(ss.BEND_POINTS_2026, (1286, 7749))                       # still 2026: the 2027 entry has confirmed=false
-            self.assertEqual(ss.COLA_2026, 0.028); self.assertEqual(ss.OASDI_WAGE_BASE_2026, 184500)
-            self.assertEqual(ss.EARNINGS_TEST_2026["under_fra_annual"], 24480)
-        keys = {u["key"] for u in taxtables.unconfirmed(2027)}
-        self.assertEqual(keys, {"ss.bend_points", "ss.cola_wagebase_max", "ss.earnings_test"})
+            self.assertEqual(ss.BEND_POINTS_2026, (1340, 8077))
+            self.assertEqual(ss.COLA_2026, 0.036); self.assertEqual(ss.OASDI_WAGE_BASE_2026, 192300)
+            self.assertEqual((ss.EARNINGS_TEST_2026["under_fra_annual"], ss.EARNINGS_TEST_2026["fra_year_annual"]), (25560, 67920))
+            self.assertEqual((ss.EARNINGS_TEST_2026["under_fra_withhold_ratio"], ss.EARNINGS_TEST_2026["fra_year_withhold_ratio"]), (2.0, 3.0))
+            self.assertEqual(ss.MAX_FRA_BENEFIT_2026, 4152.0)                          # the 2027 maximum benefit is NOT recorded yet: carried from 2026
+        self.assertEqual(taxtables.unconfirmed(2027), [])
+        for k in ("ss.bend_points", "ss.cola_wagebase_max", "ss.earnings_test"):
+            e = taxtables._file(2027)["groups"][k]
+            self.assertEqual((e["confirmed"], e["status"], e["verified"]), (True, "primary", "2026-11-12"), k)
 
     def test_unpublished_figures_carry_forward_and_are_flagged_stale(self):
         with Switch27():
@@ -86,7 +91,9 @@ class TestTwentyTwentySevenActivates(unittest.TestCase):
     def test_the_watchdog_flags_exactly_the_carried_figures_in_january_2027(self):
         with Switch27():
             stale = {a["key"] for a in grounding.alerts(JAN27) if a["level"] == "stale"}
-        self.assertEqual(stale, {"aca.cliff_regime", "ss.bend_points", "ss.cola_wagebase_max", "ss.earnings_test", "roth.irmaa",
+        # ss.bend_points and ss.earnings_test are now complete 2027 entries; ss.cola_wagebase_max stays flagged because the 2027 maximum benefit at full
+        # retirement age is not recorded yet (it carries forward from 2026).
+        self.assertEqual(stale, {"aca.cliff_regime", "ss.cola_wagebase_max", "roth.irmaa",
                                  "benefits.contribution_limits", "hsa.healthcare_need", "ltc.cost_of_care"})   # Fidelity publishes its new estimate each year
 
 
