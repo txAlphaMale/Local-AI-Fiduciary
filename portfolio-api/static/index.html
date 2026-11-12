@@ -5069,22 +5069,29 @@ function donutSlices(){                          // [{widget, total, items:[{lab
 // Per-account cash designation (2026-11-10): the person's own word beats every guess. Household-wide, admin-only, saved on the server.
 const DESIG_CHOICES=[['','Auto (rules decide)'],['investment','Investment'],['brokerage_cash','Brokerage cash'],['bank_cash','Bank cash'],['exclude','Exclude from widgets']];
 function designationSelect(a){
+  const wrap=el('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:2px;align-items:flex-start;';
   const s=el('select'); s.setAttribute('aria-label','Cash designation for '+(a.name||'account')); s.style.cssText='max-width:100%;font-size:var(--font-size-sm);';
+  const msg=el('span','muted'); msg.style.cssText='font-size:var(--font-size-xs);min-height:1em;'; msg.setAttribute('role','status');
   DESIG_CHOICES.forEach(([v,l])=>{ const o=el('option',null,l); o.value=v;
     if((a.holdings_count||0)>0 && (v==='brokerage_cash'||v==='exclude')){ o.disabled=true; o.textContent=l+' (has holdings)'; }
     s.appendChild(o); });
   s.value=a.designation||'';
+  // There is no Save button on purpose: choosing an option saves it at once. The note under the box says so, and confirms it.
+  msg.textContent=a.designation?'saved':'';
   s.onchange=async()=>{
-    s.disabled=true;
+    s.disabled=true; msg.style.color=''; msg.textContent='saving…';
     try{
-      const r=await fetch('/api/cash-designations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:{[a.key]:s.value||'auto'}})});
+      const m={[a.key]:s.value||'auto'}; if(a.legacy_key&&a.legacy_key!==a.key) m[a.legacy_key]='auto';   // also drops any older name-keyed setting
+      const r=await fetch('/api/cash-designations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({set:m})});
       if(!r.ok) throw new Error(r.status);
-      const row=((CASHCHK||{}).accounts||[]).find(x=>x.key===a.key); if(row) row.designation=s.value||null;     // keep showing the choice while the data reloads
-      a.designation=s.value||null; s.disabled=false;
+      const row=((CASHCHK||{}).accounts||[]).find(x=>x.key===a.key);                                     // a.key is the account id
+      if(row) row.designation=s.value||null;                                                              // keep showing the choice while the data reloads
+      a.designation=s.value||null; s.disabled=false; msg.textContent='✓ saved'+(s.value?'':' (back to Auto)');
       WTRACE=null; cashCheckLoad(); await load(true,true);
-    }catch(e){ s.disabled=false; alert('Could not save the setting ('+e.message+').'); }
+    }catch(e){ s.disabled=false; msg.style.color='var(--color-negative)'; msg.textContent='not saved ('+e.message+'): try again'; }
   };
-  return s;
+  wrap.appendChild(s); wrap.appendChild(msg);
+  return wrap;
 }
 function cashCheckText(masked){
   const r=CASHCHK||{}, m=s=>{ s=String(s==null?'':s); return masked?s.replace(/(xx+|\*+|#)\s*\d{2,6}/gi,'XX••••'):s; };
