@@ -20,6 +20,7 @@ import datetime
 import requests
 
 API_URL = "https://api.tavily.com/search"
+USAGE_URL = "https://api.tavily.com/usage"
 _key_getter = lambda: ""
 
 
@@ -93,6 +94,48 @@ def search(query, days=14, max_results=5, timeout=30):
             arts.append({"title": it.get("title") or "", "url": it.get("url"), "content": it.get("content") or "",
                          "published_date": it.get("published_date"), "score": it.get("score")})
     return {"ok": True, "articles": arts, "http": r.status_code, "detail": ""}
+
+
+def _num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def usage(timeout=15):
+    """GET /usage (costs NO credits; Tavily limits it to 10 requests per 10 minutes). Used as the budget gate's
+    recovery probe. -> {"ok","http","detail","plan_usage","plan_limit","key_usage","key_limit","paygo"}.
+    The response shape is parsed defensively (nested "account"/"key" objects or flat keys); fields that are
+    missing come back None -- the caller then cannot tell "exhausted" and must not assume it. Never raises,
+    never includes the key."""
+    key = (_key_getter() or "").strip()
+    out = {"ok": False, "http": None, "detail": "", "plan_usage": None, "plan_limit": None,
+           "key_usage": None, "key_limit": None, "paygo": None, "paygo_usage": None, "paygo_limit": None}
+    if not key:
+        out["detail"] = "No Tavily API key is set."
+        return out
+    try:
+        r = requests.get(USAGE_URL, headers={"Authorization": f"Bearer {key}"}, timeout=timeout)
+    except requests.RequestException as e:
+        out["detail"] = f"Could not reach Tavily ({type(e).__name__})."
+        return out
+    out["http"] = r.status_code
+    if r.status_code >= 400:
+        out["detail"] = error_detail(r.status_code, "")
+        return out
+    try:
+        data = r.json()
+    except ValueError:
+        out["detail"] = "Tavily /usage returned something that was not JSON."
+        return out
+    d = data if isinstance(data, dict) else {}
+    acct = d.get("account") if isinstance(d.get("account"), dict) else d
+    kobj = d.get("key") if isinstance(d.get("key"), dict) else d
+    pg_use, pg_lim = _num(acct.get("paygo_usage")), _num(acct.get("paygo_limit"))
+    pg = acct.get("paygo") if isinstance(acct.get("paygo"), bool) else (True if (pg_lim or 0) > 0 else
+                                                                         (None if pg_lim is None else False))
+    out.update(ok=True, plan_usage=_num(acct.get("plan_usage")), plan_limit=_num(acct.get("plan_limit")),
+               key_usage=_num(kobj.get("usage")), key_limit=_num(kobj.get("limit")),
+               paygo=pg, paygo_usage=pg_use, paygo_limit=pg_lim)
+    return out
 
 
 def as_text(articles, limit=2500):
