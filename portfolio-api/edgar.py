@@ -123,6 +123,56 @@ TAGS = {
 }
 
 
+# ---- API budget gate (Jason 2026-11-12) -------------------------------------------------------------------------
+# Every SEC request goes through _get(). With a gate attached (app.py calls set_gate(budget)) a request first asks
+# the gate for a slot: SEC throttles by IP (10 requests a second, with a long block for abuse and a 403/429 reply),
+# so a 403/429 pauses SEC with a back-off, a later request is the one test call, and a paused SEC raises SecDeferred
+# instead of hammering it. Without a gate (tests, scripts) it is a plain requests.get.
+import threading as _threading
+_GATE = {"obj": None}
+_MODE = _threading.local()
+
+
+class SecDeferred(requests.ConnectionError):
+    """SEC is paused by the budget gate (throttled or unreachable); try again after the back-off. Never means 'no data'."""
+
+
+def set_gate(gate):
+    _GATE["obj"] = gate
+
+
+class batch_mode:
+    """`with edgar.batch_mode():` -- background (idea-hunting) callers use the slower batch pace and wait for a slot."""
+    def __enter__(self):
+        _MODE.batch = True
+    def __exit__(self, *a):
+        _MODE.batch = False
+
+
+def _get(url, **kw):
+    g = _GATE["obj"]
+    if g is None:
+        return requests.get(url, **kw)
+    batch = bool(getattr(_MODE, "batch", False))
+    gate = g.check("sec", batch=batch, max_wait=30 if batch else 2)
+    if not gate.get("ok"):
+        raise SecDeferred(f"SEC deferred by the budget gate ({gate.get('reason') or 'paused'}); "
+                          f"retry in about {int(gate.get('wait') or 0)}s")
+    try:
+        r = requests.get(url, **kw)
+    except requests.RequestException:
+        g.report("sec", status=None)
+        raise
+    ra = None
+    try:
+        ra = float((r.headers or {}).get("Retry-After"))
+    except (TypeError, ValueError):
+        pass
+    sc = r.status_code
+    g.report("sec", status=sc, retry_after=ra, ok=(sc < 400 or sc == 404))
+    return r
+
+
 def _headers():
     return {"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"}
 
@@ -148,7 +198,7 @@ def _cik_map():
 
     def _compute():
         try:
-            r = requests.get("https://www.sec.gov/files/company_tickers.json",
+            r = _get("https://www.sec.gov/files/company_tickers.json",
                              headers=_headers(), timeout=30)
             r.raise_for_status()
             m = {}
@@ -199,7 +249,7 @@ def _exchange_map():
 
     def _compute():
         try:
-            r = requests.get("https://www.sec.gov/files/company_tickers_exchange.json",
+            r = _get("https://www.sec.gov/files/company_tickers_exchange.json",
                              headers=_headers(), timeout=30)
             r.raise_for_status()
             j = r.json() or {}
@@ -295,7 +345,7 @@ def _mf_map():
 
     def _compute():
         try:
-            r = requests.get("https://www.sec.gov/files/company_tickers_mf.json",
+            r = _get("https://www.sec.gov/files/company_tickers_mf.json",
                              headers=_headers(), timeout=30)
             r.raise_for_status()
             j = r.json() or {}
@@ -355,7 +405,7 @@ def _nport_by_series(series_id):
     if not series_id:
         return None
     try:
-        r = requests.get("https://www.sec.gov/cgi-bin/browse-edgar",
+        r = _get("https://www.sec.gov/cgi-bin/browse-edgar",
                          params={"action": "getcompany", "CIK": series_id, "type": "NPORT-P",
                                  "dateb": "", "owner": "include", "count": "5", "output": "atom"},
                          headers=_headers(), timeout=30)
@@ -369,7 +419,7 @@ def _nport_by_series(series_id):
         return None
     cik_i, accnd = m.group(1), m.group(2)
     try:
-        rr = requests.get(f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}/primary_doc.xml",
+        rr = _get(f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}/primary_doc.xml",
                           headers=_headers(), timeout=30)
         if rr.status_code >= 400:
             return None
@@ -385,7 +435,7 @@ def _latest_nport(cik, series_id):
     if direct and (not series_id or series_id in direct[0]):
         return direct
     try:
-        r = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
+        r = _get(f"https://data.sec.gov/submissions/CIK{cik}.json",
                          headers=_headers(), timeout=30)
         if r.status_code >= 400:
             return None
@@ -405,7 +455,7 @@ def _latest_nport(cik, series_id):
         accnd = acc.replace("-", "")
         url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accnd}/primary_doc.xml"
         try:
-            rr = requests.get(url, headers=_headers(), timeout=30)
+            rr = _get(url, headers=_headers(), timeout=30)
             if rr.status_code >= 400:
                 continue
             xml = rr.text
@@ -442,7 +492,7 @@ def _nport_by_name(name):
     if len(toks) < 2:                      # too generic to disambiguate safely
         return None
     try:
-        r = requests.get("https://efts.sec.gov/LATEST/search-index",
+        r = _get("https://efts.sec.gov/LATEST/search-index",
                          params={"q": " ".join(toks), "forms": "NPORT-P"},
                          headers=_headers(), timeout=30)
         if r.status_code >= 400:
@@ -462,7 +512,7 @@ def _nport_by_name(name):
         accnd = acc.replace("-", "")
         cik_i = int(str(ciks[0]).lstrip("0") or "0")
         try:
-            rr = requests.get(f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}/primary_doc.xml",
+            rr = _get(f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}/primary_doc.xml",
                               headers=_headers(), timeout=30)
             if rr.status_code >= 400:
                 continue
@@ -584,7 +634,7 @@ def recent_8k(ticker, days=30, limit=4):
     if not cik:
         return []
     try:
-        r = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=_headers(), timeout=30)
+        r = _get(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=_headers(), timeout=30)
         if r.status_code >= 400:
             return []
         recent = ((r.json() or {}).get("filings") or {}).get("recent") or {}
@@ -618,7 +668,7 @@ def _fetch_form4_xml(cik_i, accnd):
     Returns the XML text of the ownershipDocument, or None. Skips the xslF345 rendered variant."""
     base = f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}"
     try:
-        idx = requests.get(f"{base}/index.json", headers=_headers(), timeout=30)
+        idx = _get(f"{base}/index.json", headers=_headers(), timeout=30)
         if idx.status_code >= 400:
             return None
         items = ((idx.json() or {}).get("directory") or {}).get("item") or []
@@ -629,7 +679,7 @@ def _fetch_form4_xml(cik_i, accnd):
              and not str(it.get("name", "")).lower().startswith("xsl")]
     for nm in names:
         try:
-            rr = requests.get(f"{base}/{nm}", headers=_headers(), timeout=30)
+            rr = _get(f"{base}/{nm}", headers=_headers(), timeout=30)
             if rr.status_code >= 400:
                 continue
             if "ownershipDocument" in (rr.text or ""):
@@ -652,7 +702,7 @@ def recent_form4(ticker, days=120, limit=16):
     if not cik:
         return []
     try:
-        r = requests.get("https://www.sec.gov/cgi-bin/browse-edgar",
+        r = _get("https://www.sec.gov/cgi-bin/browse-edgar",
                          params={"action": "getcompany", "CIK": cik, "type": "4",
                                  "dateb": "", "owner": "only", "count": str(max(limit * 2, 20)),
                                  "output": "atom"},
@@ -689,7 +739,7 @@ def _fetch_13f_infotable(cik_i, accnd):
     Returns the XML text or None."""
     base = f"https://www.sec.gov/Archives/edgar/data/{cik_i}/{accnd}"
     try:
-        idx = requests.get(f"{base}/index.json", headers=_headers(), timeout=30)
+        idx = _get(f"{base}/index.json", headers=_headers(), timeout=30)
         if idx.status_code >= 400:
             return None
         items = ((idx.json() or {}).get("directory") or {}).get("item") or []
@@ -701,7 +751,7 @@ def _fetch_13f_infotable(cik_i, accnd):
              and str(it.get("name", "")).lower() != "primary_doc.xml"]
     for nm in names:
         try:
-            rr = requests.get(f"{base}/{nm}", headers=_headers(), timeout=30)
+            rr = _get(f"{base}/{nm}", headers=_headers(), timeout=30)
             if rr.status_code >= 400:
                 continue
             if "infoTable" in (rr.text or ""):
@@ -719,7 +769,7 @@ def recent_13f(cik, n=2):
     if not cik:
         return []
     try:
-        r = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
+        r = _get(f"https://data.sec.gov/submissions/CIK{cik}.json",
                          headers=_headers(), timeout=30)
         if r.status_code >= 400:
             return []
@@ -795,7 +845,7 @@ def _cagr(series):
 
 
 def _companyfacts(cik):
-    r = requests.get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+    r = _get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
                      headers=_headers(), timeout=45)
     if r.status_code == 404:
         return None
