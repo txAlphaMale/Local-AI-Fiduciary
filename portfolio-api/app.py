@@ -41,6 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
+import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
 import tax     # bracket-aware federal tax engine (G5) — replaces the 3 flat tax knobs
@@ -6472,7 +6473,7 @@ NEWS_STALE_AFTER = int(os.environ.get("NEWS_STALE_AFTER", "86400"))          # 1
 CACHE_RULES_VERSION = 2
 
 
-def _finnhub_json(path, sym, extra=None):
+def _finnhub_json(path, sym, extra=None, batch=False):
     """(payload, transport_ok). The second element distinguishes "Finnhub ANSWERED, and this
     symbol genuinely has no data" from "the call FAILED" (missing/garbled key, 429, 403 on a
     premium endpoint, timeout). cached_fetch needs that distinction: an empty-but-successful
@@ -6489,8 +6490,18 @@ def _finnhub_json(path, sym, extra=None):
     params = {"symbol": sym, "token": FINNHUB}
     if extra:
         params.update(extra)
+    # API budget gate (2026-11-12): honour a rate-limit pause and the per-minute pace BEFORE calling. A
+    # deferred call returns the same (None, False) as any failed call, so cached_fetch falls back to the
+    # last-known-good copy and nothing empty is cached as "no data".
+    if not _budget.check("finnhub", batch=batch, max_wait=20)["ok"]:
+        return None, False
     try:
         r = requests.get(f"https://finnhub.io/api/v1/{path}", params=params, timeout=20)
+        try:
+            _ra = float(r.headers.get("Retry-After") or 0)
+        except (TypeError, ValueError):
+            _ra = 0
+        _budget.report("finnhub", status=r.status_code, retry_after=_ra)
         if r.status_code >= 400:
             return None, False
         try:
@@ -6498,6 +6509,7 @@ def _finnhub_json(path, sym, extra=None):
         except ValueError:
             return None, False
     except Exception:
+        _budget.report("finnhub", status=None)
         return None, False
     if isinstance(data, dict) and data.get("error"):
         return None, False
@@ -6588,10 +6600,66 @@ def _tavily_key():
 tavily_client.configure(_tavily_key)
 
 
+def _tavily_probe():
+    """Free recovery probe for the budget gate: GET /usage costs no credits. 'ok' unless the plan is provably
+    exhausted (usage >= limit with pay-as-you-go off); unparseable numbers count as ok (a real call re-pauses
+    the gate with a longer backoff if the quota is in fact still used up)."""
+    u = tavily_client.usage()
+    if u.get("http") == 429:
+        return {"state": "rate", "detail": "HTTP 429 on the usage check"}
+    if not u.get("ok"):
+        return {"state": "unknown", "detail": u.get("detail") or "usage check failed"}
+    pu, pl = u.get("plan_usage"), u.get("plan_limit")
+    pgu, pgl = u.get("paygo_usage"), u.get("paygo_limit")
+    snap = {"plan_usage": pu, "plan_limit": pl, "key_usage": u.get("key_usage"), "key_limit": u.get("key_limit"),
+            "paygo": u.get("paygo"), "paygo_usage": pgu, "paygo_limit": pgl}
+    # Free plan: out when usage hits the limit. Pay-as-you-go: out only when its own limit is reached (the app also
+    # keeps a dollar cap of its own in the budget gate -- an account-side cap is unconfirmed).
+    if pu is not None and pl and pu >= pl:
+        if not u.get("paygo"):
+            return {"state": "quota", "detail": f"plan credits used up ({int(pu)}/{int(pl)})", "usage": snap}
+        if pgu is not None and pgl and pgu >= pgl:
+            return {"state": "quota", "detail": "pay-as-you-go limit reached on the Tavily account", "usage": snap}
+    return {"state": "ok", "usage": snap}
+
+
+BUDGET_FILE = os.environ.get("BUDGET_FILE", "/data/budgets.json")
+_budget = budget_mod.Budget(load=lambda: store.read_json_strict(BUDGET_FILE),
+                            save=lambda d: store.write_json(BUDGET_FILE, d))
+_budget.register_probe("tavily", _tavily_probe)
+
+
+_TAV_SRC = threading.local()
+
+
+class _tav_source:
+    """`with _tav_source("chat"):` tags every Tavily call made in the block so the budget gate can log which
+    feature consumed credits (chat / brief / alerts / discovery / scavenger / other)."""
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.prev = getattr(_TAV_SRC, "v", "other")
+        _TAV_SRC.v = self.name if self.prev == "other" else self.prev      # the OUTER tag wins (chat > brief)
+
+    def __exit__(self, *a):
+        _TAV_SRC.v = self.prev
+
+
 def _tavily_call(query, days, max_results):
     """ONE entry point for every Tavily news search (direct to api.tavily.com; the old mcpo/mcp-tavily route was removed
-    2026-10-21). -> {"ok","articles","text","http","detail","via"}. With no key the detail says where to add it."""
+    2026-10-21). -> {"ok","articles","text","http","detail","via"}. With no key the detail says where to add it.
+    Goes through the API budget gate: while Tavily is paused (rate limit / plan credits used up) the call is
+    DEFERRED, not sent, and the result says so ("deferred": True) -- never "no articles"."""
+    src = getattr(_TAV_SRC, "v", "other")
+    if tavily_client.configured():
+        gate = _budget.check("tavily", batch=(src == "scavenger"))
+        if not gate["ok"]:
+            return {"ok": False, "articles": [], "text": "", "http": None, "detail": gate["reason"],
+                    "via": "budget", "deferred": True}
     res = tavily_client.search(query, days, max_results)
+    if tavily_client.configured():
+        _budget.report("tavily", status=res.get("http"), ok=res["ok"], source=src)
     res["text"] = tavily_client.as_text(res["articles"]) if res["ok"] else ""
     res["via"] = "direct"
     return res
@@ -6608,7 +6676,8 @@ def _news(sym, name, with_meta=False):
     query = f"{sym} {name} stock"
 
     def _compute():
-        res = _tavily_call(query, 7, 5)
+        with _tav_source("brief"):
+            res = _tavily_call(query, 7, 5)
         if not res["ok"]:
             _news_note(False, res["detail"], "brief-news")
             return ""
@@ -10917,6 +10986,72 @@ async def post_scanner_config(req: Request):
     return {"ok": True, "config": cfg}
 
 
+# ---------------- API budget gate (status + soft budgets; see budget.py) ----------------
+@app.get("/api/budgets")
+def get_budgets():
+    """Per-provider budget state: open / paused (why, resumes in), calls this minute, batch soft budget, last usage snapshot."""
+    return {"providers": _budget.status()}
+
+
+@app.post("/api/budgets")
+async def post_budgets(req: Request):
+    """Set one provider's budgets: `batch_daily` (scavenger calls/day), `renewal` ("YYYY-MM-DD", anchors the billing
+    cycle), and for Tavily `hard_cap_usd` (app-side pay-as-you-go ceiling beyond the free credits) and
+    `batch_cycle_credits` (scavenger ceiling per cycle; null = the free allowance). Null resets a field to its default.
+    Body e.g. {"provider": "tavily", "hard_cap_usd": 10, "renewal": "2026-12-01"}."""
+    body = await req.json()
+    name = str(body.get("provider") or "")
+    if name not in {r["provider"] for r in _budget.status()}:
+        return JSONResponse({"error": "unknown provider"}, status_code=400)
+    kw = {}
+    if "batch_daily" in body:
+        v = body["batch_daily"]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or v > 100000):
+            return JSONResponse({"error": "batch_daily must be a number from 0 to 100000, or null"}, status_code=400)
+        kw["batch_daily"] = v
+    if "hard_cap_usd" in body:
+        v = body["hard_cap_usd"]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or v > 100000):
+            return JSONResponse({"error": "hard_cap_usd must be a number from 0 to 100000, or null"}, status_code=400)
+        kw["hard_cap_usd"] = v
+    if "batch_cycle_credits" in body:
+        v = body["batch_cycle_credits"]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or v > 10_000_000):
+            return JSONResponse({"error": "batch_cycle_credits must be a number >= 0, or null"}, status_code=400)
+        kw["batch_cycle_credits"] = v
+    if "renewal" in body:
+        v = body["renewal"]
+        if v is None:
+            kw["renewal"] = None
+        else:
+            try:
+                kw["renewal"] = datetime.datetime.strptime(str(v), "%Y-%m-%d").replace(
+                    tzinfo=datetime.timezone.utc).timestamp()
+            except ValueError:
+                return JSONResponse({"error": "renewal must be YYYY-MM-DD or null"}, status_code=400)
+    _snap = lambda: {r["provider"]: {"batch_daily": r["batch_daily_budget"], "renewal": r["renewal"],
+                                     "hard_cap_usd": (r["spend"] or {}).get("hard_cap_usd"),
+                                     "batch_cycle_credits": (r["spend"] or {}).get("batch_cycle_credits")}
+                     for r in _budget.status()}.get(name)
+    old = _snap()
+    _budget.configure(name, **kw)
+    new = _snap()
+    _emit_config_changed(req, "/api/budgets", old, new)
+    return {"ok": True, "providers": _budget.status()}
+
+
+@app.post("/api/budgets/probe")
+async def post_budgets_probe(req: Request):
+    """Run a provider's free probe now (Tavily: GET /usage, no credits) and re-open the gate if it passes."""
+    body = await req.json()
+    name = str(body.get("provider") or "")
+    if name not in {r["provider"] for r in _budget.status()}:
+        return JSONResponse({"error": "unknown provider"}, status_code=400)
+    out = _budget.force_probe(name)
+    return {"ok": out.get("state") == "ok", "result": {"state": out.get("state"), "detail": out.get("detail")},
+            "providers": _budget.status()}
+
+
 def _read_accounts_cfg():
     """Per-account settings: {"defaults": {drip, fractional_ok}, "accounts": {name: {...}}}."""
     try:
@@ -13559,7 +13694,8 @@ def _holdings_alerts(d, limit):
         t = c.get("ticker")
         if not t:
             continue
-        material = [n for n in _company_news(t, c.get("name") or "") if n["material"]]
+        with _tav_source("alerts"):
+            material = [n for n in _company_news(t, c.get("name") or "") if n["material"]]
         filings = edgar.recent_8k(t)               # authoritative SEC 8-K material-event filings
         if material or filings:
             alerts.append({"ticker": t, "name": c.get("name"), "weight_pct": c.get("weight_pct"),
@@ -13579,7 +13715,8 @@ def _discover(d, crit, _tavily_meta_acc=None, _funnel_acc=None):
                "held_skipped": 0, "paper_skipped": 0, "no_data": 0, "below_min_fit": 0,
                "over_price_cap": 0, "kept": 0, "briefed": 0, "min_fit": OPP_MIN_FIT, "dropped": []})
     for q in (cfg.get("discovery_queries") or [])[:4]:
-        arts, meta = _tavily_results(q, days=10, max_results=5, with_meta=True)
+        with _tav_source("discovery"):
+            arts, meta = _tavily_results(q, days=10, max_results=5, with_meta=True)
         if _tavily_meta_acc is not None:
             _tavily_meta_acc.append(meta)
         for a in arts:
@@ -14765,9 +14902,10 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None):
         if name == "get_benefits":
             return get_benefits()
         if name == "web_search":
-            return {"results": _tavily_results(str(args.get("query") or ""),
-                                               days=int(args.get("days") or 14),
-                                               max_results=int(args.get("max_results") or 5))}
+            with _tav_source("strategist"):
+                return {"results": _tavily_results(str(args.get("query") or ""),
+                                                   days=int(args.get("days") or 14),
+                                                   max_results=int(args.get("max_results") or 5))}
         return {"error": f"unknown tool {name}"}
     except Exception as e:
         return {"error": f"{name} failed: {_errref(e)}"}
@@ -15706,9 +15844,10 @@ def _fiduciary_dispatch(name, args):
         if name == "search_knowledge":
             return knowledge.search(str(args.get("query") or ""), k=int(args.get("k") or 4))
         if name == "web_search":
-            return {"results": _tavily_results(str(args.get("query") or ""),
-                                               days=int(args.get("days") or 14),
-                                               max_results=int(args.get("max_results") or 5))}
+            with _tav_source("chat"):
+                return {"results": _tavily_results(str(args.get("query") or ""),
+                                                   days=int(args.get("days") or 14),
+                                                   max_results=int(args.get("max_results") or 5))}
         if name == "list_compliance_docs":     return list_compliance_docs()
         if name == "get_compliance_doc":       return _compliance_doc_data(str(args.get("name") or ""))
         if name == "run_calculator":
