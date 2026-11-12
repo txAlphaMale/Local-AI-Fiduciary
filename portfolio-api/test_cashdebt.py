@@ -114,6 +114,44 @@ class TestAvalancheRows(unittest.TestCase):
         self.assertEqual(by["NoRate"]["remaining_payments_status"], "unknown")
 
 
+class TestAvalancheOrder(unittest.TestCase):
+    """2026-11-12: a $0 debt must never be listed above one with a balance, whatever its APR."""
+    DEBTS = [{"name": "REI", "balance": 0, "rate_pct": 24.74, "min_payment": 0},
+             {"name": "Cabelas", "balance": 0, "rate_pct": 18.8, "min_payment": 0},
+             {"name": "Loan", "balance": 14857, "rate_pct": 7.7, "min_payment": 561.6},
+             {"name": "NelNet", "balance": 15752, "rate_pct": 5.125, "min_payment": 300},
+             {"name": "BofA", "balance": 15879, "rate_pct": 0, "min_payment": 600},
+             {"name": "Apple", "balance": 21},
+             {"name": "Citi", "balance": 1592, "rate_pct": 19.49, "pay_in_full": True},
+             {"name": "Platinum", "balance": 0, "rate_pct": 0, "pay_in_full": True}]
+
+    def order(self, debts=None):
+        return [r["name"] for r in cd.avalanche(debts or self.DEBTS, 7.5)["rows"]]
+
+    def test_zero_balance_rows_come_last_and_never_above_a_row_with_a_balance(self):
+        names = self.order()
+        bal = {d["name"]: d["balance"] for d in self.DEBTS}
+        seen_zero = False
+        for n in names:
+            if bal[n] <= 0:
+                seen_zero = True
+            else:
+                self.assertFalse(seen_zero, f"{n} (balance {bal[n]}) is listed below a $0 row: {names}")
+        self.assertEqual(names[-3:], ["REI", "Cabelas", "Platinum"])                         # $0 rows last, highest rate first
+
+    def test_rows_with_a_balance_keep_the_avalanche_sequence(self):
+        self.assertEqual(self.order()[:5], ["Loan", "NelNet", "BofA", "Apple", "Citi"])        # pay-first, then carry by rate, then set-rate, then paid-in-full
+
+    def test_a_balance_breaks_a_tie_between_equal_rates(self):
+        names = self.order([{"name": "Small", "balance": 100, "rate_pct": 0}, {"name": "Big", "balance": 5000, "rate_pct": 0}])
+        self.assertEqual(names, ["Big", "Small"])
+
+    def test_the_avalanche_target_is_never_a_zero_balance_debt(self):
+        av = cd.avalanche([{"name": "REI", "balance": 0, "rate_pct": 24.74}, {"name": "Loan", "balance": 1000, "rate_pct": 7.7}], 7.5)
+        self.assertEqual(av["rows"][0]["name"], "Loan")
+        self.assertTrue(av["rate_vs_dollar_disagree"] is False)
+
+
 class TestPayoffSimulator(unittest.TestCase):
     DEBTS = [{"name": "A", "balance": 16244, "rate_pct": 7.7, "min_payment": 561.6},
              {"name": "B", "balance": 15752, "rate_pct": 5.125, "min_payment": 300.0}]
