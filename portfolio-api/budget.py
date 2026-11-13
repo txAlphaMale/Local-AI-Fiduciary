@@ -71,6 +71,7 @@ class Budget:
         self._probes = {}
         self._last_forced = {}
         self._st = {n: self._fresh() for n in self._cfg}
+        self._binfo = {n: [] for n in self._cfg}      # parallel to _win: (tag, is_batch) per call
         self._win = {n: [] for n in self._cfg}        # call timestamps, last 60 s (not persisted)
         self._restore()
 
@@ -166,16 +167,16 @@ class Budget:
             s["cycle"]["credits"] = max(s["cycle"]["credits"], int(pu))
 
     # ---------------------------------------------------------------- the two calls every client makes
-    def check(self, name, batch=False, max_wait=0):
+    def check(self, name, batch=False, max_wait=0, tag=None):
         deadline = self._clock() + max(0, max_wait)
         while True:
-            res = self._check_once(name, batch)
+            res = self._check_once(name, batch, tag)
             if res["ok"] or res.get("pace") is None or self._clock() + res["wait"] > deadline:
                 res.pop("pace", None)
                 return res
             time.sleep(min(res["wait"], 5))                  # pacing only: wait for the 60 s window to free a slot
 
-    def _check_once(self, name, batch):
+    def _check_once(self, name, batch, tag=None):
         if name not in self._st:
             return {"ok": True, "wait": 0, "reason": None, "deferred": False}
         cfg = self._cfg[name]
@@ -194,7 +195,7 @@ class Budget:
                 else:                                        # half-open: this caller IS the single trial call
                     s["state"], s["trial_at"] = "probing", now
                     self._persist()
-                    self._count(name, now)
+                    self._count(name, now, batch, tag)
                     return {"ok": True, "wait": 0, "reason": None, "deferred": False, "trial": True}
         if probe_now:
             out = self._run_probe(name)
@@ -245,8 +246,16 @@ class Budget:
                         return self._deny(name, nxt, f"the scavenger is held to {bc} credits per cycle ({cyc} used)")
             self._prune(name, now)
             used = len(self._win[name])
-            lim = cfg["batch_per_min"] if batch else cfg["hard_per_min"]
-            if used >= lim:
+            lim = cfg["hard_per_min"]
+            if batch:
+                # Background work has its OWN lane (batch_per_min) so interactive bursts cannot starve it, but the
+                # combined total still stays under the provider ceiling (hard_per_min + 3 spare, below Finnhub's 60).
+                bused = sum(1 for e in self._binfo[name] if e[1])
+                over = bused >= cfg["batch_per_min"] or used >= lim + 3
+                lim = cfg["batch_per_min"] if bused >= cfg["batch_per_min"] else lim + 3
+            else:
+                over = used >= lim
+            if over:
                 wait = max(1.0, 60 - (now - self._win[name][0]))
                 r = self._deny(name, wait, f"pacing ({used}/{lim} calls in the last minute)")
                 r["pace"] = True
@@ -261,7 +270,7 @@ class Budget:
                 s["day_count"] += 1
                 if s["day_count"] % 20 == 0:
                     self._persist()                              # so a restart does not zero the idea-hunting counter
-            self._count(name, now)
+            self._count(name, now, batch, tag)
             return {"ok": True, "wait": 0, "reason": None, "deferred": False}
 
     def _run_probe(self, name):
@@ -281,14 +290,24 @@ class Budget:
                   if why == "paused" else f"{label} deferred: {why}.")
         return {"ok": False, "wait": wait, "reason": reason, "deferred": True}
 
+    def _callers(self, name):
+        out = {}
+        for tag, b in self._binfo[name]:
+            k = ("batch " if b else "") + (tag or "?")
+            out[k] = out.get(k, 0) + 1
+        return out
+
     def _prune(self, name, now):
         w = self._win[name]
         while w and now - w[0] >= 60:
             w.pop(0)
+            if self._binfo[name]:
+                self._binfo[name].pop(0)
 
-    def _count(self, name, now):
+    def _count(self, name, now, batch=False, tag=None):
         self._prune(name, now)
         self._win[name].append(now)
+        self._binfo[name].append((tag, bool(batch)))
 
     def report(self, name, status=None, retry_after=None, ok=None, source="other", credits=1):
         if name not in self._st:
@@ -391,7 +410,7 @@ class Budget:
                     "provider": n, "label": cfg["label"], "state": s["state"], "kind": s["kind"],
                     "reason": s["reason"], "paused_until": s["paused_until"] or None,
                     "resumes_in": _fmt(s["paused_until"] - now) if s["state"] != "open" and s["paused_until"] > now else None,
-                    "backoff_level": s["level"], "calls_last_minute": len(self._win[n]),
+                    "backoff_level": s["level"], "calls_last_minute": len(self._win[n]), "recent_callers": self._callers(n),
                     "interactive_per_min": cfg["hard_per_min"], "batch_per_min": cfg["batch_per_min"],
                     "batch_calls_today": day_count,
                     "batch_daily_budget": s["batch_daily"] if s["batch_daily"] is not None else cfg["batch_daily"],

@@ -7111,7 +7111,7 @@ def _finnhub_json(path, sym, extra=None, batch=False):
     # last-known-good copy and nothing empty is cached as "no data".
     batch = batch or bool(getattr(_FH_MODE, "batch", False))
     # Background work WAITS for a pacing slot (the window is 60 s), instead of giving up after 20 s and looking like a failed lookup.
-    gate = _budget.check("finnhub", batch=batch, max_wait=75 if batch else 20)
+    gate = _budget.check("finnhub", batch=batch, max_wait=75 if batch else 20, tag=path)
     if not gate["ok"]:
         _fh_failed("gate: " + str(gate.get("reason") or "deferred"))
         return None, False

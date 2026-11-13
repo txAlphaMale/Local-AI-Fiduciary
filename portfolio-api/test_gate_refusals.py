@@ -29,7 +29,7 @@ class TestWaiting(unittest.TestCase):
     def test_background_finnhub_calls_wait_for_a_slot_and_interactive_ones_do_not(self):
         seen = []
 
-        def chk(name, batch=False, max_wait=0):
+        def chk(name, batch=False, max_wait=0, tag=None):
             seen.append((batch, max_wait))
             return {"ok": False, "reason": "pacing (45/45 calls in the last minute)"}
         with mock.patch.object(appmod, "FINNHUB", "k"), mock.patch.object(appmod._budget, "check", side_effect=chk):

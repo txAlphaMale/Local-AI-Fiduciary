@@ -448,3 +448,18 @@ class TestAppWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatchLaneTests(unittest.TestCase):
+    """An interactive burst must not starve background (batch) calls; the combined total stays under the ceiling."""
+    def test_batch_gets_own_lane_and_total_stays_capped(self):
+        import budget
+        t = [1000.0]
+        g = budget.Budget(clock=lambda: t[0])
+        for _ in range(55):
+            self.assertTrue(g.check("finnhub", batch=False, tag="quote")["ok"])
+        self.assertFalse(g.check("finnhub", batch=False)["ok"])           # interactive pool is full
+        got = sum(1 for _ in range(10) if g.check("finnhub", batch=True)["ok"])
+        self.assertEqual(got, 3)                                           # only the spare headroom, never past 58
+        snap = next(x for x in g.status() if x["provider"] == "finnhub")
+        self.assertEqual(snap["recent_callers"].get("quote"), 55)
