@@ -421,7 +421,7 @@ class TestWiring(unittest.TestCase):
         with open(os.path.join(_HERE, "app.py"), encoding="utf-8") as f:
             src = f.read()
         for needle in ('"universe":      ("Universe & first screen"', "/api/run-universe", "/api/universe/tickers",
-                       '_SCHEDULE_ORDER = ["universe",', '"hour": 3, "minute": 0'):
+                       '_SCHEDULE_ORDER = ["scout", "universe",', '"hour": 3, "minute": 0'):
             self.assertIn(needle, src, needle)
         with open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8") as f:
             self.assertIn("universe: '/api/run-universe'", f.read())

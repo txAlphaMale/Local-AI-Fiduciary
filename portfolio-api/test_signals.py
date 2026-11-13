@@ -118,7 +118,7 @@ class TestWiring(unittest.TestCase):
         with open(os.path.join(_HERE, "app.py"), encoding="utf-8") as f:
             src = f.read()
         for needle in ('"signals":       ("Signals for sleeve candidates"', "/api/run-signals", "/api/signals",
-                       '_SCHEDULE_ORDER = ["universe", "market_data", "signals",'):
+                       '_SCHEDULE_ORDER = ["scout", "universe", "market_data", "signals",'):
             self.assertIn(needle, src, needle)
         with open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8") as f:
             html = f.read()
