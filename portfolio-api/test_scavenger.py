@@ -204,7 +204,7 @@ class TestScreenAndJob(unittest.TestCase):
             self.assertEqual(scavenger.read_meta()["last_screen"]["date"], "2026-11-12")  # last real screen is kept
             s3 = scavenger.run_universe(force=True, today=TODAY, download=dl)
             self.assertTrue(s3["screened"])
-        self.assertEqual([c[1] for c in calls], [False, False, True])
+        self.assertEqual([c[1] for c in calls], [True, False, True])   # first run: no rules version saved yet, so it is forced
 
     def test_failed_download_leaves_states_untouched(self):
         ticker_state.ensure()
@@ -215,6 +215,107 @@ class TestScreenAndJob(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 scavenger.run_universe(today=TODAY, download=mock.Mock(side_effect=RuntimeError("HTTP 503")))
         self.assertEqual(ticker_state.counts(), before)
+
+
+def _ifrs(rev, rev_prev, ni, ocf, capex, assets=1000.0, liab=300.0, eq=700.0, filed="2026-04-01", cur="CAD"):
+    def flow(vals):
+        return {"units": {cur: [{"start": f"{fy}-01-01", "end": f"{fy}-12-31", "val": v, "fy": fy, "fp": "FY", "form": "40-F", "filed": f}
+                                for fy, v, f in vals]}}
+
+    def inst(v):
+        return {"units": {cur: [{"end": "2023-12-31", "val": v, "fy": 2023, "fp": "FY", "form": "40-F", "filed": "2024-04-01"},
+                                {"end": "2025-12-31", "val": v, "fy": 2025, "fp": "FY", "form": "40-F", "filed": filed}]}}
+    return {"entityName": "Foreign Co", "facts": {"ifrs-full": {
+        "Revenue": flow([(2024, rev_prev, "2025-04-01"), (2025, rev, filed)]), "ProfitLoss": flow([(2025, ni, filed)]),
+        "CashFlowsFromUsedInOperatingActivities": flow([(2025, ocf, filed)]),
+        "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": flow([(2025, capex, filed)]),
+        "Assets": inst(assets), "Liabilities": inst(liab), "Equity": inst(eq)}}}
+
+
+class TestScreenFixes(unittest.TestCase):
+    """Cowork RESULT-018 findings F1-F3 plus the IFRS path for Jason's foreign picks."""
+    def setUp(self):
+        store.init_db()
+        self.d = tempfile.mkdtemp(dir=_TMP)
+
+    def _screen(self, tickers_facts):
+        path = os.path.join(self.d, "z.zip")
+        _zip(path, {i + 1: f for i, (t, f) in enumerate(tickers_facts)})
+        rows = [{"ticker": t, "name": t, "exchange": "NYSE", "cik": str(i + 1).zfill(10), "fin_status": "N"}
+                for i, (t, f) in enumerate(tickers_facts)]
+        out, stats = scavenge_screen.screen_zip(path, rows, TODAY)
+        return {r["ticker"]: r for r in out}, stats
+
+    def test_f1_foreign_filer_that_switched_to_ifrs_is_not_dormant(self):
+        old_gaap = _facts(5e9, 4e9, 1e8, 2e8, 5e7, filed="2014-08-11", first="2012-08-11")        # last us-gaap filing 2014
+        old_gaap["facts"]["ifrs-full"] = _ifrs(6e9, 5e9, 9e8, 1.5e9, 4e8)["facts"]["ifrs-full"]    # recent IFRS filings
+        by, stats = self._screen([("AEM", old_gaap)])
+        self.assertNotEqual(by["AEM"]["reason_kind"], "dormant")
+        self.assertEqual(by["AEM"]["s1"]["basis"], "ifrs")
+        self.assertEqual(by["AEM"]["state"], "active")
+
+    def test_truly_dormant_us_filer_is_still_dormant(self):
+        by, _ = self._screen([("OLD", _facts(5e7, 5e7, 1, 1, 1, filed="2023-01-01"))])
+        self.assertEqual(by["OLD"]["reason_kind"], "dormant")
+
+    def test_ifrs_only_filer_gets_real_numbers_not_not_us_gaap(self):
+        by, stats = self._screen([("DPRO", _ifrs(8e6, 4e6, -2e6, -1e6, 5e5, cur="USD"))])
+        r = by["DPRO"]
+        self.assertEqual(r["state"], "active")
+        self.assertEqual((r["s1"]["basis"], r["s1"]["currency"]), ("ifrs", "USD"))
+        self.assertAlmostEqual(r["s1"]["rev_growth_pct"], 100.0, places=1)
+        self.assertAlmostEqual(r["s1"]["net_margin_pct"], -25.0, places=1)
+        self.assertAlmostEqual(r["s1"]["fcf_margin_pct"], -18.75, places=1)
+        self.assertEqual(stats["ifrs_read"], 1)
+
+    def test_ifrs_filer_without_revenue_stays_reconsider(self):
+        f = _ifrs(1, 1, 1, 1, 1)
+        del f["facts"]["ifrs-full"]["Revenue"]
+        by, _ = self._screen([("CRML", f)])
+        self.assertEqual((by["CRML"]["state"], by["CRML"]["reason_kind"]), ("reconsider", "not_us_gaap"))
+
+    def test_f3_bank_with_interest_income_revenue_is_not_pre_revenue(self):
+        bank = _facts(0, 0, 3e8, 4e8, 1e7, assets=2e10, liab=1.8e10, eq=2e9)
+        ug = bank["facts"]["us-gaap"]
+        del ug["RevenueFromContractWithCustomerExcludingAssessedTax"]
+        ug["InterestAndDividendIncomeOperating"] = {"units": {"USD": [
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 8e8, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"},
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 1e9, "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2026-02-20"}]}}
+        by, _ = self._screen([("BANK", bank)])
+        self.assertEqual(by["BANK"]["state"], "active")
+        self.assertTrue(by["BANK"]["s1"]["revenue_alt_tags"])
+        self.assertAlmostEqual(by["BANK"]["s1"]["rev_growth_pct"], 25.0, places=1)
+        self.assertAlmostEqual(by["BANK"]["s1"]["net_margin_pct"], 30.0, places=1)
+
+    def test_f2_liquid_cash_burner_is_not_blacklisted_but_thin_liquidity_is(self):
+        base = {"revenue": 3e8, "rev_growth_pct": -4.0, "fcf_margin_pct": -30.0, "net_margin_pct": -40.0,
+                "altman_zone": "distress", "first_filed": "2015-01-01", "last_filed": "2026-10-01"}
+        liquid = scavenge_screen.classify({"fin_status": "N"}, {**base, "current_ratio": 6.0}, TODAY, "ok")
+        thin = scavenge_screen.classify({"fin_status": "N"}, {**base, "current_ratio": 0.8}, TODAY, "ok")
+        unknown = scavenge_screen.classify({"fin_status": "N"}, {**base, "current_ratio": None}, TODAY, "ok")
+        self.assertEqual((liquid["state"], liquid["reason_kind"]), ("reconsider", "burning_cash_liquid"))
+        self.assertEqual((thin["state"], thin["reason_kind"]), ("blacklist", "distressed"))
+        self.assertEqual(unknown["state"], "blacklist")
+
+    def test_rules_change_forces_one_rescreen_and_job_runs_in_batch_mode(self):
+        zp = os.path.join(self.d, "cf.zip")
+        _zip(zp, {1: _facts(200e6, 100e6, 30e6, 40e6, 5e6, assets=1e9, liab=3e8, eq=7e8)})
+        src = {"nasdaq": NASDAQ, "other": OTHER, "sec": json.dumps(SEC)}
+        seen = []
+
+        def dl(dest, last, force):
+            seen.append((bool(getattr(edgar._MODE, "batch", False)), force))
+            import shutil
+            shutil.copy(zp, dest)
+            return dest, "LM9"
+        meta = os.path.join(self.d, "meta.json")
+        store.write_json(meta, {"facts_last_modified": "LM9", "screen_version": scavenge_screen.SCREEN_VERSION - 1})
+        with mock.patch.object(scavenger, "META_FILE", meta), mock.patch.object(scavenger, "UNIVERSE_DIR", self.d), \
+             mock.patch.object(universe, "fetch_sources", return_value=(src, [])):
+            out = scavenger.run_universe(today=TODAY, download=dl)
+            self.assertEqual(scavenger.read_meta()["screen_version"], scavenge_screen.SCREEN_VERSION)
+        self.assertTrue(out["screened"])
+        self.assertEqual(seen, [(True, True)])                       # batch pace, and forced by the old rules version
 
 
 class TestWiring(unittest.TestCase):
