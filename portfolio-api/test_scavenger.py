@@ -272,7 +272,7 @@ class TestScreenFixes(unittest.TestCase):
         f = _ifrs(1, 1, 1, 1, 1)
         del f["facts"]["ifrs-full"]["Revenue"]
         by, _ = self._screen([("CRML", f)])
-        self.assertEqual((by["CRML"]["state"], by["CRML"]["reason_kind"]), ("reconsider", "not_us_gaap"))
+        self.assertEqual((by["CRML"]["state"], by["CRML"]["reason_kind"]), ("reconsider", "pre_revenue"))
 
     def test_f3_bank_with_interest_income_revenue_is_not_pre_revenue(self):
         bank = _facts(0, 0, 3e8, 4e8, 1e7, assets=2e10, liab=1.8e10, eq=2e9)
@@ -316,6 +316,91 @@ class TestScreenFixes(unittest.TestCase):
             self.assertEqual(scavenger.read_meta()["screen_version"], scavenge_screen.SCREEN_VERSION)
         self.assertTrue(out["screened"])
         self.assertEqual(seen, [(True, True)])                       # batch pace, and forced by the old rules version
+
+
+class TestFollowups(unittest.TestCase):
+    """Cowork RESULT-019: foreign annual filers called dormant (NEW-1), ABR picked a sub-line as revenue, AEG's IFRS 17 revenue
+    tag, CRML reports no annual revenue, and a /health build id that moves with the code."""
+    def setUp(self):
+        store.init_db()
+        self.d = tempfile.mkdtemp(dir=_TMP)
+
+    def _screen(self, tickers_facts):
+        path = os.path.join(self.d, "z.zip")
+        _zip(path, {i + 1: f for i, (t, f) in enumerate(tickers_facts)})
+        rows = [{"ticker": t, "name": t, "exchange": "NYSE", "cik": str(i + 1).zfill(10), "fin_status": "N"}
+                for i, (t, f) in enumerate(tickers_facts)]
+        out, stats = scavenge_screen.screen_zip(path, rows, TODAY)
+        return {r["ticker"]: r for r in out}
+
+    def test_foreign_filer_with_old_financials_and_nothing_newer_is_reconsider_not_hidden(self):
+        nu = _ifrs(1e10, 8e9, 1e9, 2e9, 1e8, filed="2025-04-16")
+        by = self._screen([("NU", nu)])
+        self.assertEqual((by["NU"]["state"], by["NU"]["reason_kind"]), ("reconsider", "stale_foreign"))
+        self.assertTrue(by["NU"]["s1"]["financials_stale"])
+
+    def test_foreign_filer_whose_recent_filing_shows_up_only_as_cover_page_data_is_not_stale(self):
+        pbr = _ifrs(1e10, 8e9, 1e9, 2e9, 1e8, filed="2025-04-03")
+        pbr["facts"]["dei"] = {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+            {"end": "2025-12-31", "val": 1, "form": "20-F", "filed": "2026-04-09"}]}}}
+        by = self._screen([("PBR", pbr)])
+        self.assertEqual(by["PBR"]["state"], "active")
+        self.assertEqual(by["PBR"]["s1"]["last_filed_any"], "2026-04-09")
+
+    def test_us_company_with_no_recent_filing_of_any_kind_is_still_dormant(self):
+        by = self._screen([("OLD", _facts(5e7, 5e7, 1, 1, 1, filed="2023-01-01"))])
+        self.assertEqual((by["OLD"]["state"], by["OLD"]["reason_kind"]), ("blacklist", "dormant"))
+
+    def test_abr_style_reit_takes_total_interest_income_not_a_small_sub_line(self):
+        f = _facts(0, 0, 1.07e8, 3e8, 1e7, assets=1e10, liab=8e9, eq=2e9)
+        ug = f["facts"]["us-gaap"]
+        del ug["RevenueFromContractWithCustomerExcludingAssessedTax"]
+
+        def fy(v25, v24):
+            return {"units": {"USD": [
+                {"start": "2024-01-01", "end": "2024-12-31", "val": v24, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"},
+                {"start": "2025-01-01", "end": "2025-12-31", "val": v25, "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2026-02-20"}]}}
+        ug["InterestIncomeOperating"] = fy(940e6, 1000e6)
+        ug["RealEstateRevenueNet"] = fy(11e6, 12e6)
+        by = self._screen([("ABR", f)])
+        self.assertEqual(by["ABR"]["s1"]["revenue"], 940e6)
+        self.assertAlmostEqual(by["ABR"]["s1"]["rev_growth_pct"], -6.0, places=1)
+        self.assertLess(abs(by["ABR"]["s1"]["net_margin_pct"]), 20)
+
+    def test_aeg_style_insurer_follows_the_concept_that_reaches_the_newest_year(self):
+        f = _ifrs(1, 1, 5e8, 1e9, 1e7)
+        ifrs = f["facts"]["ifrs-full"]
+        ifrs["Revenue"] = {"units": {"EUR": [{"start": "2022-01-01", "end": "2022-12-31", "val": 21e9, "form": "20-F", "filed": "2023-03-22"}]}}
+        ifrs["InsuranceRevenue"] = {"units": {"EUR": [
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 9.8e9, "form": "20-F", "filed": "2025-03-27"},
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 9.1e9, "form": "20-F", "filed": "2026-03-26"}]}}
+        by = self._screen([("AEG", f)])
+        self.assertEqual((by["AEG"]["s1"]["revenue"], by["AEG"]["s1"]["currency"]), (9.1e9, "EUR"))
+        self.assertEqual(by["AEG"]["state"], "active")
+
+    def test_crml_style_explorer_with_only_half_year_revenue_is_pre_revenue_with_a_runway(self):
+        f = _ifrs(1, 1, -3e7, -2e7, 5e6)
+        f["facts"]["ifrs-full"]["Revenue"] = {"units": {"USD": [
+            {"start": "2024-07-01", "end": "2024-12-31", "val": 359859, "form": "6-K", "filed": "2025-03-01"}]}}
+        f["facts"]["ifrs-full"]["CashAndCashEquivalents"] = {"units": {"USD": [
+            {"end": "2025-12-31", "val": 5e7, "form": "20-F", "filed": "2026-04-01"}]}}
+        by = self._screen([("CRML", f)])
+        r = by["CRML"]
+        self.assertEqual((r["state"], r["reason_kind"]), ("reconsider", "pre_revenue"))
+        self.assertIsNone(r["s1"]["revenue"])
+        self.assertEqual(r["s1"]["runway_months"], 24.0)             # cash 50M, burn (-20M - 5M capex) ... 50 / 25 * 12
+        self.assertTrue(r["s1"]["foreign_filer"])
+
+    def test_runway_from_fcf(self):
+        self.assertEqual(scavenge_screen.runway_from_fcf(100.0, -50.0), 24.0)
+        self.assertEqual(scavenge_screen.runway_from_fcf(100.0, 5.0), 999)
+        self.assertIsNone(scavenge_screen.runway_from_fcf(None, -5.0))
+
+    def test_health_reports_a_code_build_that_is_a_hash_of_the_code(self):
+        import app as appmod
+        out = appmod.health()
+        self.assertRegex(out["code_build"], r"^[0-9a-f]{10}$")
+        self.assertEqual(out["code_build"], appmod._code_build())
 
 
 class TestWiring(unittest.TestCase):
