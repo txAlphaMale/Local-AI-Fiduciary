@@ -39,6 +39,13 @@ def triggers(note_inputs, row):
     return why
 
 
+def has_data(row):
+    """A name is only scouted once it has been through the data stages: a live price (the pick log needs an entry price) and at least one
+    signal (analyst ratings or insider filings). Otherwise the note would rest on SEC numbers alone and then block a proper one for 30 days."""
+    s2, s3 = row.get("s2") or {}, row.get("s3") or {}
+    return bool(s2.get("available") and s2.get("price")) and bool(s3.get("analyst") or s3.get("insider"))
+
+
 def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIGHTLY_CAP, rescout_days=RESCOUT_DAYS, held=None):
     """-> [{ticker, sleeves: [ids], why}] best-ranked first. Only names that pass a sleeve completely (SEC, market data and signals
     rules all present and satisfied) are considered; recently scouted names are skipped unless something new happened.
@@ -54,6 +61,8 @@ def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIG
         for m in ev["matches"]:
             t = m["ticker"]
             row = by_ticker.get(t) or m
+            if not has_data(row):
+                continue
             note = notes.get(t)
             why = None
             if not note:
@@ -61,7 +70,9 @@ def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIG
             else:
                 age = (now - note["created_at"]) / 86400
                 tr = triggers(note.get("inputs"), row)
-                if tr:
+                if (note.get("inputs") or {}).get("price") is None:
+                    why = "the last note was written before price and signals existed"
+                elif tr:
                     why = "; ".join(tr)
                 elif age >= rescout_days:
                     why = f"last scouted {int(age)} days ago"

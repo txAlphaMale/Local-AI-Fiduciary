@@ -2324,6 +2324,9 @@ async def post_backup_restore_stage(req: Request):
 #  the scheduler and run every job on demand instead.
 # ============================================================================
 _JOBS = {}                       # job_id -> record
+_JOB_CANCEL = {}                 # job_id -> threading.Event, set when the user presses STOP on a queued/running job
+_JOB_TLS = threading.local()     # the job-worker thread's current job id, so a job can ask "was I cancelled?"
+_CANCELLABLE_KINDS = {"market_data", "signals", "scout"}   # jobs that check for a stop request between names
 _JOBS_ORDER = []                 # insertion order (registry ring)
 _JOBS_LOCK = threading.Lock()
 _JOB_Q = queue.Queue()
@@ -2367,8 +2370,11 @@ def _enqueue(kind, source="manual"):
                       "submitted": int(time.time()), "started": None,
                       "finished": None, "error": None}
         _JOBS_ORDER.append(jid)
+        _JOB_CANCEL[jid] = threading.Event()
         while len(_JOBS_ORDER) > JOBS_MAX:      # trim the oldest record
-            _JOBS.pop(_JOBS_ORDER.pop(0), None)
+            _old = _JOBS_ORDER.pop(0)
+            _JOBS.pop(_old, None)
+            _JOB_CANCEL.pop(_old, None)
     _inflight_write()
     _JOB_Q.put(jid)
     return jid, True
@@ -2465,6 +2471,12 @@ def _history_summary(runs, n=5):
             "typical_seconds": (round(typical) if typical is not None else None), "runs": len(runs)}
 
 
+def _job_cancelled():
+    """True when the user pressed STOP on the job running on this thread. Cooperative: a job calls this between names and ends cleanly."""
+    ev = _JOB_CANCEL.get(getattr(_JOB_TLS, "jid", None))
+    return bool(ev and ev.is_set())
+
+
 def _job_worker():
     while True:
         jid = _JOB_Q.get()
@@ -2472,16 +2484,22 @@ def _job_worker():
             rec = _JOBS.get(jid)
         if not rec:
             continue
+        if rec["status"] != "queued":              # cancelled while it waited in the queue
+            continue
         rec["status"] = "running"; rec["started"] = int(time.time())
+        _JOB_TLS.jid = jid
         _inflight_write()
         fn = _JOB_KINDS[rec["kind"]][2]
         try:
             # A job that found its single-flight lock already held returns "skipped" -- it did NOT run, so
             # it must not be recorded as a (suspiciously fast) success.
             rec["status"] = "skipped" if fn() == "skipped" else "done"
+            if _job_cancelled():
+                rec["status"] = "cancelled"
         except Exception as e:
             rec["status"] = "error"; rec["error"] = _errref(e)
         finally:
+            _JOB_TLS.jid = None
             rec["finished"] = int(time.time())
             _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
             _inflight_write()
@@ -2534,6 +2552,31 @@ def _gpu_wait_message():
     typical = _job_typical_seconds(running_job["kind"], jobs, exclude_id=running_job["id"])
     eta = f"~{_fmt_secs(typical)} typical" if typical else "no history yet"
     return f'"{label}" is using the model ({_fmt_secs(elapsed)} so far, {eta}) — your message is queued and will start automatically when it finishes'
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def post_job_cancel(jid: str, request: Request):
+    """STOP a job. Queued: it is dropped and never starts. Running: market data, signals and scout stop cleanly between names (what they
+    already saved is kept); other kinds can only be stopped by restarting the app, and the answer says so."""
+    with _JOBS_LOCK:
+        rec = _JOBS.get(jid)
+        if not rec:
+            return JSONResponse({"error": "unknown job"}, status_code=404)
+        kind, status = rec["kind"], rec["status"]
+        if status == "queued":
+            rec["status"], rec["finished"], rec["error"] = "cancelled", int(time.time()), "stopped before it started"
+        elif status == "running":
+            if kind not in _CANCELLABLE_KINDS:
+                return JSONResponse({"error": f"'{rec['label']}' cannot be stopped part-way. It will finish, or you can restart the app "
+                                              "(which also drops anything queued behind it)."}, status_code=409)
+            _JOB_CANCEL.setdefault(jid, threading.Event()).set()
+            rec["error"] = "stop requested"
+        else:
+            return JSONResponse({"error": f"job already {status}"}, status_code=400)
+    _inflight_write()
+    audit.emit("job.cancelled", outcome="success", request=request, resource=f"/api/jobs/{jid}",
+               detail={"kind": kind, "was": status})
+    return {"ok": True, "was": status, "job_id": jid}
 
 
 @app.get("/api/jobs")
@@ -5917,6 +5960,9 @@ def _do_market_data(limit=None, fetch=None):
                 if deadline and time.time() >= deadline:
                     stopped = "the 06:00 window closed; the next run continues"
                     break
+                if _job_cancelled():
+                    stopped = "stopped by you; what was fetched is kept and the next run continues"
+                    break
                 _fh_reset()
                 price, val, prof = fetch(t)
                 failed, why = _fh_failures()
@@ -6003,6 +6049,9 @@ def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_
                     break
                 if deadline and time.time() >= deadline:
                     stopped = "the 06:00 window closed; the next run continues"
+                    break
+                if _job_cancelled():
+                    stopped = "stopped by you; what was saved is kept and the next run continues"
                     break
                 _fh_reset()
                 try:
@@ -6143,6 +6192,9 @@ def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None):
             t = tg["ticker"]
             if deadline and time.time() >= deadline:
                 stopped = "the 06:00 window closed; the next run continues"
+                break
+            if _job_cancelled():
+                stopped = "stopped by you; notes already written are kept"
                 break
             row = by_t[t]
             facts, deferred = gf(t, row, row.get("name") or t, tg["why"] != "you asked for it")

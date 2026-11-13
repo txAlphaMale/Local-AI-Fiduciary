@@ -3174,6 +3174,28 @@ function _saveProms(payload){
 function saveUserRef(){ const i=document.getElementById('prm-userref'); _saveProms({user_ref:(i&&i.value||'').trim()}); }
 function savePrompt(key){ const i=document.getElementById('prm-'+key); _saveProms({persona:key, prompt:(i&&i.value)||''}); }
 function resetPrompt(key){ if(!confirm('Reset the '+key+' prompt to the built-in default?')) return; _saveProms({persona:key, reset:true}); }
+// JOBS RIGHT NOW (top of SETTINGS > TASK SCHEDULE): what is queued or running, with STOP. Reads /api/jobs on demand.
+function jobsNowPanel(){
+  const box=el('div'); box.id='jobs-now'; box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-3);';
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const head=el('div'); head.style.cssText='display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-2);';
+  head.appendChild(el('b',null,'RUNNING AND QUEUED NOW'));
+  const rf=el('button','mut-btn','↻ REFRESH'); head.appendChild(rf); box.appendChild(head);
+  const list=el('div'); box.appendChild(list);
+  const load=()=>fetch('/api/jobs').then(r=>r.json()).then(d=>{
+    const live=(d.jobs||[]).filter(j=>j.status==='running'||j.status==='queued').reverse();
+    list.innerHTML='';
+    if(!live.length){ list.appendChild(el('div','muted','Nothing running or queued.')); return; }
+    live.forEach(j=>{ const row=el('div'); row.style.cssText='display:flex;gap:var(--space-3);align-items:center;padding:3px 0;flex-wrap:wrap;';
+      const since=j.started?Math.max(0,Math.round(Date.now()/1000-j.started)):null;
+      row.innerHTML='<span>'+(j.status==='running'?'▶ <b>running</b>':'… queued')+'</span><span>'+esc(j.label)+'</span><span class="muted">'+(since!=null?Math.floor(since/60)+' min so far':'waiting')+(j.error==='stop requested'?' · stopping…':'')+'</span>';
+      const st=el('button','mut-btn','■ STOP'); st.onclick=()=>{ if(!confirm('Stop "'+j.label+'"?'+(j.status==='running'?' What it already saved is kept.':''))) return;
+        fetch('/api/jobs/'+encodeURIComponent(j.id)+'/cancel',{method:'POST'}).then(r=>r.json().then(x=>({ok:r.ok,x}))).then(o=>{ if(!o.ok) alert((o.x&&o.x.error)||'Could not stop it'); load(); }); };
+      row.appendChild(st); list.appendChild(row); }); }).catch(()=>{ list.textContent='Could not read the job list.'; });
+  rf.onclick=load; load();
+  return box;
+}
+
 function scheduleContent(){
   const s=SCHEDULE||{}, wrap=el('div');
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -3186,6 +3208,7 @@ function scheduleContent(){
   info2.textContent='LAST RUN is how long the job took the last time it ran; TYPICAL is the median of its last 5 successful runs. Jobs share one queue and run one at a time, so a job that is still running when another is due makes that one wait — a ⚠ appears under a job when its typical runtime would carry past another job\'s start time (checked over the next 14 days). History is kept across restarts and begins with the first run after this feature was added.';
   wrap.appendChild(info);
   wrap.appendChild(info2);
+  wrap.appendChild(jobsNowPanel());
   // Fit the frame (tester report 2026-10-21, Linux/Firefox: the table ran past the panel). The global td rule is nowrap, which is
   // right for numeric tables but made this one as wide as its longest line. Here the text cells wrap, the three buttons share one
   // wrapping cell, and the table scrolls sideways inside its own box as a last resort instead of spilling out of the frame.
