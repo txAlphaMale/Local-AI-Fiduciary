@@ -17,7 +17,7 @@ NEW_IPO_DAYS = 365               # first filing inside a year: a first look rega
 MIN_REVENUE = 1_000_000          # below this there is no operating business to screen yet
 
 
-SCREEN_VERSION = 5               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 6               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -365,6 +365,9 @@ def screen_zip(zip_path, universe, today, progress=None):
                         stats["no_gaap"] += 1 if res.get("sec_filer") else 0
                 else:
                     s1 = compact(res, facts)
+                    if (s1 is None or (s1.get("revenue") is None and s1.get("last_filed") is None)) and "ifrs-full" in (facts.get("facts") or {}):
+                        # A foreign filer can carry a tiny us-gaap stub (AEG has 11 supplementary tags) beside its real IFRS statements.
+                        s1 = ifrs_compact(facts) or s1
                     results[cik] = (s1, flags(s1) if s1 else None, "ok")
                     _enrich_stale(s1, facts, today)
                     if s1 and _stale(s1.get("last_filed"), today) and (other_taxonomy_latest(facts) or "") > (s1.get("last_filed") or ""):

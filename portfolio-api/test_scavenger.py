@@ -378,6 +378,19 @@ class TestFollowups(unittest.TestCase):
         self.assertEqual((by["AEG"]["s1"]["revenue"], by["AEG"]["s1"]["currency"]), (9.1e9, "EUR"))
         self.assertEqual(by["AEG"]["state"], "active")
 
+    def test_aeg_with_a_us_gaap_stub_beside_real_ifrs_statements_is_read_as_ifrs(self):
+        f = _ifrs(1, 1, 5e8, 1e9, 1e7)
+        ifrs = f["facts"]["ifrs-full"]
+        ifrs["InsuranceRevenue"] = {"units": {"EUR": [
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 9.8e9, "form": "20-F", "filed": "2025-03-27"},
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 9.1e9, "form": "20-F", "filed": "2026-03-26"}]}}
+        del ifrs["Revenue"]
+        f["facts"]["us-gaap"] = {"SupplementaryInsuranceInformationPremiumRevenue": {"units": {"EUR": [
+            {"start": "2017-01-01", "end": "2017-12-31", "val": 2.28e10, "form": "20-F", "filed": "2018-03-23"}]}}}
+        by = self._screen([("AEG", f)])
+        self.assertEqual((by["AEG"]["s1"]["basis"], by["AEG"]["s1"]["revenue"]), ("ifrs", 9.1e9))
+        self.assertEqual(by["AEG"]["state"], "active")
+
     def test_crml_style_explorer_with_only_half_year_revenue_is_pre_revenue_with_a_runway(self):
         f = _ifrs(1, 1, -3e7, -2e7, 5e6)
         f["facts"]["ifrs-full"]["Revenue"] = {"units": {"USD": [
