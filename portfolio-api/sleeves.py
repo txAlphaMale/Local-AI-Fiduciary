@@ -47,10 +47,11 @@ METRICS = {
 BUILTIN = {
     "growth": {"name": "Growth (speculative)", "builtin": True, "enabled": True, "include_states": list(STATES),
                "intent": "Fast-growing companies, including ones not yet profitable, that can fund themselves through the R&D phase.",
-               "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25}, {"metric": "share_change_pct", "op": "<=", "value": 300},
+               "rules": [{"metric": "revenue", "op": ">=", "value": 10_000_000}, {"metric": "rev_growth_pct", "op": ">=", "value": 25},
+                         {"metric": "share_change_pct", "op": "<=", "value": 300},
                          {"metric": "runway_months", "op": ">=", "value": 12}],
                "rank_by": "rev_growth_pct", "rank_dir": "desc",
-               "notes": "Does not require profit. Looks for revenue growing fast and cash that lasts at least a year at the current burn. The dilution cap (300%) only screens out extreme share issuance; it is ignored in the first 2 years after listing, when the share count jumps because of the IPO."},
+               "notes": "Does not require profit. Revenue must be at least $10M, because growth percentages on tiny revenue are noise. Looks for revenue growing fast and cash that lasts at least a year at the current burn. The dilution cap (300%) only screens out extreme share issuance; it is ignored in the first 2 years after listing, when the share count jumps because of the IPO."},
     "income": {"name": "Income", "builtin": True, "enabled": True, "include_states": ["active", "new"],
                "intent": "Companies that pay a dividend they can afford and are likely to keep paying.",
                "rules": [{"metric": "dividend_payout_pct", "op": ">", "value": 0}, {"metric": "dividend_payout_pct", "op": "<=", "value": 90},
@@ -140,7 +141,10 @@ def validate(sl):
 def describe_rule(r):
     label, unit, stage = METRICS[r["metric"]]
     v = r["value"]
-    shown = f"{v:g}" + (unit if unit in ("%", "x") else (" " + unit if unit else ""))
+    if unit == "$":
+        shown = "$" + (f"{v / 1e9:g}B" if abs(v) >= 1e9 else f"{v / 1e6:g}M" if abs(v) >= 1e6 else f"{v / 1e3:g}K" if abs(v) >= 1e3 else f"{v:g}")
+    else:
+        shown = f"{v:g}" + (unit if unit in ("%", "x") else (" " + unit if unit else ""))
     return f"{label} {r['op']} {shown}" + (" (waits for the signals stage)" if stage == "s3" else "")
 
 

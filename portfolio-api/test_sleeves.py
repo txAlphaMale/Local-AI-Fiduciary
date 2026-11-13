@@ -130,7 +130,7 @@ class TestScreenCash(unittest.TestCase):
         self.assertEqual(scr.runway_months(120.0, 100.0, -50.0), 28.8)       # burn 50 a year, cash 120
         self.assertEqual(scr.runway_months(10.0, 100.0, 5.0), 999)           # funds itself
         self.assertIsNone(scr.runway_months(None, 100.0, -5.0))
-        self.assertEqual(scr.SCREEN_VERSION, 5)
+        self.assertEqual(scr.SCREEN_VERSION, 6)
 
 
 class _Req:
@@ -183,6 +183,20 @@ class TestEndpoints(unittest.TestCase):
         self.assertTrue(asyncio.run(appmod.delete_sleeve(sid, _Req({})))["ok"])
         self.assertNotIn(sid, {s["id"] for s in appmod.get_sleeves()["sleeves"]})
 
+    def test_matches_page_and_search(self):
+        # AAA 50% growth, BBB 5%: use a custom sleeve that accepts both
+        body = {"name": "All", "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 0}]}
+        sid = asyncio.run(appmod.post_sleeve(_Req(body)))["id"]
+        full = appmod.get_sleeve_matches(sid, limit=50)
+        self.assertEqual(full["total"], 2)
+        first = appmod.get_sleeve_matches(sid, limit=1, offset=0)
+        second = appmod.get_sleeve_matches(sid, limit=1, offset=1)
+        self.assertEqual((len(first["rows"]), len(second["rows"]), first["total"]), (1, 1, 2))
+        self.assertNotEqual(first["rows"][0]["ticker"], second["rows"][0]["ticker"])
+        found = appmod.get_sleeve_matches(sid, q="bb")
+        self.assertEqual((found["total"], found["rows"][0]["ticker"]), (1, "BBB"))
+        self.assertEqual(appmod.get_sleeve_matches(sid, q="zzz")["total"], 0)
+
     def test_builtins_are_read_only_and_bad_requests_are_400(self):
         r = asyncio.run(appmod.post_sleeve(_Req({**sleeves.BUILTIN["growth"], "id": "growth"})))
         self.assertEqual(r.status_code, 400)
@@ -204,7 +218,7 @@ class TestCoworkFindings(unittest.TestCase):
         old = row("DIL", share_change_pct=439.0, first_filed="2015-01-01")
         ev = sleeves.evaluate(sleeves.BUILTIN["growth"], [young, old], TODAY)
         self.assertEqual([r["ticker"] for r in ev["matches"]], ["FLY"])
-        self.assertEqual(sleeves.BUILTIN["growth"]["rules"][1]["value"], 300)
+        self.assertEqual([r["value"] for r in sleeves.BUILTIN["growth"]["rules"] if r["metric"] == "share_change_pct"], [300])
         ons = sleeves.evaluate(sleeves.BUILTIN["growth"], [row("ONDS", share_change_pct=217.0)], TODAY)
         self.assertEqual(len(ons["matches"]), 1)
 
@@ -229,6 +243,28 @@ class TestCoworkFindings(unittest.TestCase):
         self.assertNotIn("filter(r=>r.value!=='')", html)
 
 
+class TestBrowseAndFloor(unittest.TestCase):
+    """Cowork step 1 (2026-11-13): SHOW MORE stopped at 50, Growth ranking was topped by micro-revenue noise, narrow screens."""
+    def test_growth_needs_real_revenue_so_percentages_on_tiny_sales_do_not_top_the_list(self):
+        rows = [row("TINY", revenue=50_000.0, rev_growth_pct=230000.0), row("REAL", revenue=2e7, rev_growth_pct=60.0)]
+        ev = sleeves.evaluate(sleeves.BUILTIN["growth"], rows, TODAY)
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["REAL"])
+
+    def test_rule_text_shows_money_in_plain_units(self):
+        self.assertEqual(sleeves.describe_rule({"metric": "revenue", "op": ">=", "value": 10_000_000}),
+                         "Revenue (last 12 months) >= $10M")
+        self.assertEqual(sleeves.describe_rule({"metric": "cash", "op": ">", "value": 2.5e9}), "Cash and short-term investments > $2.5B")
+        self.assertEqual(sleeves.describe_rule({"metric": "rev_growth_pct", "op": ">=", "value": 25}),
+                         "Revenue growth, year over year >= 25%")
+
+    def test_page_pages_searches_and_scrolls_tables_sideways(self):
+        with open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        for needle in ("function sleeveBrowser(sl)", "SHOW 50 MORE", "'Showing '+rows.length+' of '+total", "find a ticker or company",
+                       "overflow-x:auto;max-width:100%;", "&offset='+off+(q?'&q='"):
+            self.assertIn(needle, html, needle)
+
+
 class TestPageWiring(unittest.TestCase):
     def setUp(self):
         with open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8") as f:
@@ -236,7 +272,7 @@ class TestPageWiring(unittest.TestCase):
 
     def test_research_subtab_and_calls(self):
         for needle in ("{key:'sleeves',label:'SLEEVES',build:()=>sleevesContent()}", "fetch('/api/sleeves')", "'/api/sleeves/preview'",
-                       "'/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50'", "function sleeveForm()", "+ NEW SLEEVE"):
+                       "'/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50&offset='", "function sleeveForm()", "+ NEW SLEEVE"):
             self.assertIn(needle, self.html, needle)
 
     def test_form_offers_the_fixed_menu_and_says_what_waits(self):

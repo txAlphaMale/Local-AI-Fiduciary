@@ -3336,7 +3336,22 @@ function sleeveTable(rows){
   rows.forEach(r=>{ const tr=el('tr');
     tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b>'+(r.also&&r.also.length?' <span class="muted" style="font-size:var(--font-size-sm)">also '+esc(r.also.join(', '))+'</span>':'')+'</td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
     t.appendChild(tr); });
-  return t;
+  const w=el('div'); w.style.cssText='overflow-x:auto;max-width:100%;'; w.appendChild(t);     // wide table scrolls inside its own box, not the page
+  return w;
+}
+function sleeveBrowser(sl){
+  const wrap=el('div'), rows=(sl.preview||[]).slice(); let total=sl.match_count, q='';
+  const tbl=el('div'), status=el('div','muted'), bar=el('div');
+  status.style.cssText='font-size:var(--font-size-sm);margin:var(--space-1) 0;'; bar.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center;margin-top:var(--space-1);';
+  const more=el('button','mut-btn','▸ SHOW 50 MORE');
+  const search=document.createElement('input'); search.placeholder='find a ticker or company, then Enter'; search.style.cssText='width:260px;max-width:100%;';
+  const url=off=>'/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50&offset='+off+(q?'&q='+encodeURIComponent(q):'');
+  const draw=()=>{ tbl.innerHTML=''; tbl.appendChild(sleeveTable(rows)); status.textContent='Showing '+rows.length+' of '+total+(q?' matching "'+q+'"':'');
+    more.style.display=rows.length<total?'':'none'; };
+  more.onclick=()=>fetch(url(rows.length)).then(r=>r.json()).then(d=>{ rows.push(...(d.rows||[])); total=d.total; draw(); });
+  search.onkeydown=ev=>{ if(ev.key==='Enter'){ q=search.value.trim(); fetch(url(0)).then(r=>r.json()).then(d=>{ rows.length=0; rows.push(...(d.rows||[])); total=d.total; draw(); }); } };
+  bar.appendChild(more); bar.appendChild(search); wrap.appendChild(tbl); wrap.appendChild(status); wrap.appendChild(bar); draw();
+  return wrap;
 }
 function sleevesContent(){
   const wrap=el('div'); wrap.id='sleeves-panel';
@@ -3360,9 +3375,7 @@ function sleevesContent(){
     const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }
     if(sl.fill_gap&&sl.gap_sectors&&sl.gap_sectors.length){ const g=el('div'); g.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; g.innerHTML='Sectors you hold under '+esc(sl.gap_below_pct)+'% of your portfolio, with candidates: '+sl.gap_sectors.map(x=>esc(x[0])+' ('+x[1]+')').join(', '); box.appendChild(g); }
     if(sl.notes){ const n=el('div','muted',sl.notes); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; box.appendChild(n); }
-    if(sl.preview&&sl.preview.length){ box.appendChild(sleeveTable(sl.preview)); const more=el('button','mut-btn','▸ SHOW MORE'); more.style.marginTop='var(--space-2)';
-      more.onclick=()=>fetch('/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50').then(r=>r.json()).then(d=>{ const t=sleeveTable(d.rows||[]); const old=box.querySelector('table'); if(old) old.replaceWith(t); more.remove(); });
-      if(sl.match_count>sl.preview.length) box.appendChild(more); }
+    if(sl.preview&&sl.preview.length) box.appendChild(sleeveBrowser(sl));
     const bar=el('div'); bar.style.marginTop='var(--space-2)';
     const cp=el('button','mut-btn',sl.builtin?'⎘ COPY AS MY OWN':'✎ EDIT'); cp.onclick=()=>{ SLEEVE_EDIT=JSON.parse(JSON.stringify({id:sl.builtin?undefined:sl.id,name:sl.builtin?sl.name+' (mine)':sl.name,intent:sl.intent,notes:sl.notes,rules:sl.rules||[],rank_by:sl.rank_by,rank_dir:sl.rank_dir,include_states:sl.include_states||[]})); SLEEVE_PREVIEW=null; render(); }; bar.appendChild(cp);
     if(!sl.builtin){ const del=el('button','mut-btn','✕ DELETE'); del.style.marginLeft='var(--space-2)'; del.onclick=()=>{ if(!confirm('Delete the sleeve "'+sl.name+'"?')) return; _slvJson('/api/sleeves/'+encodeURIComponent(sl.id),'DELETE').then(x=>{ if(!x.ok) alert((x.d&&x.d.error)||'Delete failed'); SLEEVES=null; render(); }); }; bar.appendChild(del); }

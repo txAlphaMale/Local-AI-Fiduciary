@@ -6065,7 +6065,7 @@ def get_sleeves():
 
 
 @app.get("/api/sleeves/{sid}/matches")
-def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0):
+def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0, q: str = ""):
     sl = next((s for s in _sleeve_list() if s["id"] == sid), None)
     if not sl:
         return JSONResponse({"error": "unknown sleeve"}, status_code=404)
@@ -6073,8 +6073,13 @@ def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0):
     ev = sleeves_mod.evaluate(sl, ticker_state.screened_rows(sleeves_mod.STATES), today,
                               _held_sector_weights() if sl.get("fill_gap") else None)
     lim, off = max(1, min(int(limit), 500)), max(0, int(offset))
-    return {"id": sid, "total": len(ev["matches"]), "awaiting_market_data": ev["awaiting"], "pending_rules": ev["pending_rules"],
-            "rows": [_sleeve_row(r, today) for r in ev["matches"][off:off + lim]]}
+    found = ev["matches"]
+    if q.strip():                                  # find a ticker or company inside this sleeve's matches
+        needle = q.strip().lower()
+        found = [r for r in found if r["ticker"].lower().startswith(needle) or needle in (r.get("name") or "").lower()
+                 or any(x.lower().startswith(needle) for x in r.get("also") or [])]
+    return {"id": sid, "total": len(found), "awaiting_market_data": ev["awaiting"], "pending_rules": ev["pending_rules"],
+            "rows": [_sleeve_row(r, today) for r in found[off:off + lim]]}
 
 
 @app.post("/api/sleeves/preview")
