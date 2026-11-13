@@ -3122,7 +3122,7 @@ function saveHomeBasis(){
 const SCHEDULE_RUN_ENDPOINTS = {
   analysis: '/api/run-analysis', discovery: '/api/run-discovery',
   opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
-  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe', market_data: '/api/run-market-data', signals: '/api/run-signals',
+  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe', scout: '/api/run-scout', market_data: '/api/run-market-data', signals: '/api/run-signals',
   backtest: '/api/run-backtest', narrative: '/api/run-narrative'};
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
@@ -3329,16 +3329,40 @@ function _slvJson(url, method, body){
 function _slvFmtMoney(v,cur){ if(v==null) return '—'; const a=Math.abs(v); const u=a>=1e9?(v/1e9).toFixed(1)+'B':(a>=1e6?(v/1e6).toFixed(0)+'M':Math.round(v).toLocaleString()); return u+(cur&&cur!=='USD'?' '+cur:''); }
 function _slvPct(v){ return v==null?'—':(v>0?'+':'')+Number(v).toFixed(0)+'%'; }
 function _slvRunway(v){ return v==null?'—':(v>=999?'self-funding':Number(v).toFixed(0)+' mo'); }
-function sleeveTable(rows){
+function sleeveTable(rows, onScout){
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const t=el('table'); const h=el('tr');
-  h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>PRICE</th><th>MKT CAP</th><th>YIELD</th><th class="l">SECTOR</th><th class="l">INSIDERS</th><th class="l">ANALYSTS</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th>'; t.appendChild(h);
+  h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>PRICE</th><th>MKT CAP</th><th>YIELD</th><th class="l">SECTOR</th><th class="l">INSIDERS</th><th class="l">ANALYSTS</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th><th class="l">SCOUT</th>'; t.appendChild(h);
   rows.forEach(r=>{ const tr=el('tr');
     tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b>'+(r.also&&r.also.length?' <span class="muted" style="font-size:var(--font-size-sm)">also '+esc(r.also.join(', '))+'</span>':'')+'</td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td class="l muted">'+esc(r.insider||'—')+'</td><td class="l muted">'+esc(r.analyst||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
+    const sc=el('td','l'); const b=r.scout;
+    if(b){ const dots='●'.repeat(b.conviction||0)+'○'.repeat(5-(b.conviction||0)); sc.innerHTML='<span title="'+esc(b.thesis||'')+'">'+dots+'</span> '; }
+    if(onScout){ const a=el('button','mut-btn',b?'▸ note':'▸ scout'); a.style.cssText='font-size:var(--font-size-sm);padding:0 6px;'; a.onclick=()=>onScout(r.ticker, !!b, sc, a); sc.appendChild(a); }
+    else if(!b){ sc.textContent='—'; }
+    tr.appendChild(sc);
     t.appendChild(tr); });
   const w=el('div'); w.style.cssText='overflow-x:auto;max-width:100%;'; w.appendChild(t);     // wide table scrolls inside its own box, not the page
   return w;
 }
+function scoutNoteBox(t, n){
+  const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);font-size:var(--font-size-base);line-height:1.5;';
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  if(!n||n.error||!n.note){ box.textContent=(n&&n.error)||'No scout note yet.'; return box; }
+  const N=n.note, SRC={sec:'SEC filings',market:'market data',insiders:'insider filings',analysts:'analyst ratings'};
+  const src=s=>SRC[s]||(s.indexOf('news:')===0?'news':(s.indexOf('filing:')===0?'SEC 8-K':s));
+  const dots='●'.repeat(N.conviction)+'○'.repeat(5-N.conviction);
+  const when=new Date(n.created_at*1000).toLocaleDateString();
+  let h='<div><b>'+esc(t)+'</b> · scout note · conviction <b>'+dots+' '+N.conviction+'/5</b>'+(N.conviction_capped?' <span class="muted">(capped: no news or filings to read)</span>':'')+' · <span class="muted">'+esc(when)+' · '+esc(N.horizon)+'</span></div>';
+  h+='<div style="margin:var(--space-2) 0;">'+esc(N.thesis)+'</div>';
+  h+='<div><b>Evidence</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.evidence.map(e=>'<li>'+esc(e.claim)+' <span class="muted">['+esc(src(e.source))+']</span></li>').join('')+'</ul>';
+  h+='<div><b>Risks</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.risks.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  h+='<div class="neg"><b>What would prove this wrong</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.disproof.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  if(N.catalysts&&N.catalysts.length) h+='<div><b>Catalysts</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.catalysts.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  h+='<div class="muted" style="font-size:var(--font-size-sm);">Stance: worth researching, not a buy or sell recommendation. Informational only, not financial advice. Written by the app\'s scout from the sources shown; '+(N.evidence_dropped?N.evidence_dropped+' claim(s) without a supplied source were discarded. ':'')+'model: '+esc(n.model||'')+'.</div>';
+  const close=el('button','mut-btn','CLOSE'); close.style.marginTop='var(--space-2)'; close.onclick=()=>box.remove();
+  box.innerHTML=h; box.appendChild(close); return box;
+}
+
 function sleeveBrowser(sl){
   const wrap=el('div'), rows=(sl.preview||[]).slice(); let total=sl.match_count, q='';
   const tbl=el('div'), status=el('div','muted'), bar=el('div');
@@ -3346,11 +3370,17 @@ function sleeveBrowser(sl){
   const more=el('button','mut-btn','▸ SHOW 50 MORE');
   const search=document.createElement('input'); search.placeholder='find a ticker or company, then Enter'; search.style.cssText='width:260px;max-width:100%;';
   const url=off=>'/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50&offset='+off+(q?'&q='+encodeURIComponent(q):'');
-  const draw=()=>{ tbl.innerHTML=''; tbl.appendChild(sleeveTable(rows)); status.textContent='Showing '+rows.length+' of '+total+(q?' matching "'+q+'"':'');
+  const detail=el('div'); detail.style.cssText='margin-top:var(--space-2);';
+  const onScout=(t,has,cell,btn)=>{
+    if(has){ fetch('/api/scout/'+encodeURIComponent(t)).then(r=>r.json()).then(n=>{ detail.innerHTML=''; detail.appendChild(scoutNoteBox(t,n)); }); return; }
+    btn.disabled=true; btn.textContent='asking…';
+    fetch('/api/run-scout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:t})}).then(r=>r.json().then(d=>({ok:r.ok,d}))).then(x=>{
+      btn.textContent=x.ok?'queued':'failed'; if(!x.ok) btn.title=(x.d&&x.d.error)||''; else btn.title='The scout runs on the job queue (a minute or two per name). Refresh this page afterwards.'; }); };
+  const draw=()=>{ tbl.innerHTML=''; tbl.appendChild(sleeveTable(rows,onScout)); status.textContent='Showing '+rows.length+' of '+total+(q?' matching "'+q+'"':'');
     more.style.display=rows.length<total?'':'none'; };
   more.onclick=()=>fetch(url(rows.length)).then(r=>r.json()).then(d=>{ rows.push(...(d.rows||[])); total=d.total; draw(); });
   search.onkeydown=ev=>{ if(ev.key==='Enter'){ q=search.value.trim(); fetch(url(0)).then(r=>r.json()).then(d=>{ rows.length=0; rows.push(...(d.rows||[])); total=d.total; draw(); }); } };
-  bar.appendChild(more); bar.appendChild(search); wrap.appendChild(tbl); wrap.appendChild(status); wrap.appendChild(bar); draw();
+  bar.appendChild(more); bar.appendChild(search); wrap.appendChild(tbl); wrap.appendChild(status); wrap.appendChild(bar); wrap.appendChild(detail); draw();
   return wrap;
 }
 function sleevesContent(){

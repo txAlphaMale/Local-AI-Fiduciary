@@ -168,3 +168,87 @@ def s3_index(group):
             if g:
                 out[r["ticker"]] = {"fetched_at": g.get("fetched_at"), "available": g.get("available", True)}
     return out
+
+
+# ---- scout notes and the pick log (phase 4d) ----
+def ensure_scout():
+    with store._lock:
+        with store._conn() as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS scout_notes(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, created_at INTEGER NOT NULL, sleeves TEXT, why TEXT,
+                conviction INTEGER, note TEXT NOT NULL, inputs TEXT, model TEXT)""")
+            c.execute("CREATE INDEX IF NOT EXISTS ix_scout_notes_ticker ON scout_notes(ticker, created_at)")
+            c.execute("""CREATE TABLE IF NOT EXISTS scout_picks(
+                ticker TEXT NOT NULL, picked_on TEXT NOT NULL, sleeves TEXT, conviction INTEGER, price REAL, spy REAL, note_id INTEGER,
+                scored TEXT, PRIMARY KEY(ticker, picked_on))""")
+
+
+def add_note(ticker, note, inputs, sleeves, why, model, price, spy, today, now=None):
+    """Save a scout note and log it as a pick (entry price and SPY level that day) for the later track-record scoring."""
+    ensure_scout()
+    now = int(now or __import__("time").time())
+    with store._lock:
+        with store._conn() as c:
+            cur = c.execute("INSERT INTO scout_notes(ticker,created_at,sleeves,why,conviction,note,inputs,model) VALUES(?,?,?,?,?,?,?,?)",
+                            (ticker, now, json.dumps(sleeves), why, note.get("conviction"), json.dumps(note), json.dumps(inputs), model))
+            nid = cur.lastrowid
+            c.execute("INSERT OR REPLACE INTO scout_picks(ticker,picked_on,sleeves,conviction,price,spy,note_id,scored) VALUES(?,?,?,?,?,?,?,NULL)",
+                      (ticker, today, json.dumps(sleeves), note.get("conviction"), price, spy, nid))
+    return nid
+
+
+def notes_index():
+    """{ticker: {'created_at', 'inputs', 'conviction'}} for the newest note of each ticker."""
+    ensure_scout()
+    out = {}
+    with store._conn() as c:
+        for r in c.execute("SELECT ticker, created_at, conviction, inputs FROM scout_notes ORDER BY created_at ASC"):
+            try:
+                inp = json.loads(r["inputs"]) if r["inputs"] else {}
+            except Exception:
+                inp = {}
+            out[r["ticker"]] = {"created_at": r["created_at"], "conviction": r["conviction"], "inputs": inp}
+    return out
+
+
+def scout_briefs():
+    """{ticker: {'conviction','created_at','thesis'}} newest note each, for the sleeve tables."""
+    ensure_scout()
+    out = {}
+    with store._conn() as c:
+        for r in c.execute("SELECT ticker, created_at, conviction, note FROM scout_notes ORDER BY created_at ASC"):
+            try:
+                th = (json.loads(r["note"]) or {}).get("thesis", "")
+            except Exception:
+                th = ""
+            out[r["ticker"]] = {"conviction": r["conviction"], "created_at": r["created_at"], "thesis": th[:160]}
+    return out
+
+
+def get_note(ticker):
+    ensure_scout()
+    with store._conn() as c:
+        r = c.execute("SELECT * FROM scout_notes WHERE ticker=? ORDER BY created_at DESC LIMIT 1", (ticker,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    for k in ("note", "inputs", "sleeves"):
+        try:
+            d[k] = json.loads(d[k]) if d.get(k) else None
+        except Exception:
+            d[k] = None
+    return d
+
+
+def list_notes(limit=30):
+    ensure_scout()
+    with store._conn() as c:
+        rows = c.execute("SELECT id,ticker,created_at,conviction,sleeves,why,model FROM scout_notes ORDER BY created_at DESC LIMIT ?",
+                         (max(1, min(int(limit), 200)),)).fetchall()
+    return [{**dict(r), "sleeves": json.loads(r["sleeves"] or "[]")} for r in rows]
+
+
+def picks(limit=500):
+    ensure_scout()
+    with store._conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM scout_picks ORDER BY picked_on DESC LIMIT ?", (limit,))]

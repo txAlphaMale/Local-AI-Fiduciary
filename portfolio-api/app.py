@@ -41,7 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
-import scavenger, ticker_state, market_data, signals, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
+import scavenger, ticker_state, market_data, signals, scout, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -2346,6 +2346,7 @@ _JOB_KINDS = {
     "universe":      ("Universe & first screen",   False, lambda: _do_universe()),
     "market_data":   ("Market data for sleeve candidates", False, lambda: _do_market_data()),
     "signals":       ("Signals for sleeve candidates", False, lambda: _do_signals()),
+    "scout":         ("Scout notes for sleeve candidates", True, lambda: _do_scout()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -2578,9 +2579,10 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["universe", "market_data", "signals", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
+_SCHEDULE_ORDER = ["scout", "universe", "market_data", "signals", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
 _SCHEDULE_DEFAULTS = {
     # Inside the 01:00-06:00 scavenging window (Jason 2026-11-12); after SEC rebuilds its bulk file (~2 a.m. Central).
+    "scout":         {"label": "Scout notes for sleeve candidates (idea scavenger)", "hour": 1, "minute": 30, "dom": "*", "dow": "*", "cadence": "daily"},
     "universe":      {"label": "Universe & first screen (idea scavenger)", "hour": 3, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "market_data":   {"label": "Market data for sleeve candidates (idea scavenger)", "hour": 4, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "signals":       {"label": "Signals for sleeve candidates (idea scavenger)", "hour": 5, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
@@ -6055,6 +6057,135 @@ def get_signals_status():
 
 
 
+SCOUT_META_FILE = os.environ.get("SCOUT_META_FILE", "/data/scout_meta.json")
+_scout_lock = threading.Lock()
+_SCOUT_REQUESTS = []          # tickers the user asked to scout by hand (processed first, ignoring sleeve rules and cool-downs)
+_SCOUT_REQ_LOCK = threading.Lock()
+
+
+def _scout_facts(t, row, name, nightly):
+    """Gather the evidence for one name. -> (facts, deferred_reason). A deferred news search returns a reason so the caller can stop;
+    other failures just mean thinner evidence (which caps the conviction)."""
+    s1, s2, s3 = row.get("s1") or {}, row.get("s2") or {}, row.get("s3") or {}
+    facts = {"sec": {k: s1.get(k) for k in ("revenue", "currency", "rev_growth_pct", "rev_cagr_pct", "gross_margin_pct", "net_margin_pct",
+                                              "fcf_margin_pct", "debt_to_equity", "share_change_pct", "cash", "runway_months",
+                                              "piotroski", "first_filed", "last_filed", "basis") if s1.get(k) is not None},
+             "market": {k: s2.get(k) for k in ("price", "market_cap", "pe", "dividend_yield_pct", "beta", "sector", "pct_off_52w_high")
+                        if s2.get(k) is not None} if s2.get("available") else {},
+             "insiders": {k: (s3.get("insider") or {}).get(k) for k in ("signal", "net_value", "buy_value", "sell_value", "buyers", "sellers", "as_of")}
+             if (s3.get("insider") or {}).get("available") else {},
+             "analysts": {k: (s3.get("analyst") or {}).get(k) for k in ("buy_pct", "total", "counts", "period")}
+             if (s3.get("analyst") or {}).get("available") else {},
+             "news": [], "filings": []}
+    with _tav_source("scavenger" if nightly else "scout"):
+        res = _tavily_call(f"{t} {name} stock news", 14, 5)
+    if res.get("deferred"):
+        return facts, res.get("detail") or "Tavily is paused by the budget gate"
+    for i, art in enumerate((res.get("articles") or [])[:5], 1):
+        title = (art.get("title") or "").strip()
+        if title:
+            facts["news"].append({"id": f"news:{i}", "title": title[:200], "date": art.get("published_date") or art.get("date"),
+                                  "text": (art.get("content") or "")[:600]})
+    for i, f in enumerate(edgar.recent_8k(t, days=45, limit=4), 1):
+        facts["filings"].append({"id": f"filing:{i}", "date": f.get("date"), "labels": f.get("labels") or [], "items": f.get("items") or ""})
+    return facts, None
+
+
+def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None):
+    """Scout notes for the few names that pass a sleeve completely, plus any the user asked for. One news search and one model call each,
+    serialized on the GPU; Tavily is the 'scavenger' (background) source so it stays inside its daily soft budget. A paused search stops
+    the run (the next run continues); a model answer that fails validation is discarded, never saved."""
+    if not _scout_lock.acquire(blocking=False):
+        return "skipped"
+    try:
+        today = datetime.date.today()
+        now_dt = datetime.datetime.now()
+        deadline = market_data.deadline_for(now_dt)
+        rows = ticker_state.screened_rows(sleeves_mod.STATES)
+        by_t = {r["ticker"]: r for r in rows}
+        with _SCOUT_REQ_LOCK:
+            asked, _SCOUT_REQUESTS[:] = list(_SCOUT_REQUESTS), []
+        targets = [{"ticker": t, "sleeves": [], "why": "you asked for it"} for t in asked if t in by_t]
+        have = {x["ticker"] for x in targets}
+        sleeve_list = _sleeve_list()
+        held = _held_sector_weights() if any(s.get("fill_gap") for s in sleeve_list) else None
+        targets += [x for x in scout.pick_targets(sleeve_list, rows, ticker_state.notes_index(), today, cap=limit or scout.NIGHTLY_CAP, held=held)
+                    if x["ticker"] not in have]
+        names = {s["id"]: s["name"] for s in sleeve_list}
+        gen, gf = generate or _ollama_generate, facts_fn or _scout_facts
+        spy = (spy_fn or (lambda: _price("SPY")))() if targets else None
+        done = rejected = errors = 0
+        stopped = None
+        t0 = time.time()
+        for tg in targets:
+            t = tg["ticker"]
+            if deadline and time.time() >= deadline:
+                stopped = "the 06:00 window closed; the next run continues"
+                break
+            row = by_t[t]
+            facts, deferred = gf(t, row, row.get("name") or t, tg["why"] != "you asked for it")
+            if deferred:
+                stopped = f"news search paused: {deferred}; the next run continues"
+                break
+            prompt = scout.build_prompt(t, row.get("name") or t, [names.get(i, i) for i in tg["sleeves"]] or ["a manual request"], facts, today)
+            raw, err = gen(prompt)
+            if err or not raw:
+                errors += 1
+                continue
+            note, why_not = scout.parse_note(raw, facts)
+            if not note:
+                rejected += 1
+                continue
+            price = (row.get("s2") or {}).get("price")
+            ticker_state.add_note(t, note, scout.inputs_snapshot(row), tg["sleeves"], tg["why"], _text_model(), price, spy, today.isoformat())
+            done += 1
+        summary = {"ran_at": int(time.time()), "targets": len(targets), "done": done, "rejected": rejected, "errors": errors,
+                   "stopped": stopped, "seconds": round(time.time() - t0, 1)}
+        store.write_json(SCOUT_META_FILE, summary)
+        return None
+    finally:
+        _scout_lock.release()
+
+
+@app.post("/api/run-scout")
+async def run_scout_ep(req: Request):
+    """Queue the scout now. Body {"ticker": "RKLB"} scouts that one name first (it must be in the screened universe); no body = the nightly selection."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    t = str((body or {}).get("ticker") or "").upper().strip() if isinstance(body, dict) else ""
+    if t:
+        if not re.fullmatch(r"[A-Z0-9.\-]{1,10}", t):
+            return JSONResponse({"error": "bad ticker"}, status_code=400)
+        if not any(r["ticker"] == t for r in ticker_state.list_rows(None, t, 5)):
+            return JSONResponse({"error": f"{t} is not in the screened universe"}, status_code=404)
+        with _SCOUT_REQ_LOCK:
+            if t not in _SCOUT_REQUESTS:
+                _SCOUT_REQUESTS.append(t)
+    jid, created = _enqueue("scout", source="manual")
+    return {"status": "started" if created else "already queued or running", "job_id": jid, "ticker": t or None}
+
+
+@app.get("/api/scout")
+def get_scout_status(limit: int = 30):
+    """Last scout run and the most recent notes (newest first)."""
+    try:
+        last = store.read_json_strict(SCOUT_META_FILE) or None
+    except Exception:
+        last = None
+    return {"last_run": last, "notes": ticker_state.list_notes(limit), "picks_logged": len(ticker_state.picks())}
+
+
+@app.get("/api/scout/{ticker}")
+def get_scout_note(ticker: str):
+    n = ticker_state.get_note(ticker.upper().strip())
+    if not n:
+        return JSONResponse({"error": "no scout note for that ticker yet"}, status_code=404)
+    return n
+
+
+
 _universe_lock = threading.Lock()
 _UNIVERSE_FORCE = {"on": False}
 
@@ -6138,7 +6269,7 @@ def _held_sector_weights():
     return _HELD_CACHE["w"]
 
 
-def _sleeve_card(sl, rows, today, top=5, held=None):
+def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
     ev = sleeves_mod.evaluate(sl, rows, today, held)
     return {"id": sl["id"], "name": sl["name"], "intent": sl.get("intent", ""), "notes": sl.get("notes", ""),
             "builtin": bool(sl.get("builtin")), "rank_by": sl.get("rank_by"), "rank_dir": sl.get("rank_dir"),
@@ -6146,10 +6277,10 @@ def _sleeve_card(sl, rows, today, top=5, held=None):
             "rule_text": [sleeves_mod.describe_rule(r) for r in sl.get("rules", [])],
             "pending_rules": ev["pending_rules"], "fill_gap": bool(sl.get("fill_gap")), "gap_below_pct": sl.get("gap_below_pct"),
             "gap_sectors": ev["gap_sectors"][:8], "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
-            "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today) for r in ev["matches"][:top]]}
+            "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 
-def _sleeve_row(r, today):
+def _sleeve_row(r, today, briefs=None):
     s1, s2 = r.get("s1") or {}, r.get("s2") or {}
     return {"ticker": r["ticker"], "name": r.get("name"), "state": r.get("state"), "revenue": s1.get("revenue"),
             "currency": s1.get("currency"), "rev_growth_pct": s1.get("rev_growth_pct"), "net_margin_pct": s1.get("net_margin_pct"),
@@ -6158,7 +6289,8 @@ def _sleeve_row(r, today):
             "age_years": sleeves_mod.value_of(r, "age_years", today),
             "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
             "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also"),
-            "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1]}
+            "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1],
+            "scout": (briefs or {}).get(r["ticker"])}
 
 
 @app.get("/api/sleeves")
@@ -6167,7 +6299,8 @@ def get_sleeves():
     today = datetime.date.today()
     rows = ticker_state.screened_rows(sleeves_mod.STATES)
     held = _held_sector_weights() if any(sl.get("fill_gap") for sl in _sleeve_list()) else None
-    return {"sleeves": [_sleeve_card(sl, rows, today, held=held) for sl in _sleeve_list()], "screened": len(rows),
+    briefs = ticker_state.scout_briefs()
+    return {"sleeves": [_sleeve_card(sl, rows, today, held=held, briefs=briefs) for sl in _sleeve_list()], "screened": len(rows),
             "with_market_data": sum(1 for r in rows if r.get("s2")),
             "metrics": [{"key": k, "label": v[0], "unit": v[1], "stage": v[2],
                          "note": ("needs FINRA credentials" if sleeves_mod.S3_GROUP.get(k) == "short" else "")}
@@ -6189,7 +6322,7 @@ def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0, q: str = ""):
         found = [r for r in found if r["ticker"].lower().startswith(needle) or needle in (r.get("name") or "").lower()
                  or any(x.lower().startswith(needle) for x in r.get("also") or [])]
     return {"id": sid, "total": len(found), "awaiting_market_data": ev["awaiting"], "pending_rules": ev["pending_rules"],
-            "rows": [_sleeve_row(r, today) for r in found[off:off + lim]]}
+            "rows": [_sleeve_row(r, today, ticker_state.scout_briefs()) for r in found[off:off + lim]]}
 
 
 @app.post("/api/sleeves/preview")
