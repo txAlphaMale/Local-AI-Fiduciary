@@ -61,7 +61,7 @@ class TestInterruptedJobs(unittest.TestCase):
 
     def test_hooks_are_wired(self):
         self.assertIn("_jobs_recover_interrupted()\nthreading.Thread(target=_job_worker", APP)
-        self.assertEqual(APP.count("_inflight_write()"), 4)                          # def + enqueue + start + finish
+        self.assertEqual(APP.count("_inflight_write()"), 5)                          # def + enqueue + start + finish + cancel
 
 
 class TestInterruptedChat(unittest.TestCase):

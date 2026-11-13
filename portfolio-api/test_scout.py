@@ -105,11 +105,11 @@ class TestSelect(unittest.TestCase):
     def test_recently_scouted_names_are_skipped_unless_something_new_happened(self):
         now = datetime.datetime.combine(TODAY, datetime.time(12, 0)).timestamp()
         rows = [row("A", rev_growth_pct=90.0), row("B", rev_growth_pct=80.0)]
-        notes = {"A": {"created_at": now - 5 * 86400, "inputs": {"insider_buyers": 3, "analyst_buy_pct": 70.0}},
-                 "B": {"created_at": now - 5 * 86400, "inputs": {"insider_buyers": 0, "analyst_buy_pct": 70.0}}}
+        notes = {"A": {"created_at": now - 5 * 86400, "inputs": {"price": 20.0, "insider_buyers": 3, "analyst_buy_pct": 70.0}},
+                 "B": {"created_at": now - 5 * 86400, "inputs": {"price": 20.0, "insider_buyers": 0, "analyst_buy_pct": 70.0}}}
         got = scout.pick_targets(self.sl(), rows, notes, TODAY)
         self.assertEqual([(g["ticker"], g["why"]) for g in got], [("B", "new insider cluster buying")])
-        old = {"A": {"created_at": now - 40 * 86400, "inputs": {"insider_buyers": 3, "analyst_buy_pct": 70.0}}}
+        old = {"A": {"created_at": now - 40 * 86400, "inputs": {"price": 20.0, "insider_buyers": 3, "analyst_buy_pct": 70.0}}}
         self.assertEqual(scout.pick_targets(self.sl(), [row("A")], old, TODAY)[0]["why"][:12], "last scouted")
 
     def test_a_name_in_two_sleeves_is_scouted_once_with_both_listed(self):
