@@ -22,12 +22,13 @@ def ensure():
                 first_seen TEXT, last_seen TEXT, last_changed TEXT, last_signal TEXT,
                 s1 TEXT, scores TEXT)""")
             c.execute("CREATE INDEX IF NOT EXISTS ix_ticker_state_state ON ticker_state(state)")
+            store._ensure_column(c, "ticker_state", "s3", "TEXT")          # signals (analyst, insider, short interest), phase 4c
             store._ensure_column(c, "ticker_state", "s2", "TEXT")          # market data (price, size, yield, beta, sector), phase 4b
 
 
 def _row(r):
     d = dict(r)
-    for k in ("s1", "scores", "s2"):
+    for k in ("s1", "scores", "s2", "s3"):
         try:
             d[k] = json.loads(d[k]) if d.get(k) else None
         except Exception:
@@ -114,7 +115,7 @@ def screened_rows(states):
     marks = ",".join("?" for _ in states)
     with store._conn() as c:
         return [_row(r) for r in c.execute(
-            f"SELECT ticker,cik,name,exchange,state,reason_kind,s1,scores,s2 FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
+            f"SELECT ticker,cik,name,exchange,state,reason_kind,s1,scores,s2,s3 FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
             list(states))]
 
 
@@ -137,4 +138,33 @@ def s2_index():
                 out[r["ticker"]] = {"fetched_at": d.get("fetched_at"), "available": d.get("available", True)}
             except Exception:
                 continue
+    return out
+
+
+def set_s3(ticker, group, record):
+    """Store one signals group ('analyst', 'insider' or 'short') for a ticker, leaving the other groups and the state alone."""
+    ensure()
+    with store._lock:
+        with store._conn() as c:
+            r = c.execute("SELECT s3 FROM ticker_state WHERE ticker=?", (ticker,)).fetchone()
+            try:
+                cur = json.loads(r["s3"]) if (r and r["s3"]) else {}
+            except Exception:
+                cur = {}
+            cur[group] = record
+            c.execute("UPDATE ticker_state SET s3=? WHERE ticker=?", (json.dumps(cur), ticker))
+
+
+def s3_index(group):
+    """{ticker: {'fetched_at', 'available'}} for rows that have this signals group."""
+    ensure()
+    out = {}
+    with store._conn() as c:
+        for r in c.execute("SELECT ticker, s3 FROM ticker_state WHERE s3 IS NOT NULL"):
+            try:
+                g = (json.loads(r["s3"]) or {}).get(group)
+            except Exception:
+                continue
+            if g:
+                out[r["ticker"]] = {"fetched_at": g.get("fetched_at"), "available": g.get("available", True)}
     return out

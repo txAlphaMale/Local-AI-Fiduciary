@@ -56,12 +56,30 @@ class TestEngine(unittest.TestCase):
         self.assertEqual([r["ticker"] for r in ev["matches"]], ["SMALL"])
         self.assertEqual(ev["awaiting"], 1)                       # NEW passes the SEC rules but has no market data yet
 
-    def test_signals_rules_are_kept_and_reported_as_waiting(self):
+    def test_short_interest_rules_stay_pending_until_some_name_has_finra_data(self):
         sl = {**sleeves.BUILTIN["growth"], "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25},
-                                                      {"metric": "insider_net_buying", "op": ">", "value": 0}]}
+                                                      {"metric": "short_days_to_cover", "op": "<=", "value": 5}]}
         ev = sleeves.evaluate(sl, [row("X")], TODAY)
         self.assertEqual(len(ev["matches"]), 1)
-        self.assertIn("waits for the signals stage", ev["pending_rules"][0])
+        self.assertIn("needs FINRA", ev["pending_rules"][0])
+        have = {**row("Y"), "s3": {"short": {"available": True, "days_to_cover": 3.0}}}
+        ev2 = sleeves.evaluate(sl, [have, row("Z")], TODAY)
+        self.assertEqual([r["ticker"] for r in ev2["matches"]], ["Y"])       # now a real rule: Z has no short data yet
+        self.assertEqual((ev2["awaiting"], ev2["pending_rules"]), (1, []))
+
+    def test_signals_rules_apply_once_data_exists_and_otherwise_wait(self):
+        sl = sleeves.BUILTIN["insiders"]
+        buying = {**row("BUY"), "s3": {"insider": {"available": True, "net_value": 250000.0, "buyers": 3}}}
+        one = {**row("ONE"), "s3": {"insider": {"available": True, "net_value": 60000.0, "buyers": 1}}}
+        none = {**row("NONE"), "s3": {"insider": {"available": False}}}
+        ev = sleeves.evaluate(sl, [buying, one, none, row("NEW")], TODAY)
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["BUY"])
+        self.assertEqual(ev["awaiting"], 1)
+
+    def test_analyst_metrics_read_the_signals_record(self):
+        r = {**row("A"), "s3": {"analyst": {"available": True, "buy_pct": 80.0, "total": 12}}}
+        self.assertEqual((sleeves.value_of(r, "analyst_buy_pct"), sleeves.value_of(r, "analyst_count")), (80.0, 12))
+        self.assertIsNone(sleeves.value_of(row("B"), "analyst_buy_pct"))
 
     def test_balance_sleeve_matches_healthy_names_in_sectors_you_are_light_on(self):
         bal = sleeves.BUILTIN["balance"]
@@ -110,7 +128,7 @@ class TestValidate(unittest.TestCase):
                          (dict(rules=[{"metric": "revenue", "op": ">=", "value": "1; DROP"}]), "number"),
                          (dict(rules=[{"metric": "revenue", "op": ">=", "value": True}]), "number"),
                          (dict(rules=[{"metric": "revenue", "op": ">=", "value": 1}] * 13), "at most"),
-                         (dict(rank_by="market_cap"), "SEC-data"), (dict(include_states=["blacklist"]), "include at least")):
+                         (dict(rank_by="nope"), "unknown metric to rank by"), (dict(include_states=["blacklist"]), "include at least")):
             clean, err = self.v(**kw)
             self.assertIsNone(clean)
             self.assertIn(frag, err)
