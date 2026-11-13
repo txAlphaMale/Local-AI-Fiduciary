@@ -20,6 +20,7 @@ MAX_RULES = 12
 METRICS = {
     "revenue": ("Revenue (last 12 months)", "$", "s1"),
     "rev_growth_pct": ("Revenue growth, year over year", "%", "s1"),
+    "growth_capped": ("Revenue growth, capped at 150% (so a tiny base cannot dominate a ranking)", "%", "s1"),
     "rev_cagr_pct": ("Revenue growth, multi-year average", "%", "s1"),
     "rev_accel_pts": ("Revenue growth acceleration (this year minus multi-year average)", "pts", "s1"),
     "gross_margin_pct": ("Gross margin", "%", "s1"),
@@ -58,8 +59,8 @@ BUILTIN = {
                "rules": [{"metric": "revenue", "op": ">=", "value": 10_000_000}, {"metric": "rev_growth_pct", "op": ">=", "value": 25},
                          {"metric": "share_change_pct", "op": "<=", "value": 300},
                          {"metric": "runway_months", "op": ">=", "value": 12}],
-               "rank_by": "rev_growth_pct", "rank_dir": "desc",
-               "notes": "Does not require profit. Revenue must be at least $10M, because growth percentages on tiny revenue are noise. Looks for revenue growing fast and cash that lasts at least a year at the current burn. The dilution cap (300%) only screens out extreme share issuance; it is ignored in the first 2 years after listing, when the share count jumps because of the IPO."},
+               "rank_by": "growth_capped", "rank_dir": "desc",
+               "notes": "Does not require profit. Ranked by revenue growth capped at 150% (ties go to the larger business), so enormous percentages on small bases do not crowd out real companies. Revenue must be at least $10M, because growth percentages on tiny revenue are noise. Looks for revenue growing fast and cash that lasts at least a year at the current burn. The dilution cap (300%) only screens out extreme share issuance; it is ignored in the first 2 years after listing, when the share count jumps because of the IPO."},
     "income": {"name": "Income", "builtin": True, "enabled": True, "include_states": ["active", "new"],
                "intent": "Companies that pay a dividend they can afford and are likely to keep paying.",
                "rules": [{"metric": "dividend_payout_pct", "op": ">", "value": 0}, {"metric": "dividend_payout_pct", "op": "<=", "value": 90},
@@ -98,6 +99,9 @@ def value_of(row, metric, today=None):
     if metric == "s1_score":
         v = (row.get("scores") or {}).get("score")
         return v if (s1 and v is not None) else None
+    if metric == "growth_capped":
+        g = s1.get("rev_growth_pct")
+        return min(g, 150.0) if _num(g) else None
     if metric == "age_years":
         try:
             d = datetime.date.fromisoformat(str(s1.get("first_filed"))[:10])
@@ -223,7 +227,8 @@ def evaluate(sleeve, rows, today=None, held=None):
             gap_sectors[sector] = gap_sectors.get(sector, 0) + 1
         out.append(row)
     key, rev = sleeve.get("rank_by") or "s1_score", (sleeve.get("rank_dir") != "asc")
-    out.sort(key=lambda r: (value_of(r, key, today) is None, -(value_of(r, key, today) or 0) if rev else (value_of(r, key, today) or 0)))
+    out.sort(key=lambda r: (value_of(r, key, today) is None, -(value_of(r, key, today) or 0) if rev else (value_of(r, key, today) or 0),
+                            -((r.get("s1") or {}).get("revenue") or 0)))             # ties: the larger business first
     out = _one_per_company(out)
     return {"matches": out, "awaiting": awaiting, "considered": considered, "pending_rules": pending,
             "gap_sectors": sorted(gap_sectors.items(), key=lambda kv: -kv[1])}

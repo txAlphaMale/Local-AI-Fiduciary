@@ -7,6 +7,7 @@
 Record builders and the due-selection live here as pure functions; app.py supplies the fetchers (behind the budget gates)."""
 import time
 
+RECORD_VERSION = 2                 # v1 records may be refusals saved as 'no data' (gate pacing bug): re-fetched
 ANALYST_REFRESH_DAYS = 7
 INSIDER_REFRESH_DAYS = 3
 SHORT_REFRESH_DAYS = 14
@@ -22,26 +23,26 @@ def build_analyst(recs, now=None):
     total = sum(counts.values())
     return {"available": total > 0, "total": total, "counts": counts, "period": latest.get("period"),
             "buy_pct": round((counts["strongBuy"] + counts["buy"]) / total * 100, 1) if total else None,
-            "fetched_at": int(now or time.time())}
+            "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
 
 
 def build_insider(res, now=None):
     """From the app's insider signal (insider.aggregate output, or an unavailable stub)."""
     res = res or {}
     if not res.get("available"):
-        return {"available": False, "reason": res.get("reason"), "fetched_at": int(now or time.time())}
+        return {"available": False, "reason": res.get("reason"), "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
     return {"available": True, "net_value": res.get("net_value"), "net_buy_pct": res.get("net_buy_pct"), "signal": res.get("signal"),
             "buyers": (res.get("buy") or {}).get("insiders", 0), "sellers": (res.get("sell") or {}).get("insiders", 0),
             "buy_value": (res.get("buy") or {}).get("value", 0.0), "sell_value": (res.get("sell") or {}).get("value", 0.0),
             "filings": res.get("filings"), "as_of": res.get("as_of"), "lookback_days": res.get("lookback_days"),
-            "fetched_at": int(now or time.time())}
+            "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
 
 
 def build_short(si, now=None):
     if not si:
-        return {"available": False, "fetched_at": int(now or time.time())}
+        return {"available": False, "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
     return {"available": True, "days_to_cover": si.get("days_to_cover"), "change_pct": si.get("change_pct"),
-            "settlement_date": si.get("settlement_date"), "flag": si.get("flag"), "fetched_at": int(now or time.time())}
+            "settlement_date": si.get("settlement_date"), "flag": si.get("flag"), "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
 
 
 def display(s3):
@@ -52,6 +53,7 @@ def display(s3):
     if ins.get("available"):
         nv = ins.get("net_value") or 0
         money = (f"${abs(nv) / 1e6:.1f}M" if abs(nv) >= 1e6 else f"${abs(nv) / 1e3:.0f}K" if abs(nv) >= 1e3 else f"${abs(nv):.0f}")
-        itxt = f"{ins.get('signal')}" + (f" ({'+' if nv >= 0 else '-'}{money}, {ins.get('buyers', 0)} buying)" if nv else "")
+        who = f"{ins.get('buyers', 0)} buying" if nv >= 0 else f"{ins.get('sellers', 0)} selling"
+        itxt = f"{ins.get('signal')}" + (f" ({'+' if nv >= 0 else '-'}{money}, {who})" if nv else "")
     atxt = f"{an['buy_pct']:.0f}% buy ({an['total']})" if an.get("available") else None
     return itxt, atxt

@@ -5902,8 +5902,10 @@ def _do_market_data(limit=None, fetch=None):
         deadline = market_data.deadline_for(now_dt)
         rows = ticker_state.screened_rows(sleeves_mod.STATES)
         cands = market_data.candidates(_sleeve_list(), rows, now_dt.date())
-        tranche, due_total = market_data.select_tranche(cands, ticker_state.s2_index(), limit=limit or MARKET_TRANCHE)
-        fetched = unavailable = 0
+        tranche, due_total = market_data.select_tranche(cands, ticker_state.s2_index(), limit=limit or MARKET_TRANCHE,
+                                                        version=market_data.RECORD_VERSION)
+        fetched = unavailable = errors = in_a_row = 0
+        first_error = None
         stopped = None
         t0 = time.time()
         fetch = fetch or (lambda t: (_price(t), _valuation(t), _profile(t)[0]))
@@ -5915,17 +5917,25 @@ def _do_market_data(limit=None, fetch=None):
                 if deadline and time.time() >= deadline:
                     stopped = "the 06:00 window closed; the next run continues"
                     break
+                _fh_reset()
                 price, val, prof = fetch(t)
-                if not _finnhub_open():                      # paused DURING this ticker: its answers are not trustworthy, leave it
-                    stopped = "Finnhub paused mid-run; the next run continues"
-                    break
+                failed, why = _fh_failures()
+                if failed or not _finnhub_open():       # a call was refused or failed: the answers are incomplete, so record nothing
+                    errors += 1
+                    in_a_row += 1
+                    first_error = first_error or why
+                    if in_a_row >= 8:
+                        stopped = f"Finnhub kept refusing calls ({first_error}); the next run continues"
+                        break
+                    continue
+                in_a_row = 0
                 rec = market_data.build_record(price, val, prof)
                 ticker_state.set_s2(t, rec)
                 fetched += 1
                 unavailable += 0 if rec["available"] else 1
         summary = {"ran_at": int(time.time()), "candidates": len(cands), "due": due_total, "tranche": len(tranche),
-                   "fetched": fetched, "no_data": unavailable, "remaining": max(0, due_total - fetched),
-                   "stopped": stopped, "seconds": round(time.time() - t0, 1)}
+                   "fetched": fetched, "no_data": unavailable, "errors": errors, "first_error": first_error,
+                   "remaining": max(0, due_total - fetched), "stopped": stopped, "seconds": round(time.time() - t0, 1)}
         store.write_json(MARKET_META_FILE, summary)
         return None
     finally:
@@ -5982,8 +5992,10 @@ def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_
 
         def run(group, fn_one, gate, refresh_days, limit):
             """fn_one(ticker) -> record or None (None = failed/deferred, leave the ticker alone)."""
-            tranche, due = market_data.select_tranche(cands, ticker_state.s3_index(group), limit=limit, refresh_days=refresh_days)
-            done = errors = 0
+            tranche, due = market_data.select_tranche(cands, ticker_state.s3_index(group), limit=limit, refresh_days=refresh_days,
+                                                      version=signals.RECORD_VERSION)
+            done = errors = in_a_row = 0
+            first_error = None
             stopped = None
             for t in tranche:
                 if gate and not _provider_open(gate):
@@ -5992,19 +6004,27 @@ def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_
                 if deadline and time.time() >= deadline:
                     stopped = "the 06:00 window closed; the next run continues"
                     break
+                _fh_reset()
                 try:
                     rec = fn_one(t)
-                except Exception:
+                except Exception as e:
                     rec = None
+                    _fh_failed(f"{type(e).__name__}")
                 if gate and not _provider_open(gate):          # paused DURING this ticker: its answer is not trustworthy
                     stopped = f"{gate} paused mid-run; the next run continues"
                     break
                 if rec is None:
                     errors += 1
+                    in_a_row += 1
+                    first_error = first_error or _fh_failures()[1] or "no answer"
+                    if in_a_row >= 8:
+                        stopped = f"{group}: too many failures in a row ({first_error}); the next run continues"
+                        break
                     continue
+                in_a_row = 0
                 ticker_state.set_s3(t, group, rec)
                 done += 1
-            summary["groups"][group] = {"due": due, "tranche": len(tranche), "done": done, "errors": errors,
+            summary["groups"][group] = {"due": due, "tranche": len(tranche), "done": done, "errors": errors, "first_error": first_error,
                                         "remaining": max(0, due - done), "stopped": stopped}
 
         fa = fetch_analyst or _fetch_analyst
@@ -6015,8 +6035,10 @@ def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_
         fi = fetch_insider or _insider_signal
 
         def one_insider(t):
+            edgar.reset_deferrals()
             res = fi(t)
-            if res is None or res.get("error"):
+            if res is None or res.get("error") or edgar.deferral_count():
+                _fh_failed("SEC request deferred or failed")
                 return None
             return signals.build_insider(res)
 
@@ -6991,6 +7013,22 @@ CACHE_RULES_VERSION = 2
 _FH_MODE = threading.local()
 
 
+def _fh_failed(why):
+    """Count a Finnhub call that did not get an answer (refused by the gate, HTTP error, timeout). A job that must never record such a
+    call as 'no data' resets the counter before a name and checks it after (_fh_reset / _fh_failures)."""
+    _FH_MODE.failed = getattr(_FH_MODE, "failed", 0) + 1
+    _FH_MODE.last_error = why
+
+
+def _fh_reset():
+    _FH_MODE.failed = 0
+    _FH_MODE.last_error = None
+
+
+def _fh_failures():
+    return int(getattr(_FH_MODE, "failed", 0)), getattr(_FH_MODE, "last_error", None)
+
+
 class _finnhub_batch:
     """`with _finnhub_batch():` -- Finnhub calls made in the block use the slower background (batch) pace of the budget gate."""
     def __enter__(self):
@@ -7020,7 +7058,10 @@ def _finnhub_json(path, sym, extra=None, batch=False):
     # deferred call returns the same (None, False) as any failed call, so cached_fetch falls back to the
     # last-known-good copy and nothing empty is cached as "no data".
     batch = batch or bool(getattr(_FH_MODE, "batch", False))
-    if not _budget.check("finnhub", batch=batch, max_wait=20)["ok"]:
+    # Background work WAITS for a pacing slot (the window is 60 s), instead of giving up after 20 s and looking like a failed lookup.
+    gate = _budget.check("finnhub", batch=batch, max_wait=75 if batch else 20)
+    if not gate["ok"]:
+        _fh_failed("gate: " + str(gate.get("reason") or "deferred"))
         return None, False
     try:
         r = requests.get(f"https://finnhub.io/api/v1/{path}", params=params, timeout=20)
@@ -7030,15 +7071,19 @@ def _finnhub_json(path, sym, extra=None, batch=False):
             _ra = 0
         _budget.report("finnhub", status=r.status_code, retry_after=_ra)
         if r.status_code >= 400:
+            _fh_failed(f"HTTP {r.status_code} on {path}")
             return None, False
         try:
             data = r.json()
         except ValueError:
+            _fh_failed(f"unreadable answer on {path}")
             return None, False
-    except Exception:
+    except Exception as e:
         _budget.report("finnhub", status=None)
+        _fh_failed(f"network error on {path}: {type(e).__name__}")
         return None, False
     if isinstance(data, dict) and data.get("error"):
+        _fh_failed(f"Finnhub error on {path}")
         return None, False
     return data, True
 
@@ -7332,7 +7377,10 @@ def _insider_signal(sym):
 
     def _compute():
         try:
+            d0 = edgar.deferral_count()
             raw = edgar.recent_form4(t, days=days, limit=int(_knob("insider_max_filings")))
+            if edgar.deferral_count() > d0:          # the SEC gate refused part of this lookup: that is not 'no filings'
+                return {"ticker": t, "available": False, "error": True, "reason": "SEC request deferred by the budget gate"}
             parsed = [insider.parse_form4(f.get("xml")) for f in raw]
             parsed = [p for p in parsed if p]
             if parsed:

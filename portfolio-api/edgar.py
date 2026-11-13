@@ -141,6 +141,17 @@ def set_gate(gate):
     _GATE["obj"] = gate
 
 
+def reset_deferrals():
+    """Start counting gate refusals on this thread (see deferral_count)."""
+    _MODE.deferred = 0
+
+
+def deferral_count():
+    """Gate refusals seen on this thread since reset_deferrals(). Several callers in this module swallow SecDeferred and return an
+    empty list, which is indistinguishable from 'SEC has nothing'; a caller that must not record a refusal as 'no data' checks this."""
+    return int(getattr(_MODE, "deferred", 0))
+
+
 class batch_mode:
     """`with edgar.batch_mode():` -- background (idea-hunting) callers use the slower batch pace and wait for a slot."""
     def __enter__(self):
@@ -154,8 +165,9 @@ def _get(url, **kw):
     if g is None:
         return requests.get(url, **kw)
     batch = bool(getattr(_MODE, "batch", False))
-    gate = g.check("sec", batch=batch, max_wait=30 if batch else 2)
+    gate = g.check("sec", batch=batch, max_wait=65 if batch else 2)       # background work waits for a slot (the window is 60 s)
     if not gate.get("ok"):
+        _MODE.deferred = getattr(_MODE, "deferred", 0) + 1
         raise SecDeferred(f"SEC deferred by the budget gate ({gate.get('reason') or 'paused'}); "
                           f"retry in about {int(gate.get('wait') or 0)}s")
     try:
