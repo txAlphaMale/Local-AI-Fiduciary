@@ -15,7 +15,8 @@ STATES = ("new", "active", "reconsider")          # blacklist is never offered t
 MAX_RULES = 12
 
 # key: (label, unit, stage). Stage s1 = from SEC filings; s2 = market data (Finnhub: price, size, yield, beta, P/E); s3 = signals
-# (analyst ratings, insider buying): not built yet, so a rule on an s3 metric is kept and shown as waiting.
+# (analyst ratings from Finnhub, insider buying from SEC Form 4, short interest from FINRA when credentials are saved).
+# Short-interest rules stay "pending" until at least one name has FINRA data.
 METRICS = {
     "revenue": ("Revenue (last 12 months)", "$", "s1"),
     "rev_growth_pct": ("Revenue growth, year over year", "%", "s1"),
@@ -40,9 +41,16 @@ METRICS = {
     "dividend_yield_pct": ("Dividend yield", "%", "s2"),
     "beta": ("Beta (sensitivity to the market)", "", "s2"),
     "pe": ("Price to earnings", "x", "s2"),
-    "analyst_buy_pct": ("Analysts rating it a buy", "%", "s3"),
-    "insider_net_buying": ("Insider net buying", "$", "s3"),
+    "analyst_buy_pct": ("Analysts rating it a buy (share of ratings)", "%", "s3"),
+    "analyst_count": ("Number of analyst ratings", "", "s3"),
+    "insider_net_buying": ("Insider net open-market buying, last 120 days (buys minus sales)", "$", "s3"),
+    "insider_buyers": ("Insiders who bought on the open market, last 120 days", "", "s3"),
+    "short_days_to_cover": ("Short interest: days to cover", "d", "s3"),
+    "short_interest_change_pct": ("Short interest change since the previous report", "%", "s3"),
 }
+
+S3_GROUP = {"analyst_buy_pct": "analyst", "analyst_count": "analyst", "insider_net_buying": "insider", "insider_buyers": "insider",
+            "short_days_to_cover": "short", "short_interest_change_pct": "short"}
 
 BUILTIN = {
     "growth": {"name": "Growth (speculative)", "builtin": True, "enabled": True, "include_states": list(STATES),
@@ -66,6 +74,12 @@ BUILTIN = {
                              {"metric": "share_change_pct", "op": "<=", "value": 3}, {"metric": "debt_to_equity", "op": "<=", "value": 2}],
                    "rank_by": "rev_growth_pct", "rank_dir": "desc",
                    "notes": "For opportunities that are not early-stage bets: companies that are already profitable and still growing."},
+    "insiders": {"name": "Insiders are buying", "builtin": True, "enabled": True, "include_states": list(STATES),
+                 "intent": "Companies where several insiders recently bought shares with their own money.",
+                 "rules": [{"metric": "revenue", "op": ">=", "value": 10_000_000}, {"metric": "insider_buyers", "op": ">=", "value": 2},
+                           {"metric": "insider_net_buying", "op": ">=", "value": 50000}],
+                 "rank_by": "insider_net_buying", "rank_dir": "desc",
+                 "notes": "Open-market purchases by officers and directors (SEC Form 4, codes P and S only). Cluster buying is a stronger signal than one insider; sales are noisy and not scored here. Context, never a buy signal on its own."},
     "balance": {"name": "Balance (fills a gap)", "builtin": True, "enabled": True, "include_states": list(STATES),
                 "intent": "Candidates in sectors or asset classes your portfolio is light on.",
                 "rules": [{"metric": "s1_score", "op": ">=", "value": 5}], "rank_by": "s1_score", "rank_dir": "desc",
@@ -95,6 +109,21 @@ def value_of(row, metric, today=None):
         age = value_of(row, "age_years", today)
         if age is not None and age < 2:
             return 0.0                    # the first year or two after an IPO compares a pre-listing share count: not real dilution
+    if stage == "s3":
+        g = ((row.get("s3") or {}).get(S3_GROUP.get(metric, "")) or {})
+        if metric == "analyst_buy_pct":
+            return g.get("buy_pct") if g.get("total") else None
+        if metric == "analyst_count":
+            return g.get("total") if g.get("total") is not None else None
+        if metric == "insider_net_buying":
+            return g.get("net_value") if g.get("available") else None
+        if metric == "insider_buyers":
+            return g.get("buyers") if g.get("available") else None
+        if metric == "short_days_to_cover":
+            return g.get("days_to_cover")
+        if metric == "short_interest_change_pct":
+            return g.get("change_pct")
+        return None
     if stage == "s2":
         s2 = row.get("s2") or {}
         v = s2.get(metric)
@@ -128,8 +157,8 @@ def validate(sl):
             return None, f"{METRICS[r['metric']][0]}: the threshold must be a number"
         clean.append({"metric": r["metric"], "op": op, "value": r["value"]})
     rank_by = sl.get("rank_by") or "s1_score"
-    if rank_by not in METRICS or METRICS[rank_by][2] != "s1":
-        return None, "rank by one of the SEC-data metrics (market-data ranking comes later)"
+    if rank_by not in METRICS:
+        return None, "unknown metric to rank by"
     states = [s for s in (sl.get("include_states") or list(STATES)) if s in STATES]
     if not states:
         return None, "include at least one of: new, active, reconsider"
@@ -138,42 +167,54 @@ def validate(sl):
             "include_states": states, "enabled": sl.get("enabled", True) is not False}, None
 
 
-def describe_rule(r):
+def describe_rule(r, note=""):
     label, unit, stage = METRICS[r["metric"]]
     v = r["value"]
     if unit == "$":
         shown = "$" + (f"{v / 1e9:g}B" if abs(v) >= 1e9 else f"{v / 1e6:g}M" if abs(v) >= 1e6 else f"{v / 1e3:g}K" if abs(v) >= 1e3 else f"{v:g}")
     else:
         shown = f"{v:g}" + (unit if unit in ("%", "x") else (" " + unit if unit else ""))
-    return f"{label} {r['op']} {shown}" + (" (waits for the signals stage)" if stage == "s3" else "")
+    return f"{label} {r['op']} {shown}" + (f" ({note})" if note else "")
 
 
 def evaluate(sleeve, rows, today=None, held=None):
     """-> {'matches', 'awaiting', 'considered', 'pending_rules', 'gap_sectors'}.
-    Rules on SEC-data metrics apply to every row. Rules on market-data metrics (and a Balance sleeve's sector test) apply once a
-    row has market data; a row that passes the SEC rules but has none yet is counted as `awaiting`, not as a failure. Rules on
-    signals metrics are kept and reported in `pending_rules`. An unknown value fails a rule: a name we cannot measure does not qualify.
-    `held` = {sector: portfolio weight %} for the Balance sleeve."""
+    SEC-data rules apply to every row. Rules on market-data or signals metrics (and a Balance sleeve's sector test) apply once a row
+    has that data; a row that passes the SEC rules but has none yet is counted as `awaiting`, not as a failure. Short-interest rules
+    stay in `pending_rules` until at least one name has FINRA data. An unknown value fails a rule: a name we cannot measure does not
+    qualify. `held` = {sector: portfolio weight %} for the Balance sleeve."""
     rules = sleeve.get("rules") or []
     stage = lambda r: METRICS[r["metric"]][2]
-    s1_rules = [r for r in rules if stage(r) == "s1"]
-    mkt_rules = [r for r in rules if stage(r) == "s2"]
-    pending = [describe_rule(r) for r in rules if stage(r) == "s3"]
+    any_short = any(((r.get("s3") or {}).get("short")) for r in rows)
+    pending, live = [], []
+    for r in rules:
+        if S3_GROUP.get(r["metric"]) == "short" and not any_short:
+            pending.append(describe_rule(r, "needs FINRA short-interest credentials"))
+        else:
+            live.append(r)
+    s1_rules = [r for r in live if stage(r) == "s1"]
+    later = [r for r in live if stage(r) in ("s2", "s3")]
     gap, gap_below = bool(sleeve.get("fill_gap")), float(sleeve.get("gap_below_pct", 3))
     held = held or {}
     states = set(sleeve.get("include_states") or STATES)
+
+    def has_data(row, r):
+        if stage(r) == "s2":
+            return bool(row.get("s2"))
+        return bool(((row.get("s3") or {}).get(S3_GROUP.get(r["metric"], ""))))
+    ok_rule = lambda row, r: (lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today))
     out, awaiting, considered, gap_sectors = [], 0, 0, {}
     for row in rows:
         if row.get("state") not in states or not row.get("s1"):
             continue
         considered += 1
-        if not all((lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today)) for r in s1_rules):
+        if not all(ok_rule(row, r) for r in s1_rules):
             continue
         s2 = row.get("s2")
-        if (mkt_rules or gap) and not s2:
+        if (gap and not s2) or any(not has_data(row, r) for r in later):
             awaiting += 1
             continue
-        if mkt_rules and not all((lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today)) for r in mkt_rules):
+        if not all(ok_rule(row, r) for r in later):
             continue
         if gap:
             sector = (s2 or {}).get("sector")

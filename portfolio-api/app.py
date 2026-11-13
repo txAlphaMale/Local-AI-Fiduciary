@@ -41,7 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
-import scavenger, ticker_state, market_data, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
+import scavenger, ticker_state, market_data, signals, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -2345,6 +2345,7 @@ _JOB_KINDS = {
     "earnings_brief": ("Post-earnings brief refresh", True, lambda: _do_earnings_brief()),
     "universe":      ("Universe & first screen",   False, lambda: _do_universe()),
     "market_data":   ("Market data for sleeve candidates", False, lambda: _do_market_data()),
+    "signals":       ("Signals for sleeve candidates", False, lambda: _do_signals()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -2577,11 +2578,12 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["universe", "market_data", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
+_SCHEDULE_ORDER = ["universe", "market_data", "signals", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
 _SCHEDULE_DEFAULTS = {
     # Inside the 01:00-06:00 scavenging window (Jason 2026-11-12); after SEC rebuilds its bulk file (~2 a.m. Central).
     "universe":      {"label": "Universe & first screen (idea scavenger)", "hour": 3, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "market_data":   {"label": "Market data for sleeve candidates (idea scavenger)", "hour": 4, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
+    "signals":       {"label": "Signals for sleeve candidates (idea scavenger)", "hour": 5, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 21, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "opportunities": {"label": "Opportunity scan",              "hour": 20, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
@@ -5948,6 +5950,111 @@ def get_market_data_status():
 
 
 
+SIGNALS_META_FILE = os.environ.get("SIGNALS_META_FILE", "/data/signals_meta.json")
+_signals_lock = threading.Lock()
+
+
+def _provider_open(name):
+    return next((r["state"] == "open" for r in _budget.status() if r["provider"] == name), True)
+
+
+def _fetch_analyst(sym):
+    """(recommendation list, answered). answered False = the call failed or was deferred; True = Finnhub answered (an empty list = no coverage)."""
+    recs, ok = _finnhub_json("stock/recommendation", sym)
+    return (recs if isinstance(recs, list) else []), bool(ok)
+
+
+def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_analyst=None, fetch_insider=None, fetch_short=None):
+    """Signals (analyst ratings, insider buying, short interest) for the stocks that pass a sleeve's SEC rules, in tranches behind the
+    Finnhub and SEC budget gates. A deferred or failed call is never recorded as 'no data'; the run stops when a gate pauses or the 06:00
+    window closes, and the next run continues. Raises on setup problems so the job queue records an error."""
+    if not _signals_lock.acquire(blocking=False):
+        return "skipped"
+    try:
+        now_dt = datetime.datetime.now()
+        deadline = market_data.deadline_for(now_dt)
+        rows = ticker_state.screened_rows(sleeves_mod.STATES)
+        cands = market_data.candidates(_sleeve_list(), rows, now_dt.date())
+        summary = {"ran_at": int(time.time()), "candidates": len(cands), "groups": {}}
+        t0 = time.time()
+
+        def run(group, fn_one, gate, refresh_days, limit):
+            """fn_one(ticker) -> record or None (None = failed/deferred, leave the ticker alone)."""
+            tranche, due = market_data.select_tranche(cands, ticker_state.s3_index(group), limit=limit, refresh_days=refresh_days)
+            done = errors = 0
+            stopped = None
+            for t in tranche:
+                if gate and not _provider_open(gate):
+                    stopped = f"{gate} is paused by the budget gate; resumes on its own and the next run continues"
+                    break
+                if deadline and time.time() >= deadline:
+                    stopped = "the 06:00 window closed; the next run continues"
+                    break
+                try:
+                    rec = fn_one(t)
+                except Exception:
+                    rec = None
+                if gate and not _provider_open(gate):          # paused DURING this ticker: its answer is not trustworthy
+                    stopped = f"{gate} paused mid-run; the next run continues"
+                    break
+                if rec is None:
+                    errors += 1
+                    continue
+                ticker_state.set_s3(t, group, rec)
+                done += 1
+            summary["groups"][group] = {"due": due, "tranche": len(tranche), "done": done, "errors": errors,
+                                        "remaining": max(0, due - done), "stopped": stopped}
+
+        fa = fetch_analyst or _fetch_analyst
+
+        def one_analyst(t):
+            recs, ok = fa(t)
+            return signals.build_analyst(recs) if ok else None
+        fi = fetch_insider or _insider_signal
+
+        def one_insider(t):
+            res = fi(t)
+            if res is None or res.get("error"):
+                return None
+            return signals.build_insider(res)
+
+        with _finnhub_batch(), edgar.batch_mode():
+            if FINNHUB or fetch_analyst:
+                run("analyst", one_analyst, "finnhub", signals.ANALYST_REFRESH_DAYS, limit_analyst or signals.DEFAULT_ANALYST_TRANCHE)
+            else:
+                summary["groups"]["analyst"] = {"skipped": "no Finnhub key saved"}
+            run("insider", one_insider, "sec", signals.INSIDER_REFRESH_DAYS, limit_insider or signals.DEFAULT_INSIDER_TRANCHE)
+            if fetch_short or shortint.configured():
+                fs = fetch_short or shortint.short_interest
+                run("short", lambda t: signals.build_short(fs(t)), None, signals.SHORT_REFRESH_DAYS, limit_short or signals.DEFAULT_SHORT_TRANCHE)
+            else:
+                summary["groups"]["short"] = {"skipped": "no FINRA credentials saved (SETTINGS > SECRETS & KEYS)"}
+        summary["seconds"] = round(time.time() - t0, 1)
+        store.write_json(SIGNALS_META_FILE, summary)
+        return None
+    finally:
+        _signals_lock.release()
+
+
+@app.post("/api/run-signals")
+def run_signals_ep():
+    jid, created = _enqueue("signals", source="manual")
+    return {"status": "started" if created else "already queued or running", "job_id": jid}
+
+
+@app.get("/api/signals")
+def get_signals_status():
+    """Last signals run (per group: due, done, errors, remaining, why it stopped) and how many names have each kind of signal."""
+    try:
+        last = store.read_json_strict(SIGNALS_META_FILE) or None
+    except Exception:
+        last = None
+    return {"last_run": last, "coverage": {g: len(ticker_state.s3_index(g)) for g in ("analyst", "insider", "short")},
+            "finnhub": next((r["state"] for r in _budget.status() if r["provider"] == "finnhub"), None),
+            "sec": next((r["state"] for r in _budget.status() if r["provider"] == "sec"), None)}
+
+
+
 _universe_lock = threading.Lock()
 _UNIVERSE_FORCE = {"on": False}
 
@@ -6050,7 +6157,8 @@ def _sleeve_row(r, today):
             "piotroski": s1.get("piotroski"), "share_change_pct": s1.get("share_change_pct"),
             "age_years": sleeves_mod.value_of(r, "age_years", today),
             "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
-            "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also")}
+            "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also"),
+            "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1]}
 
 
 @app.get("/api/sleeves")
@@ -6061,7 +6169,9 @@ def get_sleeves():
     held = _held_sector_weights() if any(sl.get("fill_gap") for sl in _sleeve_list()) else None
     return {"sleeves": [_sleeve_card(sl, rows, today, held=held) for sl in _sleeve_list()], "screened": len(rows),
             "with_market_data": sum(1 for r in rows if r.get("s2")),
-            "metrics": [{"key": k, "label": v[0], "unit": v[1], "stage": v[2]} for k, v in sleeves_mod.METRICS.items()]}
+            "metrics": [{"key": k, "label": v[0], "unit": v[1], "stage": v[2],
+                         "note": ("needs FINRA credentials" if sleeves_mod.S3_GROUP.get(k) == "short" else "")}
+                        for k, v in sleeves_mod.METRICS.items()]}
 
 
 @app.get("/api/sleeves/{sid}/matches")

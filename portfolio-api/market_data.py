@@ -13,7 +13,7 @@ import sleeves as sleeves_mod
 DEFAULT_TRANCHE = 800            # tickers per nightly run (3 Finnhub calls each, paced at the batch rate)
 REFRESH_DAYS = 3                 # re-fetch a candidate's market data after this long
 UNAVAILABLE_DAYS = 30            # a symbol Finnhub answered "nothing" for (OTC, foreign): look again after this long
-BALANCE_CANDIDATES = 400         # Balance would otherwise mean every healthy stock; take the best-scoring names
+BALANCE_CANDIDATES = 600         # Balance / insider-style sleeves would otherwise mean every healthy stock; take the best-scoring names
 
 
 def candidates(sleeve_list, rows, today=None):
@@ -25,8 +25,11 @@ def candidates(sleeve_list, rows, today=None):
             continue
         s1_only = {k: v for k, v in sl.items() if k != "fill_gap"}      # a sector test needs market data we do not have yet
         s1_only["rules"] = [r for r in sl.get("rules", []) if sleeves_mod.METRICS[r["metric"]][2] == "s1"]
+        later = [r for r in sl.get("rules", []) if sleeves_mod.METRICS[r["metric"]][2] != "s1"]
+        if later or sl.get("fill_gap"):
+            s1_only["rank_by"], s1_only["rank_dir"] = "s1_score", "desc"      # the real ranking needs data we are about to fetch
         matched = sleeves_mod.evaluate(s1_only, rows, today)["matches"]
-        if sl.get("fill_gap"):
+        if sl.get("fill_gap") or later:
             matched = matched[:BALANCE_CANDIDATES]
         for r in matched:
             if r["ticker"] not in seen:
@@ -35,7 +38,7 @@ def candidates(sleeve_list, rows, today=None):
     return out
 
 
-def select_tranche(tickers, s2_by_ticker, now=None, limit=DEFAULT_TRANCHE):
+def select_tranche(tickers, s2_by_ticker, now=None, limit=DEFAULT_TRANCHE, refresh_days=None, unavailable_days=None):
     """Never-checked first, then oldest check; skip anything checked recently enough. s2_by_ticker: {ticker: {'fetched_at', 'available'}}."""
     now = now or time.time()
     due = []
@@ -45,7 +48,7 @@ def select_tranche(tickers, s2_by_ticker, now=None, limit=DEFAULT_TRANCHE):
             due.append((0, 0, t))
             continue
         age_days = (now - s2["fetched_at"]) / 86400
-        need = REFRESH_DAYS if s2.get("available", True) else UNAVAILABLE_DAYS
+        need = (refresh_days or REFRESH_DAYS) if s2.get("available", True) else (unavailable_days or UNAVAILABLE_DAYS)
         if age_days >= need:
             due.append((1, s2["fetched_at"], t))
     due.sort()

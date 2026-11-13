@@ -89,7 +89,10 @@ class TestStorageAndJob(unittest.TestCase):
                                  "reason_kind": "screened", "next_check": None, "s1": row(t, rev_growth_pct=g)["s1"], "scores": {"score": sc}}
         ticker_state.upsert_many([mk("AAA", 90.0), mk("BBB", 60.0), mk("CCC", 40.0), mk("DDD", 3.0, 3)], "2026-11-13")
         d = tempfile.mkdtemp(dir=_TMP)
-        self.patches = [mock.patch.object(appmod, "MARKET_META_FILE", os.path.join(d, "m.json")),
+        real = appmod._sleeve_list
+        # The "Insiders are buying" sleeve's SEC-side rule is just "has revenue", so it would nominate every healthy name here.
+        self.patches = [mock.patch.object(appmod, "_sleeve_list", lambda: [s for s in real() if s["id"] != "insiders"]),
+                        mock.patch.object(appmod, "MARKET_META_FILE", os.path.join(d, "m.json")),
                         mock.patch.object(appmod, "FINNHUB", "test-key"),
                         mock.patch.object(appmod, "SLEEVES_FILE", os.path.join(d, "mktdata-sleeves.json"))]
         for p in self.patches:
