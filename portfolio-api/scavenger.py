@@ -64,19 +64,23 @@ def run_universe(force=False, today=None, sec_get=None, plain_get=None, download
     t0 = time.time()
     today = today or datetime.date.today()
     meta = read_meta()
-    srcs, stale = universe.fetch_sources(sec_get or _sec_get, plain_get or _plain_get, UNIVERSE_DIR)
+    force = force or meta.get("screen_version") != scavenge_screen.SCREEN_VERSION   # new rules: re-screen once
+    with edgar.batch_mode():                      # background pace, and counted as idea-hunting calls on the gate
+        srcs, stale = universe.fetch_sources(sec_get or _sec_get, plain_get or _plain_get, UNIVERSE_DIR)
     import json as _json
     rows, funnel = universe.build_universe(srcs["nasdaq"], srcs["other"], _json.loads(srcs["sec"]))
     if not rows:
         raise RuntimeError("universe came back empty; leaving ticker states untouched")
     dest = os.path.join(UNIVERSE_DIR, "companyfacts.zip")
-    path, lm = (download or _download_zip)(dest, meta.get("facts_last_modified"), force)
+    with edgar.batch_mode():
+        path, lm = (download or _download_zip)(dest, meta.get("facts_last_modified"), force)
     summary = {"ran_at": int(time.time()), "date": today.isoformat(), "funnel": funnel, "stale_sources": stale,
                "facts_last_modified": lm, "screened": False}
     if path is None:
         summary["note"] = "SEC's bulk file has not changed since the last screen; nothing to do."
         summary["seconds"] = round(time.time() - t0, 1)
-        store.write_json(META_FILE, {**meta, "facts_last_modified": lm, "last_check": summary})
+        store.write_json(META_FILE, {**meta, "facts_last_modified": lm, "last_check": summary,
+                                     "screen_version": meta.get("screen_version")})
         return summary
     try:
         out_rows, stats = scavenge_screen.screen_zip(path, rows, today)
@@ -88,5 +92,6 @@ def run_universe(force=False, today=None, sec_get=None, plain_get=None, download
     moved = ticker_state.upsert_many(out_rows, today.isoformat())
     summary.update({"screened": True, "screen": stats, "changes": moved, "counts": ticker_state.counts(),
                     "seconds": round(time.time() - t0, 1)})
-    store.write_json(META_FILE, {"facts_last_modified": lm, "last_check": summary, "last_screen": summary})
+    store.write_json(META_FILE, {"facts_last_modified": lm, "last_check": summary, "last_screen": summary,
+                                 "screen_version": scavenge_screen.SCREEN_VERSION})
     return summary
