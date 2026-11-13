@@ -14,7 +14,8 @@ OPS = {">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b, ">": lambda a, b: a
 STATES = ("new", "active", "reconsider")          # blacklist is never offered to a sleeve
 MAX_RULES = 12
 
-# key: (label, unit, stage). Stage s1 = from SEC filings (available now); s2 = market data (next phase).
+# key: (label, unit, stage). Stage s1 = from SEC filings; s2 = market data (Finnhub: price, size, yield, beta, P/E); s3 = signals
+# (analyst ratings, insider buying): not built yet, so a rule on an s3 metric is kept and shown as waiting.
 METRICS = {
     "revenue": ("Revenue (last 12 months)", "$", "s1"),
     "rev_growth_pct": ("Revenue growth, year over year", "%", "s1"),
@@ -39,8 +40,8 @@ METRICS = {
     "dividend_yield_pct": ("Dividend yield", "%", "s2"),
     "beta": ("Beta (sensitivity to the market)", "", "s2"),
     "pe": ("Price to earnings", "x", "s2"),
-    "analyst_buy_pct": ("Analysts rating it a buy", "%", "s2"),
-    "insider_net_buying": ("Insider net buying", "$", "s2"),
+    "analyst_buy_pct": ("Analysts rating it a buy", "%", "s3"),
+    "insider_net_buying": ("Insider net buying", "$", "s3"),
 }
 
 BUILTIN = {
@@ -66,8 +67,9 @@ BUILTIN = {
                    "notes": "Proposed addition: the 'smart opportunity beyond pre-profit' lane."},
     "balance": {"name": "Balance (fills a gap)", "builtin": True, "enabled": True, "include_states": list(STATES),
                 "intent": "Candidates in sectors or asset classes your portfolio is light on.",
-                "rules": [], "rank_by": "s1_score", "rank_dir": "desc", "waiting": "sector classification of candidates (market-data stage)",
-                "notes": "Needs each candidate's sector, which comes from market data. Your current sector mix is on the exposure view."},
+                "rules": [{"metric": "s1_score", "op": ">=", "value": 5}], "rank_by": "s1_score", "rank_dir": "desc",
+                "fill_gap": True, "gap_below_pct": 3,
+                "notes": "Healthy companies (basic screen score 5+) in a sector where you hold under 3% of your portfolio. Sector comes from market data, so a candidate shows as waiting until its market data is fetched."},
 }
 
 
@@ -87,7 +89,12 @@ def value_of(row, metric, today=None):
             return round(((today or datetime.date.today()) - d).days / 365.25, 1)
         except (TypeError, ValueError):
             return None
-    if METRICS.get(metric, ("", "", ""))[2] != "s1":
+    stage = METRICS.get(metric, ("", "", ""))[2]
+    if stage == "s2":
+        s2 = row.get("s2") or {}
+        v = s2.get(metric)
+        return v if (s2.get("available") and _num(v)) else None
+    if stage != "s1":
         return None
     v = s1.get(metric)
     return v if _num(v) else None
@@ -128,30 +135,46 @@ def describe_rule(r):
     label, unit, stage = METRICS[r["metric"]]
     v = r["value"]
     shown = f"{v:g}" + (unit if unit in ("%", "x") else (" " + unit if unit else ""))
-    return f"{label} {r['op']} {shown}" + (" (waits for market data)" if stage == "s2" else "")
+    return f"{label} {r['op']} {shown}" + (" (waits for the signals stage)" if stage == "s3" else "")
 
 
-def evaluate(sleeve, rows, today=None):
-    """-> {'matches': [...], 'considered': n, 'pending_rules': [...]}. Unknown values fail a rule (a name we cannot measure does not qualify)."""
-    live = [r for r in sleeve.get("rules") or [] if METRICS[r["metric"]][2] == "s1"]
-    pending = [describe_rule(r) for r in sleeve.get("rules") or [] if METRICS[r["metric"]][2] != "s1"]
+def evaluate(sleeve, rows, today=None, held=None):
+    """-> {'matches', 'awaiting', 'considered', 'pending_rules', 'gap_sectors'}.
+    Rules on SEC-data metrics apply to every row. Rules on market-data metrics (and a Balance sleeve's sector test) apply once a
+    row has market data; a row that passes the SEC rules but has none yet is counted as `awaiting`, not as a failure. Rules on
+    signals metrics are kept and reported in `pending_rules`. An unknown value fails a rule: a name we cannot measure does not qualify.
+    `held` = {sector: portfolio weight %} for the Balance sleeve."""
+    rules = sleeve.get("rules") or []
+    stage = lambda r: METRICS[r["metric"]][2]
+    s1_rules = [r for r in rules if stage(r) == "s1"]
+    mkt_rules = [r for r in rules if stage(r) == "s2"]
+    pending = [describe_rule(r) for r in rules if stage(r) == "s3"]
+    gap, gap_below = bool(sleeve.get("fill_gap")), float(sleeve.get("gap_below_pct", 3))
+    held = held or {}
     states = set(sleeve.get("include_states") or STATES)
-    out, considered = [], 0
+    out, awaiting, considered, gap_sectors = [], 0, 0, {}
     for row in rows:
         if row.get("state") not in states or not row.get("s1"):
             continue
         considered += 1
-        ok = True
-        for r in live:
-            v = value_of(row, r["metric"], today)
-            if v is None or not OPS[r["op"]](v, r["value"]):
-                ok = False
-                break
-        if ok and (live or not sleeve.get("waiting")):
-            out.append(row)
+        if not all((lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today)) for r in s1_rules):
+            continue
+        s2 = row.get("s2")
+        if (mkt_rules or gap) and not s2:
+            awaiting += 1
+            continue
+        if mkt_rules and not all((lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today)) for r in mkt_rules):
+            continue
+        if gap:
+            sector = (s2 or {}).get("sector")
+            if not sector or held.get(sector, 0) >= gap_below:
+                continue
+            gap_sectors[sector] = gap_sectors.get(sector, 0) + 1
+        out.append(row)
     key, rev = sleeve.get("rank_by") or "s1_score", (sleeve.get("rank_dir") != "asc")
     out.sort(key=lambda r: (value_of(r, key, today) is None, -(value_of(r, key, today) or 0) if rev else (value_of(r, key, today) or 0)))
-    return {"matches": out, "considered": considered, "pending_rules": pending}
+    return {"matches": out, "awaiting": awaiting, "considered": considered, "pending_rules": pending,
+            "gap_sectors": sorted(gap_sectors.items(), key=lambda kv: -kv[1])}
 
 
 def slug(name):

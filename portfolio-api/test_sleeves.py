@@ -46,18 +46,31 @@ class TestEngine(unittest.TestCase):
         ev = sleeves.evaluate(sleeves.BUILTIN["growth"], rows, TODAY)
         self.assertEqual([r["ticker"] for r in ev["matches"]], ["OK"])
 
-    def test_market_data_rules_are_kept_and_reported_as_waiting(self):
+    def test_market_data_rules_apply_once_data_exists_and_otherwise_wait(self):
         sl = {**sleeves.BUILTIN["growth"], "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25},
                                                       {"metric": "market_cap", "op": "<=", "value": 5e9}]}
+        small = {**row("SMALL"), "s2": {"available": True, "market_cap": 2e9}}
+        big = {**row("BIG"), "s2": {"available": True, "market_cap": 9e10}}
+        nodata = {**row("NODATA"), "s2": {"available": False}}
+        ev = sleeves.evaluate(sl, [small, big, nodata, row("NEW")], TODAY)
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["SMALL"])
+        self.assertEqual(ev["awaiting"], 1)                       # NEW passes the SEC rules but has no market data yet
+
+    def test_signals_rules_are_kept_and_reported_as_waiting(self):
+        sl = {**sleeves.BUILTIN["growth"], "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25},
+                                                      {"metric": "insider_net_buying", "op": ">", "value": 0}]}
         ev = sleeves.evaluate(sl, [row("X")], TODAY)
         self.assertEqual(len(ev["matches"]), 1)
-        self.assertEqual(len(ev["pending_rules"]), 1)
-        self.assertIn("waits for market data", ev["pending_rules"][0])
+        self.assertIn("waits for the signals stage", ev["pending_rules"][0])
 
-    def test_balance_sleeve_is_listed_but_waits_for_sectors(self):
-        ev = sleeves.evaluate(sleeves.BUILTIN["balance"], [row("X")], TODAY)
-        self.assertEqual(ev["matches"], [])
-        self.assertTrue(sleeves.BUILTIN["balance"]["waiting"])
+    def test_balance_sleeve_matches_healthy_names_in_sectors_you_are_light_on(self):
+        bal = sleeves.BUILTIN["balance"]
+        mk = lambda t, sec, score: {**row(t, score=score), "s2": {"available": True, "sector": sec}}
+        rows = [mk("TECH1", "Technology", 6), mk("HEAL1", "Health Care", 6), mk("HEAL2", "Health Care", 3), row("NOS2", score=6)]
+        ev = sleeves.evaluate(bal, rows, TODAY, held={"Technology": 40.0, "Health Care": 1.0})
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["HEAL1"])      # TECH1 is not a gap; HEAL2 is weak; NOS2 waits
+        self.assertEqual(ev["awaiting"], 1)
+        self.assertEqual(ev["gap_sectors"], [("Health Care", 1)])
 
     def test_income_and_compounder_builtins(self):
         pay = row("DIV", net_margin_pct=12.0, fcf_margin_pct=9.0, dividend_payout_pct=45.0, fcf_dividend_coverage=2.5)
@@ -134,12 +147,13 @@ class TestEndpoints(unittest.TestCase):
         mk = lambda t, g: {"ticker": t, "cik": "1", "name": t, "exchange": "NYSE", "state": "active", "reason": "", "reason_kind": "screened",
                            "next_check": None, "s1": row(t, rev_growth_pct=g)["s1"], "scores": {"score": 4}}
         ticker_state.upsert_many([mk("AAA", 50.0), mk("BBB", 5.0)], "2026-11-12")
-        self.p = mock.patch.object(appmod, "SLEEVES_FILE", os.path.join(tempfile.mkdtemp(dir=_TMP), "s.json"))
+        self.p = mock.patch.object(appmod, "SLEEVES_FILE", os.path.join(tempfile.mkdtemp(dir=_TMP), "sleeves-test.json"))
         self.p.start()
         self.e = mock.patch.object(appmod, "_emit_config_changed")
         self.e.start()
 
     def tearDown(self):
+        store.write_json(appmod.SLEEVES_FILE, {"custom": {}})      # app-state keys are by file name; leave nothing behind
         self.p.stop(); self.e.stop()
 
     def test_list_counts_matches_per_sleeve(self):
@@ -148,8 +162,9 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(out["screened"], 2)
         self.assertEqual((by["growth"]["match_count"], by["growth"]["preview"][0]["ticker"]), (1, "AAA"))
         self.assertEqual(by["balance"]["match_count"], 0)
-        self.assertTrue(by["balance"]["waiting"])
+        self.assertTrue(by["balance"]["fill_gap"])
         self.assertTrue(any(m["key"] == "market_cap" and m["stage"] == "s2" for m in out["metrics"]))
+        self.assertTrue(any(m["key"] == "insider_net_buying" and m["stage"] == "s3" for m in out["metrics"]))
 
     def test_custom_sleeve_create_preview_update_delete(self):
         body = {"name": "Slow growers", "rules": [{"metric": "rev_growth_pct", "op": "<=", "value": 10}]}
@@ -188,7 +203,7 @@ class TestPageWiring(unittest.TestCase):
             self.assertIn(needle, self.html, needle)
 
     def test_form_offers_the_fixed_menu_and_says_what_waits(self):
-        for needle in ("waits for market data", "all must pass", "never turned into rules", "would screen <b>", "COPY AS MY OWN"):
+        for needle in ("all must pass", "never turned into rules", "would screen <b>", "COPY AS MY OWN"):
             self.assertIn(needle, self.html, needle)
 
     def test_loading_guard_and_state_vars(self):

@@ -3122,7 +3122,7 @@ function saveHomeBasis(){
 const SCHEDULE_RUN_ENDPOINTS = {
   analysis: '/api/run-analysis', discovery: '/api/run-discovery',
   opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
-  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe',
+  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe', market_data: '/api/run-market-data',
   backtest: '/api/run-backtest', narrative: '/api/run-narrative'};
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
@@ -3332,9 +3332,9 @@ function _slvRunway(v){ return v==null?'—':(v>=999?'self-funding':Number(v).to
 function sleeveTable(rows){
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const t=el('table'); const h=el('tr');
-  h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th>'; t.appendChild(h);
+  h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>PRICE</th><th>MKT CAP</th><th>YIELD</th><th class="l">SECTOR</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th>'; t.appendChild(h);
   rows.forEach(r=>{ const tr=el('tr');
-    tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b></td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
+    tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b></td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
     t.appendChild(tr); });
   return t;
 }
@@ -3343,7 +3343,7 @@ function sleevesContent(){
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   wrap.appendChild(el('div','ph','SLEEVES · WHAT THE IDEA HUNT LOOKS FOR'));
   const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
-  info.textContent='A sleeve is a purpose: a plain-language intent plus measurable rules. Each night the app screens every US-listed stock from SEC filings (no paid data used) and shows how many pass each sleeve. Rules that need a share price or sector wait for the market-data stage. Your own sleeves use the same rule menu, so every rule is something the app can actually measure.';
+  info.textContent='A sleeve is a purpose: a plain-language intent plus measurable rules. Each night the app screens every US-listed stock from SEC filings (no paid data used) and shows how many pass each sleeve. Rules on price, size, yield or sector use market data fetched nightly for the names that pass the SEC rules (3 calls each, paced to the free Finnhub limit); a name shows as waiting until its market data arrives. Your own sleeves use the same rule menu, so every rule is something the app can actually measure.';
   wrap.appendChild(info);
   if(SLEEVES==null){ wrap.appendChild(el('div','muted','Loading…')); loadSleeves(); return wrap; }
   const rf=el('button','mut-btn','↻ REFRESH'); rf.style.marginBottom='var(--space-3)'; rf.onclick=()=>{ SLEEVES=null; render(); }; wrap.appendChild(rf);
@@ -3354,10 +3354,11 @@ function sleevesContent(){
     const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
     const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-1);';
     h.innerHTML='<b>'+esc(sl.name)+'</b> <span class="muted" style="font-size:var(--font-size-sm)">'+(sl.builtin?'· built in':'· yours')+'</span> &nbsp; '+
-      (sl.waiting?'<span class="muted">waiting for '+esc(sl.waiting)+'</span>':'<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today</span>');
+      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data (fetched nightly)':'')+'</span>';
     box.appendChild(h);
     box.appendChild(el('div','muted',sl.intent||'')).style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
     const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }
+    if(sl.fill_gap&&sl.gap_sectors&&sl.gap_sectors.length){ const g=el('div'); g.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; g.innerHTML='Sectors you hold under '+esc(sl.gap_below_pct)+'% of your portfolio, with candidates: '+sl.gap_sectors.map(x=>esc(x[0])+' ('+x[1]+')').join(', '); box.appendChild(g); }
     if(sl.notes){ const n=el('div','muted',sl.notes); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; box.appendChild(n); }
     if(sl.preview&&sl.preview.length){ box.appendChild(sleeveTable(sl.preview)); const more=el('button','mut-btn','▸ SHOW MORE'); more.style.marginTop='var(--space-2)';
       more.onclick=()=>fetch('/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50').then(r=>r.json()).then(d=>{ const t=sleeveTable(d.rows||[]); const old=box.querySelector('table'); if(old) old.replaceWith(t); more.remove(); });
@@ -3380,7 +3381,7 @@ function sleeveForm(){
   box.appendChild(inp('What is this sleeve for? (one sentence)','intent',''));
   box.appendChild(inp('Notes for the research assistant (free text; guides the scout later, never turned into rules)','notes','',true));
   const rl=el('div','muted','Rules (all must pass)'); rl.style.cssText='font-size:var(--font-size-sm);margin:var(--space-2) 0 var(--space-1);'; box.appendChild(rl);
-  const mopts=metrics.map(m=>'<option value="'+m.key+'">'+m.label.replace(/&/g,'&amp;')+(m.stage==='s2'?' (waits for market data)':'')+'</option>').join('');
+  const mopts=metrics.map(m=>'<option value="'+m.key+'">'+m.label.replace(/&/g,'&amp;')+(m.stage==='s3'?' (waits for the signals stage)':'')+'</option>').join('');
   (e.rules||[]).forEach((r,idx)=>{ const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);margin-bottom:4px;flex-wrap:wrap;align-items:center;';
     const ms=document.createElement('select'); ms.innerHTML=mopts; ms.value=r.metric; ms.onchange=()=>{ r.metric=ms.value; }; ms.style.maxWidth='420px';
     const os=document.createElement('select'); ['>=','<=','>','<'].forEach(o=>{ const op=document.createElement('option'); op.value=o; op.textContent=o; os.appendChild(op); }); os.value=r.op; os.onchange=()=>{ r.op=os.value; };
@@ -3406,7 +3407,7 @@ function sleeveForm(){
   bar.appendChild(pv); bar.appendChild(sv); bar.appendChild(cx); box.appendChild(bar);
   if(SLEEVE_PREVIEW){ const o=el('div'); o.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-base);';
     if(SLEEVE_PREVIEW.error){ o.className='neg'; o.textContent=SLEEVE_PREVIEW.error; }
-    else { const pr=SLEEVE_PREVIEW; o.innerHTML='This sleeve would screen <b>'+pr.match_count+'</b> of '+pr.considered+' stocks today.'+(pr.pending_rules.length?' <span class="muted">Not counted yet (wait for market data): '+pr.pending_rules.map(x=>x.replace(/&/g,'&amp;')).join('; ')+'</span>':'')+(pr.match_count===0?' <span class="neg">No stock passes: loosen a rule.</span>':'');
+    else { const pr=SLEEVE_PREVIEW; o.innerHTML='This sleeve would screen <b>'+pr.match_count+'</b> of '+pr.considered+' stocks today.'+(pr.awaiting_market_data?' <span class="muted">'+pr.awaiting_market_data+' more pass the SEC rules and wait for market data.</span>':'')+(pr.pending_rules.length?' <span class="muted">Not counted yet (wait for the signals stage): '+pr.pending_rules.map(x=>x.replace(/&/g,'&amp;')).join('; ')+'</span>':'')+(pr.match_count===0?' <span class="neg">No stock passes: loosen a rule.</span>':'');
       if(pr.preview&&pr.preview.length){ o.appendChild(sleeveTable(pr.preview)); } }
     box.appendChild(o); }
   return box;

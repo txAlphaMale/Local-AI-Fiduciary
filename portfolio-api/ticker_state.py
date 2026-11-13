@@ -22,11 +22,12 @@ def ensure():
                 first_seen TEXT, last_seen TEXT, last_changed TEXT, last_signal TEXT,
                 s1 TEXT, scores TEXT)""")
             c.execute("CREATE INDEX IF NOT EXISTS ix_ticker_state_state ON ticker_state(state)")
+            store._ensure_column(c, "ticker_state", "s2", "TEXT")          # market data (price, size, yield, beta, sector), phase 4b
 
 
 def _row(r):
     d = dict(r)
-    for k in ("s1", "scores"):
+    for k in ("s1", "scores", "s2"):
         try:
             d[k] = json.loads(d[k]) if d.get(k) else None
         except Exception:
@@ -113,5 +114,27 @@ def screened_rows(states):
     marks = ",".join("?" for _ in states)
     with store._conn() as c:
         return [_row(r) for r in c.execute(
-            f"SELECT ticker,name,exchange,state,reason_kind,s1,scores FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
+            f"SELECT ticker,name,exchange,state,reason_kind,s1,scores,s2 FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
             list(states))]
+
+
+def set_s2(ticker, record):
+    """Store a market-data record. Never touches state, reason or last_changed: market data does not move a ticker between states."""
+    ensure()
+    with store._lock:
+        with store._conn() as c:
+            c.execute("UPDATE ticker_state SET s2=? WHERE ticker=?", (json.dumps(record), ticker))
+
+
+def s2_index():
+    """{ticker: {'fetched_at', 'available'}} for every row that has market data."""
+    ensure()
+    out = {}
+    with store._conn() as c:
+        for r in c.execute("SELECT ticker, s2 FROM ticker_state WHERE s2 IS NOT NULL"):
+            try:
+                d = json.loads(r["s2"])
+                out[r["ticker"]] = {"fetched_at": d.get("fetched_at"), "available": d.get("available", True)}
+            except Exception:
+                continue
+    return out
