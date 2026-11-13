@@ -10,6 +10,7 @@ import time
 
 import sleeves as sleeves_mod
 
+RECORD_VERSION = 2              # records written before the gate-refusal fix (v1) are re-fetched: some were refusals saved as 'no data'
 DEFAULT_TRANCHE = 800            # tickers per nightly run (3 Finnhub calls each, paced at the batch rate)
 REFRESH_DAYS = 3                 # re-fetch a candidate's market data after this long
 UNAVAILABLE_DAYS = 30            # a symbol Finnhub answered "nothing" for (OTC, foreign): look again after this long
@@ -38,13 +39,13 @@ def candidates(sleeve_list, rows, today=None):
     return out
 
 
-def select_tranche(tickers, s2_by_ticker, now=None, limit=DEFAULT_TRANCHE, refresh_days=None, unavailable_days=None):
+def select_tranche(tickers, s2_by_ticker, now=None, limit=DEFAULT_TRANCHE, refresh_days=None, unavailable_days=None, version=None):
     """Never-checked first, then oldest check; skip anything checked recently enough. s2_by_ticker: {ticker: {'fetched_at', 'available'}}."""
     now = now or time.time()
     due = []
     for t in tickers:
         s2 = s2_by_ticker.get(t)
-        if not s2 or not s2.get("fetched_at"):
+        if not s2 or not s2.get("fetched_at") or (version and s2.get("v") != version):
             due.append((0, 0, t))
             continue
         age_days = (now - s2["fetched_at"]) / 86400
@@ -67,7 +68,7 @@ def build_record(price, valuation, profile, now=None):
            "sector": (p.get("finnhubIndustry") or "").strip() or None,
            "avg_dollar_volume": round(vol_m * 1e6 * price) if (vol_m and price) else None,
            "pct_off_52w_high": round((price - hi) / hi * 100, 1) if (price and hi) else None,
-           "high_52w": hi, "low_52w": lo, "fetched_at": int(now or time.time())}
+           "high_52w": hi, "low_52w": lo, "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
     rec["available"] = any(rec[k] is not None for k in ("price", "market_cap", "pe", "beta", "sector"))
     return rec
 

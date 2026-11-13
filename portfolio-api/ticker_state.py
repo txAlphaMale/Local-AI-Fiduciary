@@ -135,7 +135,7 @@ def s2_index():
         for r in c.execute("SELECT ticker, s2 FROM ticker_state WHERE s2 IS NOT NULL"):
             try:
                 d = json.loads(r["s2"])
-                out[r["ticker"]] = {"fetched_at": d.get("fetched_at"), "available": d.get("available", True)}
+                out[r["ticker"]] = {"fetched_at": d.get("fetched_at"), "available": d.get("available", True), "v": d.get("v")}
             except Exception:
                 continue
     return out
@@ -166,7 +166,7 @@ def s3_index(group):
             except Exception:
                 continue
             if g:
-                out[r["ticker"]] = {"fetched_at": g.get("fetched_at"), "available": g.get("available", True)}
+                out[r["ticker"]] = {"fetched_at": g.get("fetched_at"), "available": g.get("available", True), "v": g.get("v")}
     return out
 
 

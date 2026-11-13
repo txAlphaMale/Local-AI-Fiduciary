@@ -3399,7 +3399,7 @@ function sleevesContent(){
     const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
     const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-1);';
     h.innerHTML='<b>'+esc(sl.name)+'</b> <span class="muted" style="font-size:var(--font-size-sm)">'+(sl.builtin?'· built in':'· yours')+'</span> &nbsp; '+
-      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data (fetched nightly)':'')+'</span>';
+      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data or signals (fetched nightly)':'')+'</span>';
     box.appendChild(h);
     box.appendChild(el('div','muted',sl.intent||'')).style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
     const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }

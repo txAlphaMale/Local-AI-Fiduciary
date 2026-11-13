@@ -259,6 +259,8 @@ class Budget:
                 if cap is not None and s["day_count"] >= cap:
                     return self._deny(name, (day + 1) * 86400 - now, f"daily soft budget used ({cap} calls)")
                 s["day_count"] += 1
+                if s["day_count"] % 20 == 0:
+                    self._persist()                              # so a restart does not zero the idea-hunting counter
             self._count(name, now)
             return {"ok": True, "wait": 0, "reason": None, "deferred": False}
 
