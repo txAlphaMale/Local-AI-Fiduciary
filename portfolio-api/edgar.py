@@ -974,6 +974,12 @@ def _compute(ticker):
                 "reason": f"SEC fetch error: {e}"}
     if not facts:
         return {"ticker": ticker, "available": False, "reason": "no SEC company facts"}
+    return _metrics_from_facts(ticker, cik, facts)
+
+
+def _metrics_from_facts(ticker, cik, facts):
+    """Everything fundamentals() computes, from an already-loaded companyfacts dict. Split out of _compute() (2026-11-12) so the
+    idea-scavenger's universe screen can run the SAME numbers over SEC's nightly bulk file with no per-company request."""
     # 2026-08-06 diagnostic split. Every extractor in this module reads ONLY the `us-gaap`
     # taxonomy (see _latest/_merged_rows). A company that files with the SEC under IFRS -- a
     # foreign private issuer on a 20-F/40-F, common for the Canadian and Australian listings in

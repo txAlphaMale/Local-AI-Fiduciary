@@ -41,6 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
+import scavenger, ticker_state   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -2342,6 +2343,7 @@ _JOB_KINDS = {
     "narrative":     ("State-of-the-Wealth brief", True,  lambda: _do_narrative()),
     "knowledge_reindex": ("Knowledge reindex",     True,  lambda: knowledge.ensure_index(force=True)),
     "earnings_brief": ("Post-earnings brief refresh", True, lambda: _do_earnings_brief()),
+    "universe":      ("Universe & first screen",   False, lambda: _do_universe()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -2574,8 +2576,10 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
+_SCHEDULE_ORDER = ["universe", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
 _SCHEDULE_DEFAULTS = {
+    # Inside the 01:00-06:00 scavenging window (Jason 2026-11-12); after SEC rebuilds its bulk file (~2 a.m. Central).
+    "universe":      {"label": "Universe & first screen (idea scavenger)", "hour": 3, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 21, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "opportunities": {"label": "Opportunity scan",              "hour": 20, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
@@ -5868,6 +5872,47 @@ def get_backtest():
         return {**cached, "cached": True, "refreshing": (not fresh)}
     return {"status": "computing", "note": "First decision-backtest build is running (fetching "
             "price history per rated ticker) — refresh in a moment.", "computing": True}
+
+
+_universe_lock = threading.Lock()
+_UNIVERSE_FORCE = {"on": False}
+
+
+def _do_universe():
+    """Raises on failure (the job queue records "error"); "skipped" if already running. Only a successful screen moves ticker states."""
+    if not _universe_lock.acquire(blocking=False):
+        return "skipped"
+    force, _UNIVERSE_FORCE["on"] = _UNIVERSE_FORCE["on"], False
+    try:
+        scavenger.run_universe(force=force)
+    finally:
+        _universe_lock.release()
+
+
+@app.post("/api/run-universe")
+async def run_universe_ep(req: Request):
+    """Queue the universe build + first screen now. Body {"force": true} re-screens even if SEC's bulk file is unchanged."""
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    _UNIVERSE_FORCE["on"] = bool(isinstance(body, dict) and body.get("force"))
+    jid, created = _enqueue("universe", source="manual")
+    return {"status": "started" if created else "already queued or running", "job_id": jid}
+
+
+@app.get("/api/universe")
+def get_universe():
+    """Where the scavenger stands: last screen, the funnel from listed names to stocks, ticker counts by state, top reasons."""
+    meta = scavenger.read_meta()
+    return {"counts": ticker_state.counts(), "total": ticker_state.total(), "top_reasons": ticker_state.reason_counts(),
+            "last_screen": meta.get("last_screen"), "last_check": meta.get("last_check")}
+
+
+@app.get("/api/universe/tickers")
+def get_universe_tickers(state: str = "", q: str = "", limit: int = 50, offset: int = 0):
+    """Ticker-state rows (read-only): ?state=new|active|reconsider|blacklist &q=prefix-or-name &limit &offset."""
+    return {"rows": ticker_state.list_rows(state or None, q or None, limit, offset)}
 
 
 @app.post("/api/run-backtest")
