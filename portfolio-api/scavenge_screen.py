@@ -17,16 +17,16 @@ NEW_IPO_DAYS = 365               # first filing inside a year: a first look rega
 MIN_REVENUE = 1_000_000          # below this there is no operating business to screen yet
 
 
-SCREEN_VERSION = 3               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 4               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
-ALT_REVENUE_TAGS = ["RevenuesNetOfInterestExpense", "InterestAndDividendIncomeOperating", "InterestAndFeeIncomeLoansAndLeases",
+ALT_REVENUE_TAGS = ["InterestIncomeOperating", "RevenuesNetOfInterestExpense", "InterestAndDividendIncomeOperating", "InterestAndFeeIncomeLoansAndLeases",
                     "PremiumsEarnedNet", "RealEstateRevenueNet", "OperatingLeasesIncomeStatementLeaseRevenue",
                     "RevenuesExcludingInterestAndDividends", "SalesRevenueServicesNet", "SalesRevenueGoodsNet"]
 
 # Foreign filers on IFRS (20-F / 40-F) keep their numbers under "ifrs-full" in a few currencies.
-IFRS = {"revenue": ["Revenue", "RevenueFromContractsWithCustomers"],
+IFRS = {"revenue": ["Revenue", "RevenueFromContractsWithCustomers", "InsuranceRevenue"],
         "net_income": ["ProfitLoss", "ProfitLossAttributableToOwnersOfParent"],
         "ocf": ["CashFlowsFromUsedInOperatingActivities"],
         "capex": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipment"],
@@ -70,6 +70,13 @@ def cash_position(facts, taxonomy="us-gaap"):
     return total
 
 
+def runway_from_fcf(cash, fcf):
+    """Months of cash at the current yearly free-cash-flow burn; 999 when not burning; None when unknowable. Works for pre-revenue companies."""
+    if cash is None or fcf is None:
+        return None
+    return 999 if fcf >= 0 else round(cash / (-fcf) * 12, 1)
+
+
 def runway_months(cash, revenue, fcf_margin_pct):
     """999 when free cash flow is not negative (funds itself); months of cash at the current burn otherwise; None if unknowable."""
     if cash is None or revenue is None or fcf_margin_pct is None:
@@ -87,10 +94,12 @@ def _days(a, b):
         return None
 
 
-def _annual_rows(facts, taxonomy, tags, forms, flow=True):
-    """First tag with annual rows -> [(end, value, currency)] oldest->newest, one per end date (latest filing wins).
-    Flows must span about a year; instants (balance sheet) just need an annual form."""
+def _annual_rows(facts, taxonomy, tags, forms, flow=True, latest_tag=False):
+    """Annual series [(end, value, currency)] oldest->newest, one per end date (latest filing wins), for the first tag that has rows
+    (or, with latest_tag, the tag whose series reaches the newest year: a company that switched concepts, such as insurers moving
+    to IFRS 17, keeps the old tag's rows frozen at the old year). Flows must span about a year; instants just need an annual form."""
     node_all = (facts.get("facts") or {}).get(taxonomy) or {}
+    found = []
     for tag in tags:
         node = node_all.get(tag)
         if not node:
@@ -108,17 +117,45 @@ def _annual_rows(facts, taxonomy, tags, forms, flow=True):
                 if k not in best or str(e.get("filed", "")) > str(best[k][3]):
                     best[k] = (e["end"], e["val"], cur, e.get("filed", ""))
         if best:
-            return [(v[0], v[1], v[2]) for v in sorted(best.values())]
-    return []
+            series = [(v[0], v[1], v[2]) for v in sorted(best.values())]
+            if not latest_tag:
+                return series
+            found.append(series)
+    if not found:
+        return []
+    newest = max(f[-1][0] for f in found)
+    return next(f for f in found if f[-1][0] == newest)
 
 
 def alt_revenue(facts):
-    """(latest, prior) annual revenue from the alternate tags, or (None, None)."""
+    """(latest, prior) annual revenue from the alternate tags, or (None, None). Several alternates can exist at once (a mortgage REIT
+    has total interest income AND a small real-estate revenue line), so take the LARGEST among the series that reach the newest year."""
+    cands = []
     for tag in ALT_REVENUE_TAGS:
         s = _annual_rows(facts, "us-gaap", [tag], ("10-K",))
         if s and s[-1][1]:
-            return s[-1][1], (s[-2][1] if len(s) > 1 else None)
-    return None, None
+            cands.append(s)
+    if not cands:
+        return None, None
+    newest = max(c[-1][0] for c in cands)
+    best = max((c for c in cands if c[-1][0] == newest), key=lambda c: c[-1][1])
+    return best[-1][1], (best[-2][1] if len(best) > 1 else None)
+
+
+def filing_profile(facts):
+    """(latest filing date under ANY taxonomy, has 20-F/40-F rows). Foreign filers' recent annual reports often show up only as cover-page
+    (dei) facts while the financial statements lag, so recency must look at every taxonomy, not just the financial one."""
+    latest, foreign = "", False
+    for tags in (facts.get("facts") or {}).values():
+        for node in tags.values():
+            for rows in (node.get("units") or {}).values():
+                for e in rows:
+                    f = str(e.get("filed") or "")[:10]
+                    if f > latest:
+                        latest = f
+                    if not foreign and str(e.get("form", "")).startswith(("20-F", "40-F")):
+                        foreign = True
+    return (latest or None), foreign
 
 
 def other_taxonomy_latest(facts):
@@ -142,11 +179,9 @@ def ifrs_compact(facts):
     forms = ("20-F", "40-F")
 
     def last2(key, flow=True):
-        s = _annual_rows(facts, "ifrs-full", IFRS[key], forms, flow)
+        s = _annual_rows(facts, "ifrs-full", IFRS[key], forms, flow, latest_tag=True)
         return (s[-1][1], (s[-2][1] if len(s) > 1 else None), s[-1][2], s[-1][0]) if s else (None, None, None, None)
     rev, rev_prev, cur, fy_end = last2("revenue")
-    if rev is None:
-        return None
     ni = last2("net_income")[0]
     ocf = last2("ocf")[0]
     capex = last2("capex")[0]
@@ -154,13 +189,15 @@ def ifrs_compact(facts):
     liab = last2("liabilities", False)[0]
     eq = last2("equity", False)[0]
     fcf = (ocf - abs(capex or 0)) if ocf is not None else None
+    if rev is None and all(v is None for v in (ni, ocf, assets)):
+        return None                              # nothing annual to read under IFRS
     pct = lambda n, d: round(n / d * 100, 2) if (n is not None and d) else None
     dates = sorted(str(f)[:10] for f in [e.get("filed") for rows in
                    (((facts.get("facts") or {}).get("ifrs-full") or {}).get("Assets") or {}).get("units", {}).values() for e in rows
                    if str(e.get("form", "")).startswith(forms)] if f)
     cash = cash_position(facts, "ifrs-full")
-    return {"basis": "ifrs", "currency": cur, "revenue": rev, "cash": cash, "runway_months": runway_months(cash, rev, pct(fcf, rev)),
-            "rev_growth_pct": pct(rev - rev_prev, rev_prev) if rev_prev else None, "rev_cagr_pct": None, "rev_accel_pts": None,
+    return {"basis": "ifrs", "currency": cur, "revenue": rev, "cash": cash, "runway_months": runway_from_fcf(cash, fcf), "foreign_filer": True,
+            "rev_growth_pct": pct(rev - rev_prev, rev_prev) if (rev is not None and rev_prev) else None, "rev_cagr_pct": None, "rev_accel_pts": None,
             "gross_margin_pct": None, "net_margin_pct": pct(ni, rev), "fcf_margin_pct": pct(fcf, rev),
             "debt_to_equity": round(liab / eq, 2) if (liab is not None and eq) else None,
             "roe_pct": pct(ni, eq), "dividend_payout_pct": None, "fcf_dividend_coverage": None,
@@ -205,7 +242,7 @@ def compact(result, facts):
     cash = cash_position(facts)
     return {
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
-        "cash": cash, "runway_months": runway_months(cash, rev, fcf_m),
+        "cash": cash, "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),
         "rev_growth_pct": g, "rev_cagr_pct": cagr,
         "rev_accel_pts": round(g - cagr, 2) if (g is not None and cagr is not None) else None,
         "gross_margin_pct": r.get("gross_margin_pct"), "net_margin_pct": nm,
@@ -230,6 +267,15 @@ def flags(s1):
            "strong_financials": f(s1.get("piotroski"), lambda v: v >= 6)}
     out["score"] = sum(1 for k, v in out.items() if v)
     return out
+
+
+def _enrich_stale(s1, facts, today):
+    """For a record whose financials look old: add the latest filing under any taxonomy and whether this is a foreign annual filer."""
+    if not s1 or not _stale(s1.get("last_filed"), today):
+        return
+    latest, foreign = filing_profile(facts)
+    s1["last_filed_any"], s1["financials_stale"] = latest, True
+    s1["foreign_filer"] = bool(s1.get("foreign_filer") or foreign)
 
 
 def _stale(last, today):
@@ -258,13 +304,11 @@ def classify(row, s1, today, facts_status):
         return out("reconsider", "not_us_gaap", "Reports under a taxonomy this app does not read yet (for example IFRS).", 180)
     if s1 is None:
         return out("reconsider", "no_financials", "No usable financial statements in the SEC data.", 90)
-    last = s1.get("last_filed")
-    if last:
-        try:
-            if (today - datetime.date.fromisoformat(last)).days > STALE_FILING_DAYS:
-                return out("blacklist", "dormant", f"No SEC filing since {last}: dormant, delisted or deregistered.", 180)
-        except ValueError:
-            pass
+    last = s1.get("last_filed_any") or s1.get("last_filed")
+    if _stale(last, today):
+        if s1.get("foreign_filer") or s1.get("basis") == "ifrs":
+            return out("reconsider", "stale_foreign", f"Foreign filer: nothing newer than {last} in SEC's data, so these numbers may be out of date.", 90)
+        return out("blacklist", "dormant", f"No SEC filing since {last}: dormant, delisted or deregistered.", 180)
     first = s1.get("first_filed")
     if first:
         try:
@@ -313,6 +357,7 @@ def screen_zip(zip_path, universe, today, progress=None):
                 if res.get("available") is False:
                     i1 = ifrs_compact(facts) if res.get("sec_filer") else None
                     if i1:
+                        _enrich_stale(i1, facts, today)
                         results[cik] = (i1, flags(i1), "ok")
                         stats["ifrs_read"] = stats.get("ifrs_read", 0) + 1
                     else:
@@ -321,9 +366,11 @@ def screen_zip(zip_path, universe, today, progress=None):
                 else:
                     s1 = compact(res, facts)
                     results[cik] = (s1, flags(s1) if s1 else None, "ok")
+                    _enrich_stale(s1, facts, today)
                     if s1 and _stale(s1.get("last_filed"), today) and (other_taxonomy_latest(facts) or "") > (s1.get("last_filed") or ""):
                         # Old us-gaap numbers, newer filings under another taxonomy: a foreign filer that switched to IFRS, not a dormant one.
                         i1 = ifrs_compact(facts)
+                        _enrich_stale(i1, facts, today)
                         results[cik] = (i1, flags(i1) if i1 else None, "ok" if i1 else "no_gaap")
             except Exception:
                 stats["parse_errors"] += 1

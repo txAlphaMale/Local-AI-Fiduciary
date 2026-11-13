@@ -16908,6 +16908,24 @@ def _notes_reminder_sweep():
         print(f"[notes] reminder sweep failed: {_errref(e)}", flush=True)
 
 
+def _code_build():
+    """Short hash of the app's own code (every .py next to app.py plus the page), computed at start. Unlike "build" (the page alone) it
+    changes whenever a deploy changes anything, so a deploy can be verified from /health."""
+    import hashlib
+    h = hashlib.sha256()
+    base = os.path.dirname(os.path.abspath(__file__))
+    try:
+        files = sorted(f for f in os.listdir(base) if f.endswith(".py") and not f.startswith("test_"))
+        files += [os.path.join("static", "index.html")]
+        for f in files:
+            with open(os.path.join(base, f), "rb") as fh:
+                h.update(f.encode() + b"\0" + fh.read())
+    except OSError:
+        return "unknown"
+    return h.hexdigest()[:10]
+
+
+_CODE_BUILD = _code_build()
 _INDEX_CACHE = {"mtime": None, "text": "", "build": ""}
 
 
@@ -16927,7 +16945,7 @@ def _index_page():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "build": _index_page()[1], "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
+    return {"ok": True, "build": _index_page()[1], "code_build": _CODE_BUILD, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
             "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL,
             "llm_dialect": llm._dialect(), "llm_model": _text_model(),
             "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()}
