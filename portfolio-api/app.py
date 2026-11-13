@@ -41,7 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
-import scavenger, ticker_state   # idea scavenger: universe + quant screen (no API quota), ticker-state table
+import scavenger, ticker_state, market_data, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -2344,6 +2344,7 @@ _JOB_KINDS = {
     "knowledge_reindex": ("Knowledge reindex",     True,  lambda: knowledge.ensure_index(force=True)),
     "earnings_brief": ("Post-earnings brief refresh", True, lambda: _do_earnings_brief()),
     "universe":      ("Universe & first screen",   False, lambda: _do_universe()),
+    "market_data":   ("Market data for sleeve candidates", False, lambda: _do_market_data()),
 }
 
 def _enqueue(kind, source="manual"):
@@ -2576,10 +2577,11 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["universe", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
+_SCHEDULE_ORDER = ["universe", "market_data", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
 _SCHEDULE_DEFAULTS = {
     # Inside the 01:00-06:00 scavenging window (Jason 2026-11-12); after SEC rebuilds its bulk file (~2 a.m. Central).
     "universe":      {"label": "Universe & first screen (idea scavenger)", "hour": 3, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
+    "market_data":   {"label": "Market data for sleeve candidates (idea scavenger)", "hour": 4, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "analysis":      {"label": "Daily analysis (B/S/H briefs)", "hour": 21, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "discovery":     {"label": "News discovery & alerts",       "hour":  7, "minute": 0, "dom": "*", "dow": "*", "cadence": "daily"},
     "opportunities": {"label": "Opportunity scan",              "hour": 20, "minute": 0, "dom": "*", "dow": "5", "cadence": "weekly · Saturday"},
@@ -5874,6 +5876,78 @@ def get_backtest():
             "price history per rated ticker) — refresh in a moment.", "computing": True}
 
 
+MARKET_META_FILE = os.environ.get("MARKET_META_FILE", "/data/market_data_meta.json")
+MARKET_TRANCHE = int(os.environ.get("MARKET_TRANCHE", str(market_data.DEFAULT_TRANCHE)))
+_market_lock = threading.Lock()
+
+
+def _finnhub_open():
+    return next((r["state"] == "open" for r in _budget.status() if r["provider"] == "finnhub"), True)
+
+
+def _do_market_data(limit=None, fetch=None):
+    """Market data (price, size, yield, beta, sector) for the stocks that pass a sleeve's SEC rules, in a tranche, behind the budget
+    gate. Stops cleanly when Finnhub pauses (a paused call is deferred, never recorded as 'no data') or the 06:00 window closes;
+    the next run resumes where this one stopped. Raises on setup problems so the job queue records an error."""
+    if not _market_lock.acquire(blocking=False):
+        return "skipped"
+    try:
+        if not FINNHUB:
+            raise RuntimeError("no Finnhub key saved (SETTINGS > SECRETS & KEYS)")
+        now_dt = datetime.datetime.now()
+        deadline = market_data.deadline_for(now_dt)
+        rows = ticker_state.screened_rows(sleeves_mod.STATES)
+        cands = market_data.candidates(_sleeve_list(), rows, now_dt.date())
+        tranche, due_total = market_data.select_tranche(cands, ticker_state.s2_index(), limit=limit or MARKET_TRANCHE)
+        fetched = unavailable = 0
+        stopped = None
+        t0 = time.time()
+        fetch = fetch or (lambda t: (_price(t), _valuation(t), _profile(t)[0]))
+        with _finnhub_batch():
+            for t in tranche:
+                if not _finnhub_open():
+                    stopped = "Finnhub is paused by the budget gate; resumes on its own and the next run continues"
+                    break
+                if deadline and time.time() >= deadline:
+                    stopped = "the 06:00 window closed; the next run continues"
+                    break
+                price, val, prof = fetch(t)
+                if not _finnhub_open():                      # paused DURING this ticker: its answers are not trustworthy, leave it
+                    stopped = "Finnhub paused mid-run; the next run continues"
+                    break
+                rec = market_data.build_record(price, val, prof)
+                ticker_state.set_s2(t, rec)
+                fetched += 1
+                unavailable += 0 if rec["available"] else 1
+        summary = {"ran_at": int(time.time()), "candidates": len(cands), "due": due_total, "tranche": len(tranche),
+                   "fetched": fetched, "no_data": unavailable, "remaining": max(0, due_total - fetched),
+                   "stopped": stopped, "seconds": round(time.time() - t0, 1)}
+        store.write_json(MARKET_META_FILE, summary)
+        return None
+    finally:
+        _market_lock.release()
+
+
+@app.post("/api/run-market-data")
+def run_market_data_ep():
+    jid, created = _enqueue("market_data", source="manual")
+    return {"status": "started" if created else "already queued or running", "job_id": jid}
+
+
+@app.get("/api/market-data")
+def get_market_data_status():
+    """Last market-data run (candidates, fetched, remaining, why it stopped), coverage of the screened universe, and Finnhub's gate state."""
+    try:
+        last = store.read_json_strict(MARKET_META_FILE) or None
+    except Exception:
+        last = None
+    idx = ticker_state.s2_index()
+    fh = next((r for r in _budget.status() if r["provider"] == "finnhub"), {})
+    return {"last_run": last, "with_market_data": len(idx), "no_data": sum(1 for v in idx.values() if not v.get("available", True)),
+            "finnhub": {"state": fh.get("state"), "resumes_in": fh.get("resumes_in"), "reason": fh.get("reason")}}
+
+
+
 _universe_lock = threading.Lock()
 _UNIVERSE_FORCE = {"on": False}
 
@@ -5913,6 +5987,154 @@ def get_universe():
 def get_universe_tickers(state: str = "", q: str = "", limit: int = 50, offset: int = 0):
     """Ticker-state rows (read-only): ?state=new|active|reconsider|blacklist &q=prefix-or-name &limit &offset."""
     return {"rows": ticker_state.list_rows(state or None, q or None, limit, offset)}
+
+
+# ---------------- Idea-scavenger sleeves (purposes): built-ins + the user's own, evaluated over the SEC-data screen ----------------
+SLEEVES_FILE = os.environ.get("SLEEVES_FILE", "/data/sleeves.json")
+
+
+def _read_sleeves_cfg():
+    try:
+        cfg = store.read_json_strict(SLEEVES_FILE) or {}
+    except Exception:
+        cfg = {}
+    return {"custom": cfg.get("custom") if isinstance(cfg.get("custom"), dict) else {}}
+
+
+def _sleeve_list():
+    out = [{"id": k, **v} for k, v in sleeves_mod.BUILTIN.items()]
+    out += [{"id": k, "builtin": False, **v} for k, v in _read_sleeves_cfg()["custom"].items()]
+    return out
+
+
+_HELD_CACHE = {"at": 0.0, "w": {}}
+
+
+def _held_sector_weights():
+    """{Finnhub industry: % of invested portfolio} for the Balance sleeve. Uses the cached company profiles the dashboard already
+    keeps; refreshed every 10 minutes. Funds and cash are left out (no look-through), so weights are over the direct stocks held."""
+    if time.time() - _HELD_CACHE["at"] < 600 and _HELD_CACHE["w"]:
+        return _HELD_CACHE["w"]
+    w, tot = {}, 0.0
+    try:
+        for c in _data().get("consolidated", []):
+            t, typ, val = c.get("ticker"), (c.get("type") or ""), (c.get("value") or 0)
+            if not t or typ in ("Cash", "Mutual Fund", "ETF") or val <= 0:
+                continue
+            prof, _m = _profile(t)
+            sec = ((prof or {}).get("finnhubIndustry") or "").strip() or "Other"
+            w[sec] = w.get(sec, 0) + val
+            tot += val
+    except Exception:
+        return _HELD_CACHE["w"]
+    _HELD_CACHE.update(at=time.time(), w={k: round(v / tot * 100, 2) for k, v in w.items()} if tot else {})
+    return _HELD_CACHE["w"]
+
+
+def _sleeve_card(sl, rows, today, top=5, held=None):
+    ev = sleeves_mod.evaluate(sl, rows, today, held)
+    return {"id": sl["id"], "name": sl["name"], "intent": sl.get("intent", ""), "notes": sl.get("notes", ""),
+            "builtin": bool(sl.get("builtin")), "rank_by": sl.get("rank_by"), "rank_dir": sl.get("rank_dir"),
+            "include_states": sl.get("include_states"), "rules": sl.get("rules", []),
+            "rule_text": [sleeves_mod.describe_rule(r) for r in sl.get("rules", [])],
+            "pending_rules": ev["pending_rules"], "fill_gap": bool(sl.get("fill_gap")), "gap_below_pct": sl.get("gap_below_pct"),
+            "gap_sectors": ev["gap_sectors"][:8], "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
+            "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today) for r in ev["matches"][:top]]}
+
+
+def _sleeve_row(r, today):
+    s1, s2 = r.get("s1") or {}, r.get("s2") or {}
+    return {"ticker": r["ticker"], "name": r.get("name"), "state": r.get("state"), "revenue": s1.get("revenue"),
+            "currency": s1.get("currency"), "rev_growth_pct": s1.get("rev_growth_pct"), "net_margin_pct": s1.get("net_margin_pct"),
+            "fcf_margin_pct": s1.get("fcf_margin_pct"), "runway_months": s1.get("runway_months"),
+            "piotroski": s1.get("piotroski"), "share_change_pct": s1.get("share_change_pct"),
+            "age_years": sleeves_mod.value_of(r, "age_years", today),
+            "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
+            "beta": s2.get("beta"), "sector": s2.get("sector")}
+
+
+@app.get("/api/sleeves")
+def get_sleeves():
+    """Every sleeve (built-in and custom) with how many screened stocks pass its SEC-data rules today, and the top few."""
+    today = datetime.date.today()
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    held = _held_sector_weights() if any(sl.get("fill_gap") for sl in _sleeve_list()) else None
+    return {"sleeves": [_sleeve_card(sl, rows, today, held=held) for sl in _sleeve_list()], "screened": len(rows),
+            "with_market_data": sum(1 for r in rows if r.get("s2")),
+            "metrics": [{"key": k, "label": v[0], "unit": v[1], "stage": v[2]} for k, v in sleeves_mod.METRICS.items()]}
+
+
+@app.get("/api/sleeves/{sid}/matches")
+def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0):
+    sl = next((s for s in _sleeve_list() if s["id"] == sid), None)
+    if not sl:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    today = datetime.date.today()
+    ev = sleeves_mod.evaluate(sl, ticker_state.screened_rows(sleeves_mod.STATES), today,
+                              _held_sector_weights() if sl.get("fill_gap") else None)
+    lim, off = max(1, min(int(limit), 500)), max(0, int(offset))
+    return {"id": sid, "total": len(ev["matches"]), "awaiting_market_data": ev["awaiting"], "pending_rules": ev["pending_rules"],
+            "rows": [_sleeve_row(r, today) for r in ev["matches"][off:off + lim]]}
+
+
+@app.post("/api/sleeves/preview")
+async def post_sleeve_preview(req: Request):
+    """Evaluate unsaved rules: how many names would this sleeve screen today (so a useless rule is obvious)."""
+    try:
+        clean, err = sleeves_mod.validate(await req.json())
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    today = datetime.date.today()
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    card = _sleeve_card({"id": "preview", **clean}, rows, today, top=10)
+    return {"ok": True, "match_count": card["match_count"], "considered": card["considered"],
+            "awaiting_market_data": card["awaiting_market_data"], "pending_rules": card["pending_rules"], "preview": card["preview"]}
+
+
+@app.post("/api/sleeves")
+async def post_sleeve(req: Request):
+    """Create (no id) or update (custom id) a custom sleeve. Rules come from a fixed metric menu; notes are text only."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    clean, err = sleeves_mod.validate(body)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    cfg = _read_sleeves_cfg()
+    sid = str(body.get("id") or "")
+    if sid in sleeves_mod.BUILTIN:
+        return JSONResponse({"error": "built-in sleeves are read-only; save a copy instead"}, status_code=400)
+    old = dict(cfg["custom"])
+    if sid and sid not in cfg["custom"]:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    if not sid:
+        if len(cfg["custom"]) >= 30:
+            return JSONResponse({"error": "at most 30 custom sleeves"}, status_code=400)
+        base = "c-" + sleeves_mod.slug(clean["name"])
+        sid, n = base, 2
+        while sid in cfg["custom"] or sid in sleeves_mod.BUILTIN:
+            sid, n = f"{base}-{n}", n + 1
+    cfg["custom"][sid] = clean
+    store.write_json(SLEEVES_FILE, cfg)
+    _emit_config_changed(req, "/api/sleeves", {"sleeves": sorted(old)}, {"sleeves": sorted(cfg["custom"])})
+    return {"ok": True, "id": sid}
+
+
+@app.delete("/api/sleeves/{sid}")
+async def delete_sleeve(sid: str, req: Request):
+    cfg = _read_sleeves_cfg()
+    if sid in sleeves_mod.BUILTIN:
+        return JSONResponse({"error": "built-in sleeves cannot be deleted"}, status_code=400)
+    if sid not in cfg["custom"]:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    old = sorted(cfg["custom"])
+    del cfg["custom"][sid]
+    store.write_json(SLEEVES_FILE, cfg)
+    _emit_config_changed(req, "/api/sleeves", {"sleeves": old}, {"sleeves": sorted(cfg["custom"])})
+    return {"ok": True}
 
 
 @app.post("/api/run-backtest")
@@ -6518,6 +6740,17 @@ NEWS_STALE_AFTER = int(os.environ.get("NEWS_STALE_AFTER", "86400"))          # 1
 CACHE_RULES_VERSION = 2
 
 
+_FH_MODE = threading.local()
+
+
+class _finnhub_batch:
+    """`with _finnhub_batch():` -- Finnhub calls made in the block use the slower background (batch) pace of the budget gate."""
+    def __enter__(self):
+        _FH_MODE.batch = True
+    def __exit__(self, *a):
+        _FH_MODE.batch = False
+
+
 def _finnhub_json(path, sym, extra=None, batch=False):
     """(payload, transport_ok). The second element distinguishes "Finnhub ANSWERED, and this
     symbol genuinely has no data" from "the call FAILED" (missing/garbled key, 429, 403 on a
@@ -6538,6 +6771,7 @@ def _finnhub_json(path, sym, extra=None, batch=False):
     # API budget gate (2026-11-12): honour a rate-limit pause and the per-minute pace BEFORE calling. A
     # deferred call returns the same (None, False) as any failed call, so cached_fetch falls back to the
     # last-known-good copy and nothing empty is cached as "no data".
+    batch = batch or bool(getattr(_FH_MODE, "batch", False))
     if not _budget.check("finnhub", batch=batch, max_wait=20)["ok"]:
         return None, False
     try:
@@ -13259,12 +13493,7 @@ def _profile(sym):
         return {}, {"fetched_at": None, "stale": True}
 
     def _compute():
-        try:
-            r = requests.get("https://finnhub.io/api/v1/stock/profile2",
-                             params={"symbol": sym, "token": FINNHUB}, timeout=15)
-            prof = r.json() if r.status_code < 400 else {}
-        except Exception:
-            prof = {}
+        prof, _ok = _finnhub_json("stock/profile2", sym)       # through the budget gate (it used to bypass it)
         return prof if isinstance(prof, dict) else {}
 
     return store.cached_fetch("finnhub_profile", sym, 86400, _compute, is_ok=lambda r: bool(r))

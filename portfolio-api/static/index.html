@@ -580,7 +580,7 @@ const COMPLIANCE_DOC_CONTENT={};  // name -> already-fetched raw markdown, cache
 let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null;  // 2026-07-27 — structured Risk Register editor (admin-only; see RISK-REGISTER-PROCESS.md)
 let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
-let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BUDGETS=null, BUDGETS_LOADING=false, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
+let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BUDGETS=null, BUDGETS_LOADING=false, SLEEVES=null, SLEEVES_LOADING=false, SLEEVE_EDIT=null, SLEEVE_PREVIEW=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
 // always reflects the saved state), then mutated in place by add/remove-row clicks and synced
@@ -1823,6 +1823,7 @@ function render(){
       hasDisc && {key:'discovered',label:'DISCOVERED',build:()=>discoveredContent()},
       haveIdeas && {key:'scanner',label:'SCANNER · IDEAS',build:()=>scannerContent()},
       (THESES && !THESES.error) && {key:'theses',label:'THESES · EXIT',build:()=>thesesContent()},
+      {key:'sleeves',label:'SLEEVES',build:()=>sleevesContent()},
     ]));
   } else if(TAB==='audits'){
     tc.appendChild(panelSubtabs('audits',[
@@ -3121,7 +3122,7 @@ function saveHomeBasis(){
 const SCHEDULE_RUN_ENDPOINTS = {
   analysis: '/api/run-analysis', discovery: '/api/run-discovery',
   opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
-  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe',
+  retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe', market_data: '/api/run-market-data',
   backtest: '/api/run-backtest', narrative: '/api/run-narrative'};
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
@@ -3311,6 +3312,105 @@ function budgetContent(){
     ctl.appendChild(bar); box.appendChild(ctl); wrap.appendChild(box);
   });
   return wrap;
+}
+
+// SLEEVES (RESEARCH sub-tab): the purposes the idea scavenger hunts for. Built-in and custom sleeves are rules from a fixed
+// metric menu, evaluated over the SEC-data screen (/api/universe). Loaded on demand like API BUDGETS.
+function loadSleeves(){
+  if(SLEEVES_LOADING) return; SLEEVES_LOADING=true;
+  fetch('/api/sleeves').then(r=>r.json()).then(d=>{ SLEEVES=d&&d.sleeves?d:{sleeves:[],metrics:[],screened:0}; })
+    .catch(()=>{ SLEEVES=SLEEVES||{sleeves:[],metrics:[],screened:0}; })
+    .then(()=>{ SLEEVES_LOADING=false; if(TAB==='research') render(); });
+}
+function _slvJson(url, method, body){
+  return fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})));
+}
+function _slvFmtMoney(v,cur){ if(v==null) return '—'; const a=Math.abs(v); const u=a>=1e9?(v/1e9).toFixed(1)+'B':(a>=1e6?(v/1e6).toFixed(0)+'M':Math.round(v).toLocaleString()); return u+(cur&&cur!=='USD'?' '+cur:''); }
+function _slvPct(v){ return v==null?'—':(v>0?'+':'')+Number(v).toFixed(0)+'%'; }
+function _slvRunway(v){ return v==null?'—':(v>=999?'self-funding':Number(v).toFixed(0)+' mo'); }
+function sleeveTable(rows){
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const t=el('table'); const h=el('tr');
+  h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>PRICE</th><th>MKT CAP</th><th>YIELD</th><th class="l">SECTOR</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th>'; t.appendChild(h);
+  rows.forEach(r=>{ const tr=el('tr');
+    tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b></td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
+    t.appendChild(tr); });
+  return t;
+}
+function sleevesContent(){
+  const wrap=el('div'); wrap.id='sleeves-panel';
+  const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  wrap.appendChild(el('div','ph','SLEEVES · WHAT THE IDEA HUNT LOOKS FOR'));
+  const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
+  info.textContent='A sleeve is a purpose: a plain-language intent plus measurable rules. Each night the app screens every US-listed stock from SEC filings (no paid data used) and shows how many pass each sleeve. Rules on price, size, yield or sector use market data fetched nightly for the names that pass the SEC rules (3 calls each, paced to the free Finnhub limit); a name shows as waiting until its market data arrives. Your own sleeves use the same rule menu, so every rule is something the app can actually measure.';
+  wrap.appendChild(info);
+  if(SLEEVES==null){ wrap.appendChild(el('div','muted','Loading…')); loadSleeves(); return wrap; }
+  const rf=el('button','mut-btn','↻ REFRESH'); rf.style.marginBottom='var(--space-3)'; rf.onclick=()=>{ SLEEVES=null; render(); }; wrap.appendChild(rf);
+  const nb=el('button','mut-btn','+ NEW SLEEVE'); nb.style.cssText='margin:0 0 var(--space-3) var(--space-2);'; nb.onclick=()=>{ SLEEVE_EDIT={name:'',intent:'',notes:'',rules:[{metric:'rev_growth_pct',op:'>=',value:10}],rank_by:'s1_score',rank_dir:'desc',include_states:['active','new','reconsider']}; SLEEVE_PREVIEW=null; render(); }; wrap.appendChild(nb);
+  if(!SLEEVES.screened){ const w=el('div','neg'); w.style.cssText='margin-bottom:var(--space-3);font-size:var(--font-size-base);'; w.textContent='No screen results yet. The universe job runs nightly at 03:00 (SETTINGS > TASK SCHEDULE has RUN NOW).'; wrap.appendChild(w); }
+  if(SLEEVE_EDIT) wrap.appendChild(sleeveForm());
+  (SLEEVES.sleeves||[]).forEach(sl=>{
+    const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
+    const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-1);';
+    h.innerHTML='<b>'+esc(sl.name)+'</b> <span class="muted" style="font-size:var(--font-size-sm)">'+(sl.builtin?'· built in':'· yours')+'</span> &nbsp; '+
+      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data (fetched nightly)':'')+'</span>';
+    box.appendChild(h);
+    box.appendChild(el('div','muted',sl.intent||'')).style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
+    const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }
+    if(sl.fill_gap&&sl.gap_sectors&&sl.gap_sectors.length){ const g=el('div'); g.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; g.innerHTML='Sectors you hold under '+esc(sl.gap_below_pct)+'% of your portfolio, with candidates: '+sl.gap_sectors.map(x=>esc(x[0])+' ('+x[1]+')').join(', '); box.appendChild(g); }
+    if(sl.notes){ const n=el('div','muted',sl.notes); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; box.appendChild(n); }
+    if(sl.preview&&sl.preview.length){ box.appendChild(sleeveTable(sl.preview)); const more=el('button','mut-btn','▸ SHOW MORE'); more.style.marginTop='var(--space-2)';
+      more.onclick=()=>fetch('/api/sleeves/'+encodeURIComponent(sl.id)+'/matches?limit=50').then(r=>r.json()).then(d=>{ const t=sleeveTable(d.rows||[]); const old=box.querySelector('table'); if(old) old.replaceWith(t); more.remove(); });
+      if(sl.match_count>sl.preview.length) box.appendChild(more); }
+    const bar=el('div'); bar.style.marginTop='var(--space-2)';
+    const cp=el('button','mut-btn',sl.builtin?'⎘ COPY AS MY OWN':'✎ EDIT'); cp.onclick=()=>{ SLEEVE_EDIT=JSON.parse(JSON.stringify({id:sl.builtin?undefined:sl.id,name:sl.builtin?sl.name+' (mine)':sl.name,intent:sl.intent,notes:sl.notes,rules:sl.rules||[],rank_by:sl.rank_by,rank_dir:sl.rank_dir,include_states:sl.include_states||[]})); SLEEVE_PREVIEW=null; render(); }; bar.appendChild(cp);
+    if(!sl.builtin){ const del=el('button','mut-btn','✕ DELETE'); del.style.marginLeft='var(--space-2)'; del.onclick=()=>{ if(!confirm('Delete the sleeve "'+sl.name+'"?')) return; _slvJson('/api/sleeves/'+encodeURIComponent(sl.id),'DELETE').then(x=>{ if(!x.ok) alert((x.d&&x.d.error)||'Delete failed'); SLEEVES=null; render(); }); }; bar.appendChild(del); }
+    box.appendChild(bar); wrap.appendChild(box);
+  });
+  return wrap;
+}
+function sleeveForm(){
+  const e=SLEEVE_EDIT, metrics=(SLEEVES&&SLEEVES.metrics)||[];
+  const box=el('div'); box.style.cssText='border:2px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
+  box.appendChild(el('div','ph',e.id?'EDIT SLEEVE':'NEW SLEEVE'));
+  const inp=(label,key,ph,area)=>{ const r=el('div'); r.style.cssText='margin-bottom:var(--space-2);';
+    const l=el('div','muted',label); l.style.fontSize='var(--font-size-sm)'; r.appendChild(l);
+    const i=document.createElement(area?'textarea':'input'); if(area) i.rows=2; i.value=e[key]||''; i.placeholder=ph||''; i.style.cssText='width:100%;box-sizing:border-box;'; i.oninput=()=>{ e[key]=i.value; }; r.appendChild(i); return r; };
+  box.appendChild(inp('Name','name','e.g. Small profitable growers'));
+  box.appendChild(inp('What is this sleeve for? (one sentence)','intent',''));
+  box.appendChild(inp('Notes for the research assistant (free text; guides the scout later, never turned into rules)','notes','',true));
+  const rl=el('div','muted','Rules (all must pass)'); rl.style.cssText='font-size:var(--font-size-sm);margin:var(--space-2) 0 var(--space-1);'; box.appendChild(rl);
+  const mopts=metrics.map(m=>'<option value="'+m.key+'">'+m.label.replace(/&/g,'&amp;')+(m.stage==='s3'?' (waits for the signals stage)':'')+'</option>').join('');
+  (e.rules||[]).forEach((r,idx)=>{ const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);margin-bottom:4px;flex-wrap:wrap;align-items:center;';
+    const ms=document.createElement('select'); ms.innerHTML=mopts; ms.value=r.metric; ms.onchange=()=>{ r.metric=ms.value; }; ms.style.maxWidth='420px';
+    const os=document.createElement('select'); ['>=','<=','>','<'].forEach(o=>{ const op=document.createElement('option'); op.value=o; op.textContent=o; os.appendChild(op); }); os.value=r.op; os.onchange=()=>{ r.op=os.value; };
+    const vi=document.createElement('input'); vi.type='number'; vi.step='any'; vi.value=r.value; vi.style.width='110px'; vi.oninput=()=>{ r.value=vi.value===''?'':Number(vi.value); };
+    const x=el('button','mut-btn','✕'); x.onclick=()=>{ e.rules.splice(idx,1); render(); };
+    row.appendChild(ms); row.appendChild(os); row.appendChild(vi); row.appendChild(x); box.appendChild(row); });
+  const add=el('button','mut-btn','+ ADD RULE'); add.onclick=()=>{ (e.rules=e.rules||[]).push({metric:'rev_growth_pct',op:'>=',value:10}); render(); }; box.appendChild(add);
+  const rk=el('div'); rk.style.cssText='margin-top:var(--space-3);display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+  rk.appendChild(el('span','muted','Rank matches by'));
+  const rs=document.createElement('select'); rs.innerHTML=metrics.filter(m=>m.stage==='s1').map(m=>'<option value="'+m.key+'">'+m.label.replace(/&/g,'&amp;')+'</option>').join(''); rs.value=e.rank_by||'s1_score'; rs.onchange=()=>{ e.rank_by=rs.value; };
+  const ds=document.createElement('select'); ds.innerHTML='<option value="desc">highest first</option><option value="asc">lowest first</option>'; ds.value=e.rank_dir||'desc'; ds.onchange=()=>{ e.rank_dir=ds.value; };
+  rk.appendChild(rs); rk.appendChild(ds); box.appendChild(rk);
+  const st=el('div'); st.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);';
+  st.appendChild(el('span','muted','Include: '));
+  ['new','active','reconsider'].forEach(k=>{ const lab=document.createElement('label'); lab.style.marginRight='var(--space-3)'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=(e.include_states||[]).includes(k);
+    cb.onchange=()=>{ const s=new Set(e.include_states||[]); cb.checked?s.add(k):s.delete(k); e.include_states=[...s]; }; lab.appendChild(cb); lab.appendChild(document.createTextNode(' '+k)); st.appendChild(lab); });
+  box.appendChild(st);
+  const bar=el('div'); bar.style.marginTop='var(--space-3)';
+  const body=()=>({id:e.id,name:e.name,intent:e.intent,notes:e.notes,rules:(e.rules||[]).filter(r=>r.value!==''),rank_by:e.rank_by,rank_dir:e.rank_dir,include_states:e.include_states});
+  const pv=el('button','mut-btn','▸ PREVIEW'); pv.onclick=()=>_slvJson('/api/sleeves/preview','POST',body()).then(x=>{ SLEEVE_PREVIEW=x.ok?x.d:{error:(x.d&&x.d.error)||'Preview failed'}; render(); });
+  const sv=el('button','mut-btn','↳ SAVE'); sv.style.marginLeft='var(--space-2)'; sv.onclick=()=>_slvJson('/api/sleeves','POST',body()).then(x=>{ if(!x.ok){ alert((x.d&&x.d.error)||'Save failed'); return; } SLEEVE_EDIT=null; SLEEVE_PREVIEW=null; SLEEVES=null; render(); });
+  const cx=el('button','mut-btn','CANCEL'); cx.style.marginLeft='var(--space-2)'; cx.onclick=()=>{ SLEEVE_EDIT=null; SLEEVE_PREVIEW=null; render(); };
+  bar.appendChild(pv); bar.appendChild(sv); bar.appendChild(cx); box.appendChild(bar);
+  if(SLEEVE_PREVIEW){ const o=el('div'); o.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-base);';
+    if(SLEEVE_PREVIEW.error){ o.className='neg'; o.textContent=SLEEVE_PREVIEW.error; }
+    else { const pr=SLEEVE_PREVIEW; o.innerHTML='This sleeve would screen <b>'+pr.match_count+'</b> of '+pr.considered+' stocks today.'+(pr.awaiting_market_data?' <span class="muted">'+pr.awaiting_market_data+' more pass the SEC rules and wait for market data.</span>':'')+(pr.pending_rules.length?' <span class="muted">Not counted yet (wait for the signals stage): '+pr.pending_rules.map(x=>x.replace(/&/g,'&amp;')).join('; ')+'</span>':'')+(pr.match_count===0?' <span class="neg">No stock passes: loosen a rule.</span>':'');
+      if(pr.preview&&pr.preview.length){ o.appendChild(sleeveTable(pr.preview)); } }
+    box.appendChild(o); }
+  return box;
 }
 
 function estateContent(){

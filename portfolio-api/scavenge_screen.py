@@ -17,7 +17,7 @@ NEW_IPO_DAYS = 365               # first filing inside a year: a first look rega
 MIN_REVENUE = 1_000_000          # below this there is no operating business to screen yet
 
 
-SCREEN_VERSION = 2               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 3               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -31,6 +31,53 @@ IFRS = {"revenue": ["Revenue", "RevenueFromContractsWithCustomers"],
         "ocf": ["CashFlowsFromUsedInOperatingActivities"],
         "capex": ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipment"],
         "assets": ["Assets"], "liabilities": ["Liabilities"], "equity": ["Equity"]}
+
+
+CASH_TAGS = {"us-gaap": ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
+             "ifrs-full": ["CashAndCashEquivalents"]}
+INVEST_TAGS = ["ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"]
+_FORMS = ("10-K", "10-Q", "20-F", "40-F")
+
+
+def _instant(facts, taxonomy, tag):
+    """(end, value) of the newest balance-sheet row for a tag (any annual or quarterly form), else None."""
+    node = ((facts.get("facts") or {}).get(taxonomy) or {}).get(tag)
+    best = None
+    for rows in ((node or {}).get("units") or {}).values():
+        for e in rows:
+            if e.get("val") is None or not e.get("end") or not str(e.get("form", "")).startswith(_FORMS):
+                continue
+            k = (str(e["end"]), str(e.get("filed", "")))
+            if best is None or k > best[0]:
+                best = (k, e["val"])
+    return (best[0][0], best[1]) if best else None
+
+
+def cash_position(facts, taxonomy="us-gaap"):
+    """Cash plus short-term investments at the newest balance-sheet date, or None. Investments count only when dated the same day as the cash."""
+    cash = None
+    for tag in CASH_TAGS.get(taxonomy, []):
+        cash = _instant(facts, taxonomy, tag)
+        if cash:
+            break
+    if not cash:
+        return None
+    total = cash[1]
+    for tag in INVEST_TAGS if taxonomy == "us-gaap" else []:
+        inv = _instant(facts, taxonomy, tag)
+        if inv and inv[0] == cash[0] and inv[1]:
+            total += inv[1]
+    return total
+
+
+def runway_months(cash, revenue, fcf_margin_pct):
+    """999 when free cash flow is not negative (funds itself); months of cash at the current burn otherwise; None if unknowable."""
+    if cash is None or revenue is None or fcf_margin_pct is None:
+        return None
+    if fcf_margin_pct >= 0:
+        return 999
+    burn = -fcf_margin_pct / 100.0 * revenue
+    return round(cash / burn * 12, 1) if burn > 0 else 999
 
 
 def _days(a, b):
@@ -111,7 +158,8 @@ def ifrs_compact(facts):
     dates = sorted(str(f)[:10] for f in [e.get("filed") for rows in
                    (((facts.get("facts") or {}).get("ifrs-full") or {}).get("Assets") or {}).get("units", {}).values() for e in rows
                    if str(e.get("form", "")).startswith(forms)] if f)
-    return {"basis": "ifrs", "currency": cur, "revenue": rev,
+    cash = cash_position(facts, "ifrs-full")
+    return {"basis": "ifrs", "currency": cur, "revenue": rev, "cash": cash, "runway_months": runway_months(cash, rev, pct(fcf, rev)),
             "rev_growth_pct": pct(rev - rev_prev, rev_prev) if rev_prev else None, "rev_cagr_pct": None, "rev_accel_pts": None,
             "gross_margin_pct": None, "net_margin_pct": pct(ni, rev), "fcf_margin_pct": pct(fcf, rev),
             "debt_to_equity": round(liab / eq, 2) if (liab is not None and eq) else None,
@@ -153,8 +201,11 @@ def compact(result, facts):
     nm = ttm.get("net_margin_pct", r.get("net_margin_pct"))
     if used_alt and m.get("net_income") is not None:
         nm = round(m["net_income"] / rev * 100, 2)
+    fcf_m = ttm.get("fcf_margin_pct") if ttm.get("fcf_margin_pct") is not None else r.get("fcf_margin_pct")
+    cash = cash_position(facts)
     return {
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
+        "cash": cash, "runway_months": runway_months(cash, rev, fcf_m),
         "rev_growth_pct": g, "rev_cagr_pct": cagr,
         "rev_accel_pts": round(g - cagr, 2) if (g is not None and cagr is not None) else None,
         "gross_margin_pct": r.get("gross_margin_pct"), "net_margin_pct": nm,
