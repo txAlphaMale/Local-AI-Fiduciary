@@ -41,7 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
-import scavenger, ticker_state   # idea scavenger: universe + quant screen (no API quota), ticker-state table
+import scavenger, ticker_state, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -5913,6 +5913,125 @@ def get_universe():
 def get_universe_tickers(state: str = "", q: str = "", limit: int = 50, offset: int = 0):
     """Ticker-state rows (read-only): ?state=new|active|reconsider|blacklist &q=prefix-or-name &limit &offset."""
     return {"rows": ticker_state.list_rows(state or None, q or None, limit, offset)}
+
+
+# ---------------- Idea-scavenger sleeves (purposes): built-ins + the user's own, evaluated over the SEC-data screen ----------------
+SLEEVES_FILE = os.environ.get("SLEEVES_FILE", "/data/sleeves.json")
+
+
+def _read_sleeves_cfg():
+    try:
+        cfg = store.read_json_strict(SLEEVES_FILE) or {}
+    except Exception:
+        cfg = {}
+    return {"custom": cfg.get("custom") if isinstance(cfg.get("custom"), dict) else {}}
+
+
+def _sleeve_list():
+    out = [{"id": k, **v} for k, v in sleeves_mod.BUILTIN.items()]
+    out += [{"id": k, "builtin": False, **v} for k, v in _read_sleeves_cfg()["custom"].items()]
+    return out
+
+
+def _sleeve_card(sl, rows, today, top=5):
+    ev = sleeves_mod.evaluate(sl, rows, today)
+    return {"id": sl["id"], "name": sl["name"], "intent": sl.get("intent", ""), "notes": sl.get("notes", ""),
+            "builtin": bool(sl.get("builtin")), "rank_by": sl.get("rank_by"), "rank_dir": sl.get("rank_dir"),
+            "include_states": sl.get("include_states"), "rules": sl.get("rules", []),
+            "rule_text": [sleeves_mod.describe_rule(r) for r in sl.get("rules", [])],
+            "pending_rules": ev["pending_rules"], "waiting": sl.get("waiting"),
+            "considered": ev["considered"], "match_count": len(ev["matches"]),
+            "preview": [_sleeve_row(r, today) for r in ev["matches"][:top]]}
+
+
+def _sleeve_row(r, today):
+    s1 = r.get("s1") or {}
+    return {"ticker": r["ticker"], "name": r.get("name"), "state": r.get("state"), "revenue": s1.get("revenue"),
+            "currency": s1.get("currency"), "rev_growth_pct": s1.get("rev_growth_pct"), "net_margin_pct": s1.get("net_margin_pct"),
+            "fcf_margin_pct": s1.get("fcf_margin_pct"), "runway_months": s1.get("runway_months"),
+            "piotroski": s1.get("piotroski"), "share_change_pct": s1.get("share_change_pct"),
+            "age_years": sleeves_mod.value_of(r, "age_years", today)}
+
+
+@app.get("/api/sleeves")
+def get_sleeves():
+    """Every sleeve (built-in and custom) with how many screened stocks pass its SEC-data rules today, and the top few."""
+    today = datetime.date.today()
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    return {"sleeves": [_sleeve_card(sl, rows, today) for sl in _sleeve_list()], "screened": len(rows),
+            "metrics": [{"key": k, "label": v[0], "unit": v[1], "stage": v[2]} for k, v in sleeves_mod.METRICS.items()]}
+
+
+@app.get("/api/sleeves/{sid}/matches")
+def get_sleeve_matches(sid: str, limit: int = 50, offset: int = 0):
+    sl = next((s for s in _sleeve_list() if s["id"] == sid), None)
+    if not sl:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    today = datetime.date.today()
+    ev = sleeves_mod.evaluate(sl, ticker_state.screened_rows(sleeves_mod.STATES), today)
+    lim, off = max(1, min(int(limit), 500)), max(0, int(offset))
+    return {"id": sid, "total": len(ev["matches"]), "pending_rules": ev["pending_rules"],
+            "rows": [_sleeve_row(r, today) for r in ev["matches"][off:off + lim]]}
+
+
+@app.post("/api/sleeves/preview")
+async def post_sleeve_preview(req: Request):
+    """Evaluate unsaved rules: how many names would this sleeve screen today (so a useless rule is obvious)."""
+    try:
+        clean, err = sleeves_mod.validate(await req.json())
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    today = datetime.date.today()
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    card = _sleeve_card({"id": "preview", **clean}, rows, today, top=10)
+    return {"ok": True, "match_count": card["match_count"], "considered": card["considered"],
+            "pending_rules": card["pending_rules"], "preview": card["preview"]}
+
+
+@app.post("/api/sleeves")
+async def post_sleeve(req: Request):
+    """Create (no id) or update (custom id) a custom sleeve. Rules come from a fixed metric menu; notes are text only."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    clean, err = sleeves_mod.validate(body)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    cfg = _read_sleeves_cfg()
+    sid = str(body.get("id") or "")
+    if sid in sleeves_mod.BUILTIN:
+        return JSONResponse({"error": "built-in sleeves are read-only; save a copy instead"}, status_code=400)
+    old = dict(cfg["custom"])
+    if sid and sid not in cfg["custom"]:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    if not sid:
+        if len(cfg["custom"]) >= 30:
+            return JSONResponse({"error": "at most 30 custom sleeves"}, status_code=400)
+        base = "c-" + sleeves_mod.slug(clean["name"])
+        sid, n = base, 2
+        while sid in cfg["custom"] or sid in sleeves_mod.BUILTIN:
+            sid, n = f"{base}-{n}", n + 1
+    cfg["custom"][sid] = clean
+    store.write_json(SLEEVES_FILE, cfg)
+    _emit_config_changed(req, "/api/sleeves", {"sleeves": sorted(old)}, {"sleeves": sorted(cfg["custom"])})
+    return {"ok": True, "id": sid}
+
+
+@app.delete("/api/sleeves/{sid}")
+async def delete_sleeve(sid: str, req: Request):
+    cfg = _read_sleeves_cfg()
+    if sid in sleeves_mod.BUILTIN:
+        return JSONResponse({"error": "built-in sleeves cannot be deleted"}, status_code=400)
+    if sid not in cfg["custom"]:
+        return JSONResponse({"error": "unknown sleeve"}, status_code=404)
+    old = sorted(cfg["custom"])
+    del cfg["custom"][sid]
+    store.write_json(SLEEVES_FILE, cfg)
+    _emit_config_changed(req, "/api/sleeves", {"sleeves": old}, {"sleeves": sorted(cfg["custom"])})
+    return {"ok": True}
 
 
 @app.post("/api/run-backtest")

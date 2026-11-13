@@ -105,3 +105,13 @@ def list_rows(state=None, q=None, limit=50, offset=0):
 
 def total():
     return sum(counts().values())
+
+
+def screened_rows(states):
+    """Every row in the given states with its parsed s1/scores (for sleeve evaluation; a few thousand rows, read once per request)."""
+    ensure()
+    marks = ",".join("?" for _ in states)
+    with store._conn() as c:
+        return [_row(r) for r in c.execute(
+            f"SELECT ticker,name,exchange,state,reason_kind,s1,scores FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
+            list(states))]
