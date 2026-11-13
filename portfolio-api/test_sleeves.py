@@ -30,7 +30,7 @@ def row(t, state="active", score=4, **s1):
 
 class TestEngine(unittest.TestCase):
     def test_growth_needs_no_profit_but_needs_runway_and_limited_dilution(self):
-        rows = [row("RKT"), row("BURN", runway_months=4.0), row("DIL", share_change_pct=300.0), row("SLOW", rev_growth_pct=8.0),
+        rows = [row("RKT"), row("BURN", runway_months=4.0), row("DIL", share_change_pct=3000.0), row("SLOW", rev_growth_pct=8.0),
                 row("UNK", runway_months=None)]
         ev = sleeves.evaluate({**sleeves.BUILTIN["growth"]}, rows, TODAY)
         self.assertEqual([r["ticker"] for r in ev["matches"]], ["RKT"])
@@ -130,7 +130,7 @@ class TestScreenCash(unittest.TestCase):
         self.assertEqual(scr.runway_months(120.0, 100.0, -50.0), 28.8)       # burn 50 a year, cash 120
         self.assertEqual(scr.runway_months(10.0, 100.0, 5.0), 999)           # funds itself
         self.assertIsNone(scr.runway_months(None, 100.0, -5.0))
-        self.assertEqual(scr.SCREEN_VERSION, 4)
+        self.assertEqual(scr.SCREEN_VERSION, 5)
 
 
 class _Req:
@@ -144,7 +144,7 @@ class TestEndpoints(unittest.TestCase):
         ticker_state.ensure()
         with store._conn() as c:
             c.execute("DELETE FROM ticker_state")
-        mk = lambda t, g: {"ticker": t, "cik": "1", "name": t, "exchange": "NYSE", "state": "active", "reason": "", "reason_kind": "screened",
+        mk = lambda t, g: {"ticker": t, "cik": ("1" if t == "AAA" else "2"), "name": t, "exchange": "NYSE", "state": "active", "reason": "", "reason_kind": "screened",
                            "next_check": None, "s1": row(t, rev_growth_pct=g)["s1"], "scores": {"score": 4}}
         ticker_state.upsert_many([mk("AAA", 50.0), mk("BBB", 5.0)], "2026-11-12")
         self.p = mock.patch.object(appmod, "SLEEVES_FILE", os.path.join(tempfile.mkdtemp(dir=_TMP), "sleeves-test.json"))
@@ -190,6 +190,43 @@ class TestEndpoints(unittest.TestCase):
         self.assertEqual(asyncio.run(appmod.delete_sleeve("nope", _Req({}))).status_code, 404)
         self.assertEqual(asyncio.run(appmod.post_sleeve(_Req({"name": "x", "rules": [{"metric": "zzz", "op": ">=", "value": 1}]}))).status_code, 400)
         self.assertEqual(appmod.get_sleeve_matches("nope").status_code, 404)
+
+
+class TestCoworkFindings(unittest.TestCase):
+    """Cowork's SLEEVES test, 2026-11-13."""
+    def test_empty_rule_list_is_refused(self):
+        clean, err = sleeves.validate({"name": "Empty", "rules": []})
+        self.assertIsNone(clean)
+        self.assertIn("at least one rule", err)
+
+    def test_growth_dilution_cap_is_ignored_in_the_first_two_years_after_listing(self):
+        young = row("FLY", share_change_pct=439.0, first_filed="2025-09-22")
+        old = row("DIL", share_change_pct=439.0, first_filed="2015-01-01")
+        ev = sleeves.evaluate(sleeves.BUILTIN["growth"], [young, old], TODAY)
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["FLY"])
+        self.assertEqual(sleeves.BUILTIN["growth"]["rules"][1]["value"], 300)
+        ons = sleeves.evaluate(sleeves.BUILTIN["growth"], [row("ONDS", share_change_pct=217.0)], TODAY)
+        self.assertEqual(len(ons["matches"]), 1)
+
+    def test_share_classes_of_one_company_collapse_to_one_row_with_an_also_note(self):
+        a = {**row("SENEA", rev_growth_pct=40.0), "cik": "0000088205"}
+        b = {**row("SENEB", rev_growth_pct=40.0), "cik": "0000088205"}
+        other = {**row("OTHER", rev_growth_pct=35.0), "cik": "0000000001"}
+        ev = sleeves.evaluate(sleeves.BUILTIN["growth"], [a, b, other], TODAY)
+        self.assertEqual([r["ticker"] for r in ev["matches"]], ["SENEA", "OTHER"])
+        self.assertEqual(ev["matches"][0]["also"], ["SENEB"])
+        self.assertNotIn("also", a)                                # the input rows are not mutated
+
+    def test_no_internal_note_leaks_into_the_built_in_text(self):
+        for sl in sleeves.BUILTIN.values():
+            self.assertNotIn("Proposed", sl["notes"])
+
+    def test_form_blocks_empty_rules_inline_instead_of_saving_silently(self):
+        with open(os.path.join(_HERE, "static", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        for needle in ("Every rule needs a number in its value box.", "Add at least one rule", "SLEEVE_ERR", "also '+esc(r.also.join"):
+            self.assertIn(needle, html, needle)
+        self.assertNotIn("filter(r=>r.value!=='')", html)
 
 
 class TestPageWiring(unittest.TestCase):

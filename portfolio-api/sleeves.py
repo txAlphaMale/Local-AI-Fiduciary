@@ -28,7 +28,7 @@ METRICS = {
     "roe_pct": ("Return on equity", "%", "s1"),
     "dividend_payout_pct": ("Dividend payout (share of profit paid out)", "%", "s1"),
     "fcf_dividend_coverage": ("Dividend coverage by free cash flow", "x", "s1"),
-    "share_change_pct": ("Share count change in the last year (dilution)", "%", "s1"),
+    "share_change_pct": ("Share count change in the last year (dilution; ignored in the first 2 years after listing)", "%", "s1"),
     "piotroski": ("Piotroski financial-strength score (0-9)", "", "s1"),
     "current_ratio": ("Current ratio (short-term assets / short-term bills)", "x", "s1"),
     "cash": ("Cash and short-term investments", "$", "s1"),
@@ -47,10 +47,10 @@ METRICS = {
 BUILTIN = {
     "growth": {"name": "Growth (speculative)", "builtin": True, "enabled": True, "include_states": list(STATES),
                "intent": "Fast-growing companies, including ones not yet profitable, that can fund themselves through the R&D phase.",
-               "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25}, {"metric": "share_change_pct", "op": "<=", "value": 40},
+               "rules": [{"metric": "rev_growth_pct", "op": ">=", "value": 25}, {"metric": "share_change_pct", "op": "<=", "value": 300},
                          {"metric": "runway_months", "op": ">=", "value": 12}],
                "rank_by": "rev_growth_pct", "rank_dir": "desc",
-               "notes": "Does not require profit. Looks for revenue that is growing fast and cash that lasts at least a year at the current burn."},
+               "notes": "Does not require profit. Looks for revenue growing fast and cash that lasts at least a year at the current burn. The dilution cap (300%) only screens out extreme share issuance; it is ignored in the first 2 years after listing, when the share count jumps because of the IPO."},
     "income": {"name": "Income", "builtin": True, "enabled": True, "include_states": ["active", "new"],
                "intent": "Companies that pay a dividend they can afford and are likely to keep paying.",
                "rules": [{"metric": "dividend_payout_pct", "op": ">", "value": 0}, {"metric": "dividend_payout_pct", "op": "<=", "value": 90},
@@ -64,7 +64,7 @@ BUILTIN = {
                              {"metric": "fcf_margin_pct", "op": ">=", "value": 8}, {"metric": "piotroski", "op": ">=", "value": 6},
                              {"metric": "share_change_pct", "op": "<=", "value": 3}, {"metric": "debt_to_equity", "op": "<=", "value": 2}],
                    "rank_by": "rev_growth_pct", "rank_dir": "desc",
-                   "notes": "Proposed addition: the 'smart opportunity beyond pre-profit' lane."},
+                   "notes": "For opportunities that are not early-stage bets: companies that are already profitable and still growing."},
     "balance": {"name": "Balance (fills a gap)", "builtin": True, "enabled": True, "include_states": list(STATES),
                 "intent": "Candidates in sectors or asset classes your portfolio is light on.",
                 "rules": [{"metric": "s1_score", "op": ">=", "value": 5}], "rank_by": "s1_score", "rank_dir": "desc",
@@ -90,6 +90,10 @@ def value_of(row, metric, today=None):
         except (TypeError, ValueError):
             return None
     stage = METRICS.get(metric, ("", "", ""))[2]
+    if metric == "share_change_pct" and s1.get("share_change_pct") is not None:
+        age = value_of(row, "age_years", today)
+        if age is not None and age < 2:
+            return 0.0                    # the first year or two after an IPO compares a pre-listing share count: not real dilution
     if stage == "s2":
         s2 = row.get("s2") or {}
         v = s2.get(metric)
@@ -110,6 +114,8 @@ def validate(sl):
     rules = sl.get("rules") or []
     if not isinstance(rules, list) or len(rules) > MAX_RULES:
         return None, f"at most {MAX_RULES} rules"
+    if not rules:
+        return None, "add at least one rule (a sleeve with no rules would match every stock)"
     clean = []
     for r in rules:
         if not isinstance(r, dict) or r.get("metric") not in METRICS:
@@ -173,8 +179,24 @@ def evaluate(sleeve, rows, today=None, held=None):
         out.append(row)
     key, rev = sleeve.get("rank_by") or "s1_score", (sleeve.get("rank_dir") != "asc")
     out.sort(key=lambda r: (value_of(r, key, today) is None, -(value_of(r, key, today) or 0) if rev else (value_of(r, key, today) or 0)))
+    out = _one_per_company(out)
     return {"matches": out, "awaiting": awaiting, "considered": considered, "pending_rules": pending,
             "gap_sectors": sorted(gap_sectors.items(), key=lambda kv: -kv[1])}
+
+
+def _one_per_company(rows):
+    """Share classes of one company (SENEA/SENEB, FWONA/FWONK) carry identical SEC numbers: keep the best-ranked, note the others."""
+    seen, out = {}, []
+    for r in rows:
+        key = r.get("cik")
+        if key and key in seen:
+            seen[key].setdefault("also", []).append(r["ticker"])
+            continue
+        r = dict(r)
+        if key:
+            seen[key] = r
+        out.append(r)
+    return out
 
 
 def slug(name):

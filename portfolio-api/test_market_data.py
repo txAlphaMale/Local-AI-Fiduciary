@@ -85,7 +85,7 @@ class TestStorageAndJob(unittest.TestCase):
         ticker_state.ensure()
         with store._conn() as c:
             c.execute("DELETE FROM ticker_state")
-        mk = lambda t, g, sc=5: {"ticker": t, "cik": "1", "name": t, "exchange": "NYSE", "state": "active", "reason": "",
+        mk = lambda t, g, sc=5: {"ticker": t, "cik": str(abs(hash(t)) % 10**9).zfill(10), "name": t, "exchange": "NYSE", "state": "active", "reason": "",
                                  "reason_kind": "screened", "next_check": None, "s1": row(t, rev_growth_pct=g)["s1"], "scores": {"score": sc}}
         ticker_state.upsert_many([mk("AAA", 90.0), mk("BBB", 60.0), mk("CCC", 40.0), mk("DDD", 3.0, 3)], "2026-11-13")
         d = tempfile.mkdtemp(dir=_TMP)

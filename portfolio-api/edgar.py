@@ -793,29 +793,37 @@ def recent_13f(cik, n=2):
 
 
 def _annual(facts, tags):
-    """For the first matching tag, return its annual (10-K/FY) series as
-    [(end_date, value), ...] oldest->newest, deduped by end (latest filing wins)."""
+    """Annual (10-K / FY) series [(end_date, value), ...] oldest->newest, merged across ALL the listed tags: for each fiscal-year end the
+    earliest-listed tag that has a value wins, and within a tag the latest filing wins.
+
+    Two defects this fixes (found from the idea-scavenger's first live screen, 2026-11-13): (1) a 10-K also carries the Q4 and quarterly
+    figures tagged fp=FY, which share the annual figure's END date, so an annual value could be replaced by a quarter and growth came out
+    near +300% (MSA, FIS, RDN); flows must now span about a year. (2) A company that changed XBRL concept (SENEA moved from Revenues to
+    RevenueFromContractWithCustomer...) had its series frozen at the old tag's last year; merging picks up the newer years."""
     us = (facts.get("facts") or {}).get("us-gaap") or {}
-    for tag in tags:
+    best = {}
+    for prio, tag in enumerate(tags):
         node = us.get(tag)
         if not node:
             continue
         units = node.get("units") or {}
         rows = units.get("USD") or (next(iter(units.values()), []) if units else [])
-        ann = [e for e in rows if str(e.get("form", "")).startswith("10-K") and e.get("fp") == "FY"]
-        if not ann:
-            continue
-        by_end = {}
-        for e in ann:
-            k = e.get("end")
-            if not k:
+        for e in rows:
+            if not (str(e.get("form", "")).startswith("10-K") and e.get("fp") == "FY") or not e.get("end"):
                 continue
-            if k not in by_end or str(e.get("filed", "")) > str(by_end[k].get("filed", "")):
-                by_end[k] = e
-        series = [(e["end"], e.get("val")) for e in sorted(by_end.values(), key=lambda x: x.get("end", ""))]
-        if series:
-            return series
-    return []
+            if e.get("start"):
+                try:
+                    d = (datetime.date.fromisoformat(e["end"][:10]) - datetime.date.fromisoformat(e["start"][:10])).days
+                except ValueError:
+                    continue
+                if not 330 <= d <= 400:
+                    continue
+            k = e["end"]
+            cur = best.get(k)
+            filed = str(e.get("filed", ""))
+            if cur is None or prio < cur[0] or (prio == cur[0] and filed > cur[1]):
+                best[k] = (prio, filed, e.get("val"))
+    return [(k, v[2]) for k, v in sorted(best.items())]
 
 
 def _latest(facts, key):

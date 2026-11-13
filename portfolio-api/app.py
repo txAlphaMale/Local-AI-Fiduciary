@@ -6050,7 +6050,7 @@ def _sleeve_row(r, today):
             "piotroski": s1.get("piotroski"), "share_change_pct": s1.get("share_change_pct"),
             "age_years": sleeves_mod.value_of(r, "age_years", today),
             "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
-            "beta": s2.get("beta"), "sector": s2.get("sector")}
+            "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also")}
 
 
 @app.get("/api/sleeves")

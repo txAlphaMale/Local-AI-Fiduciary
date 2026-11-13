@@ -114,7 +114,7 @@ def screened_rows(states):
     marks = ",".join("?" for _ in states)
     with store._conn() as c:
         return [_row(r) for r in c.execute(
-            f"SELECT ticker,name,exchange,state,reason_kind,s1,scores,s2 FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
+            f"SELECT ticker,cik,name,exchange,state,reason_kind,s1,scores,s2 FROM ticker_state WHERE state IN ({marks}) AND s1 IS NOT NULL AND s1 != 'null'",
             list(states))]
 
 
