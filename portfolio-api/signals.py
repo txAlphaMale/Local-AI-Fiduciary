@@ -7,6 +7,7 @@
 Record builders and the due-selection live here as pure functions; app.py supplies the fetchers (behind the budget gates)."""
 import time
 
+INSIDER_VERSION = 3                # v3: Form 4s are kept only where the ticker's CIK is the ISSUER (Berkshire's reporter filings were counted as its own)
 RECORD_VERSION = 2                 # v1 records may be refusals saved as 'no data' (gate pacing bug): re-fetched
 ANALYST_REFRESH_DAYS = 7
 INSIDER_REFRESH_DAYS = 3
@@ -30,12 +31,12 @@ def build_insider(res, now=None):
     """From the app's insider signal (insider.aggregate output, or an unavailable stub)."""
     res = res or {}
     if not res.get("available"):
-        return {"available": False, "reason": res.get("reason"), "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
+        return {"available": False, "reason": res.get("reason"), "fetched_at": int(now or time.time()), "v": INSIDER_VERSION}
     return {"available": True, "net_value": res.get("net_value"), "net_buy_pct": res.get("net_buy_pct"), "signal": res.get("signal"),
             "buyers": (res.get("buy") or {}).get("insiders", 0), "sellers": (res.get("sell") or {}).get("insiders", 0),
             "buy_value": (res.get("buy") or {}).get("value", 0.0), "sell_value": (res.get("sell") or {}).get("value", 0.0),
             "filings": res.get("filings"), "as_of": res.get("as_of"), "lookback_days": res.get("lookback_days"),
-            "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
+            "fetched_at": int(now or time.time()), "v": INSIDER_VERSION}
 
 
 def build_short(si, now=None):
@@ -43,6 +44,10 @@ def build_short(si, now=None):
         return {"available": False, "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
     return {"available": True, "days_to_cover": si.get("days_to_cover"), "change_pct": si.get("change_pct"),
             "settlement_date": si.get("settlement_date"), "flag": si.get("flag"), "fetched_at": int(now or time.time()), "v": RECORD_VERSION}
+
+
+def version_for(group):
+    return INSIDER_VERSION if group == "insider" else RECORD_VERSION
 
 
 def display(s3):

@@ -193,3 +193,27 @@ class TestSmallFixes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestForm4IssuerCheck(unittest.TestCase):
+    """Berkshire's CIK is the REPORTING OWNER on Form 4s for other companies; those are not insider trades in BRK's own stock."""
+    def test_issuer_cik_is_read_and_compared_without_zero_padding(self):
+        import edgar
+        xml = "<ownershipDocument><issuer><issuerCik>0001067983</issuerCik><issuerTradingSymbol>OXY</issuerTradingSymbol></issuer></ownershipDocument>"
+        self.assertEqual(edgar._form4_issuer_cik(xml), 1067983)
+        self.assertIsNone(edgar._form4_issuer_cik("<ownershipDocument></ownershipDocument>"))
+
+    def test_recent_form4_skips_filings_where_the_cik_is_only_the_reporter(self):
+        import edgar
+        feed = "<entry><filing-type>4</filing-type><filing-date>2099-01-01</filing-date><link href='/Archives/edgar/data/1/111/x'/></entry>" \
+               "<entry><filing-type>4</filing-type><filing-date>2099-01-02</filing-date><link href='/Archives/edgar/data/1/222/x'/></entry>"
+        own = "<issuerCik>0001067983</issuerCik>"
+        other = "<issuerCik>0000797468</issuerCik>"
+        class R:
+            status_code = 200
+            text = feed
+        with mock.patch.object(edgar, "get_cik", return_value="0001067983"), mock.patch.object(edgar, "_get", return_value=R()), \
+             mock.patch.object(edgar, "_headers", return_value={}), \
+             mock.patch.object(edgar, "_fetch_form4_xml", side_effect=lambda c, a: own if a == "111" else other):
+            got = edgar.recent_form4("BRK-A", days=36500)
+        self.assertEqual([g["accession"] for g in got], ["111"])

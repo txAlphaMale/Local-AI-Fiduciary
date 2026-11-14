@@ -3426,7 +3426,7 @@ function sleevesContent(){
     box.appendChild(h);
     box.appendChild(el('div','muted',sl.intent||'')).style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
     const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }
-    if(sl.fill_gap&&sl.gap_sectors&&sl.gap_sectors.length){ const g=el('div'); g.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; g.innerHTML='Sectors you hold under '+esc(sl.gap_below_pct)+'% of your portfolio, with candidates: '+sl.gap_sectors.map(x=>esc(x[0])+' ('+x[1]+')').join(', '); box.appendChild(g); }
+    if(sl.fill_gap&&sl.gap_sectors&&sl.gap_sectors.length){ const g=el('div'); g.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; g.innerHTML='Sectors you hold under '+esc(sl.gap_below_pct)+'% of your portfolio, with candidates: '+sl.gap_sectors.map(x=>esc(x[0])+' ('+x[1]+')').join(', ')+(sl.gap_caveat?'<div style="color:var(--muted);margin-top:2px">'+esc(sl.gap_caveat)+'</div>':''); box.appendChild(g); }
     if(sl.notes){ const n=el('div','muted',sl.notes); n.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; box.appendChild(n); }
     if(sl.preview&&sl.preview.length) box.appendChild(sleeveBrowser(sl));
     const bar=el('div'); bar.style.marginTop='var(--space-2)';

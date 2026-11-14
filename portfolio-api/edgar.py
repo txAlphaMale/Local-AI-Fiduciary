@@ -701,6 +701,14 @@ def _fetch_form4_xml(cik_i, accnd):
     return None
 
 
+def _form4_issuer_cik(xml):
+    """The <issuerCik> of a Form 4 ownershipDocument as an int, or None if absent. EDGAR's browse-edgar list for a CIK also
+    returns filings where that CIK is the REPORTING OWNER (e.g. Berkshire reporting its purchases of OTHER companies); those
+    are not insider trades in the ticker's own stock and must be skipped."""
+    m = re.search(r"<issuerCik>\s*0*(\d+)\s*</issuerCik>", xml or "")
+    return int(m.group(1)) if m else None
+
+
 def recent_form4(ticker, days=120, limit=16):
     """Recent Form 4 (insider-transaction) filings for a ticker's issuer, as raw ownership XML.
     Uses EDGAR browse-edgar (atom, owner='only' → ownership forms) to list the issuer's Form 4
@@ -739,6 +747,9 @@ def recent_form4(ticker, days=120, limit=16):
             continue
         xml = _fetch_form4_xml(mfold.group(1), mfold.group(2))
         if xml:
+            icik = _form4_issuer_cik(xml)
+            if icik is not None and str(cik).isdigit() and icik != int(cik):
+                continue                                     # the CIK is the reporter here, not the issuer
             out.append({"date": dt, "accession": mfold.group(2), "xml": xml})
         if len(out) >= limit:
             break
@@ -813,13 +824,14 @@ def _annual(facts, tags):
     near +300% (MSA, FIS, RDN); flows must now span about a year. (2) A company that changed XBRL concept (SENEA moved from Revenues to
     RevenueFromContractWithCustomer...) had its series frozen at the old tag's last year; merging picks up the newer years."""
     us = (facts.get("facts") or {}).get("us-gaap") or {}
-    best = {}
+    per = []                                         # one {end: (filed, val)} series per tag, in priority order
     for prio, tag in enumerate(tags):
         node = us.get(tag)
         if not node:
             continue
         units = node.get("units") or {}
         rows = units.get("USD") or (next(iter(units.values()), []) if units else [])
+        ser = {}
         for e in rows:
             if not (str(e.get("form", "")).startswith("10-K") and e.get("fp") == "FY") or not e.get("end"):
                 continue
@@ -830,12 +842,30 @@ def _annual(facts, tags):
                     continue
                 if not 330 <= d <= 400:
                     continue
-            k = e["end"]
-            cur = best.get(k)
             filed = str(e.get("filed", ""))
-            if cur is None or prio < cur[0] or (prio == cur[0] and filed > cur[1]):
-                best[k] = (prio, filed, e.get("val"))
-    return [(k, v[2]) for k, v in sorted(best.items())]
+            cur = ser.get(e["end"])
+            if cur is None or filed > cur[0]:
+                ser[e["end"]] = (filed, e.get("val"))
+        if ser:
+            per.append((prio, ser))
+    if not per:
+        return []
+    # The tag that reaches the newest year leads (ties: earlier-listed). Another tag only FILLS IN years the leader lacks, and only when
+    # it agrees with the leader wherever they overlap: Chemed's RevenueFromContract... line is one segment (VITAS) while Revenues is the
+    # company total, so splicing them made 2025 look +65% against a 2024 that was a different measure. No overlap (SENEA changed
+    # concept) is fine.
+    per.sort(key=lambda t: max(t[1]), reverse=True)  # stable: newest end first, ties keep priority order
+    best = dict(per[0][1])
+    for _prio, ser in per[1:]:
+        common = [k for k in ser if k in per[0][1]]
+        def _same(k):
+            a, b2 = ser[k][1], per[0][1][k][1]
+            return a is not None and b2 is not None and abs(a - b2) <= 0.05 * max(abs(a), abs(b2), 1)
+        if any(not _same(k) for k in common):
+            continue                                  # a different measure of the same concept: do not mix
+        for k, v in ser.items():
+            best.setdefault(k, v)
+    return [(k, v[1]) for k, v in sorted(best.items())]
 
 
 def _latest(facts, key):

@@ -29,6 +29,24 @@ def facts(**tags):
 
 
 class TestAnnual(unittest.TestCase):
+    def test_a_segment_line_is_not_spliced_onto_the_company_total(self):
+        """Chemed (2026-11-13 scout note): RevenueFromContract... is one segment and ends 2024; Revenues is the total and reaches 2025.
+        Splicing them showed +65%; the series must come from the one line that reaches the newest year."""
+        f = facts(RevenueFromContractWithCustomerExcludingAssessedTax=[
+                      row("2023-01-01", "2023-12-31", 1315.0, "2024-02-20"), row("2024-01-01", "2024-12-31", 1531.0, "2025-02-20")],
+                  Revenues=[row("2023-01-01", "2023-12-31", 2264.0, "2024-02-20"), row("2024-01-01", "2024-12-31", 2431.0, "2025-02-20"),
+                            row("2025-01-01", "2025-12-31", 2530.0, "2026-02-20")])
+        ser = edgar._annual(f, edgar.TAGS["revenue"])
+        self.assertEqual(ser, [("2023-12-31", 2264.0), ("2024-12-31", 2431.0), ("2025-12-31", 2530.0)])
+        val, prev, _ = edgar._latest(f, "revenue")
+        self.assertAlmostEqual((val / prev - 1) * 100, 4.07, places=1)
+
+    def test_agreeing_older_tag_still_fills_in_history(self):
+        f = facts(Revenues=[row("2018-01-01", "2018-12-31", 100.0, "2019-02-01"), row("2019-01-01", "2019-12-31", 110.0, "2020-02-01")],
+                  RevenueFromContractWithCustomerExcludingAssessedTax=[row("2019-01-01", "2019-12-31", 110.0, "2021-02-01"),
+                                                                       row("2020-01-01", "2020-12-31", 120.0, "2021-02-01")])
+        self.assertEqual([k for k, _ in edgar._annual(f, edgar.TAGS["revenue"])], ["2018-12-31", "2019-12-31", "2020-12-31"])
+
     def test_fourth_quarter_figure_with_the_same_end_date_does_not_replace_the_annual(self):
         f = facts(RevenueFromContractWithCustomerExcludingAssessedTax=[
             row("2025-01-01", "2025-12-31", 1874.0, "2026-02-12"),

@@ -17,7 +17,7 @@ NEW_IPO_DAYS = 365               # first filing inside a year: a first look rega
 MIN_REVENUE = 1_000_000          # below this there is no operating business to screen yet
 
 
-SCREEN_VERSION = 6               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 7               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
