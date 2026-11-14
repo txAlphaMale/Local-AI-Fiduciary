@@ -148,7 +148,7 @@ class TestScreenCash(unittest.TestCase):
         self.assertEqual(scr.runway_months(120.0, 100.0, -50.0), 28.8)       # burn 50 a year, cash 120
         self.assertEqual(scr.runway_months(10.0, 100.0, 5.0), 999)           # funds itself
         self.assertIsNone(scr.runway_months(None, 100.0, -5.0))
-        self.assertEqual(scr.SCREEN_VERSION, 6)
+        self.assertEqual(scr.SCREEN_VERSION, 7)
 
 
 class _Req:
