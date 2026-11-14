@@ -16,7 +16,7 @@ sys.path.insert(0, _HERE)
 import app as appmod, scout, sleeves, store, ticker_state  # noqa: E402
 
 
-import json
+import json, os
 ROW = {"ticker": "ABCD", "name": "Abcd Inc", "state": "active", "s1": {"revenue": 20_000_000, "rev_growth_pct": 40.0, "runway_months": 30},
        "s2": {"price": 12.5, "market_cap": 900_000_000, "sector": "Technology"}, "s3": None}
 
@@ -72,3 +72,9 @@ class TestBalanceHeldWeights(unittest.TestCase):
         self.assertGreaterEqual(w["Semiconductors"], 3)            # covered by the family, so Balance will not call it a gap
         self.assertAlmostEqual(appmod._HELD_CACHE["funds_pct"], 33.1, places=1)
         appmod._HELD_CACHE.update(at=0.0, w={}, funds_pct=None)
+
+
+class TestGroundingRule(unittest.TestCase):
+    def test_agent_prompts_forbid_background_from_memory(self):
+        src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
+        self.assertGreaterEqual(src.count("do not add what the company does, former names, mergers"), 4)

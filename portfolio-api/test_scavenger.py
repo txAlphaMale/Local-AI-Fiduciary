@@ -347,6 +347,15 @@ class TestFollowups(unittest.TestCase):
         self.assertEqual(by["PBR"]["state"], "active")
         self.assertEqual(by["PBR"]["s1"]["last_filed_any"], "2026-04-09")
 
+    def test_recent_filings_but_annual_figures_years_old_is_reconsider_not_active(self):
+        """GRCE (2026-11-14): active on a fiscal 2022 annual filing while it kept filing 10-Qs."""
+        today = datetime.date(2026, 11, 14)
+        base = {"revenue": 5e7, "rev_growth_pct": 12.0, "last_filed": "2026-08-01", "first_filed": "2015-01-01"}
+        old = scavenge_screen.classify({}, dict(base, fiscal_year_end="2022-12-31"), today, "ok")
+        self.assertEqual((old["state"], old["reason_kind"]), ("reconsider", "stale_financials"))
+        fresh = scavenge_screen.classify({}, dict(base, fiscal_year_end="2025-12-31"), today, "ok")
+        self.assertEqual(fresh["state"], "active")
+
     def test_us_company_with_no_recent_filing_of_any_kind_is_still_dormant(self):
         by = self._screen([("OLD", _facts(5e7, 5e7, 1, 1, 1, filed="2023-01-01"))])
         self.assertEqual((by["OLD"]["state"], by["OLD"]["reason_kind"]), ("blacklist", "dormant"))

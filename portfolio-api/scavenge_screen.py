@@ -17,7 +17,8 @@ NEW_IPO_DAYS = 365               # first filing inside a year: a first look rega
 MIN_REVENUE = 1_000_000          # below this there is no operating business to screen yet
 
 
-SCREEN_VERSION = 7               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+STALE_ANNUAL_DAYS = 640         # ~21 months: a company with filings this year but no full-year figures newer than this is not screened on them
+SCREEN_VERSION = 8               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -314,6 +315,15 @@ def classify(row, s1, today, facts_status):
         try:
             if (today - datetime.date.fromisoformat(first)).days <= NEW_IPO_DAYS:
                 return out("new", "recent_ipo", f"First SEC financials filed {first}: a recent listing that gets a first look.", 30)
+        except ValueError:
+            pass
+    fye = s1.get("fiscal_year_end")
+    if fye:
+        try:
+            if (today - datetime.date.fromisoformat(str(fye)[:10])).days > STALE_ANNUAL_DAYS:
+                return out("reconsider", "stale_financials",
+                           f"The newest full-year figures are for the year ending {fye}: recent filings exist but the annual numbers "
+                           "this screen reads are out of date (late filer, changed reporting, or tag changes).", 90)
         except ValueError:
             pass
     rev = s1.get("revenue")
