@@ -78,3 +78,35 @@ class TestGroundingRule(unittest.TestCase):
     def test_agent_prompts_forbid_background_from_memory(self):
         src = open(os.path.join(_HERE, "app.py"), encoding="utf-8").read()
         self.assertGreaterEqual(src.count("do not add what the company does, former names, mergers"), 4)
+
+
+class TestQuoteCache(unittest.TestCase):
+    """RETEST-021: the paper ledger showed $0 because every position's quote was a separate gated Finnhub call."""
+    def setUp(self):
+        store._MEM_CACHE.pop(("finnhub_quote", "QCT"), None)
+
+    def test_quote_is_reused_and_a_refused_call_falls_back_to_the_last_price(self):
+        calls = []
+        def fake(path, sym):
+            calls.append(sym)
+            return {"c": 12.5, "dp": 1.0} if len(calls) == 1 else None      # second ask is refused/failed
+        with mock.patch.object(appmod, "_finnhub", side_effect=fake):
+            self.assertEqual(appmod._price("qct"), 12.5)
+            self.assertEqual(appmod._price("QCT"), 12.5)                     # within the TTL: no second call
+            self.assertEqual(len(calls), 1)
+            hit = store._MEM_CACHE[("finnhub_quote", "QCT")]
+            store._MEM_CACHE[("finnhub_quote", "QCT")] = (hit[0] - 10_000, hit[1])   # expire the hot cache
+            self.assertEqual(appmod._price("QCT"), 12.5)                     # refused now: last-known-good, not None
+            self.assertEqual(len(calls), 2)
+
+    def test_never_seen_and_failing_is_none_not_zero(self):
+        with mock.patch.object(appmod, "_finnhub", return_value=None):
+            self.assertIsNone(appmod._price("QCT"))
+
+    def test_paper_total_keeps_positions_when_the_quote_call_is_refused(self):
+        p = {"id": None, "cash": 100.0, "starting_cash": 100.0, "positions": {"QCT": {"shares": 10, "avg_cost": 1.0}}}
+        with mock.patch.object(appmod, "_finnhub", return_value={"c": 5.0}):
+            self.assertEqual(appmod._paper_marked(p)["total_value"], 150.0)
+        store._MEM_CACHE[("finnhub_quote", "QCT")] = (0, store._MEM_CACHE[("finnhub_quote", "QCT")][1])   # expired
+        with mock.patch.object(appmod, "_finnhub", return_value=None):
+            self.assertEqual(appmod._paper_marked(p)["total_value"], 150.0)
