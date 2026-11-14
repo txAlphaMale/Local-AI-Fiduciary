@@ -15217,6 +15217,42 @@ async def paper_seed(req: Request):
             **seed_meta}
 
 
+def _idea_research(sleeve=None, ticker=None, limit=None):
+    """Read-only view of the idea scavenger for the chat and strategist agents (same data as RESEARCH > SLEEVES)."""
+    today = datetime.date.today()
+    try:
+        lim = max(1, min(int(limit or 10), 25))
+    except (TypeError, ValueError):
+        lim = 10
+    briefs = ticker_state.scout_briefs()
+    if ticker:
+        t = str(ticker).upper().strip()
+        row = next((r for r in ticker_state.screened_rows(sleeves_mod.STATES) if r["ticker"] == t), None)
+        note = ticker_state.get_note(t)
+        if not row and not note:
+            return {"ticker": t, "found": False, "hint": "not in the screened universe (not a US-listed common stock, or not screened yet)"}
+        out = {"ticker": t, "found": True, "screen": _sleeve_row(row, today, briefs) if row else None}
+        if note:
+            out["scout_note"] = {"created_at": note.get("created_at"), "note": note.get("note"), "sleeves": note.get("sleeves")}
+        else:
+            out["scout_note"] = None
+        return out
+    sls = _sleeve_list()
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    if sleeve:
+        sl = next((x for x in sls if x["id"] == str(sleeve).lower().strip()), None)
+        if not sl:
+            return {"error": "unknown sleeve", "sleeves": [x["id"] for x in sls]}
+        ev = sleeves_mod.evaluate(sl, rows, today, _held_sector_weights() if sl.get("fill_gap") else None)
+        return {"sleeve": sl["id"], "name": sl["name"], "intent": sl.get("intent", ""),
+                "rules": [sleeves_mod.describe_rule(r) for r in sl.get("rules", [])], "match_count": len(ev["matches"]),
+                "rows": [_sleeve_row(r, today, briefs) for r in ev["matches"][:lim]]}
+    held = _held_sector_weights() if any(x.get("fill_gap") for x in sls) else None
+    return {"sleeves": [{k: c[k] for k in ("id", "name", "intent", "rule_text", "match_count", "gap_sectors", "preview")}
+                        for c in (_sleeve_card(x, rows, today, top=3, held=held, briefs=briefs) for x in sls)],
+            "screened": len(rows), "scout_notes": len(briefs)}
+
+
 def _log_report(summary, scenario_id=None, goal_snapshot=None):
     """Append a weekly report + snapshot total value to one scenario. `goal_snapshot` (2026-07-30,
     Strategist GOALS): the goal parameters active for the run that produced this report, stamped
@@ -15364,7 +15400,7 @@ STRATEGIST_PROMPT = (
     "ACCOUNT TOOLS: get_paper_portfolio (your cash, positions, P/L, return vs. start — call this FIRST); "
     "paper_buy(ticker, dollars); paper_sell(ticker, shares — omit shares to sell the whole position); "
     "log_report(summary — call this LAST, exactly once).\n"
-    "RESEARCH TOOLS: get_opportunities and get_discovery (idea sources); get_fundamentals(ticker) and "
+    "RESEARCH TOOLS: get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice) (idea sources); get_fundamentals(ticker) and "
     "get_valuation(ticker); get_research(ticker) (a Buy/Sell/Hold brief); get_holdings ({user}'s REAL "
     "portfolio, for context only — never trade it); web_search(query) (LIVE web/news via Tavily — use it "
     "to surface NEW opportunities beyond get_discovery and to check what's moving a name now). web_search "
@@ -15415,6 +15451,16 @@ STRATEGIST_TOOLS = [
     {"type": "function", "function": {"name": "get_discovery",
         "description": "News-discovered ideas plus news/SEC-8K alerts on current holdings.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_idea_research",
+        "description": "The app's own idea-hunting research over the whole US market. No args: lists the sleeves (Growth, Income, "
+            "Profitable compounder, Insiders are buying, Balance, plus custom ones) with their top names. With sleeve: that "
+            "sleeve's best matches (price, market cap, yield, sector, insider and analyst signals, scout flag). With ticker: the "
+            "scout note (thesis, evidence, risks, what would prove it wrong, conviction) plus the screen numbers. READ-ONLY research "
+            "leads, never advice; scout notes are 'worth researching', not 'buy'.",
+        "parameters": {"type": "object", "properties": {
+            "sleeve": {"type": "string", "description": "Sleeve id from the no-arg listing, e.g. growth, income."},
+            "ticker": {"type": "string", "description": "Ticker to get the scout note and screen numbers for."},
+            "limit": {"type": "integer", "description": "Max rows for a sleeve (default 10, max 25)."}}}}},
     {"type": "function", "function": {"name": "get_fundamentals",
         "description": "SEC GAAP fundamentals and ratios (growth, margins, leverage, FCF) for a ticker.",
         "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}},
@@ -15506,6 +15552,8 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None):
                 return store.read_json_strict(DISCOVERY_FILE)
             except Exception:
                 return {"discovered": [], "alerts": []}
+        if name == "get_idea_research":
+            return _idea_research(args.get("sleeve"), args.get("ticker"), args.get("limit"))
         if name == "get_fundamentals":
             return edgar.fundamentals(str(args.get("ticker") or "").upper())
         if name == "get_valuation":
@@ -15753,7 +15801,7 @@ STRATEGIST_ADVICE_PROMPT = (
     "get_fees_liquidity and get_benefits ({user}'s REAL fund expense ratios and 401k/HSA/Roth "
     "contribution room — use these for any question involving fees or contribution/match headroom "
     "instead of asking {user} to supply figures the app already tracks); "
-    "get_paper_portfolio (the hypothetical book, extra context only); get_opportunities and get_discovery "
+    "get_paper_portfolio (the hypothetical book, extra context only); get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice) "
     "(idea sources); get_fundamentals(ticker), get_valuation(ticker), get_research(ticker).\n"
     "Prefer `ttm` (trailing-twelve-month) margins over any single annual figure, and check the multi-year "
     "trend before judging a name.\n"
@@ -16168,7 +16216,7 @@ FIDUCIARY_PROMPT = (
     "drawdown / Sharpe), get_retirement and get_income_plan (long-range plan, Monte Carlo, glide path), "
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
     "get_social_security, get_benefits (401k match / HSA / Roth contribution room), get_fees_liquidity, "
-    "get_lookthrough (fund holdings), get_scorecard, get_opportunities and get_discovery (ideas), "
+    "get_lookthrough (fund holdings), get_scorecard, get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice) (ideas), "
     "get_fundamentals / get_valuation / get_research for a specific ticker, search_knowledge for tax rules / "
     "IRA-Roth mechanics / investing-policy guidance / estate-planning mechanics from {user}'s local reference "
     "library (cite the source doc), and web_search for current news or context.\n"
@@ -16287,6 +16335,16 @@ FIDUCIARY_TOOLS = [
     {"type": "function", "function": {"name": "get_discovery",
         "description": "News-discovered ideas plus news/SEC-8K alerts on current holdings.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_idea_research",
+        "description": "The app's own idea-hunting research over the whole US market. No args: lists the sleeves (Growth, Income, "
+            "Profitable compounder, Insiders are buying, Balance, plus custom ones) with their top names. With sleeve: that "
+            "sleeve's best matches (price, market cap, yield, sector, insider and analyst signals, scout flag). With ticker: the "
+            "scout note (thesis, evidence, risks, what would prove it wrong, conviction) plus the screen numbers. READ-ONLY research "
+            "leads, never advice; scout notes are 'worth researching', not 'buy'.",
+        "parameters": {"type": "object", "properties": {
+            "sleeve": {"type": "string", "description": "Sleeve id from the no-arg listing, e.g. growth, income."},
+            "ticker": {"type": "string", "description": "Ticker to get the scout note and screen numbers for."},
+            "limit": {"type": "integer", "description": "Max rows for a sleeve (default 10, max 25)."}}}}},
     {"type": "function", "function": {"name": "get_fundamentals",
         "description": "SEC GAAP fundamentals and ratios (growth, margins, leverage, FCF) for a ticker.",
         "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}},
@@ -16459,6 +16517,8 @@ def _fiduciary_dispatch(name, args):
                 return store.read_json_strict(DISCOVERY_FILE)
             except Exception:
                 return {"discovered": [], "alerts": []}
+        if name == "get_idea_research":
+            return _idea_research(args.get("sleeve"), args.get("ticker"), args.get("limit"))
         if name == "get_fundamentals":    return edgar.fundamentals(str(args.get("ticker") or "").upper())
         if name == "get_valuation":       return _valuation(str(args.get("ticker") or "").upper()) or {"available": False}
         if name == "get_research":
@@ -16499,7 +16559,7 @@ STRATEGIST_CHAT_PROMPT = (
     "asking about your paper-trading track record or hypothetical strategy performance.\n"
     "Also available: get_fees_liquidity for their REAL fund expense ratios/liquidity flags and get_benefits "
     "for their REAL 401k/HSA/Roth contribution room (use these instead of asking {user} to type figures the "
-    "app already tracks), get_opportunities and get_discovery for ideas, get_fundamentals / get_valuation "
+    "app already tracks), get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice) for ideas, get_fundamentals / get_valuation "
     "/ get_research to dig into a name, and web_search(query) for LIVE web/news via Tavily — use it to "
     "uncover fresh opportunities and to answer 'what's driving this stock right now / why is it up or "
     "down today' questions. Prefer trailing-twelve-month figures; weigh fees and liquidity on small "
