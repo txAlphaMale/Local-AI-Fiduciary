@@ -6039,7 +6039,7 @@ def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_
         def run(group, fn_one, gate, refresh_days, limit):
             """fn_one(ticker) -> record or None (None = failed/deferred, leave the ticker alone)."""
             tranche, due = market_data.select_tranche(cands, ticker_state.s3_index(group), limit=limit, refresh_days=refresh_days,
-                                                      version=signals.RECORD_VERSION)
+                                                      version=signals.version_for(group))
             done = errors = in_a_row = 0
             first_error = None
             stopped = None
@@ -6319,7 +6319,9 @@ def _sleeve_list():
     return out
 
 
-_HELD_CACHE = {"at": 0.0, "w": {}}
+_HELD_CACHE = {"at": 0.0, "w": {}, "funds_pct": None}
+# Industries that all pile onto the same concentration: if the family is already well held, none of its members is a "gap".
+_TECH_FAMILY = {"Technology", "Semiconductors", "Communications", "Media"}
 
 
 def _held_sector_weights():
@@ -6327,10 +6329,13 @@ def _held_sector_weights():
     keeps; refreshed every 10 minutes. Funds and cash are left out (no look-through), so weights are over the direct stocks held."""
     if time.time() - _HELD_CACHE["at"] < 600 and _HELD_CACHE["w"]:
         return _HELD_CACHE["w"]
-    w, tot = {}, 0.0
+    w, tot, funds, allv = {}, 0.0, 0.0, 0.0
     try:
         for c in _data().get("consolidated", []):
             t, typ, val = c.get("ticker"), (c.get("type") or ""), (c.get("value") or 0)
+            if val > 0 and typ != "Cash":
+                allv += val
+                funds += val if typ in ("Mutual Fund", "ETF") else 0.0
             if not t or typ in ("Cash", "Mutual Fund", "ETF") or val <= 0:
                 continue
             prof, _m = _profile(t)
@@ -6339,7 +6344,12 @@ def _held_sector_weights():
             tot += val
     except Exception:
         return _HELD_CACHE["w"]
-    _HELD_CACHE.update(at=time.time(), w={k: round(v / tot * 100, 2) for k, v in w.items()} if tot else {})
+    wt = {k: round(v / tot * 100, 2) for k, v in w.items()} if tot else {}
+    fam = sum(wt.get(k, 0) for k in _TECH_FAMILY)
+    if fam:
+        for k in _TECH_FAMILY:                      # Semiconductors under 3% is no gap when Technology is already 41%
+            wt[k] = max(wt.get(k, 0), round(fam, 2))
+    _HELD_CACHE.update(at=time.time(), w=wt, funds_pct=round(funds / allv * 100, 1) if allv else None)
     return _HELD_CACHE["w"]
 
 
@@ -6350,7 +6360,10 @@ def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
             "include_states": sl.get("include_states"), "rules": sl.get("rules", []),
             "rule_text": [sleeves_mod.describe_rule(r) for r in sl.get("rules", [])],
             "pending_rules": ev["pending_rules"], "fill_gap": bool(sl.get("fill_gap")), "gap_below_pct": sl.get("gap_below_pct"),
-            "gap_sectors": ev["gap_sectors"][:8], "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
+            "gap_sectors": ev["gap_sectors"][:8],
+            "gap_caveat": (f"About {_HELD_CACHE['funds_pct']:g}% of what you hold is in funds with no look-through, so some of these gaps may "
+                           "already be partly filled inside them.") if sl.get("fill_gap") and _HELD_CACHE.get("funds_pct") else None,
+            "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
             "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 

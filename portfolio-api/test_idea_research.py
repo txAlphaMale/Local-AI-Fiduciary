@@ -58,3 +58,17 @@ class IdeaResearchTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBalanceHeldWeights(unittest.TestCase):
+    def test_semiconductors_is_not_a_gap_when_the_tech_family_is_heavy_and_funds_are_reported(self):
+        cons = [{"ticker": "AAA", "type": "Stock", "value": 900.0}, {"ticker": "BBB", "type": "Stock", "value": 10.0},
+                {"ticker": "FND", "type": "ETF", "value": 450.0}]
+        profs = {"AAA": {"finnhubIndustry": "Technology"}, "BBB": {"finnhubIndustry": "Semiconductors"}}
+        appmod._HELD_CACHE.update(at=0.0, w={}, funds_pct=None)
+        with mock.patch.object(appmod, "_data", return_value={"consolidated": cons}), \
+             mock.patch.object(appmod, "_profile", side_effect=lambda t: (profs[t], {})):
+            w = appmod._held_sector_weights()
+        self.assertGreaterEqual(w["Semiconductors"], 3)            # covered by the family, so Balance will not call it a gap
+        self.assertAlmostEqual(appmod._HELD_CACHE["funds_pct"], 33.1, places=1)
+        appmod._HELD_CACHE.update(at=0.0, w={}, funds_pct=None)

@@ -74,6 +74,24 @@ class TestParse(unittest.TestCase):
         note, _ = scout.parse_note(good(conviction=5, evidence=[{"claim": "a", "source": "sec"}, {"claim": "b", "source": "market"}]), facts(news=False))
         self.assertEqual((note["conviction"], note["conviction_capped"]), (2, True))
 
+    def test_cap_follows_what_the_note_cites_not_what_was_supplied(self):
+        """ROL / ARHS (2026-11-13): news existed, but the note cited only sec/insiders/market and still got conviction 3."""
+        ev = [{"claim": "a", "source": "sec"}, {"claim": "b", "source": "insiders"}]
+        note, _ = scout.parse_note(good(conviction=4, evidence=ev), facts(news=True))
+        self.assertEqual((note["conviction"], note["conviction_capped"]), (2, True))
+        ev2 = ev + [{"claim": "c", "source": "news:1"}]
+        note, _ = scout.parse_note(good(conviction=4, evidence=ev2), facts(news=True))
+        self.assertEqual((note["conviction"], note["conviction_capped"]), (4, False))
+
+    def test_prompt_warns_about_artefact_numbers_and_asks_for_labelled_inference(self):
+        f = facts(); f["sec"]["rev_growth_pct"] = 11925.0
+        p = scout.build_prompt("QXO", "QXO", ["Growth"], f, TODAY)
+        self.assertIn("DATA CAUTIONS", p)
+        self.assertIn("tiny starting base or an acquisition", p)
+        self.assertIn("inferred:", p)
+        f["sec"]["rev_growth_pct"] = 40.0
+        self.assertNotIn("DATA CAUTIONS", scout.build_prompt("X", "X", ["Growth"], f, TODAY))
+
     def test_prompt_lists_only_real_sources_and_marks_news_untrusted(self):
         p = scout.build_prompt("RKLB", "Rocket Lab", ["Growth (speculative)"], facts(), TODAY)
         self.assertIn('"news:1"', p)
