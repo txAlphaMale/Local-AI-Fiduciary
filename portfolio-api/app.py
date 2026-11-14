@@ -3410,7 +3410,7 @@ def _csv_raw(rows):
         if len(_insts.get(acct, ())) > 1:
             acct = f"{acct} · {inst or 'no institution'}"
         typ = (r.get("type") or "Stock").strip() or "Stock"
-        q = {"c": 1.0, "dp": 0.0} if typ.lower() == "cash" else (_finnhub("quote", tkr) or {})
+        q = {"c": 1.0, "dp": 0.0} if typ.lower() == "cash" else (_quote(tkr) or {})
         price = (q.get("c") if isinstance(q, dict) else None) or None
         dp = q.get("dp") if isinstance(q, dict) else None
         value = round(qty * price, 2) if price else None
@@ -7370,10 +7370,25 @@ def _valuation(sym, with_meta=False):
     return (v, meta) if with_meta else v
 
 
+QUOTE_TTL = int(os.environ.get("QUOTE_TTL", "120"))          # seconds a quote is reused before asking Finnhub again
+
+
+def _quote(sym):
+    """Finnhub /quote with a short cache and a last-known-good fallback. Every position on every page load (real holdings, each paper
+    ledger, the strategist review) asks for a price, which is far more than the 55-a-minute interactive allowance; uncached, the gate
+    refused the surplus and a paper ledger showed $0 (RETEST-021, 2026-11-14). A refused or failed call now returns the last price we
+    saw (kept on disk, trading-time aware) instead of nothing."""
+    sym = (sym or "").upper()
+    if not sym:
+        return {}
+    q, _meta = store.cached_fetch("finnhub_quote", sym, QUOTE_TTL, lambda: _finnhub("quote", sym) or {},
+                                  is_ok=lambda v: isinstance(v, dict) and bool(v.get("c")), stale_after=7 * 86400)
+    return q if isinstance(q, dict) else {}
+
+
 def _price(sym):
-    """Current share price from Finnhub /quote (free)."""
-    q = _finnhub("quote", sym)
-    c = q.get("c") if isinstance(q, dict) else None
+    """Current share price from Finnhub /quote (free), cached; see _quote."""
+    c = _quote(sym).get("c")
     return c if c else None
 
 
