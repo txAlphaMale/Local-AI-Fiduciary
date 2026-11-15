@@ -215,6 +215,7 @@ def init_db():
             # this report was written, so a report stays interpretable after the scenario's goal is
             # later edited. Encrypted (same sensitivity class as summary/total_value above).
             _ensure_column(c, "paper_reports", "goal_snapshot", "TEXT")
+            _ensure_column(c, "paper_reports", "sources", "TEXT")
             _ensure_column(c, "strategist_runs", "goal_snapshot", "TEXT")
             # ---- Knowledge/RAG DB-backed storage (2026-07-24h) ----
             c.execute("""CREATE TABLE IF NOT EXISTS knowledge_docs(
@@ -649,16 +650,17 @@ def paper_tx_recent(scenario_id, limit=40):
 
 # 2026-07-24: total_value/return_pct/summary are ENCRYPTED (real dollar figures + LLM-written
 # commentary that can reference actual holdings/reasoning).
-def paper_report_append(scenario_id, ts, total_value, return_pct, summary, goal_snapshot=None):
+def paper_report_append(scenario_id, ts, total_value, return_pct, summary, goal_snapshot=None, sources=None):
     """`goal_snapshot` (2026-07-30, Strategist GOALS): the scenario's goal-parameter dict at the
     moment this report was logged, JSON-encoded then encrypted -- lets a report stay interpretable
     even if the scenario's goal is edited later. None for reports logged before this existed, or
     for a caller that doesn't pass one (kept optional so existing call sites need no change)."""
     with _conn() as c:
-        c.execute("INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary,goal_snapshot) "
-                  "VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO paper_reports(scenario_id,ts,total_value,return_pct,summary,goal_snapshot,sources) "
+                  "VALUES(?,?,?,?,?,?,?)",
                   (scenario_id, ts, _enc(total_value), _enc(return_pct), _enc(summary),
-                   _enc(json.dumps(goal_snapshot)) if goal_snapshot is not None else None))
+                   _enc(json.dumps(goal_snapshot)) if goal_snapshot is not None else None,
+                   _enc(json.dumps(sources)) if sources else None))
 
 
 def _paper_report_row(r):
@@ -669,20 +671,28 @@ def _paper_report_row(r):
             gs = json.loads(_dec(raw))
         except Exception:
             gs = None
+    src = None
+    raw_src = r["sources"] if "sources" in r.keys() else None
+    if raw_src is not None:
+        try:
+            src = json.loads(_dec(raw_src))
+        except Exception:
+            src = None
     return {"ts": r["ts"], "total_value": _dec_float(r["total_value"]),
-            "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"]), "goal_snapshot": gs}
+            "return_pct": _dec_float(r["return_pct"]), "summary": _dec(r["summary"]), "goal_snapshot": gs,
+            "sources": src}
 
 
 def paper_reports_all(scenario_id):
     with _conn() as c:
-        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot FROM paper_reports "
+        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot,sources FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts ASC, id ASC", (scenario_id,)).fetchall()
     return [_paper_report_row(r) for r in rows]
 
 
 def paper_reports_recent(scenario_id, limit=12):
     with _conn() as c:
-        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot FROM paper_reports "
+        rows = c.execute("SELECT ts,total_value,return_pct,summary,goal_snapshot,sources FROM paper_reports "
                          "WHERE scenario_id=? ORDER BY ts DESC, id DESC LIMIT ?", (scenario_id, limit)).fetchall()
     out = [_paper_report_row(r) for r in rows]
     return out[::-1]

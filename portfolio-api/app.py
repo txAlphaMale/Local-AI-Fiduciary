@@ -41,7 +41,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
-import scavenger, ticker_state, market_data, signals, scout, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
+import answer_check, scavenger, ticker_state, market_data, signals, scout, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
 import states  # 50-state + DC residency-aware facts registry (RESUME-TRACKER item 3)
@@ -15020,6 +15020,13 @@ def _paper_marked(p):
     seed_basis = round(p.get("seed_basis") or 0.0, 2)    # cost of positions the book was seeded with
     basis = start + contributed + seed_basis             # capital actually put in (cash + deposits + seeded cost)
     goal = _scenario_goal(p) if p.get("kind", "ai") == "ai" else None
+    sf = p.get("seeded_from") or ""
+    if "real basis" in sf:
+        basis_label = "since real cost basis (includes gains from before the book was created)"
+    elif sf:
+        basis_label = "since seed (positions valued at prices on the seed date)"
+    else:
+        basis_label = "since start (starting cash plus contributions)"
     return {"id": p.get("id"), "name": p.get("name"), "status": p.get("status"),
             "kind": p.get("kind", "ai"), "risk_profile": p.get("risk_profile"),
             "goal": goal, "goal_summary": _goal_summary_text(goal) if goal else None,
@@ -15028,6 +15035,7 @@ def _paper_marked(p):
             "cash": cash, "holdings_value": round(holdings_val, 2),
             "total_value": total, "total_return": round(total - basis, 2),
             "return_pct": round((total - basis) / basis * 100, 2) if basis else None,
+            "basis_label": basis_label,
             "recurring": p.get("recurring"),
             "positions": positions, "transactions": recent_tx,
             "reports": recent_reports, "created": p.get("created"),
@@ -15379,7 +15387,7 @@ def _idea_research(sleeve=None, ticker=None, limit=None):
             "screened": len(rows), "scout_notes": len(briefs)}
 
 
-def _log_report(summary, scenario_id=None, goal_snapshot=None):
+def _log_report(summary, scenario_id=None, goal_snapshot=None, sources=None):
     """Append a weekly report + snapshot total value to one scenario. `goal_snapshot` (2026-07-30,
     Strategist GOALS): the goal parameters active for the run that produced this report, stamped
     in so history stays interpretable even after the scenario's goal is later edited. Returns
@@ -15389,7 +15397,7 @@ def _log_report(summary, scenario_id=None, goal_snapshot=None):
     marked = _paper_marked(p)
     ts = int(time.time())
     store.paper_report_append(sid, ts, marked["total_value"], marked["return_pct"],
-                              str(summary or "")[:4000], goal_snapshot=goal_snapshot)
+                              str(summary or "")[:4000], goal_snapshot=goal_snapshot, sources=sources)
     return {"ok": True, "report_count": store.paper_reports_count(sid), "scenario_id": sid}
 
 
@@ -15650,7 +15658,7 @@ def _log_strategist_run(rec):
         pass
 
 
-def _strategist_dispatch(name, args, scenario_id=None, goal=None):
+def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
     """Run one tool call in-process and return a JSON-serializable result. `scenario_id` scopes
     the paper-ledger tools to ONE scenario for the duration of a run — the weekly loop below fixes
     it per pass (never exposed as a model-choosable tool argument, so the model can't accidentally
@@ -15670,7 +15678,8 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None):
                                    scenario_id=scenario_id)
             return res or {"error": err}
         if name == "log_report":
-            return _log_report(args.get("summary"), scenario_id=scenario_id, goal_snapshot=goal)
+            return _log_report(args.get("summary"), scenario_id=scenario_id, goal_snapshot=goal,
+                               sources=sources)
         if name == "get_opportunities":
             return _opportunities()
         if name == "get_discovery":
@@ -15708,6 +15717,19 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None):
         return {"error": f"{name} failed: {_errref(e)}"}
 
 
+def _note_source(log, name, args, result, max_items=40, max_chars=400):
+    """Remember one tool call (name, arguments, the start of what it returned) so the stored
+    report can show where its figures came from. Bounded: at most `max_items` calls, `max_chars`
+    of each result."""
+    if len(log) >= max_items:
+        return
+    try:
+        txt = json.dumps(result, default=str)
+    except Exception:
+        txt = str(result)
+    log.append({"tool": name, "args": args if isinstance(args, dict) else {}, "result": txt[:max_chars]})
+
+
 def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moderate", goal=None):
     """One full ReAct pass against ONE AI-kind scenario. Returns the run's telemetry dict. Caller
     (below) holds `_strat_lock` for the whole multi-scenario job, only ever iterates 'ai'-kind
@@ -15723,6 +15745,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
              "tool_calls": {}, "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
+    src_log = []    # what the model looked at this run, stored with the report so figures can be traced
     try:
         risk_guidance = _RISK_PROFILE_GUIDANCE.get(risk_profile, _RISK_PROFILE_GUIDANCE["moderate"])
         goal_guidance = _goal_guidance_text(goal)
@@ -15804,7 +15827,10 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                         search_calls += 1
                         result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal)
                 else:
-                    result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal)
+                    result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal,
+                                                  sources=src_log)
+                if nm != "log_report":
+                    _note_source(src_log, nm, a, result)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
                     reported = True
                 # Trim large tool results by SHRINKING FIELDS, never by chopping the serialized JSON
@@ -15829,7 +15855,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
             final = next((m["content"] for m in reversed(messages)
                           if m.get("role") == "assistant" and m.get("content")), "")
             _log_report(final or "Weekly run ended without an explicit report (may have hit the step cap).",
-                       scenario_id=scenario_id, goal_snapshot=goal)
+                       scenario_id=scenario_id, goal_snapshot=goal, sources=src_log)
         telem["converged"] = reported
     finally:
         telem["duration_s"] = round(time.time() - _t0, 1)
@@ -16982,6 +17008,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         final_content = ""
         cancelled = False
         content_buf = ""
+        research_hits, evidence = [], []     # idea-research results + every tool result seen this turn
         for i in range(CHAT_MAX_ITER):
             content_buf = ""
             tool_calls = []
@@ -17056,6 +17083,13 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         a = {}
                 yield _sse("tool", {"name": nm, "args": a})
                 result = persona["dispatch"](nm, a)
+                if nm == "get_idea_research":
+                    if isinstance(result, dict) and a.get("ticker"):
+                        research_hits.append(result)
+                    try:
+                        evidence.append(json.dumps(result, default=str))
+                    except Exception:
+                        pass
                 messages.append({"role": "tool", "content": _trim_tool_result(nm, result)})
                 yield _sse("tool_done", {"name": nm})
             if cancelled:
@@ -17071,6 +17105,20 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             yield _sse("cancelled", {"session_id": session_id})
             return
 
+        if research_hits and final_content:
+            # Hybrid grounding: strip invented company-history sentences, then append the facts
+            # the app writes itself from the research tool's own output.
+            try:
+                evid = "\n".join(evidence) + "\n" + (user_msg or "")
+                clean, removed = answer_check.strip_ungrounded(final_content, evid)
+                block = answer_check.facts_block(research_hits)
+                if removed:
+                    clean += f"\n\n_(Removed {len(removed)} sentence(s) of company background that the research data does not contain.)_"
+                if removed or block:
+                    final_content = clean + block
+                    yield _sse("replace", {"t": final_content})
+            except Exception:
+                pass
         t_end = time.time()
         stamp = {"elapsed_s": int(round(t_end - (run["t"] or t_req))), "queued_s": int(round((run["t"] or t_req) - t_req))}
         _chat_add_message(session_id, "assistant", final_content, tool_json=json.dumps(stamp))
