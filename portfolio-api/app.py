@@ -17086,6 +17086,8 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                 if nm == "get_idea_research":
                     if isinstance(result, dict) and a.get("ticker"):
                         research_hits.append(result)
+                        if len(research_hits) == 1:
+                            messages.append({"role": "system", "content": answer_check.COMMENTARY_RULE})
                     try:
                         evidence.append(json.dumps(result, default=str))
                     except Exception:
@@ -17111,11 +17113,8 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             try:
                 evid = "\n".join(evidence) + "\n" + (user_msg or "")
                 clean, removed = answer_check.strip_ungrounded(final_content, evid)
-                block = answer_check.facts_block(research_hits)
-                if removed:
-                    clean += f"\n\n_(Removed {len(removed)} sentence(s) of company background that the research data does not contain.)_"
-                if removed or block:
-                    final_content = clean + block
+                final_content = answer_check.compose(clean, len(removed), answer_check.facts_block(research_hits))
+                if final_content != clean:
                     yield _sse("replace", {"t": final_content})
             except Exception:
                 pass

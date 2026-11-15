@@ -43,6 +43,22 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(ac.facts_block([{"found": False}]), "")
 
 
+class ComposeTests(unittest.TestCase):
+    def test_facts_first_commentary_labelled(self):
+        out = ac.compose("It fits.", 2, "FACTS")
+        self.assertTrue(out.startswith("FACTS"))
+        self.assertIn("Model commentary", out)
+        self.assertIn("Removed 2 sentence", out)
+        self.assertLess(out.index("FACTS"), out.index("It fits."))
+
+    def test_no_facts_returns_commentary_unchanged(self):
+        self.assertEqual(ac.compose("Hi.", 0, ""), "Hi.")
+        self.assertIn("Removed 1", ac.compose("Hi.", 1, ""))
+
+    def test_rule_forbids_background(self):
+        self.assertIn("no company background", ac.COMMENTARY_RULE)
+
+
 class ReportSourcesTests(unittest.TestCase):
     def test_note_source_bounded(self):
         import app
