@@ -9570,7 +9570,7 @@ function stratContent(r){
   }
   const runStatus=el('div','muted'); runStatus.id='strat-runstatus'; runStatus.style.cssText='font-size:var(--font-size-sm);min-height:13px;margin-bottom:var(--space-3);'; wrap.appendChild(runStatus);
   if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; ri.innerHTML=`<span style="color:var(--color-accent)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
-  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':''); wrap.appendChild(ci); }
+  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':'')+(r.basis_label?' · return measured '+r.basis_label:''); wrap.appendChild(ci); }
   const stats=el('div'); stats.style.cssText='display:flex;gap:var(--space-7);flex-wrap:wrap;margin-bottom:var(--space-3);';
   const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
   stats.innerHTML=st('TOTAL VALUE',u2(r.total_value))+
@@ -9591,6 +9591,12 @@ function stratContent(r){
     const rb=el('div','muted'); rb.style.cssText='font-size:var(--font-size-base);white-space:pre-wrap;line-height:1.45;';
     rb.textContent=`${new Date(last.ts*1000).toLocaleString()} · value ${u2(last.total_value)} (${last.return_pct>0?'+':''}${last.return_pct}%)\n\n${last.summary||'(no summary)'}`;
     wrap.appendChild(rb);
+    if(last.sources && last.sources.length){
+      const dt=document.createElement('details'); dt.style.cssText='font-size:var(--font-size-sm);margin-top:4px;';
+      const sm=document.createElement('summary'); sm.className='muted'; sm.textContent=`Sources: ${last.sources.length} lookups behind this report`; dt.appendChild(sm);
+      last.sources.forEach(x=>{ const d=el('div','muted'); d.style.cssText='white-space:pre-wrap;word-break:break-word;margin:2px 0;'; d.textContent=`${x.tool}(${Object.keys(x.args||{}).length?JSON.stringify(x.args):''}) → ${x.result||''}`; dt.appendChild(d); });
+      wrap.appendChild(dt);
+    }
   }
   if(r.transactions && r.transactions.length){
     const th=el('div','ph','TRANSACTIONS'); th.style.marginTop='12px'; wrap.appendChild(th);
@@ -9817,7 +9823,7 @@ function userLedgerPanel(){
     wrap.appendChild(seedPanel);
     if(rec){ const ri=el('div','muted'); ri.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; ri.innerHTML=`<span style="color:var(--color-accent)">↻ recurring</span> $${rec.amount} ${rec.cadence} · next ${new Date(rec.next_ts*1000).toLocaleDateString()}`; wrap.appendChild(ri); }
   }
-  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':''); wrap.appendChild(ci); }
+  if(r.contributed || r.seed_basis){ const ci=el('div','muted'); ci.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);'; const parts=[]; if(r.seed_basis) parts.push('seeded $'+(+r.seed_basis).toLocaleString()); if(r.starting_cash) parts.push('cash $'+(+r.starting_cash).toLocaleString()); if(r.contributed) parts.push('contributions $'+(+r.contributed).toLocaleString()); ci.textContent=`Invested capital: $${(+r.invested_capital).toLocaleString()} (${parts.join(' + ')})`+(r.seeded_from?' · seeded from real holdings':'')+(r.basis_label?' · return measured '+r.basis_label:''); wrap.appendChild(ci); }
   const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const stats=el('div'); stats.style.cssText='display:flex;gap:var(--space-7);flex-wrap:wrap;margin-bottom:var(--space-3);';
   const st=(l,v,c)=>`<div class="ts"><span class="l">${l}</span><span class="v ${c||''}">${v}</span></div>`;
@@ -10386,6 +10392,7 @@ function chatFrame(frame,asst,persona){
   const cs=CS(persona);
   if(ev==='session'){ cs.sid=o.session_id||cs.sid; }
   else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
+  else if(ev==='replace'){ asst.content=o.t||asst.content; const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
   else if(ev==='status'){
