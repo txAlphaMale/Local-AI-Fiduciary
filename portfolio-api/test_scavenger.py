@@ -287,6 +287,22 @@ class TestScreenFixes(unittest.TestCase):
         self.assertAlmostEqual(by["BANK"]["s1"]["rev_growth_pct"], 25.0, places=1)
         self.assertAlmostEqual(by["BANK"]["s1"]["net_margin_pct"], 30.0, places=1)
 
+    def test_asb_style_bank_whose_main_revenue_tag_stopped_in_2023_uses_the_tag_that_reaches_2025(self):
+        """Associated Banc-Corp (RETEST-021): Revenues ends 2023, so the bank was 'stale_financials'; InterestAndDividendIncomeOperating is current."""
+        bank = _facts(0, 0, 3e8, 4e8, 1e7, assets=2e10, liab=1.8e10, eq=2e9)
+        ug = bank["facts"]["us-gaap"]
+        del ug["RevenueFromContractWithCustomerExcludingAssessedTax"]
+        ug["Revenues"] = {"units": {"USD": [
+            {"start": "2022-01-01", "end": "2022-12-31", "val": 1.2e9, "fy": 2022, "fp": "FY", "form": "10-K", "filed": "2023-02-20"},
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 1.1e9, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-20"}]}}
+        ug["InterestAndDividendIncomeOperating"] = {"units": {"USD": [
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 2.1e9, "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2025-02-20"},
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 2.2e9, "fy": 2025, "fp": "FY", "form": "10-K", "filed": "2026-02-20"}]}}
+        by, _ = self._screen([("ASB", bank)])
+        self.assertEqual((by["ASB"]["state"], by["ASB"]["reason_kind"]), ("active", "screened"))
+        self.assertTrue(by["ASB"]["s1"]["revenue_alt_tags"])
+        self.assertEqual(by["ASB"]["s1"]["fiscal_year_end"][:4], "2025")
+
     def test_f2_liquid_cash_burner_is_not_blacklisted_but_thin_liquidity_is(self):
         base = {"revenue": 3e8, "rev_growth_pct": -4.0, "fcf_margin_pct": -30.0, "net_margin_pct": -40.0,
                 "altman_zone": "distress", "first_filed": "2015-01-01", "last_filed": "2026-10-01"}
