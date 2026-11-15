@@ -43,6 +43,38 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(ac.facts_block([{"found": False}]), "")
 
 
+class V3Tests(unittest.TestCase):
+    def test_bad_conviction_scale_removed(self):
+        out, rem = ac.strip_ungrounded("It has a low conviction score of 3/10. Runway is long.", "")
+        self.assertEqual(len(rem), 1)
+        self.assertIn("Runway is long", out)
+        out2, rem2 = ac.strip_ungrounded("Conviction is 3/5. Bought 3/4/2024.", "")
+        self.assertEqual(rem2, [])
+
+    def test_limit_sentences(self):
+        txt = " ".join(f"Sentence {i}." for i in range(10))
+        out, cut = ac.limit_sentences(txt, 6)
+        self.assertTrue(cut)
+        self.assertEqual(out.count("Sentence"), 6)
+        self.assertEqual(ac.limit_sentences("One. Two.", 6), ("One. Two.", False))
+
+    def test_note_dict_rendered_readable_with_scale(self):
+        r = {"ticker": "QXO", "found": True, "screen": {"name": "QXO", "runway_months": 65, "beta": 2.36},
+             "scout_note": {"created_at": "2026-11-14", "note": {
+                 "thesis": "Roll-up story.", "conviction": 3, "conviction_capped": False, "horizon": "1-3 years",
+                 "evidence": [{"claim": "Revenue up", "source": "sec"}], "risks": ["Debt"], "disproof": ["Growth stalls"]}}}
+        b = ac.facts_block([r])
+        self.assertNotIn("{'", b)
+        self.assertIn("Conviction: 3 of 5", b)
+        self.assertIn("Evidence (sec): Revenue up", b)
+        self.assertIn("What would prove it wrong: Growth stalls", b)
+        self.assertIn("cash runway 65 months", b)
+        self.assertIn("beta 2.36", b)
+
+    def test_rule_names_scale(self):
+        self.assertIn("1 to 5", ac.COMMENTARY_RULE)
+
+
 class ComposeTests(unittest.TestCase):
     def test_facts_first_commentary_labelled(self):
         out = ac.compose("It fits.", 2, "FACTS")
