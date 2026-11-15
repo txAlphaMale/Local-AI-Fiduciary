@@ -78,4 +78,19 @@ def facts_block(results):
             lines.append(f"  - Scout note ({str(n.get('created_at') or '')[:10]}): " + str(n["note"]).strip().replace("\n", " ")[:700])
     if not lines:
         return ""
-    return "\n\n---\n**From the app's research data (written by the app, not the model):**\n" + "\n".join(lines)
+    return "**From the app's research data (written by the app, not the model):**\n" + "\n".join(lines)
+
+
+COMMENTARY_RULE = (
+    "The app will print the research figures and the scout note itself, word for word, with your answer. "
+    "So write ONLY a short commentary (at most about 6 sentences): how the numbers bear on Jason's goal, "
+    "what to check next, and the main risk. Do not repeat the figures table, and add no company background "
+    "(former names, mergers, products, history) that the tool did not give you.")
+
+
+def compose(commentary, removed, facts):
+    """Facts first (app-written), then the model's commentary under its own label."""
+    note = f"\n\n_(Removed {removed} sentence(s) of company background that the research data does not contain.)_" if removed else ""
+    if not facts:
+        return (commentary or "") + note
+    return facts + "\n\n---\n**Model commentary (not checked by the app):**\n" + (commentary or "").strip() + note
