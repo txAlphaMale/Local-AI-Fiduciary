@@ -18,7 +18,7 @@ MIN_REVENUE = 1_000_000          # below this there is no operating business to 
 
 
 STALE_ANNUAL_DAYS = 640         # ~21 months: a company with filings this year but no full-year figures newer than this is not screened on them
-SCREEN_VERSION = 8               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 9               # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -128,7 +128,7 @@ def _annual_rows(facts, taxonomy, tags, forms, flow=True, latest_tag=False):
     return next(f for f in found if f[-1][0] == newest)
 
 
-def alt_revenue(facts):
+def alt_revenue(facts, with_end=False):
     """(latest, prior) annual revenue from the alternate tags, or (None, None). Several alternates can exist at once (a mortgage REIT
     has total interest income AND a small real-estate revenue line), so take the LARGEST among the series that reach the newest year."""
     cands = []
@@ -137,10 +137,11 @@ def alt_revenue(facts):
         if s and s[-1][1]:
             cands.append(s)
     if not cands:
-        return None, None
+        return (None, None, None) if with_end else (None, None)
     newest = max(c[-1][0] for c in cands)
     best = max((c for c in cands if c[-1][0] == newest), key=lambda c: c[-1][1])
-    return best[-1][1], (best[-2][1] if len(best) > 1 else None)
+    out = (best[-1][1], (best[-2][1] if len(best) > 1 else None))
+    return out + (newest,) if with_end else out
 
 
 def filing_profile(facts):
@@ -231,11 +232,16 @@ def compact(result, facts):
     g, cagr = m.get("revenue_growth_pct"), tr.get("revenue_cagr_pct")
     rev = ttm.get("revenue") if ttm.get("revenue") is not None else m.get("revenue")
     used_alt = False
-    if rev is None or rev < MIN_REVENUE:                       # banks / REITs / insurers: other revenue tags
-        a_rev, a_prev = alt_revenue(facts)
-        if a_rev and a_rev >= MIN_REVENUE:
-            rev, used_alt = a_rev, True
-            g = round((a_rev - a_prev) / a_prev * 100, 2) if a_prev else None
+    fye = m.get("fiscal_year_end")
+    a_rev, a_prev, a_end = alt_revenue(facts, with_end=True)
+    # banks / REITs / insurers: other revenue tags, used when the main tag is missing/tiny OR stopped being reported a year or more before
+    # the alternate did (Associated Banc-Corp: Revenues ends 2023, InterestAndDividendIncomeOperating reaches 2025).
+    lagging = bool(a_end and fye and (datetime.date.fromisoformat(str(a_end)[:10]) - datetime.date.fromisoformat(str(fye)[:10])).days > 330)
+    if (rev is None or rev < MIN_REVENUE or lagging) and a_rev and a_rev >= MIN_REVENUE:
+        rev, used_alt = a_rev, True
+        g = round((a_rev - a_prev) / a_prev * 100, 2) if a_prev else None
+        if a_end and (not fye or str(a_end) > str(fye)):
+            fye = a_end
     nm = ttm.get("net_margin_pct", r.get("net_margin_pct"))
     if used_alt and m.get("net_income") is not None:
         nm = round(m["net_income"] / rev * 100, 2)
@@ -252,7 +258,7 @@ def compact(result, facts):
         "dividend_payout_pct": r.get("dividend_payout_pct"), "fcf_dividend_coverage": r.get("fcf_dividend_coverage"),
         "share_change_pct": dil, "piotroski": pio.get("score"), "piotroski_of": pio.get("of"),
         "altman_zone": alt.get("zone"), "first_filed": first, "last_filed": last,
-        "fiscal_year_end": m.get("fiscal_year_end"),
+        "fiscal_year_end": fye,
     }
 
 

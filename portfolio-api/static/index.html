@@ -3357,7 +3357,7 @@ function sleeveTable(rows, onScout){
   const t=el('table'); const h=el('tr');
   h.innerHTML='<th class="l">TICKER</th><th class="l">COMPANY</th><th class="l">STATE</th><th>PRICE</th><th>MKT CAP</th><th>YIELD</th><th class="l">SECTOR</th><th class="l">INSIDERS</th><th class="l">ANALYSTS</th><th>REVENUE</th><th>GROWTH</th><th>NET MARGIN</th><th>FCF MARGIN</th><th>RUNWAY</th><th>DILUTION</th><th class="l">SCOUT</th>'; t.appendChild(h);
   rows.forEach(r=>{ const tr=el('tr');
-    tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b>'+(r.also&&r.also.length?' <span class="muted" style="font-size:var(--font-size-sm)">also '+esc(r.also.join(', '))+'</span>':'')+'</td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td class="l muted">'+esc(r.insider||'—')+'</td><td class="l muted">'+esc(r.analyst||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
+    tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b>'+(r.also&&r.also.length?' <span class="muted" style="font-size:var(--font-size-sm)">also '+esc(r.also.join(', '))+'</span>':'')+'</td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td class="l muted">'+esc(r.insider||'—')+'</td><td class="l muted">'+esc(r.analyst||'—')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+(r.small_base?' <span title="Tiny starting base or an acquisition, not organic growth" style="cursor:help">&#9873;</span>':'')+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
     const sc=el('td','l'); const b=r.scout;
     if(b){ const dots='●'.repeat(b.conviction||0)+'○'.repeat(5-(b.conviction||0)); sc.innerHTML='<span title="'+esc(b.thesis||'')+'">'+dots+'</span> '; }
     if(onScout){ const a=el('button','mut-btn',b?'▸ note':'▸ scout'); a.style.cssText='font-size:var(--font-size-sm);padding:0 6px;'; a.onclick=()=>onScout(r.ticker, !!b, sc, a); sc.appendChild(a); }
@@ -3434,7 +3434,36 @@ function sleevesContent(){
     if(!sl.builtin){ const del=el('button','mut-btn','✕ DELETE'); del.style.marginLeft='var(--space-2)'; del.onclick=()=>{ if(!confirm('Delete the sleeve "'+sl.name+'"?')) return; _slvJson('/api/sleeves/'+encodeURIComponent(sl.id),'DELETE').then(x=>{ if(!x.ok) alert((x.d&&x.d.error)||'Delete failed'); SLEEVES=null; render(); }); }; bar.appendChild(del); }
     box.appendChild(bar); wrap.appendChild(box);
   });
+  wrap.appendChild(sleeveExperiments());
   return wrap;
+}
+let SLV_EXP=null, SLV_EXP_OPEN=false, SLV_EXP_MSG='';
+function _slvExpLoad(){ fetch('/api/sleeves/experiments').then(r=>r.json()).then(d=>{ SLV_EXP=d; render(); }).catch(()=>{ SLV_EXP={error:true}; render(); }); }
+function _slvExpPost(body){ _slvJson('/api/sleeves/experiments','POST',body).then(x=>{ SLV_EXP_MSG=x.ok?('Saved. Growth: '+x.d.growth_before+' → '+x.d.growth_after+' names.'):((x.d&&x.d.error)||'Failed'); SLEEVES=null; SLV_EXP=null; render(); }); }
+function sleeveExperiments(){
+  const box=el('div'); box.style.cssText='border:1px dashed var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
+  const t=el('button','mut-btn',(SLV_EXP_OPEN?'▾':'▸')+' GROWTH EXPERIMENTS (try a rule change, see the effect, undo it)'); t.onclick=()=>{ SLV_EXP_OPEN=!SLV_EXP_OPEN; if(SLV_EXP_OPEN&&!SLV_EXP) _slvExpLoad(); render(); }; box.appendChild(t);
+  if(!SLV_EXP_OPEN) return box;
+  if(SLV_EXP==null){ box.appendChild(el('div','muted','Loading…')); return box; }
+  if(SLV_EXP.error){ box.appendChild(el('div','neg','Could not load.')); return box; }
+  const d=SLV_EXP, f=d.flags||{};
+  const body=el('div'); body.style.cssText='font-size:var(--font-size-base);line-height:1.6;margin-top:var(--space-2);';
+  body.innerHTML='<div><b>1. Small-base marker</b> is <b>'+(f.small_base_flag?'ON':'OFF')+'</b>: a flag next to any revenue growth above 1,000% (a tiny starting base or an acquisition). Display only; it changes no ranking.</div>'+
+    '<div style="margin-top:var(--space-2)"><b>2. Dilution cap</b> in Growth is <b>'+esc(d.current_cap)+'%</b> '+(f.dilution_cap==null?'(the built-in rule)':'(your experiment; built-in is '+esc(d.default_cap)+'%)')+'. Growth now has <b>'+d.growth_now+'</b> names (built-in rule: '+d.growth_baseline+'). The dilution cap screens out companies whose share count grew by more than this in a year; it is ignored in the first 2 years after listing.</div>';
+  box.appendChild(body);
+  const tb=el('table'); tb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);border-collapse:collapse;';
+  tb.innerHTML='<tr><th class="l">CAP</th><th>GROWTH NAMES</th><th class="l">WOULD DROP (versus 300%)</th><th></th></tr>';
+  (d.preview||[]).forEach(p=>{ const tr=el('tr'); tr.innerHTML='<td class="l">'+p.cap+'%</td><td>'+p.count+'</td><td class="l muted" style="max-width:520px;white-space:normal">'+(p.dropped_count?esc(p.dropped.join(', '))+(p.dropped_count>p.dropped.length?' …':''):'—')+'</td>'; const td=el('td'); if(p.cap!==d.current_cap){ const b=el('button','mut-btn','TRY THIS CAP'); b.onclick=()=>{ if(confirm('Set the Growth dilution cap to '+p.cap+'%? Growth will change from '+d.growth_now+' to '+p.count+' names. You can undo it with REVERT.')) _slvExpPost({dilution_cap:p.cap===300?null:p.cap}); }; td.appendChild(b); } else td.textContent='current'; tr.appendChild(td); tb.appendChild(tr); });
+  box.appendChild(tb);
+  const bar=el('div'); bar.style.marginTop='var(--space-2)';
+  const mk=el('button','mut-btn',f.small_base_flag?'TURN MARKER OFF':'TURN MARKER ON'); mk.onclick=()=>_slvExpPost({small_base_flag:!f.small_base_flag}); bar.appendChild(mk);
+  const rv=el('button','mut-btn','↶ REVERT LAST CHANGE'); rv.style.marginLeft='var(--space-2)'; rv.disabled=!(d.log&&d.log.length); rv.onclick=()=>{ if(confirm('Undo the last experiment change?')) _slvExpPost({revert:true}); }; bar.appendChild(rv);
+  box.appendChild(bar);
+  if(SLV_EXP_MSG){ const m=el('div','muted',SLV_EXP_MSG); m.style.marginTop='var(--space-1)'; box.appendChild(m); }
+  const lg=(d.log||[]).slice().reverse();
+  if(lg.length){ const h=el('div','muted','CHANGE LOG (newest first; shows what each change added or dropped from Growth, for judging whether it worked)'); h.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-sm);'; box.appendChild(h);
+    lg.forEach(e=>{ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.5;'; r.textContent=new Date(e.at*1000).toLocaleString()+' · '+e.change+' · cap '+((e.now&&e.now.dilution_cap)||300)+'%, marker '+((e.now&&e.now.small_base_flag)?'on':'off')+' · Growth '+e.growth_before+' → '+e.growth_after+(e.dropped&&e.dropped.length?' · dropped: '+e.dropped.join(', '):'')+(e.added&&e.added.length?' · added: '+e.added.join(', '):''); box.appendChild(r); }); }
+  return box;
 }
 function sleeveForm(){
   const e=SLEEVE_EDIT, metrics=(SLEEVES&&SLEEVES.metrics)||[];

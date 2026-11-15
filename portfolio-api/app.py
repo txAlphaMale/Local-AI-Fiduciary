@@ -6313,8 +6313,40 @@ def _read_sleeves_cfg():
     return {"custom": cfg.get("custom") if isinstance(cfg.get("custom"), dict) else {}}
 
 
+GROWTH_EXPERIMENTS_FILE = os.environ.get("GROWTH_EXPERIMENTS_FILE", "/data/growth-experiments.json")
+EXP_DEFAULT = {"small_base_flag": True, "dilution_cap": None}      # dilution_cap None = the built-in rule (300%)
+EXP_CAPS_TO_PREVIEW = (300, 200, 150, 100, 75)
+_exp_lock = threading.Lock()
+
+
+def _exp_read():
+    try:
+        d = store.read_json_strict(GROWTH_EXPERIMENTS_FILE) or {}
+    except Exception:
+        d = {}
+    flags = {k: d.get(k, v) for k, v in EXP_DEFAULT.items()}
+    return flags, (d.get("log") if isinstance(d.get("log"), list) else [])
+
+
+def _exp_flags():
+    return _exp_read()[0]
+
+
+def _growth_with_cap(sl, cap):
+    """Copy of the Growth sleeve with its dilution cap replaced (None leaves the built-in rule alone)."""
+    if cap is None:
+        return sl
+    out = dict(sl)
+    out["rules"] = [dict(r, value=cap) if r.get("metric") == "share_change_pct" else dict(r) for r in sl.get("rules", [])]
+    out["notes"] = str(sl.get("notes", "")).replace("(300%)", f"({cap:g}%, your experiment)")
+    return out
+
+
 def _sleeve_list():
     out = [{"id": k, **v} for k, v in sleeves_mod.BUILTIN.items()]
+    cap = _exp_flags()["dilution_cap"]
+    if cap is not None:
+        out = [_growth_with_cap(x, cap) if x["id"] == "growth" else x for x in out]
     out += [{"id": k, "builtin": False, **v} for k, v in _read_sleeves_cfg()["custom"].items()]
     return out
 
@@ -6367,8 +6399,11 @@ def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
             "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 
-def _sleeve_row(r, today, briefs=None):
+def _sleeve_row(r, today, briefs=None, small_base=None):
     s1, s2 = r.get("s1") or {}, r.get("s2") or {}
+    if small_base is None:
+        small_base = _exp_flags()["small_base_flag"]
+    g = s1.get("rev_growth_pct")
     return {"ticker": r["ticker"], "name": r.get("name"), "state": r.get("state"), "revenue": s1.get("revenue"),
             "currency": s1.get("currency"), "rev_growth_pct": s1.get("rev_growth_pct"), "net_margin_pct": s1.get("net_margin_pct"),
             "fcf_margin_pct": s1.get("fcf_margin_pct"), "runway_months": s1.get("runway_months"),
@@ -6376,6 +6411,7 @@ def _sleeve_row(r, today, briefs=None):
             "age_years": sleeves_mod.value_of(r, "age_years", today),
             "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
             "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also"),
+            "small_base": bool(small_base and isinstance(g, (int, float)) and g > 1000),
             "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1],
             "scout": (briefs or {}).get(r["ticker"])}
 
@@ -6456,6 +6492,68 @@ async def post_sleeve(req: Request):
     store.write_json(SLEEVES_FILE, cfg)
     _emit_config_changed(req, "/api/sleeves", {"sleeves": sorted(old)}, {"sleeves": sorted(cfg["custom"])})
     return {"ok": True, "id": sid}
+
+
+def _growth_names(cap):
+    """Tickers passing the Growth sleeve with the dilution cap set to `cap` (None = built-in rule)."""
+    sl = _growth_with_cap({"id": "growth", **sleeves_mod.BUILTIN["growth"]}, cap)
+    ev = sleeves_mod.evaluate(sl, ticker_state.screened_rows(sleeves_mod.STATES), datetime.date.today(), None)
+    return [r["ticker"] for r in ev["matches"]]
+
+
+@app.get("/api/sleeves/experiments")
+def get_sleeve_experiments():
+    """The two Growth experiments (2026-11-14): (1) a small-base marker on growth above 1,000%; (2) a lower dilution cap. Shows what is on,
+    what each cap WOULD drop from Growth (before anyone turns it on), and the change log with one-step rollback."""
+    flags, log = _exp_read()
+    base = _growth_names(None)
+    bset = set(base)
+    preview = []
+    for cap in EXP_CAPS_TO_PREVIEW:
+        names = set(_growth_names(None if cap == 300 else cap))
+        preview.append({"cap": cap, "count": len(names), "dropped": sorted(bset - names)[:40], "dropped_count": len(bset - names)})
+    return {"flags": flags, "default_cap": 300, "current_cap": flags["dilution_cap"] or 300, "growth_now": len(_growth_names(flags["dilution_cap"])),
+            "growth_baseline": len(base), "preview": preview, "log": log[-30:]}
+
+
+@app.post("/api/sleeves/experiments")
+async def post_sleeve_experiments(req: Request):
+    """{"small_base_flag": bool} and/or {"dilution_cap": number 25-1000 | null} to change; {"revert": true} undoes the last change."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    with _exp_lock:
+        flags, log = _exp_read()
+        before = dict(flags)
+        if body.get("revert"):
+            if not log:
+                return JSONResponse({"error": "nothing to revert"}, status_code=400)
+            flags = {k: log[-1].get("prev", {}).get(k, EXP_DEFAULT[k]) for k in EXP_DEFAULT}
+            what = "revert"
+        else:
+            what = []
+            if "small_base_flag" in body:
+                if not isinstance(body["small_base_flag"], bool):
+                    return JSONResponse({"error": "small_base_flag must be true or false"}, status_code=400)
+                flags["small_base_flag"] = body["small_base_flag"]; what.append("small_base_flag")
+            if "dilution_cap" in body:
+                c = body["dilution_cap"]
+                if c is not None and (isinstance(c, bool) or not isinstance(c, (int, float)) or not 25 <= c <= 1000):
+                    return JSONResponse({"error": "dilution_cap must be a number from 25 to 1000, or null for the built-in rule"}, status_code=400)
+                flags["dilution_cap"] = c; what.append("dilution_cap")
+            if not what:
+                return JSONResponse({"error": "nothing to change"}, status_code=400)
+            what = "+".join(what)
+        was, now = set(_growth_names(before["dilution_cap"])), set(_growth_names(flags["dilution_cap"]))
+        entry = {"at": int(time.time()), "change": what, "prev": before, "now": dict(flags), "growth_before": len(was), "growth_after": len(now),
+                 "dropped": sorted(was - now)[:40], "added": sorted(now - was)[:40]}
+        log = (log + [entry])[-100:]
+        store.write_json(GROWTH_EXPERIMENTS_FILE, {**flags, "log": log})
+    _emit_config_changed(req, "/api/sleeves/experiments", before, flags)
+    return {"ok": True, "flags": flags, "growth_before": len(was), "growth_after": len(now)}
 
 
 @app.delete("/api/sleeves/{sid}")
