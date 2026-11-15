@@ -75,6 +75,24 @@ class V3Tests(unittest.TestCase):
         self.assertIn("1 to 5", ac.COMMENTARY_RULE)
 
 
+class AdviceTests(unittest.TestCase):
+    def test_advice_sentences_removed(self):
+        txt = ("Revenue growth is very high. Given your IPS targets, this would only fit a small speculative allocation. "
+               "Be prepared to trim if profitability proves fleeting. Check the next 10-Q.")
+        out, rem = ac.strip_ungrounded(txt, "")
+        self.assertEqual(len(rem), 2)
+        self.assertIn("Revenue growth is very high", out)
+        self.assertIn("Check the next 10-Q", out)
+        self.assertNotIn("allocation", out)
+
+    def test_plain_analysis_kept(self):
+        txt = "Dilution is 200% over the period. Runway is 65 months."
+        self.assertEqual(ac.strip_ungrounded(txt, ""), (txt, []))
+
+    def test_rule_forbids_advice(self):
+        self.assertIn("NO advice", ac.COMMENTARY_RULE)
+
+
 class ComposeTests(unittest.TestCase):
     def test_facts_first_commentary_labelled(self):
         out = ac.compose("It fits.", 2, "FACTS")

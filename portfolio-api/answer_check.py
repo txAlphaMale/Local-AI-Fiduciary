@@ -20,6 +20,11 @@ _CLAIM = re.compile(
     r"went\s+public|ipo\w*|known\s+for|best\s+known)\b", re.I)
 # "conviction 3/10", "score of 3 out of 10": the app's conviction scale is 1-5 only.
 _BAD_SCALE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:/|out of)\s*(?!5\b)\d+\b", re.I)
+# Personalised allocation / trading guidance: the app is read-only and educational, so the model's commentary may not give it.
+_ADVICE = re.compile(
+    r"\b(you\s+should|consider\s+(?:adding|buying|selling|trimming|a\s+position)|small\s+(?:speculative\s+)?allocation|"
+    r"your\s+IPS|IPS\s+targets?|position\s+siz\w+|watch\s?list|be\s+prepared\s+to|trim\s+(?:the|your|if|it)|"
+    r"(?:a|the)\s+(?:good|bad)\s+(?:buy|entry))\b", re.I)
 _SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*_#\-])|\n+")
 
 
@@ -42,6 +47,8 @@ def strip_ungrounded(text, evidence):
             continue
         hits = [_norm(m.group(0)) for m in _CLAIM.finditer(sent)]
         if re.search(r"conviction", sent, re.I) and _BAD_SCALE.search(sent):
+            removed.append(sent.strip())
+        elif _ADVICE.search(sent):
             removed.append(sent.strip())
         elif hits and any(h not in ev for h in hits):
             removed.append(sent.strip())
@@ -125,7 +132,11 @@ COMMENTARY_RULE = (
     "So write ONLY a short commentary (at most about 6 sentences): how the numbers bear on Jason's goal, "
     "what to check next, and the main risk. Do not repeat the figures table, and add no company background "
     "(former names, mergers, products, history) that the tool did not give you. Conviction is on a 1 to 5 scale "
-    "(say 'N of 5'); never express it on any other scale.")
+    "(say 'N of 5'); never express it on any other scale. "
+    "Give NO advice: no allocation or position sizing, no what-to-do (buy, sell, trim, add to a watchlist), "
+    "and do not refer to Jason's IPS targets. Describe what the data shows and what to check next.")
+
+MODEL_LABEL = "**Model commentary (not checked by the app):**"
 
 
 def compose(commentary, removed, facts):
@@ -133,4 +144,4 @@ def compose(commentary, removed, facts):
     note = f"\n\n_(Removed {removed} sentence(s) of company background that the research data does not contain.)_" if removed else ""
     if not facts:
         return (commentary or "") + note
-    return facts + "\n\n---\n**Model commentary (not checked by the app):**\n" + (commentary or "").strip() + note
+    return facts + "\n\n---\n" + MODEL_LABEL + "\n" + (commentary or "").strip() + note

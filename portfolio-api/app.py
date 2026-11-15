@@ -17088,6 +17088,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         research_hits.append(result)
                         if len(research_hits) == 1:
                             messages.append({"role": "system", "content": answer_check.COMMENTARY_RULE})
+                        early = answer_check.facts_block([result])
+                        if early:    # show the app-written facts at once, while the model is still writing
+                            yield _sse("token", {"t": early + "\n\n---\n" + answer_check.MODEL_LABEL + "\n"})
                     try:
                         evidence.append(json.dumps(result, default=str))
                     except Exception:
