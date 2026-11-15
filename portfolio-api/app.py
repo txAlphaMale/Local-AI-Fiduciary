@@ -15063,7 +15063,7 @@ def get_paper_scenarios():
                     "risk_profile": m["risk_profile"], "goal": m["goal"], "goal_summary": m["goal_summary"],
                     "total_value": m["total_value"], "return_pct": m["return_pct"],
                     "invested_capital": m["invested_capital"], "created": m["created"],
-                    "seeded_from": m["seeded_from"], "position_count": len(m["positions"])})
+                    "basis_label": m["basis_label"], "seeded_from": m["seeded_from"], "position_count": len(m["positions"])})
     default_id = _default_scenario_id(reg, kind="ai")
     return {"scenarios": out, "default_scenario_id": default_id,
             "max_active": MAX_ACTIVE_SCENARIOS, "active_count": len(_active_scenarios(reg, kind="ai")),
@@ -17088,6 +17088,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         research_hits.append(result)
                         if len(research_hits) == 1:
                             messages.append({"role": "system", "content": answer_check.COMMENTARY_RULE})
+                        early = answer_check.facts_block([result])
+                        if early:    # show the app-written facts at once, while the model is still writing
+                            yield _sse("token", {"t": early + "\n\n---\n" + answer_check.MODEL_LABEL + "\n"})
                     try:
                         evidence.append(json.dumps(result, default=str))
                     except Exception:
@@ -17113,6 +17116,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             try:
                 evid = "\n".join(evidence) + "\n" + (user_msg or "")
                 clean, removed = answer_check.strip_ungrounded(final_content, evid)
+                clean, cut = answer_check.limit_sentences(clean)
+                if cut:
+                    clean += " _(shortened)_"
                 final_content = answer_check.compose(clean, len(removed), answer_check.facts_block(research_hits))
                 if final_content != clean:
                     yield _sse("replace", {"t": final_content})
