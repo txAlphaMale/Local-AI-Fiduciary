@@ -18,7 +18,7 @@ MIN_REVENUE = 1_000_000          # below this there is no operating business to 
 
 
 STALE_ANNUAL_DAYS = 640         # ~21 months: a company with filings this year but no full-year figures newer than this is not screened on them
-SCREEN_VERSION = 10              # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 11              # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -202,6 +202,23 @@ def other_taxonomy_latest(facts):
     return best
 
 
+def ifrs_share_change(facts, forms=("20-F", "40-F")):
+    """(share count change over the last fiscal year in %, basis, why-not). Foreign filers do not use the us-gaap share tags the main
+    screen reads, so use the IFRS shares-outstanding concept when the company reports it, else the cover-page count (dei) that every
+    20-F/40-F carries. A fall of more than 80% is almost always a reverse split or a change of unit (ordinary shares to ADS), not
+    buybacks, so it is reported as unmeasured rather than as 'no dilution'. (None, None, reason) when it cannot be measured."""
+    for tax, tag, label in (("ifrs-full", "NumberOfSharesOutstanding", "IFRS shares outstanding"),
+                            ("dei", "EntityCommonStockSharesOutstanding", "cover-page share count")):
+        series = _annual_rows(facts, tax, [tag], forms, flow=False)
+        prior = _prior_if_adjacent(series)
+        if series and prior:
+            pct = round((series[-1][1] / prior - 1) * 100, 1)
+            if pct < -80:
+                return None, label, f"share count fell {abs(pct):.0f}% in a year: a split or unit change is likely"
+            return pct, label, None
+    return None, None, "no two consecutive yearly share counts reported"
+
+
 def ifrs_compact(facts):
     """Same compact record for a 20-F/40-F filer reporting under IFRS. Percentages are currency-neutral; `revenue` is in
     `currency` (s1['currency']). None when there is no annual revenue to work with."""
@@ -225,12 +242,14 @@ def ifrs_compact(facts):
                    (((facts.get("facts") or {}).get("ifrs-full") or {}).get("Assets") or {}).get("units", {}).values() for e in rows
                    if str(e.get("form", "")).startswith(forms)] if f)
     cash = cash_position(facts, "ifrs-full")
+    sc_pct, sc_basis, sc_why = ifrs_share_change(facts, forms)
     return {"basis": "ifrs", "currency": cur, "revenue": rev, "cash": cash, "runway_months": runway_from_fcf(cash, fcf), "foreign_filer": True,
             "rev_growth_pct": pct(rev - rev_prev, rev_prev) if (rev is not None and rev_prev) else None, "rev_cagr_pct": None, "rev_accel_pts": None,
             "gross_margin_pct": None, "net_margin_pct": pct(ni, rev), "fcf_margin_pct": pct(fcf, rev),
             "debt_to_equity": round(liab / eq, 2) if (liab is not None and eq) else None,
             "roe_pct": pct(ni, eq), "dividend_payout_pct": None, "fcf_dividend_coverage": None,
-            "share_change_pct": None, "piotroski": None, "piotroski_of": None, "altman_zone": None, "current_ratio": None,
+            "share_change_pct": sc_pct, "share_change_basis": sc_basis, "share_change_note": sc_why,
+            "piotroski": None, "piotroski_of": None, "altman_zone": None, "current_ratio": None,
             "first_filed": dates[0] if dates else None, "last_filed": dates[-1] if dates else None, "fiscal_year_end": fy_end}
 
 

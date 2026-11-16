@@ -6472,6 +6472,7 @@ def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
             "gap_caveat": (f"About {_HELD_CACHE['funds_pct']:g}% of what you hold is in funds with no look-through, so some of these gaps may "
                            "already be partly filled inside them.") if sl.get("fill_gap") and _HELD_CACHE.get("funds_pct") else None,
             "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
+            "not_evaluated": ev["not_evaluated"], "not_evaluated_by_metric": ev["not_evaluated_by_metric"],
             "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 
@@ -6569,7 +6570,8 @@ async def post_sleeve_preview(req: Request):
     rows = ticker_state.screened_rows(sleeves_mod.STATES)
     card = _sleeve_card({"id": "preview", **clean}, rows, today, top=10)
     return {"ok": True, "match_count": card["match_count"], "considered": card["considered"],
-            "awaiting_market_data": card["awaiting_market_data"], "pending_rules": card["pending_rules"], "preview": card["preview"]}
+            "awaiting_market_data": card["awaiting_market_data"], "not_evaluated": card["not_evaluated"],
+            "pending_rules": card["pending_rules"], "preview": card["preview"]}
 
 
 @app.post("/api/sleeves")
