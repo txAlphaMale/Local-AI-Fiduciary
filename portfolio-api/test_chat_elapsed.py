@@ -58,7 +58,9 @@ class TestQueueAndStamp(unittest.TestCase):
         self.assertEqual(done["queued_s"], 0)
         msgs = appmod._chat_messages(done["session_id"])
         stamp = json.loads([m for m in msgs if m["role"] == "assistant"][0]["tool_json"])
-        self.assertEqual(stamp, {"elapsed_s": done["elapsed_s"], "queued_s": 0})
+        self.assertEqual({k: stamp[k] for k in ("elapsed_s", "queued_s")}, {"elapsed_s": done["elapsed_s"], "queued_s": 0})
+        self.assertEqual(stamp["timing"]["calls"], 1)             # RV-007 part A: the turn's timing is stored beside the stamp
+        self.assertEqual(done["timing"], stamp["timing"])
         appmod._chat_delete_session(done["session_id"])
 
     def test_queue_wait_is_unlimited_by_default_and_is_not_run_time(self):
