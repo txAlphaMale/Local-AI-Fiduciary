@@ -3909,6 +3909,20 @@ function planContent(r){
         st('PATHS',mc.runs);
       wrap.appendChild(ms);
       const mn=el('div','muted'); mn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-4);'; mn.textContent=mc.note||''; wrap.appendChild(mn);
+      if(mc.holdings_volatility){
+        const hv=mc.holdings_volatility, hl=el('div'); hl.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-3);line-height:1.5;';
+        if(hv.available){
+          const gp=hv.success_gap_pts;
+          hl.innerHTML=`<span class="muted">UNDER YOUR HOLDINGS' VOLATILITY (${hv.measured_pct}% a year, measured over ${hv.days_recorded} days) success:</span> <span class="${hv.success_pct>=80?'pos':(hv.success_pct>=60?'':'neg')}">${hv.success_pct}%</span>`+
+            (hv.guardrails_success_pct!=null?` <span class="muted">(guardrails ${hv.guardrails_success_pct}%)</span>`:'')+
+            (gp!=null?` <span class="muted">· ${gp>0?'−'+gp+'pt':(gp<0?'+'+(-gp)+'pt':'same')} vs the ${hv.assumed_pct}% assumption above</span>`:'')+
+            (hv.exceeds_assumption?` <span class="neg">⚠ your book is more volatile than the plan assumes</span>`:'');
+          hl.title=hv.note||'';
+        } else {
+          hl.innerHTML=`<span class="muted">Odds under your holdings' own volatility: ${String(hv.reason||'not available yet').replace(/&/g,'&amp;').replace(/</g,'&lt;')} (the headline uses the ${hv.assumed_pct}% assumption).</span>`;
+        }
+        wrap.appendChild(hl);
+      }
       if(mc.fat_tail && mc.fat_tail.success_pct!=null){
         const ft=mc.fat_tail, drop=(mc.success_pct!=null?Math.round((mc.success_pct-ft.success_pct)*10)/10:null);
         const fl=el('div'); fl.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-3);';

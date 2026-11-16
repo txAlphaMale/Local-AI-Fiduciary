@@ -47,6 +47,7 @@ def _load(today=None):
     return {"TAX_YEAR": ob["year"], "SOURCE": (ob["extra"].get("tax_source") or ob["source"]),
             "ORDINARY_BRACKETS": taxtables.brackets(ob["values"]), "LTCG_BRACKETS": taxtables.brackets(lt["values"]),
             "STANDARD_DEDUCTION": dict(sd["values"]["base"]), "SENIOR_ADD": dict(sd["values"]["senior_add"]),
+            "SENIOR_BONUS": dict(sd["values"].get("senior_bonus") or {}),
             "NIIT_RATE": nt["values"]["rate"], "NIIT_THRESHOLD": dict(nt["values"]["threshold"])}
 
 
@@ -72,10 +73,25 @@ def norm_status(status):
     return _ALIASES.get(key, "mfj")
 
 
-def standard_deduction(status="mfj", age=None, spouse_age=None):
-    """2026 standard deduction, adding the 65+ extra per qualifying person.
-    (The separate OBBBA $6k senior deduction is income-phased and handled in
-    summary() as an optional adjustment, not baked in here.)"""
+def senior_bonus(status="mfj", age=None, spouse_age=None, magi=None):
+    """The temporary "senior deduction" (One Big Beautiful Bill Act, Pub. L. 119-21 sec. 70103): $6,000 per taxpayer aged 65 or over,
+    tax years 2025-2028 only, reduced by 6% of modified AGI above $75,000 ($150,000 joint) and never below zero; it is claimed on top of
+    the standard (or itemized) deduction. With the income unknown (`magi` None) it is NOT included: leaving it out understates the
+    deduction a little rather than overstating it for a high earner. The amount, rate, thresholds and years are data (tax_tables)."""
+    sb = SENIOR_BONUS
+    if not sb or magi is None or not (sb["first_year"] <= TAX_YEAR <= sb["last_year"]):
+        return 0.0
+    st = norm_status(status)
+    eligible = (1 if (age is not None and age >= 65) else 0) + (1 if (st == "mfj" and spouse_age is not None and spouse_age >= 65) else 0)
+    if not eligible:
+        return 0.0
+    over = max(0.0, float(magi) - sb["threshold"].get(st, sb["threshold"]["single"]))
+    return round(max(0.0, sb["amount"] * eligible - sb["phaseout_rate"] * over), 2)
+
+
+def standard_deduction(status="mfj", age=None, spouse_age=None, magi=None):
+    """The standard deduction, adding the 65+ extra per qualifying person and, when `magi` is given, the temporary $6,000 senior
+    deduction (see senior_bonus: income-phased, 2025-2028 only)."""
     st = norm_status(status)
     base = STANDARD_DEDUCTION[st]
     add = 0
@@ -83,7 +99,7 @@ def standard_deduction(status="mfj", age=None, spouse_age=None):
         add += SENIOR_ADD[st]
     if st == "mfj" and spouse_age is not None and spouse_age >= 65:
         add += SENIOR_ADD["mfj"]
-    return base + add
+    return base + add + senior_bonus(st, age, spouse_age, magi)
 
 
 def ordinary_tax(taxable, status="mfj"):
@@ -202,7 +218,8 @@ def effective_rate(gross_ordinary, ltcg=0.0, status="mfj", deduction=None,
     """Blended EFFECTIVE federal rate on a withdrawal/income mix. Used to gross-up
     spending in the Monte Carlo instead of a flat MC_WITHDRAWAL_TAX_PCT."""
     st = norm_status(status)
-    ded = standard_deduction(st, age, spouse_age) if deduction is None else deduction
+    ded = (standard_deduction(st, age, spouse_age, magi=(magi if magi is not None else float(gross_ordinary) + float(ltcg)))
+           if deduction is None else deduction)
     gross_ord = max(0.0, float(gross_ordinary))
     g = max(0.0, float(ltcg))
     taxable_ord = max(0.0, gross_ord - ded)
@@ -262,7 +279,7 @@ def summary(gross_ordinary=0.0, ltcg=0.0, status="mfj", age=None, spouse_age=Non
     st = norm_status(status)
     raw = (status or "").strip().lower().replace(" ", "_")
     unsupported = raw in ("mfs", "married_filing_separately", "separate")
-    ded = standard_deduction(st, age, spouse_age)
+    ded = standard_deduction(st, age, spouse_age, magi=(magi if magi is not None else float(gross_ordinary) + float(ltcg)))
     eff = effective_rate(gross_ordinary, ltcg, st, ded, age, spouse_age, magi=magi)
     conv = conversion_headroom(gross_ordinary, st, fill_to_rate, ded, age, spouse_age)
     harvest = gains_harvest_budget(gross_ordinary, st, ded, age, spouse_age)

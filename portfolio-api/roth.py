@@ -141,3 +141,13 @@ def ladder(annual_fill, n_years, start_age, start_year, trad_balance,
                      "conversion's principal is penalty-free after its own 5-year clock (shown "
                      "as the accessible age). Converting in these low-income years moves money "
                      "to tax-free growth before RMDs force it out at higher rates.")}
+
+
+def rmd_age(birth_year):
+    """Age at which required minimum distributions start, from the birth year (SECURE 2.0): 72 if born 1950 or earlier, 73 if born 1951-1959,
+    75 if born 1960 or later. None when the birth year is not known."""
+    try:
+        y = int(birth_year)
+    except (TypeError, ValueError):
+        return None
+    return 72 if y <= 1950 else (73 if y <= 1959 else 75)

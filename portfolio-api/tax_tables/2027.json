@@ -19,11 +19,11 @@
       "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
     },
     "tax.standard_deduction": {
-      "values": {"base": {"single": 16600, "mfj": 33200, "hoh": 24925}, "senior_add": {"single": 2100, "hoh": 2100, "mfj": 1700}},
+      "values": {"base": {"single": 16600, "mfj": 33200, "hoh": 24925}, "senior_add": {"single": 2100, "hoh": 2100, "mfj": 1700}, "senior_bonus": {"amount": 6000, "phaseout_rate": 0.06, "threshold": {"single": 75000, "mfj": 150000, "hoh": 75000}, "first_year": 2025, "last_year": 2028}},
       "status": "primary",
       "confirmed": true,
       "verified": "2026-11-09",
-      "source": "IRS Rev. Proc. 2026-35, section 3.15",
+      "source": "IRS Rev. Proc. 2026-35, section 3.15; senior deduction (the $6,000 per person aged 65+, 2025-2028, phase-out 6% above MAGI $75,000/$150,000): One Big Beautiful Bill Act, Pub. L. 119-21 sec. 70103, entered 2026-11-16 from the published terms of the law and awaiting verification against IRS guidance (Cowork)",
       "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
     },
     "aca.fpl": {

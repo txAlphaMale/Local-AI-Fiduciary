@@ -362,7 +362,8 @@ SETTING_SPECS = {
     "roth_target_ceiling_pct":{"env": "ROTH_TARGET_CEILING_PCT","default": 24.0,"cast": float, "label": "Roth ladder: fill conversions up to this marginal rate (%)", "group": "Roth / marginal curve"},
     "roth_sweep_max":         {"env": "ROTH_SWEEP_MAX",         "default": 300000,"cast": int, "label": "Marginal curve: max next-dollar income to sweep ($)", "group": "Roth / marginal curve"},
     "roth_sweep_step":        {"env": "ROTH_SWEEP_STEP",        "default": 2500,"cast": int,   "label": "Marginal curve: sweep step ($)", "group": "Roth / marginal curve"},
-    "roth_rmd_age":           {"env": "ROTH_RMD_AGE",           "default": 73,  "cast": int,   "label": "Roth ladder: RMD age (end of the conversion window)", "group": "Roth / marginal curve"},
+    "roth_rmd_age":           {"env": "ROTH_RMD_AGE",           "default": 0,   "cast": int,   "label": "Roth ladder: RMD age (0 = automatic)", "group": "Roth / marginal curve",
+                               "help": "The age the Roth conversion window ends, because required minimum distributions start. 0 works it out from your birth year under current law (73 if born 1951-1959, 75 if born 1960 or later). Enter an age only to override that. Set your birth year in PLAN > ASSUMPTIONS."},
     "roth_conversion_growth_pct": {"env": "ROTH_CONVERSION_GROWTH_PCT", "default": 5.0, "cast": float, "label": "Roth ladder: assumed traditional-balance growth (%)", "group": "Roth / marginal curve"},
     "roth_irmaa_from_age":    {"env": "ROTH_IRMAA_FROM_AGE",    "default": 63,  "cast": int,   "label": "Marginal curve: model IRMAA from this age (2-yr lookback)", "group": "Roth / marginal curve"},
     "leverage_loan_rate_pct":     {"env": "LEVERAGE_LOAN_RATE_PCT",     "default": 7.0,  "cast": float, "label": "Leverage: SBLOC/margin APR (variable, SOFR-based) (%)", "group": "Leverage"},
@@ -5047,7 +5048,11 @@ def _roth_plan():
     curve = _marginal_curve()
     cfg = _read_retire()
     age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
-    rmd = _knob("roth_rmd_age")
+    _by = cfg.get("birth_year") or ((datetime.date.today().year - age) if age else None)
+    _override = int(_knob("roth_rmd_age") or 0)
+    rmd = _override or roth.rmd_age(_by) or 73
+    rmd_source = ("your setting" if _override else (f"derived from birth year {_by} (SECURE 2.0)" + ("" if cfg.get("birth_year") else ", estimated from your age")
+                                                    if roth.rmd_age(_by) else "default 73 (birth year unknown: set it in PLAN > ASSUMPTIONS)"))
     n_years = min(40, max(0, rmd - age)) if age else 10
     trad = _balances_by_tax_status().get("deferred", 0.0)
     fill = curve["recommended_fill"]["fill_to"]
@@ -5055,7 +5060,7 @@ def _roth_plan():
                      growth_pct=_knob("roth_conversion_growth_pct"),
                      aca_cliff_fill=curve.get("aca_cliff_delta"), aca_until_age=65)
     return {"generated_at": int(time.time()), "curve": curve, "ladder": ld,
-            "trad_balance": round(trad, 2), "rmd_age": rmd, "annual_fill": fill,
+            "trad_balance": round(trad, 2), "rmd_age": rmd, "rmd_age_source": rmd_source, "annual_fill": fill,
             "note": "The ladder converts up to the recommended fill each year (or the tighter "
                     "ACA-cliff cap while under 65) until RMD age, moving pre-tax dollars to Roth "
                     "in the low-rate years. Each conversion has its own 5-year clock. Read-only "
@@ -5760,6 +5765,18 @@ def _alerts_digest():
         if INTERNAL_SCHEDULER and _SCHED_BEAT["scheduler"] and time.time() - _SCHED_BEAT["scheduler"] > 300:
             add("warn", "Scheduled jobs", "The built-in scheduler has not checked in for over 5 minutes: scheduled jobs are not being started. "
                 "Restarting portfolio-api restores it.", "settings.schedule")
+    except Exception:
+        pass
+    # Retirement odds assume a volatility; warn when the real book has been much more volatile than that (RV-033)
+    try:
+        _rk = _risk_metrics()
+        if _rk.get("status") == "ready" and _rk.get("annualized_volatility_pct"):
+            _assumed = (_read_retire().get("volatility_pct") or MC_VOLATILITY_PCT)
+            if _rk["annualized_volatility_pct"] > _assumed * HOLDINGS_VOL_WARN_RATIO:
+                add("warn", "Retirement odds",
+                    f"Your portfolio's realized volatility is {_rk['annualized_volatility_pct']:.0f}% a year (last {_rk['days_recorded']} recorded days), "
+                    f"well above the {_assumed:.0f}% the retirement success rate assumes. The headline odds are likely optimistic; "
+                    "PLAN → MONTE CARLO shows them at your real volatility too.", "plan.assumptions")
     except Exception:
         pass
     # 0) Earnings on holdings this week (P1 adoption — event awareness beats cron-only research)
@@ -11844,6 +11861,8 @@ def _retirement():
             f"flat-return projection, this captures sequence-of-returns risk. Your portfolio is concentrated "
             f"in a few high-growth names, so real-world volatility is likely HIGHER than the assumption here "
             f"— treat the success rate as optimistic. Informational, not advice.")
+        monte_carlo["holdings_volatility"] = _holdings_volatility_odds(
+            monte_carlo, vol_pct, investable, annual_savings, mc_expenses, r, acc_yrs, ret_yrs, ss_schedule)
         try:
             _ft = _monte_carlo(investable, annual_savings or 0, mc_expenses, r,
                                vol_pct / 100.0, acc_yrs, ret_yrs, draw_mode="t",
@@ -11899,6 +11918,37 @@ def _retirement():
             "funded_ratio": funded,
             "assumptions": assumptions, "notes": notes,
             "note": "Informational FIRE projection — not financial advice. Tune assumptions in the config."}
+
+
+HOLDINGS_VOL_WARN_RATIO = 1.25        # ATTENTION when the real book is more than a quarter more volatile than the plan assumes
+
+
+def _holdings_volatility_odds(headline, policy_vol_pct, investable, annual_savings, mc_expenses, mean_real, acc_yrs, ret_yrs, ss_schedule,
+                              risk=None, run=None):
+    """RV-033: the retirement odds under the volatility the owner's ACTUAL book has shown, beside the headline (which uses the plan's
+    assumed volatility, 16% unless set). The default is never switched silently: both figures are shown with their inputs named.
+    Realized volatility comes from the recorded daily portfolio value (approximate: deposits and withdrawals add noise)."""
+    risk = risk if risk is not None else _risk_metrics()
+    if risk.get("status") != "ready" or not risk.get("annualized_volatility_pct"):
+        return {"available": False, "assumed_pct": round(policy_vol_pct, 1), "days_recorded": risk.get("days_recorded"),
+                "reason": risk.get("note") or "Realized volatility needs more recorded days."}
+    measured = float(risk["annualized_volatility_pct"])
+    used = max(5.0, min(80.0, measured))           # a short or flow-distorted history must not produce an absurd input
+    try:
+        res = (run or _monte_carlo)(investable, annual_savings or 0, mc_expenses, mean_real, used / 100.0, acc_yrs, ret_yrs,
+                                    spend_schedule=ss_schedule)
+    except Exception:
+        return {"available": False, "assumed_pct": round(policy_vol_pct, 1), "reason": "could not run the simulation at that volatility"}
+    exceeds = measured > policy_vol_pct * HOLDINGS_VOL_WARN_RATIO
+    gap = None if headline.get("success_pct") is None or res.get("success_pct") is None else round(headline["success_pct"] - res["success_pct"], 1)
+    return {"available": True, "volatility_pct": round(used, 1), "measured_pct": round(measured, 1), "assumed_pct": round(policy_vol_pct, 1),
+            "exceeds_assumption": exceeds, "success_pct": res.get("success_pct"),
+            "guardrails_success_pct": (res.get("guardrails") or {}).get("success_pct"), "success_gap_pts": gap,
+            "days_recorded": risk.get("days_recorded"), "since": risk.get("since"),
+            "note": (f"Same plan, same draws, but with the volatility your book has actually shown ({measured:.0f}% a year over "
+                     f"{risk.get('days_recorded')} recorded days) instead of the {policy_vol_pct:.0f}% assumption." +
+                     (" Your holdings are noticeably more volatile than the plan assumes, so the headline success rate is likely optimistic." if exceeds else "")
+                     + " Approximate: measured on portfolio value, so deposits and withdrawals add noise.")}
 
 
 @app.get("/api/retirement")
