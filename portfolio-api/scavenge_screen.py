@@ -274,13 +274,18 @@ def compact(result, facts):
         nm = round(m["net_income"] / rev * 100, 2)
     fcf_m = ttm.get("fcf_margin_pct") if ttm.get("fcf_margin_pct") is not None else r.get("fcf_margin_pct")
     cash, cash_as_of = cash_position_ex(facts)
+    # Operating margin guards against a GAAP profit made of non-operating gains (warrant revaluations). Banks and insurers on alternate
+    # revenue tags have no meaningful operating income, so for them the net margin stands in.
+    op_m = r.get("operating_margin_pct")
+    if used_alt:
+        op_m = nm
     return {
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
         "cash": cash, "cash_as_of": cash_as_of, "negative_equity": bool(r.get("negative_equity")),
         "period_mismatch": m.get("period_mismatch") or [], "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),
         "rev_growth_pct": g, "rev_cagr_pct": cagr,
         "rev_accel_pts": round(g - cagr, 2) if (g is not None and cagr is not None) else None,
-        "gross_margin_pct": r.get("gross_margin_pct"), "net_margin_pct": nm,
+        "gross_margin_pct": r.get("gross_margin_pct"), "net_margin_pct": nm, "operating_margin_pct": op_m,
         "fcf_margin_pct": ttm.get("fcf_margin_pct") if ttm.get("fcf_margin_pct") is not None else r.get("fcf_margin_pct"),
         "debt_to_equity": r.get("debt_to_equity"), "roe_pct": r.get("return_on_equity_pct"),
         "dividend_payout_pct": r.get("dividend_payout_pct"), "fcf_dividend_coverage": r.get("fcf_dividend_coverage"),

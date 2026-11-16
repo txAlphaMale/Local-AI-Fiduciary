@@ -127,3 +127,13 @@ class NetMarginFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatingMarginTests(unittest.TestCase):
+    def _res(self, op, nm):
+        return {"metrics": {"ttm": {"revenue": 1000, "net_margin_pct": nm}, "revenue": 1000, "fiscal_year_end": "2025-12-31"},
+                "ratios": {"net_margin_pct": nm, "operating_margin_pct": op}, "scores": {}}
+
+    def test_operating_margin_carried(self):
+        s1 = ss.compact(self._res(-12.0, 40.0), facts())
+        self.assertEqual((s1["operating_margin_pct"], s1["net_margin_pct"]), (-12.0, 40.0))
