@@ -311,11 +311,25 @@ def _ollama_chat_stream(messages, model, tools, temperature, num_ctx, keep_alive
                 continue
             m = chunk.get("message") or {}
             tcs = m.get("tool_calls")
-            yield {"content": m.get("content") or None, "thinking": m.get("thinking") or None,
+            out = {"content": m.get("content") or None, "thinking": m.get("thinking") or None,
                    "tool_calls": _normalize_tool_calls(tcs) if tcs else None,
                    "done": bool(chunk.get("done")), "error": None, "cancelled": False}
             if chunk.get("done"):
+                out["timing"] = ollama_timing(chunk)
+                yield out
                 return
+            yield out
+
+
+def ollama_timing(chunk):
+    """Ollama reports its own durations (nanoseconds) on the final stream chunk: load_duration = loading the model into memory,
+    prompt_eval_* = reading the prompt, eval_* = writing the reply (thinking plus answer). -> seconds and token counts, or {}."""
+    def sec(k):
+        v = chunk.get(k)
+        return round(v / 1e9, 2) if isinstance(v, (int, float)) else None
+    t = {"load_s": sec("load_duration"), "prompt_s": sec("prompt_eval_duration"), "eval_s": sec("eval_duration"),
+         "total_s": sec("total_duration"), "prompt_tokens": chunk.get("prompt_eval_count"), "eval_tokens": chunk.get("eval_count")}
+    return {k: v for k, v in t.items() if v is not None}
 
 
 # ---------------------------------------------------------------------------

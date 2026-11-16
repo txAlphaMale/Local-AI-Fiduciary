@@ -6693,7 +6693,7 @@ def get_gpu():
     busy = _GPU.locked()
     with _gpu_waiters_lock:
         w = _gpu_waiters
-    return {"busy": busy, "waiters": w, "queued": max(0, w - (1 if busy else 0))}
+    return {"busy": busy, "waiters": w, "queued": max(0, w - (1 if busy else 0)), "recent_chat_timing": list(_RECENT_CHAT_TIMING)}
 
 
 @app.get("/api/grounding")
@@ -17053,6 +17053,49 @@ _CHAT_CANCEL = {}
 _CHAT_CANCEL_LOCK = threading.Lock()
 
 
+_RECENT_CHAT_TIMING = collections.deque(maxlen=20)
+
+
+def _new_chat_timing():
+    return {"calls": 0, "load_s": 0.0, "prompt_s": 0.0, "think_s": 0.0, "answer_s": 0.0, "tools_s": 0.0, "wall_model_s": 0.0,
+            "prompt_tokens": 0, "eval_tokens": 0, "have_ollama": False}
+
+
+def _add_call_timing(tm, call, t_end):
+    """Fold one model call into the turn's timing. Ollama's own numbers (load, prompt reading) are used when reported; thinking
+    and answer seconds are wall-clock between the first thinking token, the first answer token and the end of the call."""
+    tm["calls"] += 1
+    tm["wall_model_s"] += max(0.0, t_end - call["t0"])
+    o = call.get("ollama") or {}
+    if o:
+        tm["have_ollama"] = True
+        tm["load_s"] += o.get("load_s") or 0.0
+        tm["prompt_s"] += o.get("prompt_s") or 0.0
+        tm["prompt_tokens"] += o.get("prompt_tokens") or 0
+        tm["eval_tokens"] += o.get("eval_tokens") or 0
+    a0, k0 = call.get("answer0"), call.get("think0")
+    if k0:
+        tm["think_s"] += max(0.0, (a0 or t_end) - k0)
+    if a0:
+        tm["answer_s"] += max(0.0, t_end - a0)
+
+
+def _finish_chat_timing(tm):
+    out = {k: (round(v, 1) if isinstance(v, float) else v) for k, v in tm.items() if k != "have_ollama"}
+    if not tm["have_ollama"]:
+        for k in ("load_s", "prompt_s", "prompt_tokens", "eval_tokens"):
+            out.pop(k, None)             # the model server did not report them (other dialect): say nothing rather than 0
+    return out
+
+
+def _remember_chat_timing(stamp):
+    try:
+        _RECENT_CHAT_TIMING.appendleft({"at": int(time.time()), "elapsed_s": stamp.get("elapsed_s"), "queued_s": stamp.get("queued_s"),
+                                        **(stamp.get("timing") or {})})
+    except Exception:
+        pass
+
+
 def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
     """SSE generator: streams assistant tokens and tool events for one user message, persisting the
     turn to SQLite. Holds _strat_lock for the duration so a chat never competes with the weekly run
@@ -17171,6 +17214,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         cancelled = False
         content_buf = ""
         research_hits, evidence = [], []     # idea-research results + every tool result seen this turn
+        timing = _new_chat_timing()          # where the time went this turn (RV-007 part A: measure before changing anything)
         for i in range(CHAT_MAX_ITER):
             content_buf = ""
             tool_calls = []
@@ -17193,6 +17237,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             _ev = _mark_run()
             if _ev:
                 yield _ev
+            _call = {"t0": time.time(), "think0": None, "answer0": None, "ollama": {}}
             try:
                 for chunk in llm._llm_chat(messages, persona["model"], tools=persona["tools"],
                                            stream=True, temperature=persona.get("temp", 0.3),
@@ -17205,19 +17250,26 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         cancelled = True
                         break
                     if chunk.get("thinking"):     # qwen3 reasoning phase — stream as an activity indicator
+                        _call["think0"] = _call["think0"] or time.time()
                         yield _sse("thinking", {"t": chunk["thinking"]})
                     if chunk.get("content"):
+                        _call["answer0"] = _call["answer0"] or time.time()
                         content_buf += chunk["content"]
                         yield _sse("token", {"t": chunk["content"]})
                     if chunk.get("tool_calls"):
                         tool_calls.extend(chunk["tool_calls"])
                     if chunk.get("done"):
+                        _call["ollama"] = chunk.get("timing") or {}
                         break
             except Exception as e:
                 yield _sse("error", {"error": f"generation failed: {_errref(e)}"})
                 return
             finally:
                 _gpu_release_visible()
+                try:
+                    _add_call_timing(timing, _call, time.time())
+                except Exception:
+                    pass
 
             if cancelled:
                 break
@@ -17244,7 +17296,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                     except Exception:
                         a = {}
                 yield _sse("tool", {"name": nm, "args": a})
+                _tt = time.time()
                 result = persona["dispatch"](nm, a)
+                timing["tools_s"] += time.time() - _tt
                 if nm == "get_idea_research":
                     if isinstance(result, dict) and a.get("ticker"):
                         research_hits.append(result)
@@ -17287,7 +17341,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             except Exception:
                 pass
         t_end = time.time()
-        stamp = {"elapsed_s": int(round(t_end - (run["t"] or t_req))), "queued_s": int(round((run["t"] or t_req) - t_req))}
+        stamp = {"elapsed_s": int(round(t_end - (run["t"] or t_req))), "queued_s": int(round((run["t"] or t_req) - t_req)),
+                 "timing": _finish_chat_timing(timing)}
+        _remember_chat_timing(stamp)
         _chat_add_message(session_id, "assistant", final_content, tool_json=json.dumps(stamp))
         threading.Thread(target=_chat_summarise_old, args=(session_id,), daemon=True, name="chat-summary").start()
         _chat_touch_session(session_id)

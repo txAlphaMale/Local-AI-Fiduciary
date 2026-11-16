@@ -10367,7 +10367,9 @@ function chatMsgFromServer(m){
   let st=null; if(m.role==='assistant' && m.tool_json){ try{ const j=JSON.parse(m.tool_json); if(j && j.elapsed_s!=null) st=j; }catch(_){} }
   return {role:m.role,content:m.content||'',tools:[],stamp:st};
 }
-function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; return 'answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':''); }
+function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; let t='answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':'');
+  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+')'; }
+  return t; }
 const CHAT_LONG_RUN_S=1200;   // a hint (never a cutoff) once a request has been RUNNING this long
 function chatLiveElapsed(asst){
   if(!asst||!asst.t0) return '';
@@ -10411,7 +10413,7 @@ function chatFrame(frame,asst,persona){
     chatTools(asst);
   }
   else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
-  else if(ev==='done'){ cs.sid=o.session_id||cs.sid; if(o.elapsed_s!=null) asst.stamp={elapsed_s:o.elapsed_s,queued_s:o.queued_s||0}; }
+  else if(ev==='done'){ cs.sid=o.session_id||cs.sid; if(o.elapsed_s!=null) asst.stamp={elapsed_s:o.elapsed_s,queued_s:o.queued_s||0,timing:o.timing||null}; }
   else if(ev==='cancelled'){ cs.sid=o.session_id||cs.sid; if(!asst.content) asst.content='_(stopped)_'; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
 }
