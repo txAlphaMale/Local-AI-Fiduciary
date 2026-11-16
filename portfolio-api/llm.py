@@ -214,7 +214,7 @@ def _llm_chat(messages, model, tools=None, stream=False, temperature=0.3, num_ct
             return _openai_chat_stream(msgs, model, tools, temperature, format_json, timeout, cancel_check)
         return _openai_chat(msgs, model, tools, temperature, format_json, timeout)
     if stream:
-        return _ollama_chat_stream(msgs, model, tools, temperature, num_ctx, keep_alive, timeout, cancel_check)
+        return _ollama_chat_stream(msgs, model, tools, temperature, num_ctx, keep_alive, timeout, cancel_check, think)
     return _ollama_chat(msgs, model, tools, temperature, num_ctx, keep_alive, format_json, think, timeout)
 
 
@@ -280,7 +280,9 @@ def _ollama_chat(messages, model, tools, temperature, num_ctx, keep_alive, forma
     return LLMResult(False, error=last_err)
 
 
-def _ollama_chat_stream(messages, model, tools, temperature, num_ctx, keep_alive, timeout, cancel_check):
+def _ollama_chat_stream(messages, model, tools, temperature, num_ctx, keep_alive, timeout, cancel_check, think=None):
+    """think=None sends no `think` field (the model's default, which for qwen3 is reasoning ON); True/False sends it. A server that
+    rejects the field is retried once without it, as the non-streaming path does."""
     options = {"temperature": temperature}
     if num_ctx:
         options["num_ctx"] = num_ctx
@@ -289,7 +291,14 @@ def _ollama_chat_stream(messages, model, tools, temperature, num_ctx, keep_alive
         body["tools"] = tools
     if keep_alive is not None:
         body["keep_alive"] = keep_alive
-    with requests.post(f"{_base_url()}/api/chat", json=body, timeout=timeout, stream=True) as resp:
+    if think is not None:
+        body["think"] = bool(think)
+    resp_cm = requests.post(f"{_base_url()}/api/chat", json=body, timeout=timeout, stream=True)
+    if think is not None and resp_cm.status_code >= 400 and "think" in (resp_cm.text or "").lower():
+        resp_cm.close()
+        body.pop("think", None)
+        resp_cm = requests.post(f"{_base_url()}/api/chat", json=body, timeout=timeout, stream=True)
+    with resp_cm as resp:
         if resp.status_code >= 400:
             yield {"content": None, "thinking": None, "tool_calls": None, "done": True,
                    "error": f"ollama {resp.status_code}: {resp.text[:200]}", "cancelled": False}

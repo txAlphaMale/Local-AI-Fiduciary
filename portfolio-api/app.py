@@ -386,6 +386,7 @@ SETTING_SPECS = {
     "avenue_match_cap_dollars":   {"env": "AVENUE_MATCH_CAP_DOLLARS",   "default": 0.0,  "cast": float, "label": "Cross-avenue: annual match-eligible contribution ($)", "group": "Cross-avenue"},
     "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
     "insider_lookback_days":      {"env": "INSIDER_LOOKBACK_DAYS",      "default": 120,  "cast": int,   "label": "Insider signal: Form 4 lookback window (days)", "group": "Insider signal"},
+    "chat_thinking_mode":         {"env": "CHAT_THINKING_MODE",         "default": 0,    "cast": int,   "label": "Chat: reasoning (thinking) mode. 0 = full reasoning on every step (default, highest quality). 1 = no reasoning only for the short commentary written after the app has printed a ticker's research facts (faster; trial it against 0 before keeping it)", "group": "Chat"},
     "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 20,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker", "group": "Insider signal"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
@@ -17056,6 +17057,13 @@ _CHAT_CANCEL_LOCK = threading.Lock()
 _RECENT_CHAT_TIMING = collections.deque(maxlen=20)
 
 
+def _chat_thinking_mode():
+    try:
+        return int(_knob("chat_thinking_mode"))
+    except Exception:
+        return 0
+
+
 def _new_chat_timing():
     return {"calls": 0, "load_s": 0.0, "prompt_s": 0.0, "think_s": 0.0, "answer_s": 0.0, "tools_s": 0.0, "wall_model_s": 0.0,
             "prompt_tokens": 0, "eval_tokens": 0, "have_ollama": False}
@@ -17065,6 +17073,8 @@ def _add_call_timing(tm, call, t_end):
     """Fold one model call into the turn's timing. Ollama's own numbers (load, prompt reading) are used when reported; thinking
     and answer seconds are wall-clock between the first thinking token, the first answer token and the end of the call."""
     tm["calls"] += 1
+    if call.get("think") is False:
+        tm["no_think_calls"] = tm.get("no_think_calls", 0) + 1
     tm["wall_model_s"] += max(0.0, t_end - call["t0"])
     o = call.get("ollama") or {}
     if o:
@@ -17238,10 +17248,14 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             if _ev:
                 yield _ev
             _call = {"t0": time.time(), "think0": None, "answer0": None, "ollama": {}}
+            # Reasoning mode (knob, default 0 = unchanged). Mode 1 turns reasoning off ONLY for the call that writes the short
+            # commentary after the app has already printed a ticker's facts; every tool-choosing step and every other answer keeps it.
+            _think = False if (_chat_thinking_mode() == 1 and research_hits) else None
+            _call["think"] = _think
             try:
                 for chunk in llm._llm_chat(messages, persona["model"], tools=persona["tools"],
                                            stream=True, temperature=persona.get("temp", 0.3),
-                                           num_ctx=STRAT_NUM_CTX, keep_alive=LLM_KEEP_ALIVE,
+                                           num_ctx=STRAT_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, think=_think,
                                            timeout=STRAT_LLM_TIMEOUT, cancel_check=cancel_event.is_set):
                     if chunk.get("error"):
                         yield _sse("error", {"error": chunk["error"]})
