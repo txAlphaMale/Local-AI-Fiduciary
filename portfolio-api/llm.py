@@ -123,7 +123,7 @@ def _embed_api_key():
 
 class LLMResult:
     """Normalized non-streaming chat result."""
-    __slots__ = ("ok", "status_code", "content", "thinking", "tool_calls", "error", "raw")
+    __slots__ = ("ok", "status_code", "content", "thinking", "tool_calls", "error", "raw", "fallback_model")
 
     def __init__(self, ok, status_code=None, content="", thinking="", tool_calls=None, error=None, raw=None):
         self.ok = ok
@@ -133,6 +133,7 @@ class LLMResult:
         self.tool_calls = tool_calls or []
         self.error = error
         self.raw = raw
+        self.fallback_model = None      # set when the call was answered by the fallback model
 
 
 def _headers():
@@ -200,9 +201,66 @@ def _normalize_tool_calls(tcs):
 # public API
 # ---------------------------------------------------------------------------
 
+# Fallback model (SETTINGS > Model). app.py sets this to a function returning (model, num_ctx) or None. It is used ONLY when the
+# primary model fails to LOAD (out of memory, a CUDA allocation error, a server error before any output): never for timeouts,
+# a stop by the user, or a bad request, and never for picture reading.
+FALLBACK_PROVIDER = None
+_LOAD_FAILURE = ("resource allocation", "out of memory", "cuda error", "failed to load", "unable to allocate", "llama-server",
+                 "failed to allocate", "ollama 500", "ollama 503")
+
+
+def _is_load_failure(text):
+    t = str(text or "").lower()
+    return any(k in t for k in _LOAD_FAILURE)
+
+
+def _fallback_for(model, images):
+    if images or FALLBACK_PROVIDER is None or _dialect() != "ollama":
+        return None
+    try:
+        fb = FALLBACK_PROVIDER()
+    except Exception:
+        return None
+    return fb if (fb and fb[0] and fb[0] != model) else None
+
+
 def _llm_chat(messages, model, tools=None, stream=False, temperature=0.3, num_ctx=None,
               keep_alive=None, format_json=False, think=None, timeout=60, images=None,
               cancel_check=None):
+    kw = dict(tools=tools, stream=stream, temperature=temperature, keep_alive=keep_alive, format_json=format_json, think=think,
+              timeout=timeout, images=images, cancel_check=cancel_check)
+    fb = _fallback_for(model, images)
+    if not fb:
+        return _llm_chat_once(messages, model, num_ctx=num_ctx, **kw)
+    if not stream:
+        res = _llm_chat_once(messages, model, num_ctx=num_ctx, **kw)
+        if res.ok or not _is_load_failure(res.error):
+            return res
+        print(f"[llm] {model} failed to load ({str(res.error)[:160]}); retrying on the fallback model {fb[0]}", flush=True)
+        res2 = _llm_chat_once(messages, fb[0], num_ctx=fb[1] or num_ctx, **kw)
+        res2.fallback_model = fb[0] if res2.ok else None
+        return res2 if res2.ok else res
+
+    def gen():
+        first = True
+        for chunk in _llm_chat_once(messages, model, num_ctx=num_ctx, **kw):
+            if first and chunk.get("error") and _is_load_failure(chunk["error"]):
+                print(f"[llm] {model} failed to load ({str(chunk['error'])[:160]}); retrying on the fallback model {fb[0]}", flush=True)
+                again = True
+                for c2 in _llm_chat_once(messages, fb[0], num_ctx=fb[1] or num_ctx, **kw):
+                    if again:
+                        c2 = dict(c2, fallback=fb[0])
+                        again = False
+                    yield c2
+                return
+            first = False
+            yield chunk
+    return gen()
+
+
+def _llm_chat_once(messages, model, tools=None, stream=False, temperature=0.3, num_ctx=None,
+                   keep_alive=None, format_json=False, think=None, timeout=60, images=None,
+                   cancel_check=None):
     msgs = _with_images(messages, images)
     dialect = _dialect()
     if dialect == "anthropic":

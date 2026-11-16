@@ -4553,10 +4553,19 @@ function accountsEditor(){
   wrap.appendChild(accountRegistryTable({groups:['taxable','advantaged'], fields:['drip','fractional_ok']}));
   return wrap;
 }
+function settingLabel(lab, it){
+  // short name + a "?" that shows the long explanation on hover (and on keyboard focus / tap, via the title attribute)
+  lab.textContent=it.label;
+  if(it.help){ const q=el('span','muted'); q.textContent=' ?'; q.title=it.help; q.tabIndex=0; q.setAttribute('aria-label','Help: '+it.help);
+    q.style.cssText='cursor:help;border:1px solid var(--color-border-strong);border-radius:50%;padding:0 5px;margin-left:6px;font-size:var(--font-size-sm);'; lab.title=it.help; lab.appendChild(q); }
+}
 function saveSettings(){
   const body={};
-  document.querySelectorAll('.set-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
-  document.querySelectorAll('.cfg-inp').forEach(i=>{ if(i.disabled) return; body[i.dataset.key]=i.value; });
+  // Only what the user changed is sent: sending every field stored each default as a "customized" value, so a later change of the
+  // built-in default could never reach this install.
+  document.querySelectorAll('.set-inp').forEach(i=>{ if(i.disabled || i.value===i.dataset.orig) return; body[i.dataset.key]=i.value; });
+  document.querySelectorAll('.cfg-inp').forEach(i=>{ if(i.disabled || i.value===i.dataset.orig) return; body[i.dataset.key]=i.value; });
+  if(!Object.keys(body).length){ alert('Nothing changed.'); return; }
   fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       if(d && d.restart_required && d.restart_required.length){
@@ -6546,9 +6555,9 @@ function settingsContent(){
     const gh=el('div','ph',g); gh.style.marginTop='10px'; wrap.appendChild(gh);
     groups[g].forEach(it=>{
       const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
-      const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
+      const lab=el('span'); lab.style.cssText='width:290px;'; settingLabel(lab, it);
       const inp=document.createElement('input'); inp.type='number'; inp.className='set-inp'; inp.dataset.key=it.key;
-      inp.value=(it.value!=null?it.value:''); inp.style.cssText='width:120px;'; if(it.env_locked) inp.disabled=true;
+      inp.value=(it.value!=null?it.value:''); inp.dataset.orig=inp.value; inp.style.cssText='width:120px;'; if(it.env_locked) inp.disabled=true;
       const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
       meta.textContent=it.env_locked?('· set by env '+it.env+' (edit .env to change)')
         :('· default '+it.default+(it.source==='settings'?' · customized':''));
@@ -6567,18 +6576,20 @@ function settingsContent(){
         if(it.key==='NOTIFY_VAPID_CONTACT_EMAIL') return;   // lives in SETTINGS → NOTIFICATIONS now
         if(it.key==='PORTFOLIO_PROVIDER') return;           // lives in SETTINGS → ACCOUNTS now (applies live)
         const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:var(--space-3);padding:4px 0;font-size:var(--font-size-md);flex-wrap:wrap;';
-        const lab=el('span'); lab.style.cssText='width:290px;'; lab.textContent=it.label;
+        const lab=el('span'); lab.style.cssText='width:290px;'; settingLabel(lab, it);
         let inp;
         if(it.options && it.options.length){
           // Dropdown for enum-like fields (e.g. LLM_API_DIALECT) instead of free text — avoids
           // a typo silently falling through to the ollama default with no visible error.
           inp=document.createElement('select'); inp.className='cfg-inp'; inp.dataset.key=it.key;
+          if(it.allow_blank){ const op=document.createElement('option'); op.value=''; op.textContent='(none)'; if(!it.value) op.selected=true; inp.appendChild(op); }
           it.options.forEach(o=>{ const op=document.createElement('option'); op.value=o; op.textContent=o;
-            if((it.value||it.default)===o) op.selected=true; inp.appendChild(op); });
+            if((it.value||(it.allow_blank?'':it.default))===o) op.selected=true; inp.appendChild(op); });
         } else {
           inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
           inp.value=(it.value!=null?it.value:'');
         }
+        inp.dataset.orig=inp.value;
         inp.style.cssText=(it.applies==='immediately'?'width:340px;':'width:200px;');
         // 2026-07-24: no longer disabled when env_locked -- you can stage a replacement value
         // here while .env still wins. Two different paths: (1) a value saved HERE with no .env entry
@@ -10372,7 +10383,7 @@ function chatMsgFromServer(m){
   return {role:m.role,content:m.content||'',tools:[],stamp:st};
 }
 function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; let t='answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':'');
-  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+(m.no_think_calls?' · reasoning off for '+m.no_think_calls+' call'+(m.no_think_calls>1?'s':''):'')+')'; }
+  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+(m.fallback_model?' · RAN ON THE FALLBACK MODEL '+m.fallback_model+' (the main model failed to load)':'')+(m.no_think_calls?' · reasoning off for '+m.no_think_calls+' call'+(m.no_think_calls>1?'s':''):'')+')'; }
   return t; }
 const CHAT_LONG_RUN_S=1200;   // a hint (never a cutoff) once a request has been RUNNING this long
 function chatLiveElapsed(asst){
