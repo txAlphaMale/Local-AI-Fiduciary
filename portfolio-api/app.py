@@ -15674,6 +15674,32 @@ def _log_strategist_run(rec):
         pass
 
 
+def _compact_paper_for_agent(p):
+    """Strategist-sized view of a marked paper book: every position as a short row with its weight
+    (share of total value) and a list of positions over the scenario's size cap, plus the last few
+    trades. The full marked book (40 transactions, 12 reports, long position rows) was over the
+    tool-result limit, so the model saw only 'result too large' and could not rebalance."""
+    if not isinstance(p, dict) or "positions" not in p:
+        return p
+    total = p.get("total_value") or 0
+    cap = (p.get("goal") or {}).get("max_position_pct")
+    rows = []
+    for x in p.get("positions") or []:
+        w = round((x.get("value") or 0) / total * 100, 1) if total else None
+        rows.append({"ticker": x.get("ticker"), "shares": x.get("shares"), "price": x.get("price"),
+                     "value": x.get("value"), "weight_pct": w, "gain_pct": x.get("gain_pct")})
+    over = [{"ticker": r["ticker"], "weight_pct": r["weight_pct"]} for r in rows
+            if cap and r["weight_pct"] is not None and r["weight_pct"] > cap]
+    tx = [{k: t.get(k) for k in ("ts", "action", "ticker", "shares", "price", "value") if k in t}
+          for t in (p.get("transactions") or [])[-10:]]
+    return {"id": p.get("id"), "name": p.get("name"), "goal_summary": p.get("goal_summary"),
+            "cash": p.get("cash"), "cash_pct": round((p.get("cash") or 0) / total * 100, 1) if total else None,
+            "holdings_value": p.get("holdings_value"), "total_value": total,
+            "return_pct": p.get("return_pct"), "basis_label": p.get("basis_label"),
+            "position_cap_pct": cap, "over_cap": over, "positions": rows,
+            "recent_transactions": tx, "note": p.get("note")}
+
+
 def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
     """Run one tool call in-process and return a JSON-serializable result. `scenario_id` scopes
     the paper-ledger tools to ONE scenario for the duration of a run — the weekly loop below fixes
@@ -15684,7 +15710,7 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
     args = args or {}
     try:
         if name == "get_paper_portfolio":
-            return _paper_marked(_read_paper(scenario_id))
+            return _compact_paper_for_agent(_paper_marked(_read_paper(scenario_id)))
         if name == "paper_buy":
             res, err = _exec_trade("buy", args.get("ticker"), dollars=args.get("dollars"),
                                    shares=args.get("shares"), scenario_id=scenario_id)
