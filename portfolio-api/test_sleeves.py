@@ -21,7 +21,7 @@ TODAY = datetime.date(2026, 11, 12)
 
 
 def row(t, state="active", score=4, **s1):
-    base = {"revenue": 5e7, "rev_growth_pct": 30.0, "net_margin_pct": -5.0, "fcf_margin_pct": -10.0, "runway_months": 30.0,
+    base = {"revenue": 5e7, "rev_growth_pct": 30.0, "net_margin_pct": -5.0, "operating_margin_pct": -5.0, "fcf_margin_pct": -10.0, "runway_months": 30.0,
             "share_change_pct": 5.0, "debt_to_equity": 0.5, "piotroski": 5, "first_filed": "2021-01-01"}
     base.update(s1)
     return {"ticker": t, "name": t + " Inc", "exchange": "NYSE", "state": state, "reason_kind": "screened",
@@ -91,11 +91,17 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(ev["gap_sectors"], [("Health Care", 1)])
 
     def test_income_and_compounder_builtins(self):
-        pay = row("DIV", net_margin_pct=12.0, fcf_margin_pct=9.0, dividend_payout_pct=45.0, fcf_dividend_coverage=2.5)
-        nodiv = row("NODIV", net_margin_pct=12.0, dividend_payout_pct=None, fcf_dividend_coverage=None)
+        pay = row("DIV", net_margin_pct=12.0, operating_margin_pct=14.0, fcf_margin_pct=9.0, dividend_payout_pct=45.0, fcf_dividend_coverage=2.5)
+        nodiv = row("NODIV", net_margin_pct=12.0, operating_margin_pct=14.0, dividend_payout_pct=None, fcf_dividend_coverage=None)
         self.assertEqual([r["ticker"] for r in sleeves.evaluate(sleeves.BUILTIN["income"], [pay, nodiv], TODAY)["matches"]], ["DIV"])
-        comp = row("CMP", net_margin_pct=18.0, fcf_margin_pct=15.0, piotroski=8, share_change_pct=-1.0, rev_growth_pct=14.0)
+        comp = row("CMP", net_margin_pct=18.0, operating_margin_pct=20.0, fcf_margin_pct=15.0, piotroski=8, share_change_pct=-1.0, rev_growth_pct=14.0)
         self.assertEqual([r["ticker"] for r in sleeves.evaluate(sleeves.BUILTIN["compounder"], [comp, row("LOSS")], TODAY)["matches"]], ["CMP"])
+
+    def test_gain_driven_profit_fails_operating_margin(self):    # review: GAAP profit from warrant gains is not a compounder
+        gain = row("GAIN", net_margin_pct=60.0, operating_margin_pct=-40.0, fcf_margin_pct=15.0, piotroski=8,
+                   share_change_pct=-1.0, rev_growth_pct=14.0, dividend_payout_pct=40.0, fcf_dividend_coverage=2.5)
+        for sid in ("compounder", "income"):
+            self.assertEqual(sleeves.evaluate(sleeves.BUILTIN[sid], [gain], TODAY)["matches"], [])
 
     def test_age_years_and_score_metrics(self):
         r = row("A", first_filed="2021-11-12")
@@ -148,7 +154,7 @@ class TestScreenCash(unittest.TestCase):
         self.assertEqual(scr.runway_months(120.0, 100.0, -50.0), 28.8)       # burn 50 a year, cash 120
         self.assertEqual(scr.runway_months(10.0, 100.0, 5.0), 999)           # funds itself
         self.assertIsNone(scr.runway_months(None, 100.0, -5.0))
-        self.assertEqual(scr.SCREEN_VERSION, 9)
+        self.assertEqual(scr.SCREEN_VERSION, 10)
 
 
 class _Req:
