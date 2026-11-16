@@ -166,7 +166,8 @@ class TestJob(unittest.TestCase):
         self.patches = [mock.patch.object(appmod, "_sleeve_list", lambda: [s for s in real() if s["id"] == "growth"]),
                         mock.patch.object(appmod, "SCOUT_META_FILE", os.path.join(d, "scout.json")),
                         mock.patch.object(appmod, "SLEEVES_FILE", os.path.join(d, "scout-sleeves.json")),
-                        mock.patch.object(appmod, "_text_model", return_value="test-model")]
+                        mock.patch.object(appmod, "_text_model", return_value="test-model"),
+                        mock.patch.object(appmod, "_quote", lambda sym: {})]       # no live quotes in tests unless a test sets them
         for p in self.patches:
             p.start()
         appmod._SCOUT_REQUESTS.clear()
@@ -184,6 +185,52 @@ class TestJob(unittest.TestCase):
         picks = {p["ticker"]: p for p in ticker_state.picks()}
         self.assertEqual((set(picks), picks["AAA"]["price"], picks["AAA"]["spy"], picks["AAA"]["picked_on"]), ({"AAA", "BBB"}, 20.0, 600.0, datetime.date.today().isoformat()))
         self.assertEqual(appmod.get_scout_status()["last_run"]["done"], 2)
+
+    def test_note_keeps_its_sources_with_links_and_a_filing_address(self):
+        fx = lambda t, row, name, nightly: ({**facts(), "news": [{"id": "news:1", "title": "Big order", "date": "2026-11-10", "text": "x",
+                                                                   "url": "https://www.reuters.com/a", "domain": "reuters.com"}],
+                                             "filings": [{"id": "filing:1", "date": "2026-11-09", "labels": ["Results"], "items": "2.02",
+                                                          "url": "https://www.sec.gov/Archives/edgar/data/1/2/3-index.htm"}]}, None)
+        appmod._do_scout(generate=lambda p: (good(), None), facts_fn=fx, spy_fn=lambda: 1.0)
+        n = ticker_state.get_note("AAA")
+        by = {x["id"]: x for x in n["sources"]}
+        self.assertEqual(by["news:1"]["url"], "https://www.reuters.com/a")
+        self.assertEqual(by["news:1"]["domain"], "reuters.com")
+        self.assertTrue(by["filing:1"]["url"].startswith("https://www.sec.gov/"))
+        self.assertEqual(by["filing:1"]["domain"], "sec.gov")
+
+    def test_pick_prices_are_taken_together_and_stamped(self):
+        q = {"AAA": {"c": 21.5, "t": 1_800_000_000}, "BBB": {"c": 30.0, "t": 1_800_000_050}, "SPY": {"c": 650.0, "t": 1_800_000_020}}
+        with mock.patch.object(appmod, "_quote", lambda sym: q.get(sym, {})):
+            appmod._do_scout(generate=lambda p: (good(), None), facts_fn=self.ok_facts, spy_fn=lambda: 600.0)
+        p = {x["ticker"]: x for x in ticker_state.picks()}
+        self.assertEqual((p["AAA"]["price"], p["AAA"]["spy"], p["AAA"]["price_as_of"], p["AAA"]["spy_as_of"], p["AAA"]["price_src"]),
+                         (21.5, 650.0, 1_800_000_000, 1_800_000_020, "live quote"))
+
+    def test_pick_price_falls_back_to_the_stored_price_and_says_so(self):
+        appmod._do_scout(generate=lambda p: (good(), None), facts_fn=self.ok_facts, spy_fn=lambda: 600.0)
+        p = {x["ticker"]: x for x in ticker_state.picks()}
+        self.assertEqual((p["AAA"]["price"], p["AAA"]["price_src"], p["AAA"]["price_as_of"]), (20.0, "stored screen price", None))
+
+    def test_nightly_run_records_sleeve_membership_and_a_rerun_replaces_it(self):
+        appmod._do_scout(generate=lambda p: (good(), None), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
+        today = datetime.date.today().isoformat()
+        snap = ticker_state.sleeve_snapshot(today)
+        rows = [r for r in snap["rows"] if r["sleeve_id"] == "growth"]
+        self.assertEqual([(r["ticker"], r["rank"]) for r in rows][:2], [("AAA", 1), ("BBB", 2)])
+        self.assertEqual(rows[0]["price"], 20.0)
+        self.assertTrue(rows[0]["price_as_of"])
+        n = len(snap["rows"])
+        appmod._do_scout(generate=lambda p: (good(), None), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
+        self.assertEqual(len(ticker_state.sleeve_snapshot(today)["rows"]), n)
+        self.assertEqual(ticker_state.sleeve_snapshot()["dates"][0], today)
+        self.assertEqual(appmod.get_sleeve_snapshot(today, "growth")["rows"],
+                         [r for r in ticker_state.sleeve_snapshot(today)["rows"] if r["sleeve_id"] == "growth"])
+        self.assertEqual([r["conviction"] for r in appmod.get_sleeve_snapshot(today, "growth")["rows"]], [4, 4])      # second run sees tonight's notes
+
+    def test_snapshot_endpoint_rejects_a_bad_date(self):
+        r = appmod.get_sleeve_snapshot("yesterday", "")
+        self.assertEqual(r.status_code, 400)
 
     def test_invalid_model_answers_are_discarded_not_saved(self):
         appmod._do_scout(generate=lambda p: ("I think you should buy it", None), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
@@ -250,3 +297,38 @@ class TestWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEvidenceHelpers(unittest.TestCase):
+    def test_domain_of(self):
+        self.assertEqual(appmod._domain_of("https://www.Example.com:8080/a?b=1"), "example.com")
+        self.assertIsNone(appmod._domain_of(None))
+        self.assertIsNone(appmod._domain_of("not a url"))
+
+    def test_old_data_markers(self):
+        today = datetime.date(2026, 11, 16)                 # a Monday
+        self.assertIs(appmod._older_than_days("2026-03-31", 366, today), False)
+        self.assertTrue(appmod._older_than_days("2025-06-30", 366, today))
+        self.assertIsNone(appmod._older_than_days(None, 366, today))
+        ts = lambda d: datetime.datetime.combine(d, datetime.time(12)).timestamp()
+        self.assertFalse(appmod._price_is_old(ts(datetime.date(2026, 11, 13)), today))       # Friday: 1 trading day
+        self.assertTrue(appmod._price_is_old(ts(datetime.date(2026, 11, 9)), today))         # a week old
+        self.assertIsNone(appmod._price_is_old(None, today))
+
+    def test_sleeve_row_carries_dates_and_flags(self):
+        r = row("AAA")
+        r["s1"].update({"fiscal_year_end": "2024-12-31", "last_filed": "2025-03-01", "negative_equity": True})
+        r["s2"] = {"available": True, "price": 5.0, "fetched_at": int(time.time()) - 20 * 86400}
+        out = appmod._sleeve_row(r, datetime.date.today(), {})
+        self.assertEqual((out["fiscal_year_end"], out["financials_old"], out["price_old"], out["negative_equity"]), ("2024-12-31", True, True, True))
+        self.assertTrue(out["price_as_of"])
+
+    def test_old_database_gains_the_new_columns(self):
+        store.init_db()
+        with store._conn() as c:
+            c.execute("DROP TABLE IF EXISTS scout_picks")
+            c.execute("CREATE TABLE scout_picks(ticker TEXT NOT NULL, picked_on TEXT NOT NULL, sleeves TEXT, conviction INTEGER, price REAL, spy REAL, note_id INTEGER, scored TEXT, PRIMARY KEY(ticker, picked_on))")
+        ticker_state.ensure_scout()
+        with store._conn() as c:
+            cols = {r[1] for r in c.execute("PRAGMA table_info(scout_picks)")}
+        self.assertTrue({"price_as_of", "spy_as_of", "price_src"} <= cols)
