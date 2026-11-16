@@ -62,13 +62,13 @@
     },
     "benefits.contribution_limits": {
       "merge": true,
-      "values": {"hsa_self": 4500, "hsa_family": 9000},
+      "values": {"hsa_self": 4500, "hsa_family": 9000, "k401_employee": 25500, "k401_catchup_50": 8500, "k401_catchup_60_63": 11750, "ira_limit": 7500, "ira_catchup": 1100, "roth_ira_mfj_phaseout": [250000, 260000], "roth_ira_single_phaseout": [158000, 173000]},
       "status": "primary",
       "confirmed": true,
-      "verified": "2026-11-09",
-      "source": "IRS Rev. Proc. 2026-24 (HSA); IRS annual retirement-plan COLA notice (pending)",
-      "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-24.pdf",
-      "note": "HSA limits only (Rev. Proc. 2026-24). The 401(k)/415(c)/IRA figures for 2027 are not published yet and carry forward from 2026, so this group stays flagged stale."
+      "verified": "2026-11-16",
+      "source": "IRS Rev. Proc. 2026-24 (HSA); IRS Notice 2026-66 / news release IR-2026-136 of 12 Nov 2026 (401(k), catch-ups, IRA, Roth phase-out)",
+      "source_url": "https://www.irs.gov/newsroom/401k-limit-increases-to-25500-for-2027-ira-limit-remains-7500",
+      "note": "401(k) deferral, catch-up, IRA and Roth phase-out figures are the published 2027 values. The 415(c) total and the Roth catch-up wage floor are not in the news release and still carry forward from 2026 (not invented), so this group stays flagged stale until the Notice itself is read."
     },
     "ss.bend_points": {
       "confirmed": true,
