@@ -436,7 +436,7 @@ class TestFollowups(unittest.TestCase):
 
     def test_health_reports_a_code_build_that_is_a_hash_of_the_code(self):
         import app as appmod
-        out = appmod.health()
+        out = appmod.health(type("R", (), {"session": {}})())          # no session: only ok and the build ids are returned
         self.assertRegex(out["code_build"], r"^[0-9a-f]{10}$")
         self.assertEqual(out["code_build"], appmod._code_build())
 
