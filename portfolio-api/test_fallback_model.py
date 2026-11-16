@@ -128,6 +128,16 @@ class Settings(unittest.TestCase):
         self.assertNotIn("FALLBACK_MODEL", box)
         self.assertEqual(self.post({"FALLBACK_MODEL": "nope"}, {}).status_code, 400)
 
+    def test_extra_news_domains_are_validated_cleaned_and_applied_live(self):
+        box = {}
+        r = self.post({"SCOUT_EXTRA_DOMAINS": "Trade-Journal.example,  other.org"}, box)
+        self.assertEqual(box["SCOUT_EXTRA_DOMAINS"], "trade-journal.example, other.org")
+        self.assertEqual(r["restart_required"], [])
+        self.assertEqual(self.post({"SCOUT_EXTRA_DOMAINS": "not a domain!"}, {}).status_code, 400)
+        with mock.patch.object(appmod, "_ollama_models", lambda force=False: ROWS), mock.patch.object(appmod, "_read_settings", lambda: dict(box)):
+            cfg = {c["key"]: c for c in appmod.get_settings()["config"]}["SCOUT_EXTRA_DOMAINS"]
+        self.assertEqual((cfg["value"], cfg["free_text"], cfg["options"], cfg["applies"]), ("trade-journal.example, other.org", True, None, "immediately"))
+
     def test_page_sends_only_changed_values_and_shows_a_help_icon(self):
         html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"), encoding="utf-8").read()
         self.assertIn("i.value===i.dataset.orig", html)

@@ -14,6 +14,7 @@ Design rules (Jason 2026-11-12/13):
 This module is pure (selection, prompt, validation); app.py supplies the data fetchers, the model call and the storage."""
 import datetime
 import json
+import numcheck
 import re
 
 import sleeves as sleeves_mod
@@ -46,7 +47,7 @@ def has_data(row):
     return bool(s2.get("available") and s2.get("price")) and bool(s3.get("analyst") or s3.get("insider"))
 
 
-def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIGHTLY_CAP, rescout_days=RESCOUT_DAYS, held=None):
+def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIGHTLY_CAP, rescout_days=RESCOUT_DAYS, held=None, skip=None):
     """-> [{ticker, sleeves: [ids], why}] best-ranked first. Only names that pass a sleeve completely (SEC, market data and signals
     rules all present and satisfied) are considered; recently scouted names are skipped unless something new happened.
     notes: {ticker: {'created_at': epoch, 'inputs': {...}}}."""
@@ -61,7 +62,7 @@ def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIG
         for m in ev["matches"]:
             t = m["ticker"]
             row = by_ticker.get(t) or m
-            if not has_data(row):
+            if not has_data(row) or (skip and t in skip):
                 continue
             note = notes.get(t)
             why = None
@@ -87,6 +88,68 @@ def pick_targets(sleeve_list, rows, notes, today, per_sleeve=PER_SLEEVE, cap=NIG
             if taken >= per_sleeve:
                 break
     return [chosen[t] for t in order][:cap]
+
+
+# ---- news source quality (RV-006 part B) -------------------------------------------------------------------------------------
+# A scout note may earn conviction 4-5 only when it cites an SEC filing or an ESTABLISHED news outlet. Company press releases and
+# unknown or promotional sites are shown and may be cited, but they cap conviction at 3. Official (.gov) and SEC sources count as
+# established. The list below is the proposed default; additions are made in SETTINGS > Model > "Extra established news domains".
+ESTABLISHED_DOMAINS = (
+    "reuters.com", "apnews.com", "bloomberg.com", "wsj.com", "ft.com", "cnbc.com", "barrons.com", "marketwatch.com", "nytimes.com",
+    "washingtonpost.com", "economist.com", "forbes.com", "fortune.com", "businessinsider.com", "investors.com", "morningstar.com",
+    "axios.com", "bbc.com", "bbc.co.uk", "theguardian.com", "npr.org", "pbs.org", "cbsnews.com", "nbcnews.com", "abcnews.go.com",
+    "usatoday.com", "latimes.com", "techcrunch.com", "theinformation.com", "spglobal.com", "finance.yahoo.com", "thestreet.com",
+    "nikkei.com", "scmp.com", "japantimes.co.jp", "globeandmail.com", "financialpost.com", "theverge.com", "arstechnica.com",
+    "wired.com", "defensenews.com", "spacenews.com", "fiercebiotech.com", "fiercepharma.com", "statnews.com", "endpts.com")
+# Wire services that carry companies' OWN announcements: a press release is the company speaking, not independent reporting.
+COMPANY_WIRE_DOMAINS = ("businesswire.com", "prnewswire.com", "globenewswire.com", "accesswire.com", "newsfilecorp.com",
+                        "einpresswire.com", "prweb.com", "marketwire.com", "stocktitan.net")
+OFFICIAL_SUFFIXES = (".gov", ".gov.uk", ".europa.eu")
+
+
+def _valid_domain(d):
+    """A plain host name: dot-separated labels of letters, digits and hyphens, at least two labels, an alphabetic last label. Checked
+    label by label (no backtracking pattern on user input)."""
+    if not d or len(d) > 253:
+        return False
+    labels = d.split(".")
+    if len(labels) < 2:
+        return False
+    for lab in labels:
+        if not 1 <= len(lab) <= 63 or lab[0] == "-" or lab[-1] == "-" or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in lab):
+            return False
+    return len(labels[-1]) >= 2 and labels[-1].isalpha()
+
+
+def _clean_domains(extra):
+    out = []
+    for d in re.split(r"[\s,;]+", str(extra or "")[:5000].lower()):
+        d = d.strip().lstrip(".")
+        if d and _valid_domain(d):
+            out.append(d)
+    return out
+
+
+def _on(domain, listed):
+    return any(domain == d or domain.endswith("." + d) for d in listed)
+
+
+def domain_class(domain, extra=""):
+    """-> 'official' (SEC, government), 'established' (a recognised news outlet), 'company' (a wire service carrying a company's own
+    press release) or 'other' (unknown, promotional, blog). Only official and established can support conviction 4-5."""
+    d = str(domain or "").lower().strip()
+    if not d:
+        return "other"
+    if d == "sec.gov" or d.endswith("." + "sec.gov") or any(d.endswith(sfx) for sfx in OFFICIAL_SUFFIXES):
+        return "official"
+    if _on(d, COMPANY_WIRE_DOMAINS):
+        return "company"
+    if _on(d, ESTABLISHED_DOMAINS) or _on(d, _clean_domains(extra)):
+        return "established"
+    return "other"
+
+
+CLASS_LABEL = {"official": "official source", "established": "established outlet", "company": "company press release", "other": "unrated site"}
 
 
 def evidence_menu(facts):
@@ -166,7 +229,7 @@ def _strs(v, lo, hi, maxlen=240):
     return out[:hi]
 
 
-def parse_note(raw, facts):
+def parse_note(raw, facts, extra_domains=""):
     """-> (note, None) or (None, reason). Strict: grounded evidence only, and conviction capped by how much evidence existed."""
     try:
         obj = json.loads(_strip_fences(raw))
@@ -178,14 +241,27 @@ def parse_note(raw, facts):
     thesis = str(obj.get("thesis") or "").strip()
     if len(thesis) < 20:
         return None, "thesis missing or too short"
-    ev, dropped = [], 0
+    ev, dropped, dropped_numbers = [], 0, 0
+    news_by_id = {n.get("id"): n for n in facts.get("news") or []}
     for e in obj.get("evidence") if isinstance(obj.get("evidence"), list) else []:
         if isinstance(e, dict) and str(e.get("source")) in menu and str(e.get("claim") or "").strip():
-            ev.append({"claim": str(e["claim"]).strip()[:300], "source": str(e["source"])})
+            src, claim = str(e["source"]), str(e["claim"]).strip()[:300]
+            if src in ("sec", "market", "insiders", "analysts"):
+                # RV-014: a claim that cites a data block must use figures that block really contains
+                if numcheck.unsupported(claim, json.dumps(facts.get(src), default=str)):
+                    dropped += 1
+                    dropped_numbers += 1
+                    continue
+                cls = "data"
+            elif src.startswith("filing:"):
+                cls = "official"
+            else:
+                cls = domain_class((news_by_id.get(src) or {}).get("domain"), extra_domains)
+            ev.append({"claim": claim, "source": src, "source_class": cls})
         else:
             dropped += 1
     if len(ev) < 2:
-        return None, f"fewer than 2 claims grounded in the supplied sources ({dropped} dropped)"
+        return None, f"fewer than 2 claims grounded in the supplied sources ({dropped} dropped, {dropped_numbers} with figures not in the data)"
     disproof = _strs(obj.get("disproof"), 1, 4)
     risks = _strs(obj.get("risks"), 1, 5)
     if not disproof:
@@ -198,14 +274,34 @@ def parse_note(raw, facts):
         return None, "conviction missing"
     # Capped on what the note actually CITES, not on what was merely supplied: a note resting only on numbers cannot earn a high rating.
     has_outside = any(e["source"].startswith(("news:", "filing:")) for e in ev)
-    capped = False
+    has_strong = any(e["source_class"] in ("official", "established") for e in ev)     # a filing, a government source or an established outlet
+    capped, cap_reason = False, None
     if not has_outside and conv > 2:
-        conv, capped = 2, True                       # numbers alone, with no news or filings to read, cannot earn a high rating
+        conv, capped, cap_reason = 2, True, "no news or filings cited"       # numbers alone, with no news or filings to read, cannot earn a high rating
+    elif has_outside and not has_strong and conv > 3:
+        conv, capped, cap_reason = 3, True, "only company press releases or unrated sites cited"
     horizon = obj.get("horizon") if obj.get("horizon") in HORIZONS else "1-3 years"
     return {"thesis": thesis[:900], "evidence": ev, "risks": risks, "disproof": disproof, "catalysts": _strs(obj.get("catalysts"), 0, 4),
             "horizon": horizon, "conviction": conv, "stance": "worth researching", "evidence_dropped": dropped,
-            "conviction_capped": capped,
+            "conviction_capped": capped, "conviction_cap_reason": cap_reason, "evidence_dropped_numbers": dropped_numbers,
+            "thesis_figures_unverified": _thesis_unverified(thesis, facts),
             "note": "Informational research note written by the app's scout from the sources listed. Not financial advice."}, None
+
+
+def _thesis_unverified(thesis, facts):
+    """Figures in the thesis that none of the supplied data or news contains (the thesis is the model's own summary, so these are shown
+    as a caution, not removed). Threshold or hypothetical sentences are skipped."""
+    try:
+        everything = json.dumps({k: facts.get(k) for k in ("sec", "market", "insiders", "analysts", "news", "filings")}, default=str)
+        vals = numcheck.evidence_values(everything)
+        out = []
+        for sent in re.split(r"(?<=[.!?])\s+", thesis):
+            if numcheck.sentence_is_hypothetical(sent):
+                continue
+            out.extend(numcheck.unsupported(sent, everything, vals))
+        return out[:6]
+    except Exception:
+        return []
 
 
 def inputs_snapshot(row):

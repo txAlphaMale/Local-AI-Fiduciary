@@ -24,7 +24,7 @@ def facts(news=True):
     f = {"sec": {"rev_growth_pct": 60.0, "runway_months": 30.0}, "market": {"price": 20.0, "sector": "Aerospace"},
          "insiders": {"buyers": 3, "net_value": 250000.0}, "analysts": {"buy_pct": 70.0, "total": 10}, "news": [], "filings": []}
     if news:
-        f["news"] = [{"id": "news:1", "title": "Launch succeeds", "date": "2026-11-10", "text": "x"}]
+        f["news"] = [{"id": "news:1", "title": "Launch succeeds", "date": "2026-11-10", "text": "x", "domain": "reuters.com"}]
         f["filings"] = [{"id": "filing:1", "date": "2026-11-05", "labels": ["Entry into a Material Agreement"], "items": "1.01"}]
     return f
 
@@ -149,7 +149,7 @@ class TestJob(unittest.TestCase):
         ticker_state.ensure()
         ticker_state.ensure_scout()
         with store._conn() as c:
-            for t in ("ticker_state", "scout_notes", "scout_picks"):
+            for t in ("ticker_state", "scout_notes", "scout_picks", "scout_rejects", "sleeve_snapshots"):
                 c.execute(f"DELETE FROM {t}")
         rows = []
         for t, g in (("AAA", 90.0), ("BBB", 70.0)):
@@ -248,6 +248,17 @@ class TestJob(unittest.TestCase):
         self.assertEqual([n["ticker"] for n in ticker_state.list_notes()], ["AAA"])
         self.assertIn("paused", appmod.get_scout_status()["last_run"]["stopped"])
 
+    def test_failed_and_rejected_names_are_logged_and_not_retried_the_next_night(self):
+        with store._conn() as c:
+            c.execute("DELETE FROM scout_rejects")
+        appmod._do_scout(generate=lambda p: ("I think you should buy it", None), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
+        got = appmod.get_scout_status()
+        self.assertEqual(sorted(r["ticker"] for r in got["rejected"]), ["AAA", "BBB"])
+        self.assertTrue(all(r["kind"] == "rejected" and r["reason"] for r in got["rejected"]))
+        calls = []
+        appmod._do_scout(generate=lambda p: (calls.append(p) or good(), None), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
+        self.assertEqual(calls, [])                      # both names are skipped for a week: no search, no GPU slot
+
     def test_model_errors_are_counted_and_skipped(self):
         appmod._do_scout(generate=lambda p: (None, "request failed"), facts_fn=self.ok_facts, spy_fn=lambda: 1.0)
         self.assertEqual(appmod.get_scout_status()["last_run"]["errors"], 2)
@@ -332,3 +343,90 @@ class TestEvidenceHelpers(unittest.TestCase):
         with store._conn() as c:
             cols = {r[1] for r in c.execute("PRAGMA table_info(scout_picks)")}
         self.assertTrue({"price_as_of", "spy_as_of", "price_src"} <= cols)
+
+
+class TestClaimChecks(unittest.TestCase):
+    """RV-014 (claims must use figures the cited data contains) and RV-006 part B (source quality gates conviction 4-5)."""
+
+    def test_a_claim_with_a_figure_not_in_its_data_block_is_dropped_and_counted(self):
+        ev = [{"claim": "Revenue grew 60% year over year.", "source": "sec"}, {"claim": "Revenue grew 95% year over year.", "source": "sec"},
+              {"claim": "Three insiders bought about $250K.", "source": "insiders"}]
+        note, err = scout.parse_note(good(evidence=ev), facts())
+        self.assertIsNone(err)
+        self.assertEqual((len(note["evidence"]), note["evidence_dropped"], note["evidence_dropped_numbers"]), (2, 1, 1))
+
+    def test_all_figure_claims_wrong_rejects_the_note_with_the_reason(self):
+        ev = [{"claim": "Revenue grew 95%.", "source": "sec"}, {"claim": "Cash runway is 80 months, or $9M a month.", "source": "sec"}]
+        note, err = scout.parse_note(good(evidence=ev), facts())
+        self.assertIsNone(note)
+        self.assertIn("figures not in the data", err)
+
+    def test_claims_without_figures_pass(self):
+        ev = [{"claim": "Insiders are net buyers.", "source": "insiders"}, {"claim": "Analysts lean positive.", "source": "analysts"}]
+        note, _ = scout.parse_note(good(evidence=ev, conviction=2), facts())
+        self.assertEqual(len(note["evidence"]), 2)
+
+    def test_domain_classes(self):
+        self.assertEqual(scout.domain_class("www.sec.gov"), "official")
+        self.assertEqual(scout.domain_class("data.fda.gov"), "official")
+        self.assertEqual(scout.domain_class("markets.reuters.com"), "established")
+        self.assertEqual(scout.domain_class("prnewswire.com"), "company")
+        self.assertEqual(scout.domain_class("hotstockalerts.biz"), "other")
+        self.assertEqual(scout.domain_class(None), "other")
+        self.assertEqual(scout.domain_class("trade-journal.example"), "other")
+        self.assertEqual(scout.domain_class("trade-journal.example", "Trade-Journal.example, nonsense"), "established")
+        self.assertEqual(scout.domain_class("notreuters.com"), "other")           # a look-alike is not a subdomain
+
+    def test_only_press_releases_or_unrated_sites_cap_conviction_at_three(self):
+        f = facts(news=True)
+        f["filings"] = []
+        for dom in ("businesswire.com", "pumpmystock.biz"):
+            f["news"][0]["domain"] = dom
+            note, _ = scout.parse_note(good(conviction=5), f)
+            self.assertEqual((note["conviction"], note["conviction_capped"]), (3, True), dom)
+            self.assertIn("press releases", note["conviction_cap_reason"])
+        f["news"][0]["domain"] = "reuters.com"
+        self.assertEqual(scout.parse_note(good(conviction=5), f)[0]["conviction"], 5)
+
+    def test_a_cited_sec_filing_counts_as_strong_even_with_weak_news(self):
+        f = facts(news=True)
+        f["news"][0]["domain"] = "stocktitan.net"
+        ev = [{"claim": "Revenue grew 60%.", "source": "sec"}, {"claim": "A material agreement was filed.", "source": "filing:1"},
+              {"claim": "A launch succeeded.", "source": "news:1"}]
+        note, _ = scout.parse_note(good(conviction=5, evidence=ev), f)
+        self.assertEqual((note["conviction"], note["conviction_capped"]), (5, False))
+        self.assertEqual([e["source_class"] for e in note["evidence"]], ["data", "official", "company"])
+
+    def test_extra_domains_from_settings_count(self):
+        f = facts(news=True)
+        f["filings"] = []
+        f["news"][0]["domain"] = "tradejournal.example"
+        self.assertEqual(scout.parse_note(good(conviction=5), f)[0]["conviction"], 3)
+        self.assertEqual(scout.parse_note(good(conviction=5), f, "tradejournal.example")[0]["conviction"], 5)
+
+    def test_thesis_figures_not_in_the_data_are_flagged_but_the_note_is_kept(self):
+        note, err = scout.parse_note(good(thesis="Revenue is growing 60% and margins reached 41% last year."), facts())
+        self.assertIsNone(err)
+        self.assertEqual(note["thesis_figures_unverified"], ["41%"])
+
+
+class TestRejectLog(unittest.TestCase):
+    def setUp(self):
+        store.init_db()
+        ticker_state.ensure_scout()
+        with store._conn() as c:
+            c.execute("DELETE FROM scout_rejects")
+
+    def test_rejects_are_listed_and_block_a_retry_for_seven_days(self):
+        ticker_state.add_reject("AAA", "2026-11-10", "rejected", "thesis missing or too short")
+        ticker_state.add_reject("BBB", "2026-11-04", "error", "request failed")
+        self.assertEqual(ticker_state.recent_reject_tickers("2026-11-14", 7), {"AAA"})          # BBB is 10 days old
+        self.assertEqual(ticker_state.recent_reject_tickers("2026-11-16", 7), {"AAA"})          # blocked for the 7 days after the reject
+        self.assertEqual(ticker_state.recent_reject_tickers("2026-11-17", 7), set())            # the 8th day it may be tried again
+        self.assertEqual([r["ticker"] for r in ticker_state.list_rejects()], ["BBB", "AAA"])
+
+    def test_pick_targets_skips_recently_failed_names(self):
+        sl = [{"id": "g", **sleeves.BUILTIN["growth"]}]
+        r = row("A")
+        self.assertEqual([t["ticker"] for t in scout.pick_targets(sl, [r], {}, TODAY)], ["A"])
+        self.assertEqual(scout.pick_targets(sl, [r], {}, TODAY, skip={"A"}), [])
