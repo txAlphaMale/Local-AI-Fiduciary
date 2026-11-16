@@ -12167,7 +12167,9 @@ async def post_account_registry(req: Request):
         store.write_json(ACCOUNTS_FILE, ac)
         _emit_config_changed(req, "/api/account-registry", old_ac, ac, summarize_keys={"accounts"})
 
-    ins_keys = ("ef", "ef_cap", "rate_pct", "min_payment", "pay_in_full", "is_mortgage")
+    # "ef_state" is what the EF? dropdown actually sends ({ef_state: "yes"|"no"|"unset"}); leaving it out of this list made a
+    # designation return ok with nothing saved, and the page said NOT SAVED.
+    ins_keys = ("ef", "ef_state", "ef_cap", "rate_pct", "min_payment", "pay_in_full", "is_mortgage")
     if any(k in body for k in ins_keys):
         old_cfg = _read_insurance_cfg()
         cfg = _read_insurance_cfg()
