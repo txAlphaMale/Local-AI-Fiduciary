@@ -387,13 +387,15 @@ SETTING_SPECS = {
     "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
     "insider_lookback_days":      {"env": "INSIDER_LOOKBACK_DAYS",      "default": 120,  "cast": int,   "label": "Insider signal: Form 4 lookback window (days)", "group": "Insider signal"},
     "chat_thinking_mode":         {"env": "CHAT_THINKING_MODE",         "default": 0,    "cast": int,   "label": "Chat: reasoning (thinking) mode. 0 = full reasoning on every step (default, highest quality). 1 = no reasoning only for the short commentary written after the app has printed a ticker's research facts (faster; trial it against 0 before keeping it)", "group": "Chat"},
+    "llm_num_ctx":                {"env": "LLM_NUM_CTX",                "default": 32768, "cast": int,   "label": "Model context size (tokens) used for EVERY call to the big model. Keep it one value: Ollama reloads the model (about 30 s) whenever the size changes. On two 11 GB cards the largest that fits fully on the GPUs is about 32768; if the model stops loading, lower it", "group": "Chat"},
     "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 80,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker (a busy company can hit this before the window ends; the signal then says how far back it reaches)", "group": "Insider signal"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live. app.py reads them into module constants
 # AFTER _boot_merge runs; llm.py (imported BEFORE the merge) resolves its own keys lazily per call.
 CONFIG_SPECS = [
-    {"key": "ANALYSIS_MODEL", "label": "Analysis / Strategist model (Ollama tag)", "group": "Model", "default": "qwen3.6:27b"},
+    {"key": "ANALYSIS_MODEL", "label": "Chat, Strategist and analysis model (pick from the models Ollama has; applies immediately)", "group": "Model", "default": "qwen3.6:27b"},
+    {"key": "VISION_MODEL",   "label": "Picture-reading model (reads fund lists and tickers from an attached screenshot)", "group": "Model", "default": "qwen2.5vl:7b"},
     {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
     {"key": "LLM_KEEP_ALIVE", "label": "Keep model resident (e.g. 30m)",           "group": "Model", "default": "30m"},
     # ---- AI / LLM provider (2026-07-24, Claude integration) ----
@@ -516,10 +518,31 @@ DEFAULT_ACCOUNT_FLAGS = {"drip": False, "fractional_ok": True}
 FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
 # (OLLAMA = llm.BASE_URL alias removed: llm.py now resolves its URL/dialect lazily per call so
 #  SETTINGS-tab values merged by _boot_merge take effect; error text calls llm._base_url().)
-ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "qwen3.6:27b")
+ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL") or "qwen3.6:27b"     # boot value; the live choice is _analysis_model()
+
+
+# Model choices are made in SETTINGS (a dropdown filled from Ollama) and apply at once, with no .env edit and no restart. The value
+# saved there wins over the environment, because docker-compose always injects a default for these variables and a user must never
+# have to edit config files to pick a model; with nothing saved, the environment and then the built-in default apply.
+LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL")
+
+
+def _live_cfg(key, fallback):
+    try:
+        v = _read_settings().get(key)
+    except Exception:
+        v = None
+    return str(v).strip() if v not in (None, "") else (os.environ.get(key) or fallback)
+
+
+def _analysis_model():
+    return _live_cfg("ANALYSIS_MODEL", ANALYSIS_MODEL)
+
+
+def _vision_model():
+    return _live_cfg("VISION_MODEL", "qwen2.5vl:7b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
-ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "32768"))   # ONE context size for every call to the big model (same as STRAT_NUM_CTX): Ollama reloads the model whenever the requested size changes, so mixed sizes cost a ~30 s reload each time (RV-007; 2026-11-16 measurements)
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
 # ---- Claude (Anthropic) integration, 2026-07-24 -- two-tier model selection ------------------
 # Only consulted when llm._dialect() == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
@@ -540,13 +563,12 @@ def _text_model(strategist=False):
     ANTHROPIC_MODEL for everything else (chat personas, narrative, single-shot JSON extraction)."""
     if llm._dialect() == "anthropic":
         return ANTHROPIC_STRATEGIST_MODEL if strategist else ANTHROPIC_MODEL
-    return ANALYSIS_MODEL
+    return _analysis_model()
 # Chat image input (RESUME-TRACKER 2026-07-18j): a SEPARATE small multimodal model, not a
 # replacement for ANALYSIS_MODEL (text-only, no vision support). qwen2.5vl:7b is confirmed to fit
 # even an 8GB test-user card at 4-bit and comfortably fits Jason's dual 1080 Tis; pull it once via
 # `ollama pull qwen2.5vl:7b` before this feature works (a missing model surfaces as a normal Ollama
 # 404 from _vision_identify_tickers, not a crash).
-VISION_MODEL = os.environ.get("VISION_MODEL", "qwen2.5vl:7b")
 VISION_LLM_TIMEOUT = int(os.environ.get("VISION_LLM_TIMEOUT", "180"))   # single non-streaming call, bounded
 
 _run_lock = threading.Lock()
@@ -7947,13 +7969,13 @@ def _ollama_generate(prompt):
     /api/generate; the retry-without-`think` behavior now lives in llm._ollama_chat."""
     # Qwen3 family: soft-switch off the <think> channel so the JSON isn't buried in reasoning
     # (unless ANALYSIS_THINK is enabled — then let it reason for deeper, better-calibrated briefs).
-    if "qwen3" in ANALYSIS_MODEL.lower() and not ANALYSIS_THINK:
+    if "qwen3" in _analysis_model().lower() and not ANALYSIS_THINK:
         prompt = prompt + "\n/no_think"
     try:
         with _gpu_slot():   # serialize qwen-27b generation across all features
             res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(),
                                 format_json=True, think=ANALYSIS_THINK, temperature=0.3,
-                                num_ctx=ANALYSIS_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, timeout=LLM_TIMEOUT)
+                                num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, timeout=LLM_TIMEOUT)
     except Exception as e:
         return None, f"request failed: {e}"
     if not res.ok:
@@ -8939,7 +8961,7 @@ def _do_narrative():
         "single line beginning exactly 'THIS WEEK'S FOCUS:' naming the ONE most valuable action. "
         "Cite only numbers present in the data; round sensibly; warm but direct; under 220 words. "
         "Close with: 'Educational, not advice.'\n\nDATA:\n" + json.dumps(ctx))
-    if "qwen3" in ANALYSIS_MODEL.lower() and not ANALYSIS_THINK:
+    if "qwen3" in _analysis_model().lower() and not ANALYSIS_THINK:
         prompt += "\n/no_think"
     messages = [{"role": "user", "content": prompt}]
     # Every failure mode below used to collapse into `letter = ""` and a silent `return` — the
@@ -8960,7 +8982,7 @@ def _do_narrative():
         with _gpu_slot():
             gpu_wait_s = round(time.time() - t_submit, 1)
             t_gen = time.time()
-            res = llm._llm_chat(messages, _text_model(), temperature=0.4, num_ctx=ANALYSIS_NUM_CTX,
+            res = llm._llm_chat(messages, _text_model(), temperature=0.4, num_ctx=_num_ctx(),
                                 keep_alive=LLM_KEEP_ALIVE, timeout=NARR_LLM_TIMEOUT)
             gen_s = round(time.time() - t_gen, 1)
         if not res.ok:
@@ -12234,6 +12256,60 @@ async def post_account_registry(req: Request):
     return {"ok": True, "account": nm, "saved": touched, "rejected": rejected}
 
 
+_OLLAMA_MODELS_CACHE = {"at": 0.0, "rows": None}
+
+
+def _ollama_models(force=False):
+    """The models the Ollama server has, each with what it can do: [{name, size_gb, parameters, quantization, capabilities}].
+    Asked of Ollama itself (/api/tags, then /api/show per model for its capabilities), cached 30 s. None when this install does not
+    use Ollama or the server cannot be reached, so the Settings page can fall back to a plain text box."""
+    if llm._dialect() != "ollama":
+        return None
+    now = time.time()
+    if not force and _OLLAMA_MODELS_CACHE["rows"] is not None and now - _OLLAMA_MODELS_CACHE["at"] < 30:
+        return _OLLAMA_MODELS_CACHE["rows"]
+    try:
+        base = llm._base_url().rstrip("/")
+        tags = requests.get(f"{base}/api/tags", timeout=6).json().get("models") or []
+        rows = []
+        for m in tags:
+            name = m.get("name") or m.get("model")
+            if not name:
+                continue
+            caps, det = [], m.get("details") or {}
+            try:
+                show = requests.post(f"{base}/api/show", json={"model": name}, timeout=6).json()
+                caps = list(show.get("capabilities") or [])
+                det = show.get("details") or det
+            except Exception:
+                pass
+            rows.append({"name": name, "size_gb": round((m.get("size") or 0) / 1e9, 1), "parameters": det.get("parameter_size"),
+                         "quantization": det.get("quantization_level"), "capabilities": caps})
+        rows.sort(key=lambda r: r["name"])
+        _OLLAMA_MODELS_CACHE.update(at=now, rows=rows)
+        return rows
+    except Exception:
+        return None
+
+
+def _model_options_for(key):
+    """Dropdown choices for a model setting: the Ollama models that can do the job (chat and Strategist need tool use; the picture
+    reader needs vision). None = free text."""
+    rows = _ollama_models()
+    if rows is None:
+        return None
+    need = {"ANALYSIS_MODEL": "tools", "VISION_MODEL": "vision"}.get(key)
+    names = [r["name"] for r in rows if (not need or need in r["capabilities"] or not r["capabilities"])]
+    return names or [r["name"] for r in rows]
+
+
+@app.get("/api/ollama/models")
+def get_ollama_models():
+    """Models installed on the Ollama server with their capabilities (read-only), for the model pickers in SETTINGS."""
+    rows = _ollama_models(force=True)
+    return {"available": rows is not None, "models": rows or [], "analysis_model": _analysis_model(), "vision_model": _vision_model()}
+
+
 @app.get("/api/settings")
 def get_settings():
     """Advanced knobs with resolved value + source (env/settings/default) for the SETTINGS tab.
@@ -12251,6 +12327,15 @@ def get_settings():
         k = spec["key"]
         env_locked = k in _ENV_SECRETS_AT_BOOT
         staged = stored.get(k) not in (None, "")
+        if k in LIVE_CONFIG_KEYS:     # chosen from a dropdown of the models Ollama has; applies at once and beats the compose default
+            cur = _analysis_model() if k == "ANALYSIS_MODEL" else _vision_model()
+            opts = _model_options_for(k)
+            if opts is not None and cur not in opts:
+                opts = [cur] + opts
+            cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": cur, "default": spec["default"],
+                            "source": "settings" if staged else ("env" if env_locked else "default"), "env_locked": False,
+                            "staged_behind_env": False, "editable": True, "applies": "immediately", "options": opts})
+            continue
         if env_locked:
             val, source = os.environ.get(k), "env"
         elif staged:
@@ -12285,7 +12370,7 @@ def _env_overrides():
                         "saved": str(sv), "env": str(ev)})
     for spec in CONFIG_SPECS:
         k = spec["key"]
-        if k == "PORTFOLIO_PROVIDER":
+        if k == "PORTFOLIO_PROVIDER" or k in LIVE_CONFIG_KEYS:
             continue
         ev, sv = os.environ.get(k), stored.get(k)
         if k in _ENV_SECRETS_AT_BOOT and sv not in (None, "") and str(sv) != str(ev):
@@ -12344,9 +12429,14 @@ async def post_settings(req: Request):
         if val in (None, ""):
             stored.pop(key, None)
         else:
-            stored[key] = str(val)
+            if key in LIVE_CONFIG_KEYS:
+                known = [r["name"] for r in (_ollama_models(force=True) or [])]
+                if known and str(val).strip() not in known:
+                    return JSONResponse({"error": f"{str(val).strip()!r} is not one of the models Ollama has: {', '.join(known)}"}, status_code=400)
+            stored[key] = str(val).strip()
         applied.append(key)
-        restart_needed.append(key)
+        if key not in LIVE_CONFIG_KEYS:
+            restart_needed.append(key)
         if key in _ENV_SECRETS_AT_BOOT:
             staged_behind_env.append(key)
     store.write_json(SETTINGS_FILE, stored)
@@ -15744,7 +15834,6 @@ STRATEGIST_TOOLS = [
             "required": ["query"]}}},
 ]
 
-STRAT_NUM_CTX = int(os.environ.get("STRAT_NUM_CTX", "32768"))         # full context — don't truncate the agent's working memory
 STRAT_LLM_TIMEOUT = int(os.environ.get("STRAT_LLM_TIMEOUT", "1800"))   # per-call ceiling; weekly bg job, reasoning ON is slow on Pascal
 _strat_lock = threading.Lock()
 _STRAT_HOLDER = {"kind": None, "since": 0}      # who holds _strat_lock, so a queued message can say so truthfully
@@ -15940,7 +16029,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
                     res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_TOOLS,
-                                        temperature=0.4, num_ctx=STRAT_NUM_CTX,
+                                        temperature=0.4, num_ctx=_num_ctx(),
                                         keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
                     telem["ended"] = "ollama_error"
@@ -16177,7 +16266,7 @@ def _do_advice(amount, question, max_iter=None):
             try:
                 with _gpu_slot():   # serialize qwen-27b generation across all features
                     res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_ADVICE_TOOLS,
-                                        temperature=0.4, num_ctx=STRAT_NUM_CTX,
+                                        temperature=0.4, num_ctx=_num_ctx(),
                                         keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
                     _advice_state.update(status=f"error: {res.error}", finished=int(time.time()))
@@ -16455,7 +16544,7 @@ def _chat_summarise_old(sid):
                   f"PREVIOUS SUMMARY:\n{prev or '(none)'}\n\nNEW TURNS:\n" + "\n".join(lines))
         with _gpu_slot():
             res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(), temperature=0.2,
-                                num_ctx=ANALYSIS_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, timeout=180)
+                                num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, timeout=180)
         if not res.ok:
             return
         text = (res.content or "").strip()
@@ -17034,7 +17123,7 @@ def _vision_identify_tickers(images, user_msg):
         "describe what you saw instead so the user can clarify."
     )
     try:
-        res = llm._llm_chat([{"role": "user", "content": prompt}], VISION_MODEL, images=images,
+        res = llm._llm_chat([{"role": "user", "content": prompt}], _vision_model(), images=images,
                             temperature=0.1, keep_alive=LLM_KEEP_ALIVE, timeout=VISION_LLM_TIMEOUT)
         if not res.ok:
             return {"tickers": [], "note": f"vision model error {res.status_code}: {res.error}", "error": True}
@@ -17060,6 +17149,13 @@ _CHAT_CANCEL_LOCK = threading.Lock()
 
 
 _RECENT_CHAT_TIMING = collections.deque(maxlen=20)
+
+
+def _num_ctx():
+    try:
+        return max(2048, int(_knob("llm_num_ctx")))
+    except Exception:
+        return 32768
 
 
 def _chat_thinking_mode():
@@ -17258,9 +17354,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             _think = False if (_chat_thinking_mode() == 1 and research_hits) else None
             _call["think"] = _think
             try:
-                for chunk in llm._llm_chat(messages, persona["model"], tools=persona["tools"],
+                for chunk in llm._llm_chat(messages, _text_model(), tools=persona["tools"],
                                            stream=True, temperature=persona.get("temp", 0.3),
-                                           num_ctx=STRAT_NUM_CTX, keep_alive=LLM_KEEP_ALIVE, think=_think,
+                                           num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, think=_think,
                                            timeout=STRAT_LLM_TIMEOUT, cancel_check=cancel_event.is_set):
                     if chunk.get("error"):
                         yield _sse("error", {"error": chunk["error"]})
@@ -17771,7 +17867,7 @@ def _index_page():
 @app.get("/health")
 def health():
     return {"ok": True, "build": _index_page()[1], "code_build": _CODE_BUILD, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
-            "finnhub": bool(FINNHUB), "analysis_model": ANALYSIS_MODEL,
+            "finnhub": bool(FINNHUB), "analysis_model": _analysis_model(),
             "llm_dialect": llm._dialect(), "llm_model": _text_model(),
             "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()}
 

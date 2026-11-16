@@ -27,12 +27,15 @@ def run(stored, secrets, boot_env, env):
 
 class TestOverrides(unittest.TestCase):
     def test_config_value_saved_but_env_differs_is_reported(self):
-        r = run({"ANALYSIS_MODEL": "new-model"}, {}, {"ANALYSIS_MODEL"}, {"ANALYSIS_MODEL": "old-model"})
-        self.assertEqual([(o["key"], o["saved"], o["env"]) for o in r], [("ANALYSIS_MODEL", "new-model", "old-model")])
+        r = run({"LLM_TIMEOUT": "900"}, {}, {"LLM_TIMEOUT"}, {"LLM_TIMEOUT": "1200"})
+        self.assertEqual([(o["key"], o["saved"], o["env"]) for o in r], [("LLM_TIMEOUT", "900", "1200")])
+
+    def test_model_choices_are_exempt_because_the_ui_wins_and_applies_at_once(self):
+        self.assertEqual(run({"ANALYSIS_MODEL": "new-model"}, {}, {"ANALYSIS_MODEL"}, {"ANALYSIS_MODEL": "old-model"}), [])
 
     def test_same_value_or_nothing_saved_is_not_a_conflict(self):
-        self.assertEqual(run({"ANALYSIS_MODEL": "m"}, {}, {"ANALYSIS_MODEL"}, {"ANALYSIS_MODEL": "m"}), [])
-        self.assertEqual(run({}, {}, {"ANALYSIS_MODEL"}, {"ANALYSIS_MODEL": "m"}), [])
+        self.assertEqual(run({"LLM_TIMEOUT": "m"}, {}, {"LLM_TIMEOUT"}, {"LLM_TIMEOUT": "m"}), [])
+        self.assertEqual(run({}, {}, {"LLM_TIMEOUT"}, {"LLM_TIMEOUT": "m"}), [])
 
     def test_data_source_selector_is_exempt_because_the_ui_wins(self):
         self.assertEqual(run({"PORTFOLIO_PROVIDER": "snaptrade"}, {}, {"PORTFOLIO_PROVIDER"}, {"PORTFOLIO_PROVIDER": "csv"}), [])

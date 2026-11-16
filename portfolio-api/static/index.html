@@ -6579,7 +6579,7 @@ function settingsContent(){
           inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.dataset.key=it.key;
           inp.value=(it.value!=null?it.value:'');
         }
-        inp.style.cssText='width:200px;';
+        inp.style.cssText=(it.applies==='immediately'?'width:340px;':'width:200px;');
         // 2026-07-24: no longer disabled when env_locked -- you can stage a replacement value
         // here while .env still wins. Two different paths: (1) a value saved HERE with no .env entry
         // is read from the DB by _boot_merge on every process start, so a plain `restart` applies it
@@ -6587,6 +6587,9 @@ function settingsContent(){
         // .env-locked key needs the .env line removed and `docker compose up -d`, because `restart`
         // reuses the container's existing (stale) environment and won't see an edited .env.
         const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
+        if(it.applies==='immediately'){
+          meta.textContent = '· applies immediately (no restart)'+(it.options?' · choices read live from Ollama':' · Ollama could not be reached, type the exact model name')+(it.source==='settings'?' · customized':' · default '+it.default);
+        } else
         meta.textContent = it.env_locked
           ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + `docker compose up -d` to activate it'+(it.staged_behind_env?' (already staged)':''))
           : ('· applies on next portfolio-api restart (`docker compose restart portfolio-api`)'+(it.source==='settings'?' · customized':' · default '+it.default));
@@ -6596,7 +6599,7 @@ function settingsContent(){
   }
   const btn=el('button','mut-btn','↳ SAVE SETTINGS'); btn.style.marginTop='12px'; btn.onclick=saveSettings; wrap.appendChild(btn);
   const foot=el('div','muted'); foot.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-4);line-height:1.45;';
-  foot.textContent='Model / AI-provider config here is DB-backed and restart-to-apply, same as the SECRETS tab (which is also encrypted at rest). A real .env value always wins over a saved one while both exist.';
+  foot.textContent='The chat/analysis model and the picture-reading model are chosen from the models Ollama has and apply immediately. Other model / AI-provider config here is DB-backed and restart-to-apply, same as the SECRETS tab (which is also encrypted at rest); for those a real .env value wins over a saved one while both exist.';
   wrap.appendChild(foot);
   return wrap;
 }
