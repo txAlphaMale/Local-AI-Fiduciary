@@ -1124,7 +1124,7 @@ function timelineContent(){
   // ---- what changed ----
   const sm=r.summary, bs=TL.base?TL.base.summary:null;
   const strip=el('div'); strip.style.cssText='display:flex;gap:var(--space-6);flex-wrap:wrap;margin:var(--space-2) 0 var(--space-3);font-size:var(--font-size-base);';
-  const delta=(a,b)=>(b==null||a==null||Object.keys(TL.trial).length===0)?'':' <span class="muted">('+(a-b>=0?'+':'-')+tlMoney(Math.abs(a-b)).replace('$','$')+' vs current inputs)</span>';
+  const delta=(a,b)=>(b==null||a==null||Object.keys(TL.trial).length===0)?'':' <span class="muted">('+(a-b>=0?'+':'-')+tlMoney(Math.abs(a-b))+' vs current inputs)</span>';
   const cell=(l,v,extra)=>{ const d=el('div'); d.innerHTML='<div class="muted" style="font-size:var(--font-size-sm)">'+l+'</div><div>'+v+(extra||'')+'</div>'; return d; };
   strip.appendChild(cell('LIFETIME TAX',tlMoney(sm.lifetime_tax),delta(sm.lifetime_tax,bs&&bs.lifetime_tax)));
   strip.appendChild(cell('FINAL TOTAL (age '+inp.end_age+')',tlMoney(sm.final_total),delta(sm.final_total,bs&&bs.final_total)));
