@@ -519,7 +519,7 @@ FINNHUB = os.environ.get("FINNHUB_API_KEY", "")
 ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL", "qwen3.6:27b")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
-ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "16384"))   # fit full fundamentals+valuation+news without truncation
+ANALYSIS_NUM_CTX = int(os.environ.get("ANALYSIS_NUM_CTX", "32768"))   # ONE context size for every call to the big model (same as STRAT_NUM_CTX): Ollama reloads the model whenever the requested size changes, so mixed sizes cost a ~30 s reload each time (RV-007; 2026-11-16 measurements)
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
 # ---- Claude (Anthropic) integration, 2026-07-24 -- two-tier model selection ------------------
 # Only consulted when llm._dialect() == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
