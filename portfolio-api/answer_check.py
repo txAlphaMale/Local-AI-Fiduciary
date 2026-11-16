@@ -13,6 +13,8 @@ Two pieces, both plain functions with no network or model:
 """
 import re
 
+import numcheck
+
 # Words that signal "background about the company" rather than a reading of the numbers.
 _CLAIM = re.compile(
     r"\b(formerly|fmr\.?|previously\s+known|rebrand\w*|renamed|re-?named|merg(?:er|ed|ing)|"
@@ -56,6 +58,23 @@ def strip_ungrounded(text, evidence):
             kept.append(sent)
     # keep paragraph structure roughly: the splitter drops newlines, so rejoin with spaces
     # only when something was removed; otherwise return the text untouched
+    return (" ".join(kept).strip() if removed else (text or "")), removed
+
+
+def strip_unsupported_numbers(text, evidence):
+    """-> (clean_text, removed_sentences). A sentence is removed when it states a figure (a percentage, dollar amount, multiple or
+    scaled quantity) that appears nowhere in `evidence` (the tool results the model was given plus the user's own message).
+    Sentences that talk about a threshold or a hypothetical ("if growth falls below 25%") keep their figure: that is the writer's own
+    number, not a claim about the data."""
+    vals = numcheck.evidence_values(evidence)
+    kept, removed = [], []
+    for sent in _SPLIT.split(text or ""):
+        if not sent.strip():
+            continue
+        if numcheck.unsupported(sent, evidence, vals) and not numcheck.sentence_is_hypothetical(sent):
+            removed.append(sent.strip())
+        else:
+            kept.append(sent)
     return (" ".join(kept).strip() if removed else (text or "")), removed
 
 
@@ -140,9 +159,11 @@ COMMENTARY_RULE = (
 MODEL_LABEL = "**Model commentary (not checked by the app):**"
 
 
-def compose(commentary, removed, facts):
+def compose(commentary, removed, facts, removed_numbers=0):
     """Facts first (app-written), then the model's commentary under its own label."""
     note = f"\n\n_(Removed {removed} sentence(s) of company background that the research data does not contain.)_" if removed else ""
+    if removed_numbers:
+        note += f"\n\n_(Removed {removed_numbers} sentence(s) containing figures that the research data does not contain.)_"
     if not facts:
         return (commentary or "") + note
     return facts + "\n\n---\n" + MODEL_LABEL + "\n" + (commentary or "").strip() + note

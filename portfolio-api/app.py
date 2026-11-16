@@ -403,6 +403,8 @@ CONFIG_SPECS = [
      "help": "The model that answers chat, writes the weekly Strategist review, briefs and scout notes. Pick from the models Ollama has (only ones that can use tools are listed). Applies immediately, no restart."},
     {"key": "FALLBACK_MODEL", "label": "Fallback model", "group": "Model", "default": "", "allow_blank": True,
      "help": "Optional. Used only when the main model fails to LOAD (out of GPU memory, a CUDA error). The call is retried once on this model, using the fallback context size below, and the answer's timing line says so. Never used for timeouts or for picture reading. Leave blank for none."},
+    {"key": "SCOUT_EXTRA_DOMAINS", "label": "Extra established news domains", "group": "Scout", "default": "", "free_text": True,
+     "help": "Scout notes may earn conviction 4-5 only when they cite an SEC filing, a government source or an ESTABLISHED news outlet; company press releases and unrated sites cap conviction at 3. The built-in list of established outlets (Reuters, Bloomberg, WSJ, FT, CNBC, AP and others) is fixed; add more domains here, separated by commas (for example: example-trade-journal.com). Applies at once."},
     {"key": "VISION_MODEL",   "label": "Picture-reading model", "group": "Model", "default": "qwen2.5vl:7b",
      "help": "Reads fund names and tickers from a screenshot you attach in chat (for example a 401(k) fund list). Only models that can read images are listed. It loads on demand and unloads the main model while it runs."},
     {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
@@ -533,7 +535,7 @@ ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL") or "qwen3.6:27b"     # boot va
 # Model choices are made in SETTINGS (a dropdown filled from Ollama) and apply at once, with no .env edit and no restart. The value
 # saved there wins over the environment, because docker-compose always injects a default for these variables and a user must never
 # have to edit config files to pick a model; with nothing saved, the environment and then the built-in default apply.
-LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL")
+LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL", "SCOUT_EXTRA_DOMAINS")
 
 
 def _live_cfg(key, fallback):
@@ -6294,7 +6296,9 @@ def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None, price_fn=No
         have = {x["ticker"] for x in targets}
         sleeve_list = _sleeve_list()
         held = _held_sector_weights() if any(s.get("fill_gap") for s in sleeve_list) else None
-        targets += [x for x in scout.pick_targets(sleeve_list, rows, ticker_state.notes_index(), today, cap=limit or scout.NIGHTLY_CAP, held=held)
+        skip = ticker_state.recent_reject_tickers(today.isoformat(), 7)       # a name that just failed is not retried every night
+        targets += [x for x in scout.pick_targets(sleeve_list, rows, ticker_state.notes_index(), today, cap=limit or scout.NIGHTLY_CAP, held=held,
+                                                  skip=skip)
                     if x["ticker"] not in have]
         names = {s["id"]: s["name"] for s in sleeve_list}
         gen, gf = generate or _ollama_generate, facts_fn or _scout_facts
@@ -6319,10 +6323,12 @@ def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None, price_fn=No
             raw, err = gen(prompt)
             if err or not raw:
                 errors += 1
+                ticker_state.add_reject(t, today.isoformat(), "error", err or "no answer from the model")
                 continue
-            note, why_not = scout.parse_note(raw, facts)
+            note, why_not = scout.parse_note(raw, facts, _live_cfg("SCOUT_EXTRA_DOMAINS", ""))
             if not note:
                 rejected += 1
+                ticker_state.add_reject(t, today.isoformat(), "rejected", why_not)
                 continue
             price, spy_now, price_at, spy_at, price_src = _pick_prices(t, (row.get("s2") or {}).get("price")) if price_fn is None \
                 else price_fn(t, (row.get("s2") or {}).get("price"))
@@ -6365,7 +6371,8 @@ def get_scout_status(limit: int = 30):
         last = store.read_json_strict(SCOUT_META_FILE) or None
     except Exception:
         last = None
-    return {"last_run": last, "notes": ticker_state.list_notes(limit), "picks_logged": len(ticker_state.picks())}
+    return {"last_run": last, "notes": ticker_state.list_notes(limit), "picks_logged": len(ticker_state.picks()),
+            "rejected": ticker_state.list_rejects(30)}
 
 
 @app.get("/api/sleeves-snapshot")
@@ -12356,14 +12363,15 @@ def get_settings():
         env_locked = k in _ENV_SECRETS_AT_BOOT
         staged = stored.get(k) not in (None, "")
         if k in LIVE_CONFIG_KEYS:     # chosen from a dropdown of the models Ollama has; applies at once and beats the compose default
-            cur = {"ANALYSIS_MODEL": _analysis_model, "VISION_MODEL": _vision_model, "FALLBACK_MODEL": _fallback_model}[k]()
-            opts = _model_options_for(k)
+            cur = {"ANALYSIS_MODEL": _analysis_model, "VISION_MODEL": _vision_model, "FALLBACK_MODEL": _fallback_model,
+                   "SCOUT_EXTRA_DOMAINS": lambda: _live_cfg("SCOUT_EXTRA_DOMAINS", "")}[k]()
+            opts = None if spec.get("free_text") else _model_options_for(k)
             if opts is not None and cur and cur not in opts:
                 opts = [cur] + opts
             cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": cur, "default": spec["default"],
                             "source": "settings" if staged else ("env" if env_locked else "default"), "env_locked": False,
                             "staged_behind_env": False, "editable": True, "applies": "immediately", "options": opts,
-                            "help": spec.get("help"), "allow_blank": bool(spec.get("allow_blank"))})
+                            "help": spec.get("help"), "allow_blank": bool(spec.get("allow_blank")), "free_text": bool(spec.get("free_text"))})
             continue
         if env_locked:
             val, source = os.environ.get(k), "env"
@@ -12462,6 +12470,13 @@ async def post_settings(req: Request):
         if val in (None, ""):
             stored.pop(key, None)
         else:
+            if key == "SCOUT_EXTRA_DOMAINS":
+                cleaned = scout._clean_domains(val)
+                if len([x for x in re.split(r"[\s,;]+", str(val)) if x.strip()]) != len(cleaned):
+                    return JSONResponse({"error": "Extra news domains must be plain domain names like example.com, separated by commas."}, status_code=400)
+                stored[key] = ", ".join(cleaned)
+                applied.append(key)
+                continue
             if key in LIVE_CONFIG_KEYS:
                 known = [r["name"] for r in (_ollama_models(force=True) or [])]
                 if known and str(val).strip() not in known:
@@ -17235,7 +17250,7 @@ def _finish_chat_timing(tm):
 def _remember_chat_timing(stamp):
     try:
         _RECENT_CHAT_TIMING.appendleft({"at": int(time.time()), "elapsed_s": stamp.get("elapsed_s"), "queued_s": stamp.get("queued_s"),
-                                        **(stamp.get("timing") or {})})
+                                        **(stamp.get("timing") or {}), **(stamp.get("checks") or {})})
     except Exception:
         pass
 
@@ -17358,6 +17373,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         cancelled = False
         content_buf = ""
         research_hits, evidence = [], []     # idea-research results + every tool result seen this turn
+        research_any = False                 # get_idea_research was called at all (a ticker OR a sleeve list)
         timing = _new_chat_timing()          # where the time went this turn (RV-007 part A: measure before changing anything)
         for i in range(CHAT_MAX_ITER):
             content_buf = ""
@@ -17450,6 +17466,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                 result = persona["dispatch"](nm, a)
                 timing["tools_s"] += time.time() - _tt
                 if nm == "get_idea_research":
+                    research_any = True
                     if isinstance(result, dict) and a.get("ticker"):
                         research_hits.append(result)
                         if len(research_hits) == 1:
@@ -17476,23 +17493,32 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             yield _sse("cancelled", {"session_id": session_id})
             return
 
-        if research_hits and final_content:
-            # Hybrid grounding: strip invented company-history sentences, then append the facts
-            # the app writes itself from the research tool's own output.
+        checks = {}
+        if (research_hits or research_any) and final_content:
+            # Hybrid grounding. For a ticker answer: strip invented company-history sentences, then append the facts the app writes
+            # itself. For any research answer (a ticker or a sleeve list): remove sentences whose figures are not in the data.
             try:
                 evid = "\n".join(evidence) + "\n" + (user_msg or "")
-                clean, removed = answer_check.strip_ungrounded(final_content, evid)
-                clean, cut = answer_check.limit_sentences(clean)
-                if cut:
-                    clean += " _(shortened)_"
-                final_content = answer_check.compose(clean, len(removed), answer_check.facts_block(research_hits))
+                clean, removed, cut = final_content, [], False
+                if research_hits:
+                    clean, removed = answer_check.strip_ungrounded(final_content, evid)
+                clean, removed_n = answer_check.strip_unsupported_numbers(clean, evid)
+                if research_hits:
+                    clean, cut = answer_check.limit_sentences(clean)
+                    if cut:
+                        clean += " _(shortened)_"
+                checks = {"history_removed": len(removed), "numbers_removed": len(removed_n)}
+                if removed or removed_n:
+                    print(f"[answer-check] removed {len(removed)} history and {len(removed_n)} figure sentence(s): "
+                          f"{(removed_n or removed)[0][:140]!r}", flush=True)
+                final_content = answer_check.compose(clean, len(removed), answer_check.facts_block(research_hits), len(removed_n))
                 if final_content != clean:
                     yield _sse("replace", {"t": final_content})
             except Exception:
                 pass
         t_end = time.time()
         stamp = {"elapsed_s": int(round(t_end - (run["t"] or t_req))), "queued_s": int(round((run["t"] or t_req) - t_req)),
-                 "timing": _finish_chat_timing(timing)}
+                 "timing": _finish_chat_timing(timing), **({"checks": checks} if checks else {})}
         _remember_chat_timing(stamp)
         _chat_add_message(session_id, "assistant", final_content, tool_json=json.dumps(stamp))
         threading.Thread(target=_chat_summarise_old, args=(session_id,), daemon=True, name="chat-summary").start()
