@@ -1954,8 +1954,8 @@ function cockpitPanel(){
         +((ef.gap_dollars>0)?(' · gap '+usd(ef.gap_dollars)):'')
         +(stressShort?(' · only '+ef.months_covered_stress+' after a '+ef.stress_drawdown_pct+'% drawdown'):'')
         +(ef.designated?'':' · estimate (no accounts designated)');
-      A.push({id:'EMERGENCY FUND',sev,cat:'EMERGENCY FUND',msg,tab:'plan',subtab:'cashdebt',
-              tip:ef.designated?'Reserve = the accounts you designated':'Auto-detected cash only — designate your real reserve accounts in PLAN → CASH·DEBT'});
+      A.push({id:'EMERGENCY FUND',sev,cat:'EMERGENCY FUND',msg,tab:'plan',subtab:'cashdebt',openEf:!ef.designated,
+              tip:ef.designated?'Reserve = the accounts you designated':'Auto-detected cash only — click to open PLAN → CASH·DEBT with the emergency-fund account chooser already open'});
     } else {
       A.push({id:'EMERGENCY FUND',sev:'info',cat:'EMERGENCY FUND',msg:'set your annual expenses to size it',tab:'plan',subtab:'assumptions'});
     }
@@ -1993,7 +1993,8 @@ function cockpitPanel(){
     const lab=document.createElement('span'); lab.innerHTML=`<span style="color:${c};letter-spacing:1px;">${escHtml(a.cat)}</span> <span class="muted">·</span> ${escHtml(a.msg)}`;
     chip.appendChild(lab);
     chip.title=(a.tip?a.tip+' — ':'')+'Go to '+a.tab.toUpperCase()+(a.subtab?(' · '+a.subtab.toUpperCase()):'')+' tab';
-    chip.onclick=()=>{ TAB=a.tab; if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
+    chip.onclick=()=>{ TAB=a.tab; if(a.openEf) CD_EF_EDIT_OPEN=true;     // the emergency-fund tile lands on the account chooser, not the top of the page
+      if(a.subtab){ setSubtab(a.tab,a.subtab); } else { render(); } };
     if(a.sev==='ok'||a.sev==='opp'){      // green tiles are dismissible; reappear if they stop being green
       const x=document.createElement('span'); x.style.cssText='margin-left:8px;opacity:0.7;'; x.textContent=dim?'↺':'✕';
       x.title=dim?'Restore this tile':'Dismiss — it comes back on its own if it stops being green';
