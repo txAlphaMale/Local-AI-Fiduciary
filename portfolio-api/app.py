@@ -7840,6 +7840,8 @@ def _insider_signal(sym):
         try:
             d0 = edgar.deferral_count()
             ex = edgar.recent_form4_ex(t, days=days, limit=int(_knob("insider_max_filings")))
+            if ex.get("error"):          # SEC could not be read: that is NOT "no filings", and must not be cached as such
+                return {"ticker": t, "available": False, "error": True, "reason": "SEC filing list unavailable right now (it will be retried)"}
             raw = ex["filings"]
             if edgar.deferral_count() > d0:          # the SEC gate refused part of this lookup: that is not 'no filings'
                 return {"ticker": t, "available": False, "error": True, "reason": "SEC request deferred by the budget gate"}

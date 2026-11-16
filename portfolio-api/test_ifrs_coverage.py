@@ -59,11 +59,12 @@ class Sleeve(unittest.TestCase):
         self.assertEqual(sleeves.value_of(row("U"), "revenue", TODAY), 50e6)
         self.assertEqual(sleeves.value_of(row("J", currency="JPY"), "rev_growth_pct", TODAY), 40.0)     # a percentage is currency-neutral
 
-    def test_cards_count_names_that_could_not_be_evaluated(self):
-        rs = [row("A"), row("B", share_change_pct=None), row("C", currency="JPY"), row("D", share_change_pct=None, currency="EUR")]
+    def test_cards_count_names_blocked_only_by_missing_data(self):
+        rs = [row("A"), row("B", share_change_pct=None), row("C", currency="JPY"), row("D", share_change_pct=None, currency="EUR"),
+              row("E", rev_growth_pct=5.0, share_change_pct=None)]            # E fails a rule it CAN be measured on: its gap changes nothing
         ev = sleeves.evaluate(self.sl, rs, TODAY)
         self.assertEqual([m["ticker"] for m in ev["matches"]], ["A"])
-        self.assertEqual((ev["considered"], ev["not_evaluated"]), (4, 3))
+        self.assertEqual((ev["considered"], ev["not_evaluated"]), (5, 3))
         self.assertEqual(ev["not_evaluated_by_metric"], {"share_change_pct": 2, "revenue": 2})
 
     def test_nothing_missing_means_zero(self):

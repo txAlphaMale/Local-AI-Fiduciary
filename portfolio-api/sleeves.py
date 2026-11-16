@@ -217,7 +217,9 @@ def evaluate(sleeve, rows, today=None, held=None):
             continue
         considered += 1
         gaps = [r["metric"] for r in s1_rules if value_of(row, r["metric"], today) is None]
-        if gaps:                      # a rule could not be measured for this name: it was counted but never really evaluated
+        if gaps and all(ok_rule(row, r) for r in s1_rules if r["metric"] not in gaps):
+            # Every rule that CAN be measured passes, and at least one cannot be measured: the missing data could be the difference
+            # between qualifying and not. (A name that already fails a measurable rule is not counted: its missing data changes nothing.)
             unmeasured += 1
             for m in set(gaps):
                 by_metric[m] = by_metric.get(m, 0) + 1
