@@ -89,18 +89,23 @@ def parse_form4(xml):
     symbol = _value_of(issuer, "issuerTradingSymbol") or _first_text(issuer, "issuerTradingSymbol")
     issuer_name = _first_text(issuer, "issuerName")
 
-    owner = next((e for e in root.iter() if _ln(e.tag) == "reportingOwner"), None)
-    owner_name = _first_text(owner, "rptOwnerName")
-    rel = next((e for e in root.iter() if _ln(e.tag) == "reportingOwnerRelationship"), None)
-
-    def _flag(name):
+    def _flag_of(rel, name):
         v = _first_text(rel, name)
         return str(v).strip().lower() in ("1", "true") if v is not None else False
 
-    is_officer = _flag("isOfficer")
-    is_director = _flag("isDirector")
-    is_ten_pct = _flag("isTenPercentOwner")
-    title = _first_text(rel, "officerTitle")
+    # A joint filing lists several reporting owners (a fund and its manager, say); each has its own relationship flags.
+    owners = []
+    for o in root.iter():
+        if _ln(o.tag) != "reportingOwner":
+            continue
+        rel_o = next((e for e in o.iter() if _ln(e.tag) == "reportingOwnerRelationship"), None)
+        owners.append({"name": _first_text(o, "rptOwnerName"), "title": _first_text(rel_o, "officerTitle"),
+                       "is_officer": _flag_of(rel_o, "isOfficer"), "is_director": _flag_of(rel_o, "isDirector"),
+                       "is_ten_pct": _flag_of(rel_o, "isTenPercentOwner")})
+    first = owners[0] if owners else {}
+    owner_name, title = first.get("name"), first.get("title")
+    is_officer, is_director, is_ten_pct = (bool(first.get("is_officer")), bool(first.get("is_director")),
+                                           bool(first.get("is_ten_pct")))
 
     doc_date = None
     for e in root.iter():
@@ -125,9 +130,25 @@ def parse_form4(xml):
                      "acquired": acquired, "open_market": code in SIGNAL_CODES})
 
     return {"issuer": issuer_name, "symbol": (symbol.upper() if symbol else None),
-            "owner": owner_name, "title": title, "is_officer": is_officer,
+            "owner": owner_name, "owners": owners, "title": title, "is_officer": is_officer,
             "is_director": is_director, "is_ten_pct": is_ten_pct,
             "date": doc_date, "transactions": txns}
+
+
+def _filing_actors(f):
+    """-> (names of the officers/directors on a parsed Form 4, True if there is at least one, names of the other reporting owners). A filing whose reporting owners are
+    all 10% holders (a fund, a parent company) has none: its trades are reported separately and never counted as insiders buying.
+    A filing parsed without relationship information (older records) is treated as an insider filing, as before."""
+    owners = f.get("owners")
+    if owners is None:
+        if any(k in f for k in ("is_officer", "is_director", "is_ten_pct")):
+            owners = [{"name": f.get("owner"), "is_officer": f.get("is_officer"), "is_director": f.get("is_director")}]
+        else:
+            n = (f.get("owner") or "").strip()
+            return ([n] if n else []), True, []
+    ins = [(o.get("name") or "").strip() for o in owners if o.get("is_officer") or o.get("is_director")]
+    others = [(o.get("name") or "unnamed holder").strip() for o in owners if not (o.get("is_officer") or o.get("is_director"))]
+    return [n for n in ins if n], bool(ins), others
 
 
 def aggregate(filings, ticker=None, days=None):
@@ -140,27 +161,31 @@ def aggregate(filings, ticker=None, days=None):
     buy_shares = sell_shares = 0.0
     buy_count = sell_count = 0
     buyers, sellers = set(), set()
+    hold = {"buy": {"count": 0, "value": 0.0, "who": set()}, "sell": {"count": 0, "value": 0.0, "who": set()}}   # 10% holders who are neither officer nor director
     other = {}          # non-open-market code -> count (context)
     latest = None
     for f in filings:
-        who = (f.get("owner") or "").strip()
+        names, is_insider, holder_names = _filing_actors(f)
         for t in f.get("transactions") or []:
             code = (t.get("code") or "").upper()
             d = t.get("date") or f.get("date")
             if d and (latest is None or d > latest):
                 latest = d
-            if code == "P":
+            if code in ("P", "S") and not is_insider:
+                side = hold["buy" if code == "P" else "sell"]       # a fund or other large holder: reported, never scored
+                side["count"] += 1
+                side["value"] += t.get("value") or 0.0
+                side["who"].update(holder_names or ["unnamed holder"])
+            elif code == "P":
                 buy_count += 1
                 buy_value += t.get("value") or 0.0
                 buy_shares += t.get("shares") or 0.0
-                if who:
-                    buyers.add(who)
+                buyers.update(names)
             elif code == "S":
                 sell_count += 1
                 sell_value += t.get("value") or 0.0
                 sell_shares += t.get("shares") or 0.0
-                if who:
-                    sellers.add(who)
+                sellers.update(names)
             elif code:
                 other[code] = other.get(code, 0) + 1
 
@@ -189,6 +214,8 @@ def aggregate(filings, ticker=None, days=None):
             "sell": {"count": sell_count, "insiders": n_sellers,
                      "shares": round(sell_shares, 2), "value": round(sell_value, 2)},
             "net_value": net_value, "net_buy_pct": net_buy_pct, "signal": signal,
+            "holders_not_insiders": {k: {"count": v["count"], "holders": len(v["who"]), "value": round(v["value"], 2)}
+                                     for k, v in hold.items()},
             "other_transactions": {TRANSACTION_CODES.get(k, k): v for k, v in sorted(other.items())},
             "note": "Open-market insider purchases (code P) vs sales (code S) only; grants, option "
                     "exercises and tax-withholding are compensation mechanics, shown as context. "

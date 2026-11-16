@@ -387,7 +387,7 @@ SETTING_SPECS = {
     "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
     "insider_lookback_days":      {"env": "INSIDER_LOOKBACK_DAYS",      "default": 120,  "cast": int,   "label": "Insider signal: Form 4 lookback window (days)", "group": "Insider signal"},
     "chat_thinking_mode":         {"env": "CHAT_THINKING_MODE",         "default": 0,    "cast": int,   "label": "Chat: reasoning (thinking) mode. 0 = full reasoning on every step (default, highest quality). 1 = no reasoning only for the short commentary written after the app has printed a ticker's research facts (faster; trial it against 0 before keeping it)", "group": "Chat"},
-    "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 20,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker", "group": "Insider signal"},
+    "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 80,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker (a busy company can hit this before the window ends; the signal then says how far back it reaches)", "group": "Insider signal"},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live. app.py reads them into module constants
@@ -6472,6 +6472,7 @@ def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
             "gap_caveat": (f"About {_HELD_CACHE['funds_pct']:g}% of what you hold is in funds with no look-through, so some of these gaps may "
                            "already be partly filled inside them.") if sl.get("fill_gap") and _HELD_CACHE.get("funds_pct") else None,
             "considered": ev["considered"], "awaiting_market_data": ev["awaiting"],
+            "not_evaluated": ev["not_evaluated"], "not_evaluated_by_metric": ev["not_evaluated_by_metric"],
             "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 
@@ -6569,7 +6570,8 @@ async def post_sleeve_preview(req: Request):
     rows = ticker_state.screened_rows(sleeves_mod.STATES)
     card = _sleeve_card({"id": "preview", **clean}, rows, today, top=10)
     return {"ok": True, "match_count": card["match_count"], "considered": card["considered"],
-            "awaiting_market_data": card["awaiting_market_data"], "pending_rules": card["pending_rules"], "preview": card["preview"]}
+            "awaiting_market_data": card["awaiting_market_data"], "not_evaluated": card["not_evaluated"],
+            "pending_rules": card["pending_rules"], "preview": card["preview"]}
 
 
 @app.post("/api/sleeves")
@@ -7664,7 +7666,8 @@ def _insider_signal(sym):
     def _compute():
         try:
             d0 = edgar.deferral_count()
-            raw = edgar.recent_form4(t, days=days, limit=int(_knob("insider_max_filings")))
+            ex = edgar.recent_form4_ex(t, days=days, limit=int(_knob("insider_max_filings")))
+            raw = ex["filings"]
             if edgar.deferral_count() > d0:          # the SEC gate refused part of this lookup: that is not 'no filings'
                 return {"ticker": t, "available": False, "error": True, "reason": "SEC request deferred by the budget gate"}
             parsed = [insider.parse_form4(f.get("xml")) for f in raw]
@@ -7672,6 +7675,8 @@ def _insider_signal(sym):
             if parsed:
                 r = insider.aggregate(parsed, t, days)
                 r["available"] = True
+                r["window_complete"] = ex["window_complete"]          # False = a busy company: the filing cap stopped the read early
+                r["covered_from"] = ex["covered_from"]                # the oldest date the filings actually reach back to
                 return r
             return {"ticker": t, "available": False,
                     "reason": "no Form 4 filings (foreign listing, fund/ETF, or none in window)"}

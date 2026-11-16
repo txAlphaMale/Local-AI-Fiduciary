@@ -7,7 +7,7 @@
 Record builders and the due-selection live here as pure functions; app.py supplies the fetchers (behind the budget gates)."""
 import time
 
-INSIDER_VERSION = 3                # v3: Form 4s are kept only where the ticker's CIK is the ISSUER (Berkshire's reporter filings were counted as its own)
+INSIDER_VERSION = 4                # v4: officers/directors only (10% holders reported separately), window paged with coverage recorded. v3: Form 4s are kept only where the ticker's CIK is the ISSUER (Berkshire's reporter filings were counted as its own)
 RECORD_VERSION = 2                 # v1 records may be refusals saved as 'no data' (gate pacing bug): re-fetched
 ANALYST_REFRESH_DAYS = 7
 INSIDER_REFRESH_DAYS = 3
@@ -36,6 +36,8 @@ def build_insider(res, now=None):
             "buyers": (res.get("buy") or {}).get("insiders", 0), "sellers": (res.get("sell") or {}).get("insiders", 0),
             "buy_value": (res.get("buy") or {}).get("value", 0.0), "sell_value": (res.get("sell") or {}).get("value", 0.0),
             "filings": res.get("filings"), "as_of": res.get("as_of"), "lookback_days": res.get("lookback_days"),
+            "window_complete": res.get("window_complete"), "covered_from": res.get("covered_from"),
+            "holders_not_insiders": res.get("holders_not_insiders"),
             "fetched_at": int(now or time.time()), "v": INSIDER_VERSION}
 
 
@@ -60,5 +62,7 @@ def display(s3):
         money = (f"${abs(nv) / 1e6:.1f}M" if abs(nv) >= 1e6 else f"${abs(nv) / 1e3:.0f}K" if abs(nv) >= 1e3 else f"${abs(nv):.0f}")
         who = f"{ins.get('buyers', 0)} buying" if nv >= 0 else f"{ins.get('sellers', 0)} selling"
         itxt = f"{ins.get('signal')}" + (f" ({'+' if nv >= 0 else '-'}{money}, {who})" if nv else "")
+        if ins.get("window_complete") is False and ins.get("covered_from"):
+            itxt += f" [only back to {ins['covered_from']}]"          # a busy company: the read stopped at the filing cap
     atxt = f"{an['buy_pct']:.0f}% buy ({an['total']})" if an.get("available") else None
     return itxt, atxt

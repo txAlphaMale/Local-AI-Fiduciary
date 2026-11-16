@@ -3425,7 +3425,7 @@ function sleevesContent(){
     const box=el('div'); box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-4);';
     const h=el('div'); h.style.cssText='font-size:var(--font-size-md);margin-bottom:var(--space-1);';
     h.innerHTML='<b>'+esc(sl.name)+'</b> <span class="muted" style="font-size:var(--font-size-sm)">'+(sl.builtin?'· built in':'· yours')+'</span> &nbsp; '+
-      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data or signals (fetched nightly)':'')+'</span>';
+      '<b>'+sl.match_count+'</b> <span class="muted">of '+sl.considered+' screened pass today'+(sl.awaiting_market_data?' · '+sl.awaiting_market_data+' more wait for market data or signals (fetched nightly)':'')+(sl.not_evaluated?' · <span style="cursor:help;text-decoration:underline dotted;" title="Counted above but at least one rule could not be measured (missing data, or a foreign filer reporting in another currency). Most-missing first: '+Object.entries(sl.not_evaluated_by_metric||{}).slice(0,6).map(([k,v])=>k+' '+v).join(', ')+'">'+sl.not_evaluated+' could not be evaluated (missing data)</span>':'')+'</span>';
     box.appendChild(h);
     box.appendChild(el('div','muted',sl.intent||'')).style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-2);';
     const rules=(sl.rule_text||[]); if(rules.length){ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.6;margin-bottom:var(--space-2);'; r.innerHTML=rules.map(esc).join('<br>'); box.appendChild(r); }
@@ -3510,7 +3510,7 @@ function sleeveForm(){
   if(SLEEVE_ERR){ const er=el('div','neg',SLEEVE_ERR); er.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-base);'; box.appendChild(er); }
   if(SLEEVE_PREVIEW){ const o=el('div'); o.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-base);';
     if(SLEEVE_PREVIEW.error){ o.className='neg'; o.textContent=SLEEVE_PREVIEW.error; }
-    else { const pr=SLEEVE_PREVIEW; o.innerHTML='This sleeve would screen <b>'+pr.match_count+'</b> of '+pr.considered+' stocks today.'+(pr.awaiting_market_data?' <span class="muted">'+pr.awaiting_market_data+' more pass the SEC rules and wait for market data.</span>':'')+(pr.pending_rules.length?' <span class="muted">Not counted yet (wait for the signals stage): '+pr.pending_rules.map(x=>x.replace(/&/g,'&amp;')).join('; ')+'</span>':'')+(pr.match_count===0?' <span class="neg">No stock passes: loosen a rule.</span>':'');
+    else { const pr=SLEEVE_PREVIEW; o.innerHTML='This sleeve would screen <b>'+pr.match_count+'</b> of '+pr.considered+' stocks today.'+(pr.awaiting_market_data?' <span class="muted">'+pr.awaiting_market_data+' more pass the SEC rules and wait for market data.</span>':'')+(pr.not_evaluated?' <span class="muted">'+pr.not_evaluated+' could not be evaluated (missing data).</span>':'')+(pr.pending_rules.length?' <span class="muted">Not counted yet (wait for the signals stage): '+pr.pending_rules.map(x=>x.replace(/&/g,'&amp;')).join('; ')+'</span>':'')+(pr.match_count===0?' <span class="neg">No stock passes: loosen a rule.</span>':'');
       if(pr.preview&&pr.preview.length){ o.appendChild(sleeveTable(pr.preview)); } }
     box.appendChild(o); }
   return box;

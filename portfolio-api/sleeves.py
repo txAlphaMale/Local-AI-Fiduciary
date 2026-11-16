@@ -110,6 +110,8 @@ def value_of(row, metric, today=None):
         except (TypeError, ValueError):
             return None
     stage = METRICS.get(metric, ("", "", ""))[2]
+    if METRICS.get(metric, ("", "", ""))[1] == "$" and stage == "s1" and (s1.get("currency") or "USD") != "USD":
+        return None                       # a foreign filer reports in its own currency: it cannot be compared with a dollar threshold
     if metric == "share_change_pct" and s1.get("share_change_pct") is not None:
         age = value_of(row, "age_years", today)
         if age is not None and age < 2:
@@ -209,10 +211,16 @@ def evaluate(sleeve, rows, today=None, held=None):
         return bool(((row.get("s3") or {}).get(S3_GROUP.get(r["metric"], ""))))
     ok_rule = lambda row, r: (lambda v: v is not None and OPS[r["op"]](v, r["value"]))(value_of(row, r["metric"], today))
     out, awaiting, considered, gap_sectors = [], 0, 0, {}
+    unmeasured, by_metric = 0, {}
     for row in rows:
         if row.get("state") not in states or not row.get("s1"):
             continue
         considered += 1
+        gaps = [r["metric"] for r in s1_rules if value_of(row, r["metric"], today) is None]
+        if gaps:                      # a rule could not be measured for this name: it was counted but never really evaluated
+            unmeasured += 1
+            for m in set(gaps):
+                by_metric[m] = by_metric.get(m, 0) + 1
         if not all(ok_rule(row, r) for r in s1_rules):
             continue
         s2 = row.get("s2")
@@ -232,6 +240,7 @@ def evaluate(sleeve, rows, today=None, held=None):
                             -((r.get("s1") or {}).get("revenue") or 0)))             # ties: the larger business first
     out = _one_per_company(out)
     return {"matches": out, "awaiting": awaiting, "considered": considered, "pending_rules": pending,
+            "not_evaluated": unmeasured, "not_evaluated_by_metric": dict(sorted(by_metric.items(), key=lambda kv: -kv[1])),
             "gap_sectors": sorted(gap_sectors.items(), key=lambda kv: -kv[1])}
 
 

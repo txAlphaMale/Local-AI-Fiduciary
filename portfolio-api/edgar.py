@@ -709,51 +709,78 @@ def _form4_issuer_cik(xml):
     return int(m.group(1)) if m else None
 
 
-def recent_form4(ticker, days=120, limit=16):
-    """Recent Form 4 (insider-transaction) filings for a ticker's issuer, as raw ownership XML.
-    Uses EDGAR browse-edgar (atom, owner='only' → ownership forms) to list the issuer's Form 4
-    filings, then fetches each filing's ownershipDocument XML. Returns a list of
-    {date, accession, xml} newest-first, bounded by `limit` and `days`. Free, authoritative public
-    data. Empty list if the ticker has no CIK or on any fetch failure (defensive throughout)."""
+FORM4_PAGE = 100          # EDGAR's atom list returns at most 100 entries per request
+FORM4_MAX_PAGES = 6
+
+
+def recent_form4_ex(ticker, days=120, limit=16, max_pages=FORM4_MAX_PAGES):
+    """Recent Form 4 (insider-transaction) filings for a ticker's issuer, as raw ownership XML, WITH how much of the window they cover.
+    Uses EDGAR browse-edgar (atom, owner='only' -> ownership forms) to list the issuer's Form 4 filings newest-first, paging until the
+    list passes the cutoff date, `limit` filings have been kept, or `max_pages` pages are read; then fetches each filing's
+    ownershipDocument XML. -> {"filings": [{date, accession, xml}], "window_complete": bool, "covered_from": 'YYYY-MM-DD'|None,
+    "listed": int}. window_complete is False when the cap stopped the read before the cutoff was reached (a busy company), and
+    covered_from then says how far back the filings kept actually go. Empty/None-ish on any failure (defensive throughout)."""
+    empty = {"filings": [], "window_complete": True, "covered_from": None, "listed": 0}
     try:
         cik = get_cik(ticker)
     except CikMapUnavailable:
-        return []
+        return empty
     if not cik:
-        return []
-    try:
-        r = _get("https://www.sec.gov/cgi-bin/browse-edgar",
-                         params={"action": "getcompany", "CIK": cik, "type": "4",
-                                 "dateb": "", "owner": "only", "count": str(max(limit * 2, 20)),
-                                 "output": "atom"},
-                         headers=_headers(), timeout=30)
-        if r.status_code >= 400:
-            return []
-        feed = r.text or ""
-    except Exception:
-        return []
+        return empty
     cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-    out = []
-    for chunk in feed.split("<entry")[1:]:
-        mtype = re.search(r"<filing-type>([^<]+)</filing-type>", chunk)
-        if not mtype or mtype.group(1).strip() != "4":
-            continue
-        mdate = re.search(r"<filing-date>(\d{4}-\d{2}-\d{2})</filing-date>", chunk)
-        dt = mdate.group(1) if mdate else ""
-        if dt and dt < cutoff:
-            continue
-        mfold = re.search(r"/Archives/edgar/data/(\d+)/(\d+)/", chunk)
-        if not mfold:
-            continue
-        xml = _fetch_form4_xml(mfold.group(1), mfold.group(2))
-        if xml:
-            icik = _form4_issuer_cik(xml)
-            if icik is not None and str(cik).isdigit() and icik != int(cik):
-                continue                                     # the CIK is the reporter here, not the issuer
-            out.append({"date": dt, "accession": mfold.group(2), "xml": xml})
-        if len(out) >= limit:
+    out, listed, complete, oldest = [], 0, False, None
+    for page in range(max(1, int(max_pages))):
+        try:
+            r = _get("https://www.sec.gov/cgi-bin/browse-edgar",
+                     params={"action": "getcompany", "CIK": cik, "type": "4", "dateb": "", "owner": "only",
+                             "start": str(page * FORM4_PAGE), "count": str(FORM4_PAGE), "output": "atom"},
+                     headers=_headers(), timeout=30)
+            if r.status_code >= 400:
+                break
+            feed = r.text or ""
+        except Exception:
             break
-    return out
+        entries = feed.split("<entry")[1:]
+        if not entries:
+            complete = True              # the list ended: nothing older exists
+            break
+        stop = False
+        for chunk in entries:
+            mtype = re.search(r"<filing-type>([^<]+)</filing-type>", chunk)
+            if not mtype or mtype.group(1).strip() != "4":
+                continue
+            mdate = re.search(r"<filing-date>(\d{4}-\d{2}-\d{2})</filing-date>", chunk)
+            dt = mdate.group(1) if mdate else ""
+            listed += 1
+            if dt and dt < cutoff:
+                complete = True          # newest-first: everything after this is older than the window
+                stop = True
+                break
+            mfold = re.search(r"/Archives/edgar/data/(\d+)/(\d+)/", chunk)
+            if not mfold:
+                continue
+            xml = _fetch_form4_xml(mfold.group(1), mfold.group(2))
+            if xml:
+                icik = _form4_issuer_cik(xml)
+                if icik is not None and str(cik).isdigit() and icik != int(cik):
+                    continue                                 # the CIK is the reporter here, not the issuer
+                out.append({"date": dt, "accession": mfold.group(2), "xml": xml})
+                oldest = dt or oldest
+            if len(out) >= limit:
+                stop = True
+                break
+        if stop:
+            break
+        if len(entries) < FORM4_PAGE:
+            complete = True              # a short page is the last page
+            break
+    return {"filings": out, "window_complete": bool(complete), "listed": listed,
+            "covered_from": cutoff if complete else oldest}
+
+
+def recent_form4(ticker, days=120, limit=16):
+    """Same filings as recent_form4_ex, as a plain list (older call sites and tests)."""
+    return recent_form4_ex(ticker, days=days, limit=limit)["filings"]
 
 
 def _fetch_13f_infotable(cik_i, accnd):

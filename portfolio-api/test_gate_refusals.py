@@ -148,8 +148,8 @@ class TestSignalsJob(unittest.TestCase):
     def test_insider_signal_does_not_cache_a_deferred_lookup_as_empty(self):
         def fake(t, days=120, limit=16):
             edgar._MODE.deferred = getattr(edgar._MODE, "deferred", 0) + 1
-            return []
-        with mock.patch.object(edgar, "recent_form4", side_effect=fake):
+            return {"filings": [], "window_complete": True, "covered_from": None, "listed": 0}
+        with mock.patch.object(edgar, "recent_form4_ex", side_effect=fake):
             res = appmod._insider_signal("QQQQ")
         self.assertTrue(res.get("error"))
         self.assertFalse(res.get("available"))
