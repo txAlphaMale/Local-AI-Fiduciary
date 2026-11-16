@@ -538,6 +538,36 @@ ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL") or "qwen3.6:27b"     # boot va
 LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL", "SCOUT_EXTRA_DOMAINS")
 
 
+def _prune_default_settings(stored=None, write=True):
+    """One-time tidy-up of values saved only because Save used to send every field: any saved knob or non-secret setting that equals its
+    built-in default is removed, so it reads 'default' instead of 'customized' and follows a future change of the default. Behaviour today
+    is identical (the value is the same). PORTFOLIO_PROVIDER is kept: it is an explicit user choice. -> the keys removed."""
+    try:
+        stored = dict(_read_settings() if stored is None else stored)
+        removed = []
+        for key, spec in SETTING_SPECS.items():
+            if key in stored:
+                try:
+                    if spec["cast"](stored[key]) == spec["default"]:
+                        removed.append(key)
+                except (TypeError, ValueError):
+                    pass
+        for spec in CONFIG_SPECS:
+            k = spec["key"]
+            if k in stored and k != "PORTFOLIO_PROVIDER" and str(stored[k]).strip() == str(spec.get("default") or "").strip():
+                removed.append(k)
+        if removed and write:
+            for k in removed:
+                stored.pop(k, None)
+            store.write_json(SETTINGS_FILE, stored)
+        return removed
+    except Exception:
+        return []
+
+
+_prune_default_settings()
+
+
 def _live_cfg(key, fallback):
     try:
         v = _read_settings().get(key)
