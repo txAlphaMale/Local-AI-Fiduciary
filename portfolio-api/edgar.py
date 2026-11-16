@@ -816,7 +816,14 @@ def recent_13f(cik, n=2):
 
 
 def _annual(facts, tags):
-    """Annual (10-K / FY) series [(end_date, value), ...] oldest->newest, merged across ALL the listed tags: for each fiscal-year end the
+    return _annual_ex(facts, tags)[0]
+
+
+def _annual_ex(facts, tags, tol=0.05):
+    """(series, accepted_tags): see _annual. `accepted_tags` is the leading tag plus every other tag that agreed with it where they
+    overlap, so a caller that needs interim (10-Q) rows can read the same measure and no other (RV-003).
+
+    Annual (10-K / FY) series [(end_date, value), ...] oldest->newest, merged across ALL the listed tags: for each fiscal-year end the
     earliest-listed tag that has a value wins, and within a tag the latest filing wins.
 
     Two defects this fixes (found from the idea-scavenger's first live screen, 2026-11-13): (1) a 10-K also carries the Q4 and quarterly
@@ -847,41 +854,59 @@ def _annual(facts, tags):
             if cur is None or filed > cur[0]:
                 ser[e["end"]] = (filed, e.get("val"))
         if ser:
-            per.append((prio, ser))
+            per.append((prio, ser, tag))
     if not per:
-        return []
+        return [], []
     # The tag that reaches the newest year leads (ties: earlier-listed). Another tag only FILLS IN years the leader lacks, and only when
     # it agrees with the leader wherever they overlap: Chemed's RevenueFromContract... line is one segment (VITAS) while Revenues is the
     # company total, so splicing them made 2025 look +65% against a 2024 that was a different measure. No overlap (SENEA changed
     # concept) is fine.
     per.sort(key=lambda t: max(t[1]), reverse=True)  # stable: newest end first, ties keep priority order
     best = dict(per[0][1])
-    for _prio, ser in per[1:]:
+    accepted = [per[0][2]]
+    for _prio, ser, _tag in per[1:]:
         common = [k for k in ser if k in per[0][1]]
         def _same(k):
             a, b2 = ser[k][1], per[0][1][k][1]
-            return a is not None and b2 is not None and abs(a - b2) <= 0.05 * max(abs(a), abs(b2), 1)
+            return a is not None and b2 is not None and abs(a - b2) <= tol * max(abs(a), abs(b2), 1)
         if any(not _same(k) for k in common):
             continue                                  # a different measure of the same concept: do not mix
+        accepted.append(_tag)
         for k, v in ser.items():
             best.setdefault(k, v)
-    return [(k, v[1]) for k, v in sorted(best.items())]
+    return [(k, v[1]) for k, v in sorted(best.items())], accepted
 
 
-def _latest(facts, key):
-    """(latest_value, prior_year_value, fiscal_year_end) for a GAAP concept."""
+def _gap_days(a, b):
+    da, db = _d(a), _d(b)
+    return (db - da).days if (da and db) else None
+
+
+def _latest(facts, key, ref_end=None):
+    """(latest_value, prior_year_value, fiscal_year_end) for a GAAP concept. The prior value is returned only when it is really the
+    previous fiscal year (330-400 days earlier): a series with a missing year used to report a multi-year change as one year's (RV-002).
+    With `ref_end`, a concept whose newest year is not within a week of that date is treated as missing, so ratios never combine
+    figures from different fiscal years (RV-001)."""
     s = _annual(facts, TAGS[key])
     if not s:
         return None, None, None
     end, val = s[-1]
-    prev = s[-2][1] if len(s) >= 2 else None
+    if ref_end is not None:
+        g = _gap_days(end, ref_end)
+        if g is None or abs(g) > 7:
+            return None, None, None
+    prev = None
+    if len(s) >= 2:
+        g = _gap_days(s[-2][0], end)
+        if g is not None and 330 <= g <= 400:
+            prev = s[-2][1]
     return val, prev, end
 
 
 def _series(facts, key, n=5):
     """Last n annual values for a concept: [{fy, val}, ...] oldest->newest."""
     s = _annual(facts, TAGS[key])
-    return [{"fy": e[0][:4], "val": e[1]} for e in s[-n:]]
+    return [{"fy": e[0][:4], "val": e[1], "end": e[0]} for e in s[-n:]]
 
 
 def _cagr(series):
@@ -889,6 +914,9 @@ def _cagr(series):
     if len(series) < 2:
         return None
     a, b, yrs = series[0]["val"], series[-1]["val"], len(series) - 1
+    g = _gap_days(series[0].get("end"), series[-1].get("end"))
+    if g:                                             # real elapsed time, so a missing year is not counted as one year
+        yrs = g / 365.25
     if a and b and a > 0 and b > 0 and yrs > 0:
         return round(((b / a) ** (1 / yrs) - 1) * 100, 2)
     return None
@@ -954,27 +982,30 @@ def _usd_rows(facts, tags):
     return [e for _, e in best.values()]
 
 
-def _ttm_val(facts, tags):
+def _ttm_val(facts, tags, ref_end=None):
     """Trailing-twelve-month sum for a FLOW concept (revenue, net income, cash flows).
     TTM = latest full FY (10-K) + current-year YTD interim - prior-year same-length YTD,
     which bridges the un-filed standalone Q4. Falls back to the latest annual when no
     newer interim exists; returns None when it can't bridge reliably (never guesses).
     This keeps a single trough/peak fiscal year from misrepresenting current profitability."""
-    rows = _usd_rows(facts, tags)
+    # The annual anchor and the interim rows come from the SAME measure `_annual` chose (RV-003): a quarter that shares the annual
+    # figure's end date, or another tag measuring a segment, can no longer stand in for the year.
+    series, _strict = _annual_ex(facts, tags)
+    if not series:
+        return None
+    # Interim rows may come from any tag that measures the same thing (within 25% of the leader wherever annual years overlap; ONDS
+    # reports its nine-month figures only under the second net-income tag), but never from a tag measuring a segment (CHE: a third).
+    accepted = _annual_ex(facts, tags, tol=0.25)[1] or _strict
+    rows = _usd_rows(facts, accepted)
     if not rows:
         return None
-    ann = {}
-    for e in rows:
-        if str(e.get("form", "")).startswith("10-K") and e.get("fp") == "FY" and e.get("end"):
-            k = e["end"]
-            if k not in ann or str(e.get("filed", "")) > str(ann[k].get("filed", "")):
-                ann[k] = e
-    if not ann:
-        return None
-    a = max(ann.values(), key=lambda e: e["end"])
-    a_end, a_val = _d(a["end"]), a.get("val")
+    a_end, a_val = _d(series[-1][0]), series[-1][1]
     if a_end is None or a_val is None:
         return None
+    if ref_end is not None:                       # same reference year as every other ratio input (RV-001)
+        g = _gap_days(series[-1][0], ref_end)
+        if g is None or abs(g) > 7:
+            return None
     cur = []
     for e in rows:
         s, en = _d(e.get("start")), _d(e.get("end"))
@@ -1048,29 +1079,45 @@ def _metrics_from_facts(ticker, cik, facts):
                            + " — this module only parses us-gaap, so no ratios can be computed"
                            if _other else "SEC filer, but companyfacts contains no financial taxonomy")}
 
-    rev, rev_prev, fy_end = _latest(facts, "revenue")
-    cor = _latest(facts, "cost_of_revenue")[0]
-    gross = _latest(facts, "gross_profit")[0]
-    op_inc = _latest(facts, "operating_income")[0]
-    ni = _latest(facts, "net_income")[0]
-    ca = _latest(facts, "current_assets")[0]
-    cl = _latest(facts, "current_liabilities")[0]
-    inv = _latest(facts, "inventory")[0]
-    liab = _latest(facts, "total_liabilities")[0]
-    equity = _latest(facts, "equity")[0]
-    int_exp = _latest(facts, "interest_expense")[0]
-    ocf = _latest(facts, "operating_cash_flow")[0]
-    assets = _latest(facts, "total_assets")[0]
-    capex = _latest(facts, "capex")[0]
-    ar = _latest(facts, "accounts_receivable")[0]
-    div_paid = _latest(facts, "dividends_paid")[0]
+    # One reference fiscal year for every concept (RV-001): the newest year-end among the anchor concepts. A concept whose own newest
+    # year is a different one (a tag the company stopped using) is dropped and named in `period_mismatch`, never mixed in.
+    _anchor_ends = [s[-1][0] for s in (_annual(facts, TAGS[k]) for k in ("revenue", "net_income", "total_assets")) if s]
+    ref_end = max(_anchor_ends) if _anchor_ends else None
+    mismatch = []
+
+    def L(key):
+        v = _latest(facts, key, ref_end)
+        if v[0] is None and ref_end is not None:
+            s = _annual(facts, TAGS[key])
+            if s:
+                mismatch.append(key)
+        return v
+
+    rev, rev_prev, fy_end = L("revenue")
+    if fy_end is None:
+        fy_end = ref_end
+    cor = L("cost_of_revenue")[0]
+    gross = L("gross_profit")[0]
+    op_inc = L("operating_income")[0]
+    ni = L("net_income")[0]
+    ca = L("current_assets")[0]
+    cl = L("current_liabilities")[0]
+    inv = L("inventory")[0]
+    liab = L("total_liabilities")[0]
+    equity = L("equity")[0]
+    int_exp = L("interest_expense")[0]
+    ocf = L("operating_cash_flow")[0]
+    assets = L("total_assets")[0]
+    capex = L("capex")[0]
+    ar = L("accounts_receivable")[0]
+    div_paid = L("dividends_paid")[0]
     fcf = round(ocf - capex, 2) if (ocf is not None and capex is not None) else None
 
     # TTM (trailing-twelve-month) so a single trough/peak fiscal year doesn't mislead
-    ttm_rev = _ttm_val(facts, TAGS["revenue"])
-    ttm_ni = _ttm_val(facts, TAGS["net_income"])
-    ttm_ocf = _ttm_val(facts, TAGS["operating_cash_flow"])
-    ttm_capex = _ttm_val(facts, TAGS["capex"])
+    ttm_rev = _ttm_val(facts, TAGS["revenue"], ref_end)
+    ttm_ni = _ttm_val(facts, TAGS["net_income"], ref_end)
+    ttm_ocf = _ttm_val(facts, TAGS["operating_cash_flow"], ref_end)
+    ttm_capex = _ttm_val(facts, TAGS["capex"], ref_end)
     ttm_fcf = round(ttm_ocf - ttm_capex, 2) if (ttm_ocf is not None and ttm_capex is not None) else None
 
     if gross is None and rev is not None and cor is not None:
@@ -1084,6 +1131,7 @@ def _metrics_from_facts(ticker, cik, facts):
 
     metrics = {
         "fiscal_year_end": fy_end,
+        "period_mismatch": sorted(set(mismatch)),
         "revenue": rev,
         "revenue_growth_pct": _pct(rev - rev_prev, rev_prev) if (rev is not None and rev_prev) else None,
         "net_income": ni,
@@ -1105,9 +1153,10 @@ def _metrics_from_facts(ticker, cik, facts):
         "operating_margin_pct": _pct(op_inc, rev),
         "net_margin_pct": _pct(ni, rev),
         "fcf_margin_pct": _pct(fcf, rev),
-        "return_on_equity_pct": _pct(ni, equity),               # ROE = net income / equity
+        "return_on_equity_pct": _pct(ni, equity) if (equity and equity > 0) else None,   # ROE = net income / equity (n/a when equity <= 0, RV-009)
         "return_on_assets_pct": _pct(ni, assets),               # ROA = net income / assets
-        "debt_to_equity": _ratio(liab, equity),                 # total liabilities / equity
+        "debt_to_equity": _ratio(liab, equity) if (equity and equity > 0) else None,    # total liabilities / equity (n/a when equity <= 0)
+        "negative_equity": bool(equity is not None and equity <= 0),
         "debt_to_assets": _ratio(liab, assets),                 # total liabilities / assets
         "interest_coverage": _ratio(op_inc, int_exp),           # operating income / interest expense
         "asset_turnover": _ratio(rev, assets),                  # revenue / assets (efficiency)
@@ -1118,14 +1167,14 @@ def _metrics_from_facts(ticker, cik, facts):
         "fcf_dividend_coverage": _ratio(fcf, div_paid) if div_paid else None,  # FCF / dividends (>1 good)
     }
     # ---- disciplined quant scores (Piotroski F, Altman Z') from current vs prior-year GAAP ----
-    ni_p = _latest(facts, "net_income")[1]
-    assets_p = _latest(facts, "total_assets")[1]
-    ca_p = _latest(facts, "current_assets")[1]
-    cl_p = _latest(facts, "current_liabilities")[1]
-    liab_p = _latest(facts, "total_liabilities")[1]
-    gross_p = _latest(facts, "gross_profit")[1]
-    cor_p = _latest(facts, "cost_of_revenue")[1]
-    re_val = _latest(facts, "retained_earnings")[0]
+    ni_p = L("net_income")[1]
+    assets_p = L("total_assets")[1]
+    ca_p = L("current_assets")[1]
+    cl_p = L("current_liabilities")[1]
+    liab_p = L("total_liabilities")[1]
+    gross_p = L("gross_profit")[1]
+    cor_p = L("cost_of_revenue")[1]
+    re_val = L("retained_earnings")[0]
     sh, sh_p, _shfy = _latest(facts, "shares")
 
     def _rr(n, d):

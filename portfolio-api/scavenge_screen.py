@@ -18,7 +18,7 @@ MIN_REVENUE = 1_000_000          # below this there is no operating business to 
 
 
 STALE_ANNUAL_DAYS = 640         # ~21 months: a company with filings this year but no full-year figures newer than this is not screened on them
-SCREEN_VERSION = 9               # bump when rules change: the job re-screens once even if SEC's file is unchanged
+SCREEN_VERSION = 10              # bump when rules change: the job re-screens once even if SEC's file is unchanged
 
 # Revenue under other us-gaap tags: banks, REITs and insurers do not use the revenue tags edgar looks for, which made the
 # first live run call them "pre-revenue" (Cowork RESULT-018 F3). Used only by this screen, so holdings math is unchanged.
@@ -54,21 +54,40 @@ def _instant(facts, taxonomy, tag):
     return (best[0][0], best[1]) if best else None
 
 
-def cash_position(facts, taxonomy="us-gaap"):
-    """Cash plus short-term investments at the newest balance-sheet date, or None. Investments count only when dated the same day as the cash."""
-    cash = None
-    for tag in CASH_TAGS.get(taxonomy, []):
-        cash = _instant(facts, taxonomy, tag)
-        if cash:
-            break
-    if not cash:
-        return None
+CASH_STALE_DAYS = 200
+
+
+def cash_position_ex(facts, taxonomy="us-gaap"):
+    """(cash plus short-term investments, as-of date) at the newest balance-sheet date, or (None, None). Every cash tag is looked at and
+    the one with the NEWEST date wins (RV-004: a company that moved to the restricted-cash tag after 2018 used to keep the old tag's
+    figure); if that date is more than ~200 days older than the company's newest balance sheet the figure is unknown, not stale.
+    Investments count only when dated the same day as the cash, and the LARGEST single investment tag is used, not the sum, because a
+    total and its component can both be tagged (RV-023)."""
+    cands = [c for c in (_instant(facts, taxonomy, t) for t in CASH_TAGS.get(taxonomy, [])) if c]
+    if not cands:
+        return None, None
+    cash = max(cands, key=lambda c: c[0])
+    newest = cash[0]
+    for t in ("Assets", "Liabilities"):
+        a = _instant(facts, taxonomy, t)
+        if a and a[0] > newest:
+            newest = a[0]
+    g = _days(cash[0], newest)
+    if g is not None and g > CASH_STALE_DAYS:
+        return None, None
     total = cash[1]
+    invs = []
     for tag in INVEST_TAGS if taxonomy == "us-gaap" else []:
         inv = _instant(facts, taxonomy, tag)
         if inv and inv[0] == cash[0] and inv[1]:
-            total += inv[1]
-    return total
+            invs.append(inv[1])
+    if invs:
+        total += max(invs)
+    return total, cash[0]
+
+
+def cash_position(facts, taxonomy="us-gaap"):
+    return cash_position_ex(facts, taxonomy)[0]
 
 
 def runway_from_fcf(cash, fcf):
@@ -128,6 +147,14 @@ def _annual_rows(facts, taxonomy, tags, forms, flow=True, latest_tag=False):
     return next(f for f in found if f[-1][0] == newest)
 
 
+def _prior_if_adjacent(series):
+    """The previous year's value, only when it really is the previous fiscal year (330-400 days earlier) (RV-002)."""
+    if len(series) < 2:
+        return None
+    g = _days(series[-2][0], series[-1][0])
+    return series[-2][1] if (g is not None and 330 <= g <= 400) else None
+
+
 def alt_revenue(facts, with_end=False):
     """(latest, prior) annual revenue from the alternate tags, or (None, None). Several alternates can exist at once (a mortgage REIT
     has total interest income AND a small real-estate revenue line), so take the LARGEST among the series that reach the newest year."""
@@ -140,7 +167,7 @@ def alt_revenue(facts, with_end=False):
         return (None, None, None) if with_end else (None, None)
     newest = max(c[-1][0] for c in cands)
     best = max((c for c in cands if c[-1][0] == newest), key=lambda c: c[-1][1])
-    out = (best[-1][1], (best[-2][1] if len(best) > 1 else None))
+    out = (best[-1][1], _prior_if_adjacent(best))
     return out + (newest,) if with_end else out
 
 
@@ -182,7 +209,7 @@ def ifrs_compact(facts):
 
     def last2(key, flow=True):
         s = _annual_rows(facts, "ifrs-full", IFRS[key], forms, flow, latest_tag=True)
-        return (s[-1][1], (s[-2][1] if len(s) > 1 else None), s[-1][2], s[-1][0]) if s else (None, None, None, None)
+        return (s[-1][1], _prior_if_adjacent(s), s[-1][2], s[-1][0]) if s else (None, None, None, None)
     rev, rev_prev, cur, fy_end = last2("revenue")
     ni = last2("net_income")[0]
     ocf = last2("ocf")[0]
@@ -242,14 +269,15 @@ def compact(result, facts):
         g = round((a_rev - a_prev) / a_prev * 100, 2) if a_prev else None
         if a_end and (not fye or str(a_end) > str(fye)):
             fye = a_end
-    nm = ttm.get("net_margin_pct", r.get("net_margin_pct"))
+    nm = ttm.get("net_margin_pct") if ttm.get("net_margin_pct") is not None else r.get("net_margin_pct")
     if used_alt and m.get("net_income") is not None:
         nm = round(m["net_income"] / rev * 100, 2)
     fcf_m = ttm.get("fcf_margin_pct") if ttm.get("fcf_margin_pct") is not None else r.get("fcf_margin_pct")
-    cash = cash_position(facts)
+    cash, cash_as_of = cash_position_ex(facts)
     return {
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
-        "cash": cash, "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),
+        "cash": cash, "cash_as_of": cash_as_of, "negative_equity": bool(r.get("negative_equity")),
+        "period_mismatch": m.get("period_mismatch") or [], "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),
         "rev_growth_pct": g, "rev_cagr_pct": cagr,
         "rev_accel_pts": round(g - cagr, 2) if (g is not None and cagr is not None) else None,
         "gross_margin_pct": r.get("gross_margin_pct"), "net_margin_pct": nm,
