@@ -149,3 +149,12 @@ class StrategistFollowupTests(unittest.TestCase):
         log = []
         app._note_source(log, "get_fundamentals", {"ticker": "ISRG"}, {"v": "z" * 5000})
         self.assertEqual(len(log[0]["result"]), 2000)
+
+
+class TestScoutNoteLabel(unittest.TestCase):
+    def test_note_is_labelled_as_model_written_inside_the_facts_block(self):
+        res = [{"found": True, "ticker": "QXO", "screen": {"name": "QXO"}, "scout_note": {"created_at": "2026-11-14 01:00", "note": {"thesis": "T", "conviction": 3}}}]
+        out = ac.facts_block(res)
+        self.assertIn("written by the model on 2026-11-14", out)
+        self.assertIn("any scout note is model-written", out.split("\n")[0])
+        self.assertNotIn("written by the app, not the model", out)

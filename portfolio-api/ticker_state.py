@@ -181,20 +181,62 @@ def ensure_scout():
             c.execute("""CREATE TABLE IF NOT EXISTS scout_picks(
                 ticker TEXT NOT NULL, picked_on TEXT NOT NULL, sleeves TEXT, conviction INTEGER, price REAL, spy REAL, note_id INTEGER,
                 scored TEXT, PRIMARY KEY(ticker, picked_on))""")
+            c.execute("""CREATE TABLE IF NOT EXISTS sleeve_snapshots(
+                snap_date TEXT NOT NULL, sleeve_id TEXT NOT NULL, ticker TEXT NOT NULL, rank INTEGER, price REAL, price_as_of INTEGER,
+                conviction INTEGER, PRIMARY KEY(snap_date, sleeve_id, ticker))""")
+            for tbl, col, typ in (("scout_notes", "sources", "TEXT"), ("scout_picks", "price_as_of", "INTEGER"),
+                                  ("scout_picks", "spy_as_of", "INTEGER"), ("scout_picks", "price_src", "TEXT")):
+                if col not in {r[1] for r in c.execute(f"PRAGMA table_info({tbl})")}:
+                    c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}")
 
 
-def add_note(ticker, note, inputs, sleeves, why, model, price, spy, today, now=None):
-    """Save a scout note and log it as a pick (entry price and SPY level that day) for the later track-record scoring."""
+def add_note(ticker, note, inputs, sleeves, why, model, price, spy, today, now=None, sources=None,
+             price_as_of=None, spy_as_of=None, price_src=None):
+    """Save a scout note and log it as a pick (entry price and SPY level that day) for the later track-record scoring.
+    `sources` = the list of news items / filings the model was shown (id, title, url, date, domain) so every evidence line can be
+    traced afterwards; `price_as_of` / `spy_as_of` = epoch seconds of the two quotes (taken back to back so the stock leg and the
+    benchmark leg describe the same moment); `price_src` = 'live quote' or 'stored screen price'."""
     ensure_scout()
     now = int(now or __import__("time").time())
     with store._lock:
         with store._conn() as c:
-            cur = c.execute("INSERT INTO scout_notes(ticker,created_at,sleeves,why,conviction,note,inputs,model) VALUES(?,?,?,?,?,?,?,?)",
-                            (ticker, now, json.dumps(sleeves), why, note.get("conviction"), json.dumps(note), json.dumps(inputs), model))
+            cur = c.execute("INSERT INTO scout_notes(ticker,created_at,sleeves,why,conviction,note,inputs,model,sources) VALUES(?,?,?,?,?,?,?,?,?)",
+                            (ticker, now, json.dumps(sleeves), why, note.get("conviction"), json.dumps(note), json.dumps(inputs), model,
+                             json.dumps(sources) if sources is not None else None))
             nid = cur.lastrowid
-            c.execute("INSERT OR REPLACE INTO scout_picks(ticker,picked_on,sleeves,conviction,price,spy,note_id,scored) VALUES(?,?,?,?,?,?,?,NULL)",
-                      (ticker, today, json.dumps(sleeves), note.get("conviction"), price, spy, nid))
+            c.execute("INSERT OR REPLACE INTO scout_picks(ticker,picked_on,sleeves,conviction,price,spy,note_id,scored,price_as_of,spy_as_of,price_src) "
+                      "VALUES(?,?,?,?,?,?,?,NULL,?,?,?)",
+                      (ticker, today, json.dumps(sleeves), note.get("conviction"), price, spy, nid, price_as_of, spy_as_of, price_src))
     return nid
+
+
+def save_sleeve_snapshot(snap_date, entries):
+    """entries: [{sleeve_id, ticker, rank, price, price_as_of, conviction}]. Replaces that day's snapshot (so a re-run is harmless).
+    Kept so a later scoring job can compare sleeve members with and without a scout note, and so a rule change can show who entered or left."""
+    ensure_scout()
+    with store._lock:
+        with store._conn() as c:
+            c.execute("DELETE FROM sleeve_snapshots WHERE snap_date=?", (snap_date,))
+            c.executemany("INSERT OR REPLACE INTO sleeve_snapshots(snap_date,sleeve_id,ticker,rank,price,price_as_of,conviction) VALUES(?,?,?,?,?,?,?)",
+                          [(snap_date, e["sleeve_id"], e["ticker"], e.get("rank"), e.get("price"), e.get("price_as_of"), e.get("conviction"))
+                           for e in entries])
+    return len(entries)
+
+
+def sleeve_snapshot(snap_date=None, sleeve_id=None):
+    """-> {date, dates: [available dates, newest first], rows: [...]} for one day (default: the newest)."""
+    ensure_scout()
+    with store._conn() as c:
+        dates = [r[0] for r in c.execute("SELECT DISTINCT snap_date FROM sleeve_snapshots ORDER BY snap_date DESC LIMIT 60")]
+        d = snap_date or (dates[0] if dates else None)
+        rows = []
+        if d:
+            sql, args = "SELECT * FROM sleeve_snapshots WHERE snap_date=?", [d]
+            if sleeve_id:
+                sql += " AND sleeve_id=?"
+                args.append(sleeve_id)
+            rows = [dict(r) for r in c.execute(sql + " ORDER BY sleeve_id, rank", args)]
+    return {"date": d, "dates": dates, "rows": rows}
 
 
 def notes_index():
@@ -232,7 +274,7 @@ def get_note(ticker):
     if not r:
         return None
     d = dict(r)
-    for k in ("note", "inputs", "sleeves"):
+    for k in ("note", "inputs", "sleeves", "sources"):
         try:
             d[k] = json.loads(d[k]) if d.get(k) else None
         except Exception:

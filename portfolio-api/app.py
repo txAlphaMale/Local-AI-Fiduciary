@@ -15,6 +15,7 @@ Endpoints:
 """
 
 import os
+import urllib.parse
 import json
 import time
 import math
@@ -6156,14 +6157,73 @@ def _scout_facts(t, row, name, nightly):
     for i, art in enumerate((res.get("articles") or [])[:5], 1):
         title = (art.get("title") or "").strip()
         if title:
+            url = art.get("url") if isinstance(art.get("url"), str) and art.get("url").startswith(("http://", "https://")) else None
             facts["news"].append({"id": f"news:{i}", "title": title[:200], "date": art.get("published_date") or art.get("date"),
-                                  "text": (art.get("content") or "")[:600]})
+                                  "text": (art.get("content") or "")[:600], "url": url, "domain": _domain_of(url)})
     for i, f in enumerate(edgar.recent_8k(t, days=45, limit=4), 1):
-        facts["filings"].append({"id": f"filing:{i}", "date": f.get("date"), "labels": f.get("labels") or [], "items": f.get("items") or ""})
+        facts["filings"].append({"id": f"filing:{i}", "date": f.get("date"), "labels": f.get("labels") or [], "items": f.get("items") or "",
+                                 "url": f.get("url")})
     return facts, None
 
 
-def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None):
+def _domain_of(url):
+    """'https://www.example.com/a' -> 'example.com' (None for no usable address)."""
+    try:
+        host = urllib.parse.urlparse(url or "").netloc.lower().split("@")[-1].split(":")[0]
+    except Exception:
+        return None
+    return (host[4:] if host.startswith("www.") else host) or None
+
+
+def _scout_sources(facts):
+    """The news items and 8-K filings the model was shown, with their addresses, to be saved beside the note. The model
+    cites them by id (news:1, filing:2); this list is how a reader gets from the id to the page."""
+    out = []
+    for n in (facts.get("news") or []):
+        out.append({"id": n.get("id"), "kind": "news", "title": n.get("title"), "url": n.get("url"), "date": n.get("date"),
+                    "domain": n.get("domain")})
+    for f in (facts.get("filings") or []):
+        out.append({"id": f.get("id"), "kind": "filing", "title": "SEC 8-K" + (": " + ", ".join(f.get("labels") or []) if f.get("labels") else ""),
+                    "url": f.get("url"), "date": f.get("date"), "domain": "sec.gov"})
+    return out
+
+
+def _pick_prices(t, fallback_price=None):
+    """Stock and SPY quotes taken back to back, each with the time of its last trade (Finnhub 't'), so a pick's entry price and
+    its benchmark describe the same moment. Falls back to the stored screen price (labelled) when the live quote is unavailable.
+    -> (price, spy, price_as_of, spy_as_of, source)."""
+    now = int(time.time())
+    q, b = _quote(t), _quote("SPY")
+    price, spy = q.get("c") or None, b.get("c") or None
+    if price:
+        return price, spy, int(q.get("t") or now), (int(b.get("t") or now) if spy else None), "live quote"
+    return fallback_price, spy, None, (int(b.get("t") or now) if spy else None), "stored screen price"
+
+
+def _snapshot_sleeves(rows, today, sleeve_list=None, briefs=None):
+    """Write today's sleeve membership (who matches each enabled sleeve, in rank order, with price, its time and any scout
+    conviction). One row per sleeve and ticker per day; re-running replaces that day. Never raises: this is bookkeeping."""
+    try:
+        sleeve_list = sleeve_list or _sleeve_list()
+        briefs = briefs if briefs is not None else ticker_state.scout_briefs()
+        held = _held_sector_weights() if any(sl.get("fill_gap") for sl in sleeve_list) else None
+        by_t = {r["ticker"]: r for r in rows}
+        entries = []
+        for sl in sleeve_list:
+            if sl.get("enabled") is False:
+                continue
+            ev = sleeves_mod.evaluate(sl, rows, today, held if sl.get("fill_gap") else None)
+            for i, m in enumerate(ev["matches"], 1):
+                s2 = (by_t.get(m["ticker"]) or m).get("s2") or {}
+                entries.append({"sleeve_id": sl["id"], "ticker": m["ticker"], "rank": i, "price": s2.get("price"),
+                                "price_as_of": s2.get("fetched_at"), "conviction": ((briefs or {}).get(m["ticker"]) or {}).get("conviction")})
+        return ticker_state.save_sleeve_snapshot(today.isoformat(), entries)
+    except Exception as e:
+        print(f"[sleeve snapshot] failed: {type(e).__name__}: {str(e)[:200]}", flush=True)
+        return 0
+
+
+def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None, price_fn=None, snapshot=True):
     """Scout notes for the few names that pass a sleeve completely, plus any the user asked for. One news search and one model call each,
     serialized on the GPU; Tavily is the 'scavenger' (background) source so it stays inside its daily soft budget. A paused search stops
     the run (the next run continues); a model answer that fails validation is discarded, never saved."""
@@ -6175,6 +6235,8 @@ def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None):
         deadline = market_data.deadline_for(now_dt)
         rows = ticker_state.screened_rows(sleeves_mod.STATES)
         by_t = {r["ticker"]: r for r in rows}
+        if snapshot:
+            _snapshot_sleeves(rows, today)      # tonight's membership is recorded before anything else can stop the run
         with _SCOUT_REQ_LOCK:
             asked, _SCOUT_REQUESTS[:] = list(_SCOUT_REQUESTS), []
         targets = [{"ticker": t, "sleeves": [], "why": "you asked for it"} for t in asked if t in by_t]
@@ -6211,8 +6273,11 @@ def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None):
             if not note:
                 rejected += 1
                 continue
-            price = (row.get("s2") or {}).get("price")
-            ticker_state.add_note(t, note, scout.inputs_snapshot(row), tg["sleeves"], tg["why"], _text_model(), price, spy, today.isoformat())
+            price, spy_now, price_at, spy_at, price_src = _pick_prices(t, (row.get("s2") or {}).get("price")) if price_fn is None \
+                else price_fn(t, (row.get("s2") or {}).get("price"))
+            ticker_state.add_note(t, note, scout.inputs_snapshot(row), tg["sleeves"], tg["why"], _text_model(), price, spy_now or spy,
+                                  today.isoformat(), sources=_scout_sources(facts), price_as_of=price_at, spy_as_of=spy_at,
+                                  price_src=price_src)
             done += 1
         summary = {"ran_at": int(time.time()), "targets": len(targets), "done": done, "rejected": rejected, "errors": errors,
                    "stopped": stopped, "seconds": round(time.time() - t0, 1)}
@@ -6250,6 +6315,15 @@ def get_scout_status(limit: int = 30):
     except Exception:
         last = None
     return {"last_run": last, "notes": ticker_state.list_notes(limit), "picks_logged": len(ticker_state.picks())}
+
+
+@app.get("/api/sleeves-snapshot")
+def get_sleeve_snapshot(date: str = "", sleeve: str = ""):
+    """Sleeve membership recorded by the nightly scout run (read-only): ?date=YYYY-MM-DD (default newest) &sleeve=<id>."""
+    d = date.strip() or None
+    if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+        return JSONResponse({"error": "date must be YYYY-MM-DD"}, status_code=400)
+    return ticker_state.sleeve_snapshot(d, sleeve.strip() or None)
 
 
 @app.get("/api/scout/{ticker}")
@@ -6400,6 +6474,34 @@ def _sleeve_card(sl, rows, today, top=5, held=None, briefs=None):
             "match_count": len(ev["matches"]), "preview": [_sleeve_row(r, today, briefs) for r in ev["matches"][:top]]}
 
 
+def _epoch_date(ts):
+    try:
+        return datetime.date.fromtimestamp(float(ts)).isoformat() if ts else None
+    except Exception:
+        return None
+
+
+def _older_than_days(iso, days, today):
+    try:
+        return (today - datetime.date.fromisoformat(str(iso)[:10])).days > days if iso else None
+    except Exception:
+        return None
+
+
+def _price_is_old(ts, today, trading_days=3):
+    """True when the stored price is more than `trading_days` weekdays old (None when it has no time)."""
+    try:
+        d = datetime.date.fromtimestamp(float(ts))
+    except Exception:
+        return None
+    n, cur = 0, d
+    while cur < today:
+        cur += datetime.timedelta(days=1)
+        if cur.weekday() < 5:
+            n += 1
+    return n > trading_days
+
+
 def _sleeve_row(r, today, briefs=None, small_base=None):
     s1, s2 = r.get("s1") or {}, r.get("s2") or {}
     if small_base is None:
@@ -6412,6 +6514,10 @@ def _sleeve_row(r, today, briefs=None, small_base=None):
             "age_years": sleeves_mod.value_of(r, "age_years", today),
             "price": s2.get("price"), "market_cap": s2.get("market_cap"), "dividend_yield_pct": s2.get("dividend_yield_pct"),
             "beta": s2.get("beta"), "sector": s2.get("sector"), "also": r.get("also"),
+            "fiscal_year_end": s1.get("fiscal_year_end"), "last_filed": s1.get("last_filed"),
+            "price_as_of": _epoch_date(s2.get("fetched_at")),
+            "financials_old": _older_than_days(s1.get("fiscal_year_end"), 366, today),
+            "price_old": _price_is_old(s2.get("fetched_at"), today),
             "negative_equity": bool(s1.get("negative_equity")), "small_base": bool(small_base and isinstance(g, (int, float)) and g > 1000),
             "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1],
             "scout": (briefs or {}).get(r["ticker"])}

@@ -72,8 +72,9 @@ def _note_lines(n):
     body = n.get("note")
     date = str(n.get("created_at") or "")[:10]
     if not isinstance(body, dict):
-        return [f"  - Scout note ({date}): " + str(body).strip().replace("\n", " ")[:700]]
-    out = [f"  - Scout note ({date}): {str(body.get('thesis') or '').strip()}"]
+        return [f"  - Scout note (written by the model on {date}; open the note to see its sources): " + str(body).strip().replace("\n", " ")[:700]]
+    out = [f"  - Scout note (written by the model on {date} from the sources listed in the note; open the note to see them): "
+           f"{str(body.get('thesis') or '').strip()}"]
     conv = body.get("conviction")
     if conv is not None:
         out.append(f"    - Conviction: {conv} of 5" + (" (capped: no news or filings cited)" if body.get("conviction_capped") else "")
@@ -124,7 +125,7 @@ def facts_block(results):
             lines.extend(_note_lines(n))
     if not lines:
         return ""
-    return "**From the app's research data (written by the app, not the model):**\n" + "\n".join(lines)
+    return "**From the app's research data (the figures are copied by the app from its screen; any scout note is model-written and labelled as such):**\n" + "\n".join(lines)
 
 
 COMMENTARY_RULE = (
