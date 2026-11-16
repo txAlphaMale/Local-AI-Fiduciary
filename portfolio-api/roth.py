@@ -38,7 +38,8 @@ def _load(today=None):
     return {"IRMAA_YEAR": ir["year"], "IRMAA_PART_B_STD_MONTHLY": ir["values"]["std_monthly"],
             "IRMAA_MULTIPLIERS": list(ir["values"]["multipliers"]),
             "IRMAA_THRESHOLDS": {k: list(v) for k, v in ir["values"]["thresholds"].items()},
-            "IRMAA_SOURCE": (ir["extra"].get("irmaa_source") or ir["source"])}
+            "IRMAA_SOURCE": (ir["extra"].get("irmaa_source") or ir["source"]),
+            "RMD_DIVISORS": {int(k): float(v) for k, v in taxtables.resolve("rmd.uniform_lifetime", today)["values"]["divisors"].items()}}
 
 
 def reload_tables(today=None):
