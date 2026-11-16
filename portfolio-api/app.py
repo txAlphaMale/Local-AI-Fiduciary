@@ -17334,6 +17334,38 @@ _CHAT_CANCEL_LOCK = threading.Lock()
 _RECENT_CHAT_TIMING = collections.deque(maxlen=20)
 
 
+def _model_load_state(model, num_ctx):
+    """Is `model` already in GPU memory at this context size? 'loaded', 'cold' (not loaded: the first call will load it, which takes
+    from half a minute to several minutes), 'reload' (loaded at a different context size, so Ollama reloads it) or None (not Ollama,
+    or it could not be asked). Read from Ollama's own /api/ps."""
+    if llm._dialect() != "ollama" or not model:
+        return None
+    try:
+        r = requests.get(f"{llm._base_url().rstrip('/')}/api/ps", timeout=3)
+        models = r.json().get("models") or []
+    except Exception:
+        return None
+    want = model if ":" in model else model + ":latest"
+    for m in models:
+        if want in (m.get("name"), m.get("model")):
+            ctx = m.get("context_length")
+            try:
+                if ctx and num_ctx and int(ctx) != int(num_ctx):
+                    return "reload"
+            except (TypeError, ValueError):
+                pass
+            return "loaded"
+    return "cold"
+
+
+def _loading_message(state, model, num_ctx):
+    if state == "reload":
+        return (f"Reloading {model}: it is in GPU memory at a different context size than this request ({num_ctx:,} tokens). "
+                "This takes about half a minute to a few minutes, once.")
+    return (f"Loading {model} into GPU memory: it was unloaded after idle time or another job used the GPU. "
+            "This takes from half a minute to several minutes, once; it is not stuck.")
+
+
 def _num_ctx():
     try:
         return max(2048, int(_knob("llm_num_ctx")))
@@ -17533,6 +17565,10 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             if _ev:
                 yield _ev
             _call = {"t0": time.time(), "think0": None, "answer0": None, "ollama": {}}
+            _lstate = _model_load_state(_text_model(), _num_ctx())
+            if _lstate in ("cold", "reload"):
+                yield _sse("status", {"state": "loading", "message": _loading_message(_lstate, _text_model(), _num_ctx())})
+                timing["cold_start"] = _lstate
             # Reasoning mode (knob, default 0 = unchanged). Mode 1 turns reasoning off ONLY for the call that writes the short
             # commentary after the app has already printed a ticker's facts; every tool-choosing step and every other answer keeps it.
             _think = False if (_chat_thinking_mode() == 1 and research_hits) else None

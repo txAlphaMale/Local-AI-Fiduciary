@@ -10384,13 +10384,14 @@ function chatMsgFromServer(m){
   return {role:m.role,content:m.content||'',tools:[],stamp:st};
 }
 function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; let t='answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':'');
-  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+(m.fallback_model?' · RAN ON THE FALLBACK MODEL '+m.fallback_model+' (the main model failed to load)':'')+(m.no_think_calls?' · reasoning off for '+m.no_think_calls+' call'+(m.no_think_calls>1?'s':''):'')+')'; }
+  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+(m.cold_start?' · the model had to be '+(m.cold_start==='reload'?'reloaded':'loaded')+' first':'')+(m.fallback_model?' · RAN ON THE FALLBACK MODEL '+m.fallback_model+' (the main model failed to load)':'')+(m.no_think_calls?' · reasoning off for '+m.no_think_calls+' call'+(m.no_think_calls>1?'s':''):'')+')'; }
   return t; }
 const CHAT_LONG_RUN_S=1200;   // a hint (never a cutoff) once a request has been RUNNING this long
 function chatLiveElapsed(asst){
   if(!asst||!asst.t0) return '';
   const now=Date.now();
   if(asst.phase==='queued') return '⏳ queued '+fmtDur((now-asst.t0)/1000)+' (the clock starts when the model starts on your message)';
+  if(asst.phase==='loading') return '⏳ loading the model into GPU memory '+fmtDur((now-(asst.tLoad||asst.t0))/1000)+' (once; not stuck)';
   const run=(now-(asst.tRun||asst.t0))/1000;
   return '⚙ working '+fmtDur(run)+(asst.tRun&&asst.tRun-asst.t0>=2000?' · queued '+fmtDur((asst.tRun-asst.t0)/1000)+' first':'')+
     (run>=CHAT_LONG_RUN_S?' · longer than usual for one answer: slow hardware or a long tool chain, Stop cancels, otherwise keep waiting':'');
@@ -10412,12 +10413,13 @@ function chatFrame(frame,asst,persona){
   let o={}; if(data){ try{ o=JSON.parse(data); }catch(_){} }
   const cs=CS(persona);
   if(ev==='session'){ cs.sid=o.session_id||cs.sid; }
-  else if(ev==='token'){ asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
+  else if(ev==='token'){ if(asst.phase==='loading') asst.phase='working'; asst.content+=(o.t||''); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='replace'){ asst.content=o.t||asst.content; const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; chatScroll(); }
   else if(ev==='tool'){ asst.tools.push({name:o.name,done:false}); chatTools(asst); }
   else if(ev==='tool_done'){ for(let k=asst.tools.length-1;k>=0;k--){ if(asst.tools[k].name===o.name && !asst.tools[k].done){ asst.tools[k].done=true; break; } } chatTools(asst); }
   else if(ev==='status'){
     if(o.state==='waiting'){ asst.phase='queued'; }
+    else if(o.state==='loading'){ asst.phase='loading'; asst.tLoad=Date.now(); }
     else if(o.state==='working'){ asst.phase='working'; asst.tRun=Date.now(); }
     if(o.state!=='working'){ const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='⏳ '+(o.message||'waiting…'); }
     chatTick(); chatScroll(); }
@@ -10428,7 +10430,7 @@ function chatFrame(frame,asst,persona){
     asst.tools.push({name:label, done:true});
     chatTools(asst);
   }
-  else if(ev==='thinking'){ asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
+  else if(ev==='thinking'){ if(asst.phase==='loading') asst.phase='working'; asst.think=(asst.think||'')+(o.t||''); const c=document.getElementById('chat-live-content'); if(c && !asst.content) c.textContent='💭 thinking… '+asst.think.slice(-400); chatScroll(); }
   else if(ev==='done'){ cs.sid=o.session_id||cs.sid; if(o.elapsed_s!=null) asst.stamp={elapsed_s:o.elapsed_s,queued_s:o.queued_s||0,timing:o.timing||null}; }
   else if(ev==='cancelled'){ cs.sid=o.session_id||cs.sid; if(!asst.content) asst.content='_(stopped)_'; }
   else if(ev==='error'){ asst.content+=(asst.content?'\n\n':'')+'⚠ '+(o.error||'error'); const c=document.getElementById('chat-live-content'); if(c) c.textContent=asst.content; }
