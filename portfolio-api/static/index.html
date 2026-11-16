@@ -10368,7 +10368,7 @@ function chatMsgFromServer(m){
   return {role:m.role,content:m.content||'',tools:[],stamp:st};
 }
 function chatStampText(st){ if(!st||st.elapsed_s==null) return ''; let t='answered in '+fmtDur(st.elapsed_s)+(st.queued_s>=5?' · waited '+fmtDur(st.queued_s)+' in the queue first':'');
-  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+')'; }
+  const m=st.timing; if(m){ const p=[]; if(m.load_s!=null) p.push('model load '+fmtDur(Math.round(m.load_s))); if(m.prompt_s!=null) p.push('reading prompt '+fmtDur(Math.round(m.prompt_s))+(m.prompt_tokens?' ('+m.prompt_tokens.toLocaleString()+' tokens)':'')); p.push('thinking '+fmtDur(Math.round(m.think_s||0))); p.push('answer '+fmtDur(Math.round(m.answer_s||0))); if(m.tools_s>=1) p.push('tools '+fmtDur(Math.round(m.tools_s))); t+=' ('+p.join(' · ')+(m.calls>1?' · '+m.calls+' model calls':'')+(m.no_think_calls?' · reasoning off for '+m.no_think_calls+' call'+(m.no_think_calls>1?'s':''):'')+')'; }
   return t; }
 const CHAT_LONG_RUN_S=1200;   // a hint (never a cutoff) once a request has been RUNNING this long
 function chatLiveElapsed(asst){

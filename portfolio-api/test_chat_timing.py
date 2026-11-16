@@ -80,3 +80,65 @@ class TurnTiming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(appmod is None, "app not importable")
+class ThinkingKnob(unittest.TestCase):
+    """Mode 0 (default) never sends think; mode 1 turns reasoning off only for the call after the app printed a ticker's facts."""
+
+    def run_chat(self, mode):
+        seen = []
+        research = {"found": True, "ticker": "QXO", "screen": {"name": "QXO Inc", "price": 12.6}, "scout_note": None}
+
+        def fake(messages, model, **k):
+            seen.append(k.get("think", "absent"))
+            if len(seen) == 1:
+                yield {"content": None, "thinking": "hm", "done": True, "error": None, "cancelled": False,
+                       "tool_calls": [{"function": {"name": "get_idea_research", "arguments": {"ticker": "QXO"}}}]}
+            else:
+                yield {"content": "Short commentary.", "thinking": None, "tool_calls": None, "done": True, "error": None,
+                       "cancelled": False}
+        with mock.patch.object(appmod.llm, "_llm_chat", side_effect=fake), mock.patch.object(appmod, "_chat_summarise_old"), \
+                mock.patch.object(appmod, "_idea_research", return_value=research), \
+                mock.patch.object(appmod, "_chat_thinking_mode", return_value=mode):
+            out = []
+            for raw in appmod._chat_stream("fiduciary", None, "Tell me about QXO", req_id="th" + str(mode)):
+                out.append(raw)
+        return seen, "".join(out)
+
+    def test_default_mode_never_sends_think(self):
+        seen, _ = self.run_chat(0)
+        self.assertEqual(seen, [None, None])
+
+    def test_mode_one_turns_reasoning_off_only_after_the_facts_are_printed(self):
+        seen, out = self.run_chat(1)
+        self.assertEqual(seen, [None, False])
+        self.assertIn("no_think_calls", out)
+
+    def test_knob_is_registered_with_a_safe_default(self):
+        spec = appmod.SETTING_SPECS["chat_thinking_mode"]
+        self.assertEqual((spec["default"], spec["cast"]), (0, int))
+        with mock.patch.dict(os.environ, {"CHAT_THINKING_MODE": "banana"}):
+            self.assertEqual(appmod._chat_thinking_mode(), 0)
+
+
+class StreamThinkField(unittest.TestCase):
+    def test_think_is_sent_only_when_asked_and_retried_without_if_rejected(self):
+        class R(FakeResp):
+            def __init__(self, status, text, lines=()):
+                super().__init__(list(lines)); self.status_code = status; self.text = text
+        bodies = []
+
+        def post(url, json=None, **k):
+            bodies.append(dict(json))
+            if "think" in json:
+                return R(400, "model does not support think")
+            return R(200, "", [b'{"message": {"content": "ok"}, "done": true}'])
+        with mock.patch.object(llm.requests, "post", side_effect=post):
+            out = list(llm._ollama_chat_stream([{"role": "user", "content": "x"}], "m", None, 0.1, 1000, None, 5, None, think=False))
+        self.assertEqual(["think" in b for b in bodies], [True, False])
+        self.assertEqual(out[-1]["content"], "ok")
+        bodies.clear()
+        with mock.patch.object(llm.requests, "post", side_effect=post):
+            list(llm._ollama_chat_stream([{"role": "user", "content": "x"}], "m", None, 0.1, 1000, None, 5, None))
+        self.assertEqual(["think" in b for b in bodies], [False])
