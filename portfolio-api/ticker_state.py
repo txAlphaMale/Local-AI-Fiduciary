@@ -5,6 +5,7 @@
 state: new | active | reconsider | blacklist. Public market data only (no personal data), kept in store.db.
 Only a SUCCESSFUL screen changes a row; a failed or deferred run leaves every row untouched (callers simply do not write).
 `last_changed` moves only when the state itself changes, so "what changed since X" is a cheap query."""
+import datetime
 import json
 import time
 
@@ -184,6 +185,9 @@ def ensure_scout():
             c.execute("""CREATE TABLE IF NOT EXISTS sleeve_snapshots(
                 snap_date TEXT NOT NULL, sleeve_id TEXT NOT NULL, ticker TEXT NOT NULL, rank INTEGER, price REAL, price_as_of INTEGER,
                 conviction INTEGER, PRIMARY KEY(snap_date, sleeve_id, ticker))""")
+            c.execute("""CREATE TABLE IF NOT EXISTS scout_rejects(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, rejected_on TEXT NOT NULL, kind TEXT, reason TEXT)""")
+            c.execute("CREATE INDEX IF NOT EXISTS ix_scout_rejects_day ON scout_rejects(rejected_on, ticker)")
             for tbl, col, typ in (("scout_notes", "sources", "TEXT"), ("scout_picks", "price_as_of", "INTEGER"),
                                   ("scout_picks", "spy_as_of", "INTEGER"), ("scout_picks", "price_src", "TEXT")):
                 if col not in {r[1] for r in c.execute(f"PRAGMA table_info({tbl})")}:
@@ -208,6 +212,31 @@ def add_note(ticker, note, inputs, sleeves, why, model, price, spy, today, now=N
                       "VALUES(?,?,?,?,?,?,?,NULL,?,?,?)",
                       (ticker, today, json.dumps(sleeves), note.get("conviction"), price, spy, nid, price_as_of, spy_as_of, price_src))
     return nid
+
+
+def add_reject(ticker, today, kind, reason):
+    """Remember that a scout attempt on `ticker` produced no note (kind 'rejected' = the model's note failed the checks, 'error' = the
+    model or search failed), so the nightly run does not spend a search and a GPU slot on the same name again at once."""
+    ensure_scout()
+    with store._lock:
+        with store._conn() as c:
+            c.execute("INSERT INTO scout_rejects(ticker,rejected_on,kind,reason) VALUES(?,?,?,?)", (ticker, today, kind, str(reason or "")[:300]))
+
+
+def recent_reject_tickers(today, days=7):
+    """Tickers with a reject or error logged in the last `days` days (today included)."""
+    ensure_scout()
+    since = (datetime.date.fromisoformat(today) - datetime.timedelta(days=days - 1)).isoformat() if isinstance(today, str) else \
+        (today - datetime.timedelta(days=days - 1)).isoformat()
+    with store._conn() as c:
+        return {r[0] for r in c.execute("SELECT DISTINCT ticker FROM scout_rejects WHERE rejected_on>=?", (since,))}
+
+
+def list_rejects(limit=30):
+    ensure_scout()
+    with store._conn() as c:
+        return [dict(r) for r in c.execute("SELECT ticker, rejected_on, kind, reason FROM scout_rejects ORDER BY id DESC LIMIT ?",
+                                           (max(1, min(int(limit), 200)),))]
 
 
 def save_sleeve_snapshot(snap_date, entries):

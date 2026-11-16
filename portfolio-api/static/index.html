@@ -3376,11 +3376,12 @@ function scoutNoteBox(t, n){
   const src=s=>SRC[s]||(s.indexOf('news:')===0?'news':(s.indexOf('filing:')===0?'SEC 8-K':s));
   const dots='●'.repeat(N.conviction)+'○'.repeat(5-N.conviction);
   const when=new Date(n.created_at*1000).toLocaleDateString();
-  let h='<div><b>'+esc(t)+'</b> · scout note · conviction <b>'+dots+' '+N.conviction+'/5</b>'+(N.conviction_capped?' <span class="muted">(capped: no news or filings to read)</span>':'')+' · <span class="muted">'+esc(when)+' · '+esc(N.horizon)+'</span></div>';
+  let h='<div><b>'+esc(t)+'</b> · scout note · conviction <b>'+dots+' '+N.conviction+'/5</b>'+(N.conviction_capped?' <span class="muted">(capped: '+esc(N.conviction_cap_reason||'no news or filings to read')+')</span>':'')+' · <span class="muted">'+esc(when)+' · '+esc(N.horizon)+'</span></div>';
   h+='<div style="margin:var(--space-2) 0;">'+esc(N.thesis)+'</div>';
+  if(N.thesis_figures_unverified&&N.thesis_figures_unverified.length) h+='<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">&#9888; Figures in this summary that the supplied data does not contain: '+N.thesis_figures_unverified.map(esc).join(', ')+'. Treat them as unverified.</div>';
   const SRCS={}; (n.sources||[]).forEach(x=>{ if(x&&x.id) SRCS[x.id]=x; });
   const srcLink=e=>{ const x=SRCS[e.source]; if(x&&/^https?:\/\//.test(x.url||'')) return '<a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer">'+esc(src(e.source))+(x.domain?' · '+esc(x.domain):'')+'</a>'; return esc(src(e.source))+(e.source.indexOf('news:')===0||e.source.indexOf('filing:')===0?' (link not saved)':''); };
-  h+='<div><b>Evidence</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.evidence.map(e=>'<li>'+esc(e.claim)+' <span class="muted">['+srcLink(e)+']</span></li>').join('')+'</ul>';
+  h+='<div><b>Evidence</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.evidence.map(e=>'<li>'+esc(e.claim)+' <span class="muted">['+srcLink(e)+(e.source_class&&e.source.indexOf('news:')===0?' · '+esc({official:'official source',established:'established outlet',company:'company press release',other:'unrated site'}[e.source_class]||e.source_class):'')+']</span></li>').join('')+'</ul>';
   if((n.sources||[]).length) h+='<div class="muted" style="font-size:var(--font-size-sm);">Sources shown to the model: '+n.sources.map(x=>(/^https?:\/\//.test(x.url||'')?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener noreferrer">':'<span>')+esc(x.id)+' '+esc((x.title||'').slice(0,70))+(x.domain?' ('+esc(x.domain)+')':'')+(/^https?:\/\//.test(x.url||'')?'</a>':'</span>')).join(' · ')+'</div>';
   h+='<div><b>Risks</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.risks.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
   h+='<div class="neg"><b>What would prove this wrong</b></div><ul style="margin:0 0 var(--space-2) 18px;padding:0;">'+N.disproof.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
@@ -6599,7 +6600,7 @@ function settingsContent(){
         // reuses the container's existing (stale) environment and won't see an edited .env.
         const meta=el('span','muted'); meta.style.cssText='font-size:var(--font-size-sm);';
         if(it.applies==='immediately'){
-          meta.textContent = '· applies immediately (no restart)'+(it.options?' · choices read live from Ollama':' · Ollama could not be reached, type the exact model name')+(it.source==='settings'?' · customized':' · default '+it.default);
+          meta.textContent = '· applies immediately (no restart)'+(it.free_text?'':(it.options?' · choices read live from Ollama':' · Ollama could not be reached, type the exact model name'))+(it.source==='settings'?' · customized':' · default '+(it.default||'none'));
         } else
         meta.textContent = it.env_locked
           ? ('· .env currently wins here — save a value, then remove '+it.key+' from .env + `docker compose up -d` to activate it'+(it.staged_behind_env?' (already staged)':''))
