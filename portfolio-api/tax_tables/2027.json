@@ -61,14 +61,13 @@
       "source_url": "https://www.irs.gov/pub/irs-drop/rp-26-35.pdf"
     },
     "benefits.contribution_limits": {
-      "merge": true,
-      "values": {"hsa_self": 4500, "hsa_family": 9000, "k401_employee": 25500, "k401_catchup_50": 8500, "k401_catchup_60_63": 11750, "ira_limit": 7500, "ira_catchup": 1100, "roth_ira_mfj_phaseout": [250000, 260000], "roth_ira_single_phaseout": [158000, 173000]},
+      "values": {"hsa_self": 4500, "hsa_family": 9000, "k401_employee": 25500, "k401_catchup_50": 8500, "k401_catchup_60_63": 11750, "ira_limit": 7500, "ira_catchup": 1100, "roth_ira_mfj_phaseout": [250000, 260000], "roth_ira_single_phaseout": [158000, 173000], "sec415c_total": 75000, "catchup_roth_wage_floor": 155000, "hsa_catchup_55": 1000},
       "status": "primary",
       "confirmed": true,
       "verified": "2026-11-16",
-      "source": "IRS Rev. Proc. 2026-24 (HSA); IRS Notice 2026-66 / news release IR-2026-136 of 12 Nov 2026 (401(k), catch-ups, IRA, Roth phase-out)",
+      "source": "IRS Rev. Proc. 2026-24 (HSA); IRS Notice 2026-66 (read in full) / news release IR-2026-136 of 12 Nov 2026",
       "source_url": "https://www.irs.gov/newsroom/401k-limit-increases-to-25500-for-2027-ira-limit-remains-7500",
-      "note": "401(k) deferral, catch-up, IRA and Roth phase-out figures are the published 2027 values. The 415(c) total and the Roth catch-up wage floor are not in the news release and still carry forward from 2026 (not invented), so this group stays flagged stale until the Notice itself is read."
+      "note": "All figures are the published 2027 values. 415(c) total $75,000 and the Roth catch-up wage threshold $155,000 are from Notice 2026-66 (the HSA age-55 catch-up is a fixed $1,000 in the statute, IRC 223(b)(3); the threshold is measured on 2026 wages and decides whether 2027 catch-up contributions must be Roth)."
     },
     "ss.bend_points": {
       "confirmed": true,

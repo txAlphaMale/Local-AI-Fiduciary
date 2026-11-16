@@ -38,7 +38,7 @@ class TestFile(unittest.TestCase):
         self.assertNotIn("values", by["roth.irmaa"])                              # CMS has not published the 2027 IRMAA brackets
         v = by["benefits.contribution_limits"]["values"]
         self.assertEqual(v["k401_employee"], 25500)                              # IR-2026-136
-        self.assertNotIn("sec415c_total", v)                                      # not in the release: never invented
+        self.assertEqual((v["sec415c_total"], v["catchup_roth_wage_floor"]), (75000, 155000))   # Notice 2026-66
 
     def test_key_figures_match_the_documents_they_were_read_from(self):
         by = {i["key"]: i["values"] for i in DATA["items"] if "values" in i}
