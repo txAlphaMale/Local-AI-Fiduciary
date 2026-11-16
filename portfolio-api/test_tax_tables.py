@@ -80,10 +80,11 @@ class TestTwentyTwentySevenActivates(unittest.TestCase):
             r = taxtables.resolve("roth.irmaa", JAN27)
             self.assertEqual((r["year"], r["stale"]), (2026, True)); self.assertEqual(roth.IRMAA_PART_B_STD_MONTHLY, 202.90)
             b = taxtables.resolve("benefits.contribution_limits", JAN27)
-            self.assertTrue(b["partial"] and b["stale"] and "k401_employee" in b["carried_fields"] and b["carried_from"] == 2026)
+            self.assertTrue(b["partial"] and b["stale"] and "sec415c_total" in b["carried_fields"] and "k401_employee" not in b["carried_fields"] and b["carried_from"] == 2026)
             self.assertEqual(benefits.LIMITS_2026["hsa_self"], 4500); self.assertEqual(benefits.LIMITS_2026["hsa_family"], 9000)
-            self.assertEqual(benefits.LIMITS_2026["k401_employee"], 24500)           # not published: carried, never invented
-            self.assertEqual(benefits.LIMITS_2026["roth_ira_mfj_phaseout"], (242000.0, 252000.0))
+            self.assertEqual(benefits.LIMITS_2026["k401_employee"], 25500)           # published 2027 value (IR-2026-136)
+            self.assertEqual(benefits.LIMITS_2026["roth_ira_mfj_phaseout"], (250000.0, 260000.0))
+            self.assertEqual(benefits.LIMITS_2026["sec415c_total"], 72000)           # not published in the release: carried, never invented
             self.assertTrue(taxtables.resolve("aca.cliff_regime", JAN27)["stale"])    # a policy regime must be re-checked against legislation
             self.assertFalse(taxtables.resolve("tax.niit", JAN27)["stale"])          # statutory: carrying forward is correct
             self.assertFalse(taxtables.resolve("tax.ordinary_brackets", JAN27)["stale"])

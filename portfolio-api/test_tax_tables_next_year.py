@@ -37,9 +37,8 @@ class TestFile(unittest.TestCase):
         by = {i["key"]: i for i in DATA["items"]}
         self.assertNotIn("values", by["roth.irmaa"])                              # CMS has not published the 2027 IRMAA brackets
         v = by["benefits.contribution_limits"]["values"]
-        self.assertEqual(set(v), {"hsa_self", "hsa_family", "hdhp_min_deductible_self", "hdhp_min_deductible_family",
-                                  "hdhp_oop_max_self", "hdhp_oop_max_family"})   # only the HSA figures the IRS has published
-        self.assertFalse([k for k in v if "401" in k or "ira" in k])
+        self.assertEqual(v["k401_employee"], 25500)                              # IR-2026-136
+        self.assertNotIn("sec415c_total", v)                                      # not in the release: never invented
 
     def test_key_figures_match_the_documents_they_were_read_from(self):
         by = {i["key"]: i["values"] for i in DATA["items"] if "values" in i}
