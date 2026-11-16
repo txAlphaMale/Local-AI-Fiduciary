@@ -107,11 +107,25 @@ COMPANY_WIRE_DOMAINS = ("businesswire.com", "prnewswire.com", "globenewswire.com
 OFFICIAL_SUFFIXES = (".gov", ".gov.uk", ".europa.eu")
 
 
+def _valid_domain(d):
+    """A plain host name: dot-separated labels of letters, digits and hyphens, at least two labels, an alphabetic last label. Checked
+    label by label (no backtracking pattern on user input)."""
+    if not d or len(d) > 253:
+        return False
+    labels = d.split(".")
+    if len(labels) < 2:
+        return False
+    for lab in labels:
+        if not 1 <= len(lab) <= 63 or lab[0] == "-" or lab[-1] == "-" or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in lab):
+            return False
+    return len(labels[-1]) >= 2 and labels[-1].isalpha()
+
+
 def _clean_domains(extra):
     out = []
-    for d in re.split(r"[\s,;]+", str(extra or "").lower()):
+    for d in re.split(r"[\s,;]+", str(extra or "")[:5000].lower()):
         d = d.strip().lstrip(".")
-        if d and re.fullmatch(r"[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}", d):
+        if d and _valid_domain(d):
             out.append(d)
     return out
 
