@@ -50,7 +50,7 @@ set -euo pipefail
 SRC="${1:-${BACKUP_SOURCE_DIR:-/data}}"
 OUT="${BACKUP_OUTPUT_DIR:-./backups}"
 PASS="${BACKUP_PASSPHRASE:-}"
-RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-0}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-60}"   # default 60 days (RV-017); set 0 to keep every backup forever
 
 if [ -z "$PASS" ]; then
   echo "ERROR: BACKUP_PASSPHRASE is not set. Refusing to write an unencrypted backup." >&2
@@ -77,11 +77,17 @@ mkdir -p "$OUT"
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 enc_path="$OUT/fiduciary-backup-$ts.tar.gz.enc"
 
-if [ -n "$VOLUME" ]; then
+# What is left out (RV-017): /data/universe is SEC's bulk file (re-downloaded nightly, up to 1.4 GB with a half-finished .part) and temp files.
+EXCLUDES="--exclude=./universe --exclude=*.part --exclude=*.tmp"
+if [ -n "${BACKUP_VIA_CONTAINER:-}" ]; then
+  # Preferred for the daily timer: let the running app container build the archive. It copies every SQLite database with SQLite's own
+  # backup call (a plain tar of a live database can catch a half-written page, and the -wal file holds data the main file lacks).
+  docker exec "$BACKUP_VIA_CONTAINER" python /app/backup.py --tar /data
+elif [ -n "$VOLUME" ]; then
   # read-only mount; the pinned-by-name alpine image is already on this host (used by the compose tooling)
-  docker run --rm -v "$VOLUME":/data:ro alpine tar czf - -C /data .
+  docker run --rm -v "$VOLUME":/data:ro alpine tar czf - $EXCLUDES -C /data .
 else
-  tar czf - -C "$SRC" .
+  tar czf - $EXCLUDES -C "$SRC" .
 fi | \
   openssl enc -aes-256-cbc -pbkdf2 -iter 300000 -salt -pass env:BACKUP_PASSPHRASE -out "$enc_path"
 

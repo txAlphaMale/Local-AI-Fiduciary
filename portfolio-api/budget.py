@@ -47,6 +47,18 @@ PROVIDERS = {
 OUTAGE_AFTER = 5            # consecutive network/5xx failures before an "outage" pause
 RATE_BASE, RATE_MAX = 60, 3600
 QUOTA_BASE, QUOTA_MAX = 3600, 86400
+
+
+def _local_day(now):
+    """The calendar day in the container's local time zone (TZ), as a day number. The daily soft budget rolls over at LOCAL midnight:
+    it used to roll at midnight UTC (6 p.m. Central), so an evening manual run and the 01:30 scout shared one day's allowance."""
+    return datetime.date.fromtimestamp(now).toordinal()
+
+
+def _seconds_to_local_midnight(now):
+    d = datetime.datetime.fromtimestamp(now)
+    nxt = datetime.datetime.combine(d.date() + datetime.timedelta(days=1), datetime.time(0, 0))
+    return max(1.0, (nxt - d).total_seconds())
 OUTAGE_BASE, OUTAGE_MAX = 300, 3600
 TRIAL_TIMEOUT = 60          # a half-open trial that never reports back must not wedge the gate
 
@@ -262,11 +274,11 @@ class Budget:
                 return r
             if batch:
                 cap = s["batch_daily"] if s["batch_daily"] is not None else cfg["batch_daily"]
-                day = int(now // 86400)
+                day = _local_day(now)
                 if s["day"] != day:
                     s["day"], s["day_count"] = day, 0
                 if cap is not None and s["day_count"] >= cap:
-                    return self._deny(name, (day + 1) * 86400 - now, f"daily soft budget used ({cap} calls)")
+                    return self._deny(name, _seconds_to_local_midnight(now), f"daily soft budget used ({cap} calls)")
                 s["day_count"] += 1
                 if s["day_count"] % 20 == 0:
                     self._persist()                              # so a restart does not zero the idea-hunting counter
@@ -405,7 +417,7 @@ class Budget:
             for n, cfg in self._cfg.items():
                 s = self._st[n]
                 self._prune(n, now)
-                day_count = s["day_count"] if s["day"] == int(now // 86400) else 0
+                day_count = s["day_count"] if s["day"] == _local_day(now) else 0
                 rows.append({
                     "provider": n, "label": cfg["label"], "state": s["state"], "kind": s["kind"],
                     "reason": s["reason"], "paused_until": s["paused_until"] or None,

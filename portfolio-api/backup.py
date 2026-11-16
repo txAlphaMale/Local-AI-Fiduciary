@@ -74,10 +74,68 @@ def _decrypt(blob: bytes, passphrase: str) -> bytes:
         raise ValueError(f"decrypt failed -- wrong passphrase, or the file is corrupted ({e})")
 
 
+# What a backup leaves out. /data/universe holds SEC's bulk file and its half-downloaded .part (up to 1.4 GB): it is re-downloaded by the
+# nightly Universe job and is not state, so including it made each backup 10x larger and could exhaust memory in the in-app path.
+EXCLUDE_DIRS = ("universe",)
+EXCLUDE_SUFFIXES = (".part", ".tmp")
+SQLITE_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def _excluded(rel: str) -> bool:
+    parts = rel.replace("\\", "/").split("/")
+    return bool(parts) and (parts[0] in EXCLUDE_DIRS or rel.endswith(EXCLUDE_SUFFIXES))
+
+
+def _snapshot_sqlite(path: str, dest: str) -> None:
+    """A consistent copy of a live SQLite database made with SQLite's own backup call (copying the file while the app writes can
+    capture a half-written page, and the -wal sidecar holds committed data that the main file does not have yet)."""
+    import sqlite3
+    src = sqlite3.connect(path, timeout=30)
+    try:
+        dst = sqlite3.connect(dest)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
 def _tar_directory(src_dir: str) -> bytes:
+    """tar.gz of src_dir minus EXCLUDE_*, with every SQLite database replaced by a consistent snapshot."""
+    import shutil
+    import tempfile
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        tf.add(src_dir, arcname=".")
+    tmp = tempfile.mkdtemp(prefix="bk-snap-")
+    try:
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            tf.add(src_dir, arcname=".", recursive=False)
+            for root, dirs, files in os.walk(src_dir):
+                rel_root = os.path.relpath(root, src_dir)
+                dirs[:] = sorted(d for d in dirs if not _excluded(os.path.normpath(os.path.join(rel_root, d))))
+                for d in dirs:
+                    tf.add(os.path.join(root, d), arcname=os.path.join(".", rel_root, d) if rel_root != "." else "./" + d, recursive=False)
+                for f in sorted(files):
+                    rel = os.path.normpath(os.path.join(rel_root, f))
+                    full = os.path.join(root, f)
+                    arc = "./" + rel
+                    if _excluded(rel) or f.endswith(SQLITE_SIDECARS):
+                        continue
+                    if f.endswith(SQLITE_SUFFIXES):
+                        snap = os.path.join(tmp, f"{abs(hash(full))}-{f}")
+                        try:
+                            _snapshot_sqlite(full, snap)
+                            tf.add(snap, arcname=arc)
+                            continue
+                        except Exception:
+                            pass                      # not a readable SQLite file after all: fall through and copy it as it is
+                    try:
+                        tf.add(full, arcname=arc)
+                    except OSError:
+                        continue                      # vanished or unreadable mid-backup (a temp file): skip, never fail the backup
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return buf.getvalue()
 
 
@@ -190,3 +248,12 @@ def stage_restore(passphrase: str, archive_path: str, staging_dir: str) -> dict:
         for fn in files:
             extracted.append(os.path.relpath(os.path.join(root, fn), staging_dir))
     return {"staging_dir": staging_dir, "files": sorted(extracted)}
+
+
+if __name__ == "__main__":
+    # `python /app/backup.py --tar /data` writes the (excluded, SQLite-safe) tar.gz of a directory to stdout, for scripts/backup.sh.
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--tar":
+        sys.stdout.buffer.write(_tar_directory(sys.argv[2]))
+    else:
+        sys.exit("usage: backup.py --tar DIR")

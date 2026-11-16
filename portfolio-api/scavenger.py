@@ -59,10 +59,28 @@ def _download_zip(dest, last_modified_seen, force):
         h.close()
 
 
+def cleanup_leftovers(directory):
+    """Delete what a crashed or interrupted run leaves behind: a half-downloaded companyfacts.zip.part (up to 1.4 GB) and a whole
+    companyfacts.zip that was never removed. Both are re-downloaded when needed. -> names removed."""
+    gone = []
+    try:
+        for name in os.listdir(directory):
+            if name == "companyfacts.zip" or name.endswith(".part"):
+                try:
+                    os.remove(os.path.join(directory, name))
+                    gone.append(name)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return gone
+
+
 def run_universe(force=False, today=None, sec_get=None, plain_get=None, download=None):
     """The job body. Returns a summary dict (also saved to META_FILE for GET /api/universe)."""
     t0 = time.time()
     today = today or datetime.date.today()
+    cleanup_leftovers(UNIVERSE_DIR)
     meta = read_meta()
     force = force or meta.get("screen_version") != scavenge_screen.SCREEN_VERSION   # new rules: re-screen once
     with edgar.batch_mode():                      # background pace, and counted as idea-hunting calls on the gate

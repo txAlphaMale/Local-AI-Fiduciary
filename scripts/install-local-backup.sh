@@ -22,7 +22,7 @@
 # NON-INTERACTIVE (e.g. scripted provisioning): set these three before running --
 #   BACKUP_PASSPHRASE=...        (required -- same passphrase restore.sh will need later)
 #   BACKUP_SOURCE_DIR=/var/lib/docker/volumes/fiduciary_portfolio-data/_data   (default shown)
-#   BACKUP_RETENTION_DAYS=30     (optional -- 0/unset keeps every backup forever)
+#   BACKUP_RETENTION_DAYS=30     (optional -- default 60; 0 keeps every backup forever)
 #
 # WHERE THE PASSPHRASE ACTUALLY LIVES: /etc/fiduciary-backup.env, root-owned, mode 600 -- readable
 # only by root (the systemd service also runs as root, since it needs to read the Docker volume
@@ -62,7 +62,7 @@ DEFAULT_OUT="/var/backups/fiduciary"
 
 SRC="${BACKUP_SOURCE_DIR:-}"
 OUT="${BACKUP_OUTPUT_DIR:-$DEFAULT_OUT}"
-RETENTION="${BACKUP_RETENTION_DAYS:-0}"
+RETENTION="${BACKUP_RETENTION_DAYS:-60}"
 PASS="${BACKUP_PASSPHRASE:-}"
 
 if [ -z "$SRC" ]; then

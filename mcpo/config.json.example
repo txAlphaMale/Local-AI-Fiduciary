@@ -1,13 +1,13 @@
 {
-  "_comment": "Copy to config.json BEFORE the first `docker compose up` (mcpo crash-loops if the bind-mount source is missing). Fiduciary stack only. 'monarch' is used ONLY when PORTFOLIO_PROVIDER=monarch (its credentials come from the MONARCH_* env vars, not this file). Tavily news search no longer goes through mcpo (the app calls Tavily directly; set the key in SETTINGS -> SECRETS & KEYS), so there is no 'tavily' entry here.",
+  "_comment": "Both packages are PINNED to exact versions: unpinned, whatever was newest on PyPI at container start would run with the Monarch session credentials. Change a version only deliberately (read its release notes, then test). Copy to config.json BEFORE the first `docker compose up` (mcpo crash-loops if the bind-mount source is missing). Fiduciary stack only. 'monarch' is used ONLY when PORTFOLIO_PROVIDER=monarch (its credentials come from the MONARCH_* env vars, not this file). Tavily news search no longer goes through mcpo (the app calls Tavily directly; set the key in SETTINGS -> SECRETS & KEYS), so there is no 'tavily' entry here.",
   "mcpServers": {
     "time": {
       "command": "uvx",
-      "args": ["mcp-server-time", "--local-timezone=America/Chicago"]
+      "args": ["mcp-server-time@2026.11.4", "--local-timezone=America/Chicago"]
     },
     "monarch": {
       "command": "uvx",
-      "args": ["monarch-mcp-jamiew"]
+      "args": ["--with", "monarchmoneycommunity==1.7.1", "monarch-mcp-jamiew@0.7.1"]
     }
   }
 }

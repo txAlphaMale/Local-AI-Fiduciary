@@ -392,6 +392,8 @@ SETTING_SPECS = {
                                    "help": "Used for EVERY call to the big model. Keep it one value: Ollama reloads the model (about 30 s) whenever the requested size changes. On two 11 GB cards the largest size that fits fully on the GPUs is about 32768; if the model stops loading, lower it (or use the fallback model)."},
     "llm_fallback_num_ctx":       {"env": "LLM_FALLBACK_NUM_CTX",       "default": 16384, "cast": int,   "label": "Fallback model context size (tokens)", "group": "Chat",
                                    "help": "The context size used when a call falls back to the fallback model. Match what that model was built for (a model named ...-16k expects 16384)."},
+    "backup_retention_days":      {"env": "BACKUP_RETENTION_DAYS",      "default": 60,   "cast": int,   "label": "Keep backups for (days, 0 = forever)", "group": "Backups",
+                                   "help": "After each successful backup, backup files older than this are deleted from the backup folder. The newest backup is never deleted. 0 keeps every backup forever (the folder then grows without limit). The host's systemd backup timer has its own BACKUP_RETENTION_DAYS."},
     "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 80,   "cast": int,   "label": "Insider signal: max Form 4 filings per ticker", "group": "Insider signal",
                                    "help": "How many insider filings are read per company. A busy company can hit this before the lookback window ends; the signal then says how far back it reaches. Higher = more complete but more SEC requests."},
 }
@@ -2294,7 +2296,6 @@ async def post_risk_register_row_close(row_id: str, req: Request):
 # they work independently either way.
 BACKUP_OUTPUT_DIR = os.environ.get("BACKUP_OUTPUT_DIR", "/backups")
 BACKUP_STAGING_DIR = os.environ.get("BACKUP_STAGING_DIR", "/backups/.restore-staging")
-BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0") or "0")
 
 
 @app.get("/api/backup/status")
@@ -2306,7 +2307,9 @@ def get_backup_status():
         files = backup.list_backups(BACKUP_OUTPUT_DIR)
     except Exception as e:
         return {"passphrase_configured": configured, "files": [], "error": _errref(e)}
-    return {"passphrase_configured": configured, "files": files, "output_dir": BACKUP_OUTPUT_DIR}
+    return {"passphrase_configured": configured, "files": files, "output_dir": BACKUP_OUTPUT_DIR,
+            "retention_days": int(_knob("backup_retention_days")), "excluded": list(backup.EXCLUDE_DIRS) + ["*" + x for x in backup.EXCLUDE_SUFFIXES],
+            "sqlite_snapshots": True}
 
 
 @app.post("/api/backup/run")
@@ -2318,7 +2321,7 @@ def post_backup_run(request: Request):
     BACKUP_OUTPUT_DIR above which deliberately IS a separate mount for the output side."""
     pw = _read_secrets().get("BACKUP_PASSPHRASE")
     try:
-        result = backup.run_backup(pw, "/data", BACKUP_OUTPUT_DIR, retention_days=BACKUP_RETENTION_DAYS)
+        result = backup.run_backup(pw, "/data", BACKUP_OUTPUT_DIR, retention_days=int(_knob("backup_retention_days")))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -2531,9 +2534,16 @@ def _job_cancelled():
     return bool(ev and ev.is_set())
 
 
+_SCHED_BEAT = {"scheduler": 0.0, "worker": 0.0, "boot": time.time()}      # thread heartbeats, shown by /api/jobs and the ATTENTION list
+
+
 def _job_worker():
     while True:
-        jid = _JOB_Q.get()
+        _SCHED_BEAT["worker"] = time.time()
+        try:
+            jid = _JOB_Q.get(timeout=30)           # wake twice a minute even when idle, so the heartbeat shows the thread is alive
+        except queue.Empty:
+            continue
         with _JOBS_LOCK:
             rec = _JOBS.get(jid)
         if not rec:
@@ -2662,8 +2672,15 @@ def get_jobs():
                     "over_typical": bool(typical and elapsed > typical * 1.5)}
     hist = _read_job_history()
     typical_by_kind = {k: _history_summary(hist.get(k)).get("typical_seconds") for k, spec in _JOB_KINDS.items() if spec[1]}   # GPU jobs
+    nowt = time.time()
     return {"queued": depth, "running": running, "progress": progress, "typical_by_kind": typical_by_kind,
             "scheduler": INTERNAL_SCHEDULER,
+            "heartbeat": {"scheduler_age_s": (round(nowt - _SCHED_BEAT["scheduler"]) if _SCHED_BEAT["scheduler"] else None),
+                          "worker_age_s": (round(nowt - _SCHED_BEAT["worker"]) if _SCHED_BEAT["worker"] else None),
+                          "uptime_s": round(nowt - _SCHED_BEAT["boot"])},
+            "last_success_by_kind": {k: (max((r["finished"] for r in (hist.get(k) or []) if isinstance(r, dict) and r.get("status") == "done" and r.get("finished")), default=None))
+                                     for k in _JOB_KINDS},
+            "missed_runs": _missed_runs(),
             "jobs": list(reversed(jobs)),      # newest first
             "strategist_busy": _strat_lock.locked(),
             "strategist_busy_by": _STRAT_HOLDER.get("kind") if _strat_lock.locked() else None}
@@ -2710,10 +2727,42 @@ def _read_schedule():
     return out
 def _sched_match(field, val):
     return field == "*" or int(field) == val
+def _missed_runs(now=None, sched=None, hist=None, grace_s=5400):
+    """Scheduled jobs whose most recent due time passed more than `grace_s` ago with no SUCCESSFUL run since (a restart, a sleeping host or a
+    long earlier job in that minute makes the scheduler miss a minute silently). Only jobs that have run successfully before are listed,
+    so a fresh install is not flooded. -> [{kind, label, due, last_success, cadence}] oldest first."""
+    now = now or datetime.datetime.now()
+    sched = sched if sched is not None else _read_schedule()
+    hist = hist if hist is not None else _read_job_history()
+    out = []
+    for kind, sc in sched.items():
+        runs = [r for r in (hist.get(kind) or []) if isinstance(r, dict)]
+        done = sorted(r["finished"] for r in runs if r.get("status") == "done" and r.get("finished"))
+        if not done:
+            continue
+        due = None
+        for back in range(0, 45):
+            day = (now - datetime.timedelta(days=back)).date()
+            if _sched_match(sc["dom"], day.day) and _sched_match(sc["dow"], day.weekday()):
+                cand = datetime.datetime.combine(day, datetime.time(sc["hour"], sc["minute"]))
+                if cand <= now:
+                    due = cand
+                    break
+        if due is None or (now - due).total_seconds() < grace_s:
+            continue
+        if done[-1] >= due.timestamp() - 300:
+            continue
+        out.append({"kind": kind, "label": sc.get("label"), "cadence": sc.get("cadence"), "due": due.strftime("%Y-%m-%d %H:%M"),
+                    "last_success": datetime.datetime.fromtimestamp(done[-1]).strftime("%Y-%m-%d %H:%M")})
+    out.sort(key=lambda m: m["due"])
+    return out
+
+
 def _scheduler_loop():
     last = None
     while True:
         now = datetime.datetime.now()
+        _SCHED_BEAT["scheduler"] = time.time()
         stamp = now.strftime("%Y%m%d%H%M")     # fire each due schedule once per minute
         if stamp != last:
             last = stamp
@@ -2900,10 +2949,17 @@ def _monarch_guard():
                               f"{int(wait)}s to avoid load on their service.")
 
 
+# The ONLY Monarch operations this app may ever call through the mcpo bridge. The app is read-only by design; this makes that a property of
+# the code, not of the package behind the bridge: any other operation name is refused before a request is made.
+MONARCH_READ_OPS = frozenset({"get_accounts", "get_account_holdings", "get_cashflow"})
+
+
 def _post(op, payload, trip=True):
     """POST one Monarch tool call through mcpo. `trip=False` is for OPTIONAL lookups (get_cashflow): a failure there must not start the
     300 s hold-down that blocks every Monarch call -- on 2026-10-23 a single slow cashflow query took the whole dashboard down for five
     minutes while the holdings calls beside it were succeeding."""
+    if op not in MONARCH_READ_OPS:
+        raise ValueError(f"Monarch operation {op!r} is not on the read-only allowlist")
     _monarch_guard()
     url = f"{MCPO}/{ROUTE}/{op}"
     headers = {"Content-Type": "application/json"}
@@ -5625,6 +5681,7 @@ _ALERT_DESTINATIONS = {
     "plan.vault": {"tab": "plan",     "subtab": "vault",       "label": "PLAN · FI → VAULT"},
     "settings.iam": {"tab": "settings", "subtab": "iam", "label": "⚙ SETTINGS → IAM → EMERGENCY ACCESS"},
     "settings.accounts": {"tab": "settings", "subtab": "accounts",    "label": "⚙ SETTINGS → ACCOUNTS"},
+    "settings.schedule": {"tab": "settings", "subtab": "schedule",    "label": "⚙ SETTINGS → TASK SCHEDULE"},
 }
 
 
@@ -5646,6 +5703,16 @@ def _alerts_digest():
             a["tab"], a["subtab"] = dest["tab"], dest["subtab"]
         alerts.append(a)
 
+    # Scheduled jobs that did not run (RV-018): shown as soon as a due job is over an hour late with no success since
+    try:
+        for m in _missed_runs():
+            add("warn", "Scheduled jobs", f"{m['label']} has not succeeded since {m['last_success']} (due {m['cadence']}; last due {m['due']}). "
+                "A restart or a busy queue can skip a scheduled minute; run it from RESEARCH or wait for the next slot.", "settings.schedule")
+        if INTERNAL_SCHEDULER and _SCHED_BEAT["scheduler"] and time.time() - _SCHED_BEAT["scheduler"] > 300:
+            add("warn", "Scheduled jobs", "The built-in scheduler has not checked in for over 5 minutes: scheduled jobs are not being started. "
+                "Restarting portfolio-api restores it.", "settings.schedule")
+    except Exception:
+        pass
     # 0) Earnings on holdings this week (P1 adoption — event awareness beats cron-only research)
     for e in _earnings_this_week():
         est = f", est EPS {e['eps_estimate']}" if e.get("eps_estimate") is not None else ""
@@ -17928,11 +17995,19 @@ def _index_page():
 
 
 @app.get("/health")
-def health():
-    return {"ok": True, "build": _index_page()[1], "code_build": _CODE_BUILD, "mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL,
-            "finnhub": bool(FINNHUB), "analysis_model": _analysis_model(),
-            "llm_dialect": llm._dialect(), "llm_model": _text_model(),
-            "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()}
+def health(request: Request):
+    """Public (the container health check and the page's reload check call it without a session), so it returns only what those need:
+    ok and the two build ids. Model names, the internal bridge address and other detail are returned only to a signed-in user."""
+    out = {"ok": True, "build": _index_page()[1], "code_build": _CODE_BUILD}
+    try:
+        signed_in = bool(request.session.get("uid"))
+    except Exception:
+        signed_in = False
+    if signed_in:
+        out.update({"mcpo": MCPO, "route": ROUTE, "cache_ttl_s": TTL, "finnhub": bool(FINNHUB), "analysis_model": _analysis_model(),
+                    "llm_dialect": llm._dialect(), "llm_model": _text_model(),
+                    "llm_strategist_model": _text_model(strategist=True), "embed_dialect": llm._embed_dialect()})
+    return out
 
 
 @app.get("/")
