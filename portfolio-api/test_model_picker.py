@@ -105,3 +105,47 @@ class Save(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimeoutAndKeepAlive(unittest.TestCase):
+    """The last two '.env wins' rows of SETTINGS > Model are live now (no .env edit, no restart)."""
+
+    def test_saved_values_beat_the_compose_default_and_bad_ones_fall_back(self):
+        with mock.patch.dict(os.environ, {"LLM_TIMEOUT": "1200", "LLM_KEEP_ALIVE": "30m"}), \
+                mock.patch.object(appmod, "_read_settings", lambda: {"LLM_TIMEOUT": "2400", "LLM_KEEP_ALIVE": "2h"}):
+            self.assertEqual((appmod._llm_timeout(), appmod._keep_alive()), (2400, "2h"))
+        with mock.patch.object(appmod, "_read_settings", lambda: {"LLM_TIMEOUT": "soon", "LLM_KEEP_ALIVE": "forever"}), \
+                mock.patch.dict(os.environ, {"LLM_TIMEOUT": "", "LLM_KEEP_ALIVE": ""}):
+            self.assertEqual((appmod._llm_timeout(), appmod._keep_alive()), (1200, "30m"))
+
+    def test_keep_alive_formats(self):
+        for ok in ("30m", "2h", "90s", "0", "-1"):
+            self.assertTrue(appmod._valid_keep_alive(ok), ok)
+        for bad in ("", "m", "30", "1.5h", "30 minutes", "-5m", "0m"):
+            self.assertFalse(appmod._valid_keep_alive(bad), bad)
+
+    def post(self, body):
+        class Req:
+            headers = {}
+            client = None
+
+            async def json(self_inner):
+                return body
+        box = {}
+        with mock.patch.object(appmod, "_read_settings", lambda: {}), mock.patch.object(appmod.store, "write_json", lambda path, data: box.update(data)), \
+                mock.patch.object(appmod, "_emit_config_changed", lambda *a, **k: None):
+            return asyncio.run(appmod.post_settings(Req())), box
+
+    def test_saving_validates_and_applies_live(self):
+        r, box = self.post({"LLM_TIMEOUT": "1800", "LLM_KEEP_ALIVE": "1h"})
+        self.assertEqual((box, r["restart_required"]), ({"LLM_TIMEOUT": "1800", "LLM_KEEP_ALIVE": "1h"}, []))
+        self.assertEqual(self.post({"LLM_TIMEOUT": "5"})[0].status_code, 400)
+        self.assertEqual(self.post({"LLM_TIMEOUT": "abc"})[0].status_code, 400)
+        self.assertEqual(self.post({"LLM_KEEP_ALIVE": "a while"})[0].status_code, 400)
+
+    def test_settings_page_lists_them_as_live_text_fields_with_help(self):
+        with mock.patch.object(appmod, "_ollama_models", lambda force=False: None), mock.patch.object(appmod, "_read_settings", lambda: {}):
+            cfg = {c["key"]: c for c in appmod.get_settings()["config"]}
+        for k in ("LLM_TIMEOUT", "LLM_KEEP_ALIVE"):
+            self.assertEqual((cfg[k]["applies"], cfg[k]["env_locked"], cfg[k]["free_text"]), ("immediately", False, True), k)
+            self.assertGreater(len(cfg[k]["help"]), 60)

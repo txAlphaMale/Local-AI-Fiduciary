@@ -407,8 +407,10 @@ CONFIG_SPECS = [
      "help": "Scout notes may earn conviction 4-5 only when they cite an SEC filing, a government source or an ESTABLISHED news outlet; company press releases and unrated sites cap conviction at 3. The built-in list of established outlets (Reuters, Bloomberg, WSJ, FT, CNBC, AP and others) is fixed; add more domains here, separated by commas (for example: example-trade-journal.com). Applies at once."},
     {"key": "VISION_MODEL",   "label": "Picture-reading model", "group": "Model", "default": "qwen2.5vl:7b",
      "help": "Reads fund names and tickers from a screenshot you attach in chat (for example a 401(k) fund list). Only models that can read images are listed. It loads on demand and unloads the main model while it runs."},
-    {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
-    {"key": "LLM_KEEP_ALIVE", "label": "Keep model resident (e.g. 30m)",           "group": "Model", "default": "30m"},
+    {"key": "LLM_TIMEOUT",    "label": "Model call timeout (seconds)", "group": "Model", "default": "1200", "free_text": True,
+     "help": "How long one everyday model call (briefs, scout notes, chat summaries) may run before it is abandoned. Big models on slow cards need minutes, so keep it generous. The weekly Strategist and narrative jobs have their own longer limits. Applies immediately."},
+    {"key": "LLM_KEEP_ALIVE", "label": "Keep model loaded for", "group": "Model", "default": "30m", "free_text": True,
+     "help": "How long Ollama keeps the model in GPU memory after its last use, for example 30m, 2h, 0 (unload at once) or -1 (never unload). While it is loaded, ComfyUI and other apps have less GPU memory. Applies immediately."},
     # ---- AI / LLM provider (2026-07-24, Claude integration) ----
     # "options" is a UI-only hint (settingsContent() renders a <select> instead of a free-text
     # input when present) -- ignored by the backend, which just stores/returns a plain string.
@@ -535,7 +537,7 @@ ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL") or "qwen3.6:27b"     # boot va
 # Model choices are made in SETTINGS (a dropdown filled from Ollama) and apply at once, with no .env edit and no restart. The value
 # saved there wins over the environment, because docker-compose always injects a default for these variables and a user must never
 # have to edit config files to pick a model; with nothing saved, the environment and then the built-in default apply.
-LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL", "SCOUT_EXTRA_DOMAINS")
+LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL", "SCOUT_EXTRA_DOMAINS", "LLM_TIMEOUT", "LLM_KEEP_ALIVE")
 
 
 def _live_cfg(key, fallback):
@@ -552,6 +554,25 @@ def _analysis_model():
 
 def _vision_model():
     return _live_cfg("VISION_MODEL", "qwen2.5vl:7b")
+
+
+def _llm_timeout():
+    """Per-call timeout in seconds for the everyday model calls (big models on Pascal are slow). Live: SETTINGS > Model."""
+    try:
+        return max(30, int(float(_live_cfg("LLM_TIMEOUT", "1200"))))
+    except (TypeError, ValueError):
+        return 1200
+
+
+def _keep_alive():
+    """How long Ollama keeps the model loaded after a call (for example 30m). Live: SETTINGS > Model."""
+    v = _live_cfg("LLM_KEEP_ALIVE", "30m")
+    return v if _valid_keep_alive(v) else "30m"
+
+
+def _valid_keep_alive(v):
+    v = str(v or "").strip()
+    return bool(v) and (v in ("0", "-1") or (v[:-1].isdigit() and v[-1] in "smh" and 0 < int(v[:-1]) <= 100000))
 
 
 def _fallback_model():
@@ -571,8 +592,6 @@ def _fallback_choice():
 
 
 llm.FALLBACK_PROVIDER = _fallback_choice
-LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
-LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
 # ---- Claude (Anthropic) integration, 2026-07-24 -- two-tier model selection ------------------
 # Only consulted when llm._dialect() == "anthropic" (SETTINGS -> AI / LLM PROVIDER, or LLM_API_DIALECT
@@ -8010,7 +8029,7 @@ def _ollama_generate(prompt):
         with _gpu_slot():   # serialize qwen-27b generation across all features
             res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(),
                                 format_json=True, think=ANALYSIS_THINK, temperature=0.3,
-                                num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, timeout=LLM_TIMEOUT)
+                                num_ctx=_num_ctx(), keep_alive=_keep_alive(), timeout=_llm_timeout())
     except Exception as e:
         return None, f"request failed: {e}"
     if not res.ok:
@@ -9018,7 +9037,7 @@ def _do_narrative():
             gpu_wait_s = round(time.time() - t_submit, 1)
             t_gen = time.time()
             res = llm._llm_chat(messages, _text_model(), temperature=0.4, num_ctx=_num_ctx(),
-                                keep_alive=LLM_KEEP_ALIVE, timeout=NARR_LLM_TIMEOUT)
+                                keep_alive=_keep_alive(), timeout=NARR_LLM_TIMEOUT)
             gen_s = round(time.time() - t_gen, 1)
         if not res.ok:
             err = (f"Ollama returned HTTP {res.status_code}: {res.error}" if res.status_code
@@ -12366,7 +12385,8 @@ def get_settings():
         staged = stored.get(k) not in (None, "")
         if k in LIVE_CONFIG_KEYS:     # chosen from a dropdown of the models Ollama has; applies at once and beats the compose default
             cur = {"ANALYSIS_MODEL": _analysis_model, "VISION_MODEL": _vision_model, "FALLBACK_MODEL": _fallback_model,
-                   "SCOUT_EXTRA_DOMAINS": lambda: _live_cfg("SCOUT_EXTRA_DOMAINS", "")}[k]()
+                   "SCOUT_EXTRA_DOMAINS": lambda: _live_cfg("SCOUT_EXTRA_DOMAINS", ""), "LLM_TIMEOUT": lambda: str(_llm_timeout()),
+                   "LLM_KEEP_ALIVE": _keep_alive}[k]()
             opts = None if spec.get("free_text") else _model_options_for(k)
             if opts is not None and cur and cur not in opts:
                 opts = [cur] + opts
@@ -12472,6 +12492,22 @@ async def post_settings(req: Request):
         if val in (None, ""):
             stored.pop(key, None)
         else:
+            if key == "LLM_TIMEOUT":
+                try:
+                    secs = int(float(str(val).strip()))
+                except ValueError:
+                    secs = 0
+                if not 30 <= secs <= 86400:
+                    return JSONResponse({"error": "Model call timeout must be a number of seconds between 30 and 86400."}, status_code=400)
+                stored[key] = str(secs)
+                applied.append(key)
+                continue
+            if key == "LLM_KEEP_ALIVE":
+                if not _valid_keep_alive(val):
+                    return JSONResponse({"error": "Keep-loaded time must look like 30m, 2h, 90s, 0 (unload at once) or -1 (never)."}, status_code=400)
+                stored[key] = str(val).strip()
+                applied.append(key)
+                continue
             if key == "SCOUT_EXTRA_DOMAINS":
                 cleaned = scout._clean_domains(val)
                 if len([x for x in re.split(r"[\s,;]+", str(val)) if x.strip()]) != len(cleaned):
@@ -16080,7 +16116,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                 with _gpu_slot():   # serialize qwen-27b generation across all features
                     res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_TOOLS,
                                         temperature=0.4, num_ctx=_num_ctx(),
-                                        keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
+                                        keep_alive=_keep_alive(), timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
                     telem["ended"] = "ollama_error"
                     telem["error"] = res.error
@@ -16317,7 +16353,7 @@ def _do_advice(amount, question, max_iter=None):
                 with _gpu_slot():   # serialize qwen-27b generation across all features
                     res = llm._llm_chat(messages, _text_model(strategist=True), tools=STRATEGIST_ADVICE_TOOLS,
                                         temperature=0.4, num_ctx=_num_ctx(),
-                                        keep_alive=LLM_KEEP_ALIVE, timeout=STRAT_LLM_TIMEOUT)
+                                        keep_alive=_keep_alive(), timeout=STRAT_LLM_TIMEOUT)
                 if not res.ok:
                     _advice_state.update(status=f"error: {res.error}", finished=int(time.time()))
                     return
@@ -16594,7 +16630,7 @@ def _chat_summarise_old(sid):
                   f"PREVIOUS SUMMARY:\n{prev or '(none)'}\n\nNEW TURNS:\n" + "\n".join(lines))
         with _gpu_slot():
             res = llm._llm_chat([{"role": "user", "content": prompt}], _text_model(), temperature=0.2,
-                                num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, timeout=180)
+                                num_ctx=_num_ctx(), keep_alive=_keep_alive(), timeout=180)
         if not res.ok:
             return
         text = (res.content or "").strip()
@@ -17174,7 +17210,7 @@ def _vision_identify_tickers(images, user_msg):
     )
     try:
         res = llm._llm_chat([{"role": "user", "content": prompt}], _vision_model(), images=images,
-                            temperature=0.1, keep_alive=LLM_KEEP_ALIVE, timeout=VISION_LLM_TIMEOUT)
+                            temperature=0.1, keep_alive=_keep_alive(), timeout=VISION_LLM_TIMEOUT)
         if not res.ok:
             return {"tickers": [], "note": f"vision model error {res.status_code}: {res.error}", "error": True}
         content = res.content
@@ -17407,7 +17443,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             try:
                 for chunk in llm._llm_chat(messages, _text_model(), tools=persona["tools"],
                                            stream=True, temperature=persona.get("temp", 0.3),
-                                           num_ctx=_num_ctx(), keep_alive=LLM_KEEP_ALIVE, think=_think,
+                                           num_ctx=_num_ctx(), keep_alive=_keep_alive(), think=_think,
                                            timeout=STRAT_LLM_TIMEOUT, cancel_check=cancel_event.is_set):
                     if chunk.get("error"):
                         yield _sse("error", {"error": chunk["error"]})
