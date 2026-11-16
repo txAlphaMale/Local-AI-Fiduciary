@@ -49,49 +49,64 @@ class Aggregate(unittest.TestCase):
 
 
 class Paging(unittest.TestCase):
-    def feed(self, dates, start=0):
-        return "".join(f"<entry><filing-type>4</filing-type><filing-date>{d}</filing-date><link href='/Archives/edgar/data/1/{start + i:04d}/x'/></entry>"
-                       for i, d in enumerate(dates))
+    """The filing list comes from SEC's submissions API (newest first); the window, the cap and a failed lookup behave as documented."""
 
-    def run_ex(self, pages, limit=500, days=120):
-        calls = []
+    def submissions(self, forms_dates):
+        return {"filings": {"recent": {"form": [f for f, _ in forms_dates], "filingDate": [d for _, d in forms_dates],
+                                       "accessionNumber": [f"0000000001-26-{i:06d}" for i in range(len(forms_dates))]}}}
 
+    def run_ex(self, forms_dates, limit=500, days=120, status=200, boom=False):
         class R:
-            status_code = 200
+            def __init__(self, code, body):
+                self.status_code, self._b = code, body
 
-            def __init__(self, text):
-                self.text = text
+            def json(self):
+                return self._b
 
         def fake_get(url, params=None, headers=None, timeout=None):
-            calls.append(int(params["start"]))
-            i = int(params["start"]) // edgar.FORM4_PAGE
-            return R(pages[i] if i < len(pages) else "")
+            if boom:
+                raise RuntimeError("timeout")
+            return R(status, self.submissions(forms_dates))
         with mock.patch.object(edgar, "get_cik", return_value="0000000001"), mock.patch.object(edgar, "_get", side_effect=fake_get), \
                 mock.patch.object(edgar, "_headers", return_value={}), \
                 mock.patch.object(edgar, "_fetch_form4_xml", side_effect=lambda c, a: "<issuerCik>1</issuerCik>"):
-            return edgar.recent_form4_ex("X", days=days, limit=limit), calls
+            return edgar.recent_form4_ex("X", days=days, limit=limit)
 
-    def test_pages_until_the_cutoff_and_reports_a_complete_window(self):
-        today = datetime.date.today()
-        recent = [(today - datetime.timedelta(days=i)).isoformat() for i in range(edgar.FORM4_PAGE)]       # a full page, all in the window
-        old = [(today - datetime.timedelta(days=400)).isoformat()] * 5
-        res, calls = self.run_ex([self.feed(recent), self.feed(recent[:10] + old, start=100)])
-        self.assertEqual(calls, [0, 100])
+    def days_ago(self, n):
+        return (datetime.date.today() - datetime.timedelta(days=n)).isoformat()
+
+    def test_reads_back_to_the_cutoff_and_reports_a_complete_window(self):
+        fd = [("4", self.days_ago(i)) for i in range(0, 60)] + [("8-K", self.days_ago(5))] + [("4", self.days_ago(400))] * 5
+        res = self.run_ex(fd)
+        self.assertEqual(len(res["filings"]), 60)                # the 8-K is ignored; the 400-day-old ones are outside the window
         self.assertTrue(res["window_complete"])
-        self.assertEqual(len(res["filings"]), edgar.FORM4_PAGE + 10)
+        self.assertFalse(res["error"])
 
     def test_stops_at_the_filing_cap_and_says_how_far_back_it_got(self):
-        today = datetime.date.today()
-        dates = [(today - datetime.timedelta(days=i % 100)).isoformat() for i in range(edgar.FORM4_PAGE)]
-        res, _ = self.run_ex([self.feed(dates)] * 3, limit=30)
+        fd = [("4", self.days_ago(i % 100)) for i in range(200)]
+        res = self.run_ex(fd, limit=30)
         self.assertEqual(len(res["filings"]), 30)
         self.assertFalse(res["window_complete"])
         self.assertEqual(res["covered_from"], res["filings"][-1]["date"])
 
-    def test_a_short_first_page_is_a_complete_window(self):
-        d = datetime.date.today().isoformat()
-        res, calls = self.run_ex([self.feed([d, d, d])])
-        self.assertEqual((calls, res["window_complete"], len(res["filings"])), ([0], True, 3))
+    def test_a_short_list_inside_the_window_is_complete(self):
+        res = self.run_ex([("4", self.days_ago(1)), ("4", self.days_ago(2)), ("4", self.days_ago(3))])
+        self.assertEqual((res["window_complete"], len(res["filings"])), (True, 3))
+
+    def test_a_failed_sec_request_is_an_error_not_no_filings(self):
+        for kw in ({"status": 503}, {"boom": True}):
+            res = self.run_ex([("4", self.days_ago(1))], **kw)
+            self.assertTrue(res["error"], kw)
+            self.assertEqual(res["filings"], [])
+
+    def test_the_app_does_not_cache_a_failed_lookup_as_empty(self):
+        import app as appmod
+        with mock.patch.object(edgar, "recent_form4_ex", lambda *a, **k: {"filings": [], "window_complete": True, "covered_from": None,
+                                                                          "listed": 0, "error": True}):
+            res = appmod._insider_signal("ZZERR")
+        self.assertTrue(res.get("error"))
+        self.assertFalse(res.get("available"))
+        self.assertIn("retried", res["reason"])
 
 
 class Records(unittest.TestCase):

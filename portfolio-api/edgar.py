@@ -709,72 +709,56 @@ def _form4_issuer_cik(xml):
     return int(m.group(1)) if m else None
 
 
-FORM4_PAGE = 100          # EDGAR's atom list returns at most 100 entries per request
-FORM4_MAX_PAGES = 6
-
-
-def recent_form4_ex(ticker, days=120, limit=16, max_pages=FORM4_MAX_PAGES):
+def recent_form4_ex(ticker, days=120, limit=16):
     """Recent Form 4 (insider-transaction) filings for a ticker's issuer, as raw ownership XML, WITH how much of the window they cover.
-    Uses EDGAR browse-edgar (atom, owner='only' -> ownership forms) to list the issuer's Form 4 filings newest-first, paging until the
-    list passes the cutoff date, `limit` filings have been kept, or `max_pages` pages are read; then fetches each filing's
-    ownershipDocument XML. -> {"filings": [{date, accession, xml}], "window_complete": bool, "covered_from": 'YYYY-MM-DD'|None,
-    "listed": int}. window_complete is False when the cap stopped the read before the cutoff was reached (a busy company), and
-    covered_from then says how far back the filings kept actually go. Empty/None-ish on any failure (defensive throughout)."""
-    empty = {"filings": [], "window_complete": True, "covered_from": None, "listed": 0}
+    The filing list comes from SEC's submissions API (data.sec.gov, the supported interface: it answers in about 0.1 s and lists up to
+    ~1,000 recent filings newest-first). The legacy browse-edgar page this used before is overloaded for long stretches (503s, 30 s+
+    responses), which made busy companies look as if they had no insider filings. Each filing's ownershipDocument XML is then fetched.
+    -> {"filings": [{date, accession, xml}], "window_complete": bool, "covered_from": 'YYYY-MM-DD'|None, "listed": int, "error": bool}.
+    window_complete is False when the filing cap stopped the read before the cutoff date; covered_from then says how far back the kept
+    filings reach. error is True when the SEC list could not be read at all (the caller must NOT treat that as 'no filings')."""
+    empty = {"filings": [], "window_complete": True, "covered_from": None, "listed": 0, "error": False}
     try:
         cik = get_cik(ticker)
     except CikMapUnavailable:
-        return empty
+        return dict(empty, error=True)
     if not cik:
         return empty
+    try:
+        r = _get(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=_headers(), timeout=30)
+        if r.status_code >= 400:
+            return dict(empty, error=True)
+        recent = ((r.json() or {}).get("filings") or {}).get("recent") or {}
+    except Exception:
+        return dict(empty, error=True)
+    forms, dates, accs = recent.get("form") or [], recent.get("filingDate") or [], recent.get("accessionNumber") or []
     cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    cik_i = int(cik) if str(cik).isdigit() else None
     out, listed, complete, oldest = [], 0, False, None
-    for page in range(max(1, int(max_pages))):
-        try:
-            r = _get("https://www.sec.gov/cgi-bin/browse-edgar",
-                     params={"action": "getcompany", "CIK": cik, "type": "4", "dateb": "", "owner": "only",
-                             "start": str(page * FORM4_PAGE), "count": str(FORM4_PAGE), "output": "atom"},
-                     headers=_headers(), timeout=30)
-            if r.status_code >= 400:
-                break
-            feed = r.text or ""
-        except Exception:
+    for i, f in enumerate(forms):
+        if f != "4":
+            continue
+        dt = dates[i] if i < len(dates) else ""
+        acc = accs[i] if i < len(accs) else ""
+        if dt and dt < cutoff:
+            complete = True                       # newest-first: everything after this is older than the window
             break
-        entries = feed.split("<entry")[1:]
-        if not entries:
-            complete = True              # the list ended: nothing older exists
+        listed += 1
+        if not acc or cik_i is None:
+            continue
+        xml = _fetch_form4_xml(cik_i, acc.replace("-", ""))
+        if xml:
+            icik = _form4_issuer_cik(xml)
+            if icik is not None and icik != cik_i:
+                continue                         # the CIK is the reporter here, not the issuer
+            out.append({"date": dt, "accession": acc.replace("-", ""), "xml": xml})
+            oldest = dt or oldest
+        if len(out) >= limit:
             break
-        stop = False
-        for chunk in entries:
-            mtype = re.search(r"<filing-type>([^<]+)</filing-type>", chunk)
-            if not mtype or mtype.group(1).strip() != "4":
-                continue
-            mdate = re.search(r"<filing-date>(\d{4}-\d{2}-\d{2})</filing-date>", chunk)
-            dt = mdate.group(1) if mdate else ""
-            listed += 1
-            if dt and dt < cutoff:
-                complete = True          # newest-first: everything after this is older than the window
-                stop = True
-                break
-            mfold = re.search(r"/Archives/edgar/data/(\d+)/(\d+)/", chunk)
-            if not mfold:
-                continue
-            xml = _fetch_form4_xml(mfold.group(1), mfold.group(2))
-            if xml:
-                icik = _form4_issuer_cik(xml)
-                if icik is not None and str(cik).isdigit() and icik != int(cik):
-                    continue                                 # the CIK is the reporter here, not the issuer
-                out.append({"date": dt, "accession": mfold.group(2), "xml": xml})
-                oldest = dt or oldest
-            if len(out) >= limit:
-                stop = True
-                break
-        if stop:
-            break
-        if len(entries) < FORM4_PAGE:
-            complete = True              # a short page is the last page
-            break
-    return {"filings": out, "window_complete": bool(complete), "listed": listed,
+    else:
+        # the list ended without passing the cutoff: everything SEC lists is inside the window (or the list is shorter than the window)
+        complete = len(forms) < 1000
+    return {"filings": out, "window_complete": bool(complete), "listed": listed, "error": False,
             "covered_from": cutoff if complete else oldest}
 
 
