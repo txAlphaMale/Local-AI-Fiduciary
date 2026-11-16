@@ -116,7 +116,7 @@ class ReportSourcesTests(unittest.TestCase):
         for i in range(60):
             app._note_source(log, "get_x", {"i": i}, {"v": "y" * 1000})
         self.assertEqual(len(log), 40)
-        self.assertLessEqual(len(log[0]["result"]), 400)
+        self.assertLessEqual(len(log[0]["result"]), 2000)
 
 
 class BasisLabelTests(unittest.TestCase):
@@ -131,3 +131,21 @@ class BasisLabelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrategistFollowupTests(unittest.TestCase):
+    def test_holder_text_and_busy_by(self):
+        import app
+        app._strat_hold("chat")
+        try:
+            self.assertIn("chat answer", app._strat_holder_text())
+        finally:
+            app._strat_unhold()
+        self.assertEqual(app._STRAT_HOLDER["kind"], None)
+        self.assertEqual(app._strat_holder_text(), "another request")
+
+    def test_source_keeps_2000_chars(self):
+        import app
+        log = []
+        app._note_source(log, "get_fundamentals", {"ticker": "ISRG"}, {"v": "z" * 5000})
+        self.assertEqual(len(log[0]["result"]), 2000)

@@ -2611,7 +2611,8 @@ def get_jobs():
     return {"queued": depth, "running": running, "progress": progress, "typical_by_kind": typical_by_kind,
             "scheduler": INTERNAL_SCHEDULER,
             "jobs": list(reversed(jobs)),      # newest first
-            "strategist_busy": _strat_lock.locked()}
+            "strategist_busy": _strat_lock.locked(),
+            "strategist_busy_by": _STRAT_HOLDER.get("kind") if _strat_lock.locked() else None}
 
 
 # ---- internal cron scheduler (stdlib) — the built-in job timetable ----------
@@ -15634,6 +15635,21 @@ STRATEGIST_TOOLS = [
 STRAT_NUM_CTX = int(os.environ.get("STRAT_NUM_CTX", "32768"))         # full context — don't truncate the agent's working memory
 STRAT_LLM_TIMEOUT = int(os.environ.get("STRAT_LLM_TIMEOUT", "1800"))   # per-call ceiling; weekly bg job, reasoning ON is slow on Pascal
 _strat_lock = threading.Lock()
+_STRAT_HOLDER = {"kind": None, "since": 0}      # who holds _strat_lock, so a queued message can say so truthfully
+_STRAT_HOLDER_TEXT = {"strategist": "a Strategist run", "advisory": "an advisory run",
+                      "chat": "another chat answer (it keeps running on the server even if its browser tab was closed)"}
+
+
+def _strat_hold(kind):
+    _STRAT_HOLDER.update(kind=kind, since=int(time.time()))
+
+
+def _strat_unhold():
+    _STRAT_HOLDER.update(kind=None, since=0)
+
+
+def _strat_holder_text():
+    return _STRAT_HOLDER_TEXT.get(_STRAT_HOLDER.get("kind"), "another request")
 _strat_state = {"status": "idle", "iterations": 0, "started": 0, "finished": 0,
                 "scenario": None, "scenario_id": None, "scenarios_done": 0, "scenarios_total": 0}
 
@@ -15717,7 +15733,7 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
         return {"error": f"{name} failed: {_errref(e)}"}
 
 
-def _note_source(log, name, args, result, max_items=40, max_chars=400):
+def _note_source(log, name, args, result, max_items=40, max_chars=2000):
     """Remember one tool call (name, arguments, the start of what it returned) so the stored
     report can show where its figures came from. Bounded: at most `max_items` calls, `max_chars`
     of each result."""
@@ -15751,11 +15767,20 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
         goal_guidance = _goal_guidance_text(goal)
         prompt = (STRATEGIST_PROMPT.replace("{scenario_name}", scenario_name)
                   .replace("{risk_guidance}", risk_guidance).replace("{goal_guidance}", goal_guidance))
+        try:
+            _cash_now = float(_paper_marked(_read_paper(scenario_id)).get("cash") or 0)
+        except Exception:
+            _cash_now = None
+        cash_note = ""
+        if _cash_now is not None and _cash_now < 100:
+            cash_note = (f" This scenario has only ${_cash_now:,.2f} in cash, so do NOT attempt paper_buy: "
+                         "any buy would be refused. To fund an idea, first sell or trim a holding you can justify, "
+                         "or just report your analysis and watchlist ideas without trading.")
         messages = [
             {"role": "system", "content": _sys(prompt)},
             {"role": "user", "content": f"Perform your weekly review of the '{scenario_name}' scenario now: "
              "call get_paper_portfolio, research a few opportunities, make any buy/sell trades you judge "
-             "worthwhile, then call log_report with your summary. Be efficient — don't deep-dive every name."},
+             "worthwhile, then call log_report with your summary. Be efficient — don't deep-dive every name." + cash_note},
         ]
         reported = False
         # Per-run web-search budget (settings knob, default 20) — PER SCENARIO PASS, same as before
@@ -15875,6 +15900,7 @@ def _do_strategist(max_iter=20):
     Strategist fighting them over it."""
     if not _strat_lock.acquire(blocking=False):
         return
+    _strat_hold("strategist")
     try:
         reg = _read_registry()
         active = _active_scenarios(reg, kind="ai")
@@ -15891,6 +15917,7 @@ def _do_strategist(max_iter=20):
             _strat_state["scenarios_done"] = idx + 1
         _strat_state.update(status="idle", finished=int(time.time()), scenario=None)
     finally:
+        _strat_unhold()
         _strat_lock.release()
 
 
@@ -15983,8 +16010,9 @@ def _advice_dispatch(name, args):
 
 def _do_advice(amount, question, max_iter=None):
     if not _strat_lock.acquire(blocking=False):
-        _advice_state.update(status="busy: a strategist run is already in progress")
+        _advice_state.update(status=f"busy: {_strat_holder_text()} is already using the model")
         return
+    _strat_hold("advisory")
     try:
         max_iter = STRAT_ADVICE_MAX_ITER if max_iter is None else max_iter
         try:
@@ -16052,6 +16080,7 @@ def _do_advice(amount, question, max_iter=None):
         _advice_state.update(status="done", advice=final or "(no analysis produced)",
                              finished=int(time.time()))
     finally:
+        _strat_unhold()
         _strat_lock.release()
 
 
@@ -16933,7 +16962,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         # (instead of one long blocking acquire) so a Stop while queued takes effect immediately
         # rather than after the full CHAT_QUEUE_TIMEOUT.
         yield _sse("status", {"state": "waiting",
-                              "message": "A strategist/advisory run is using the model — your message is "
+                              "message": f"The model is busy with {_strat_holder_text()} — your message is "
                                          "queued and will start automatically when it finishes."})
         acquired = False
         deadline = _queue_deadline()
@@ -16949,6 +16978,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             yield _sse("error", {"error": "still busy after waiting a while — please try again shortly"})
             _forget()
             return
+    _strat_hold("chat")
     try:
         # Image pre-pass (RESUME-TRACKER 2026-07-18j): identify tickers via VISION_MODEL BEFORE
         # the normal turn, under the same visible/cancellable GPU-wait treatment bug #2 added
@@ -17131,6 +17161,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         _chat_touch_session(session_id)
         yield _sse("done", {"session_id": session_id, **stamp})
     finally:
+        _strat_unhold()
         _strat_lock.release()
         _forget()
 
