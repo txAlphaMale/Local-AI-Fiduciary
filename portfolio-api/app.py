@@ -5065,10 +5065,10 @@ def _timeline_inputs():
     notes = []
     age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
     sp_age = _derive_age(cfg.get("spouse_birth_year"), cfg.get("spouse_age"))
-    bal = _balances_by_tax_status(exclude_529=True)
-    excl = bal.pop("_excluded_529", 0.0)
+    bal = _balances_by_tax_status()
+    excl = _education_balance(d)
     if excl:
-        notes.append(f"529 plan balances (${excl:,.0f}) are excluded: they are education money, not retirement money. (The bridge panel still counts them as pre-tax.)")
+        notes.append(f"Education accounts (529, Coverdell: ${excl:,.0f}) are left out: they are for schooling, not retirement.")
     _hs = _hsa_summary(d, cfg)
     hc = hsa.annual_cost(_hs["need"]["people"], override=cfg.get("healthcare_need_override"))
     hc_on = cfg.get("healthcare_expense_mode") == "add" and hc.get("annual") is not None
@@ -9923,6 +9923,8 @@ def _ef_tier(a):
     if a.get("is_asset") is False:
         return None
     st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
+    if st == "education":
+        return None                      # earmarked for schooling: not an emergency-fund source, and the toggle is hidden
     if st == "roth":
         return "roth_basis"
     if st in ("deferred", "hsa"):
@@ -11290,8 +11292,17 @@ def _investable_assets(d, exclude_types):
     total = 0.0
     for a in (d.get("accounts") or []):
         if a.get("is_asset") and str(a.get("type") or "").lower() not in ex:
+            if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "education":
+                continue                 # 529 / Coverdell money is for schooling, not retirement
             total += a.get("balance") or 0
     return round(total, 2)
+
+
+def _education_balance(d=None):
+    """Total in dedicated education accounts (529, Coverdell): shown beside retirement figures as 'left out', never counted in them."""
+    d = d if d is not None else _data()
+    return round(sum((a.get("balance") or 0) for a in (d.get("accounts") or [])
+                     if a.get("is_asset") is not False and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "education"), 2)
 
 
 def _cashflow_annual():
@@ -12397,7 +12408,7 @@ def _registry_group(a):
     st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
     if st == "taxable":
         return "taxable"
-    if st in ("roth", "deferred", "hsa"):
+    if st in ("roth", "deferred", "hsa", "education"):
         return "advantaged"
     if _is_cash_account(a):
         return "cash"
@@ -14117,13 +14128,17 @@ LOC_MIN_YIELD = float(os.environ.get("LOC_MIN_YIELD", "3.0"))    # % dividend yi
 
 
 def _account_tax_status(name, atype, subtype=None):
-    """Classify an account: taxable | roth | deferred | hsa | na (non-investment).
+    """Classify an account: taxable | roth | deferred | hsa | education | na (non-investment).
     Roth/HSA/IRA/401k/etc. = tax-advantaged; a plain brokerage = taxable.
     `subtype` is the provider's own account subtype when it sends one (Monarch: "Roth IRA", "IRA", "401k", "HSA", "Brokerage", ...). A
     tax-advantaged subtype is more specific than a name that merely mentions IRA (2026-11-10: "IRA BROKERAGE CASH" synced from a Roth IRA's
     cash sweep read as a traditional IRA), so it wins; any other subtype (Checking, Brokerage, none) falls through to the name rules."""
     n = (name or "").upper()
     st = (subtype or "").upper()
+    # Dedicated education money (529 plans, Coverdell accounts) is its own status: it is not retirement money, so every retirement,
+    # bridge, Roth and emergency-fund panel leaves it out (as the HSA is kept out of spendable retirement money), while net worth still counts it.
+    if any(k in st for k in ("529", "COVERDELL")) or any(k in n for k in ("529", "COVERDELL")):
+        return "education"
     if st:
         if "ROTH" in st or "TFSA" in st:
             return "roth"
@@ -14267,12 +14282,7 @@ SEPP_RATE_PCT = float(os.environ.get("SEPP_RATE_PCT", "5.0"))    # 72(t) rate = 
 BRIDGE_TAX_PCT = float(os.environ.get("BRIDGE_TAX_PCT", "15.0"))  # effective ordinary-income rate on Roth conversions
 
 
-def _is_529(name, subtype=None):
-    t = f"{name or ''} {subtype or ''}".upper()
-    return "529" in t
-
-
-def _balances_by_tax_status(include_balance_only=True, exclude_529=False):
+def _balances_by_tax_status(include_balance_only=True):
     """Investable value grouped by account tax status (taxable/roth/deferred/hsa): the securities the provider lists PLUS, by default, the
     balance of investment accounts that report only a balance and no holdings (a 401(k) or HSA that syncs one number). Those used to count
     as $0 here, which understated the bridge plan and the Roth ladder. `include_balance_only=False` keeps the securities-only view for
@@ -14282,17 +14292,11 @@ def _balances_by_tax_status(include_balance_only=True, exclude_529=False):
     acct_status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
                    for a in d.get("accounts", [])}
     bal = {"taxable": 0.0, "roth": 0.0, "deferred": 0.0, "hsa": 0.0}
-    excluded = 0.0
-    sub_by_name = {a.get("name"): a.get("subtype") for a in d.get("accounts", [])}
     for acct in d.get("by_account", []):
         name = acct.get("account")
         status = acct_status.get(name) or _account_tax_status(name, "Investments")
         if status in bal:
-            v = sum((h.get("value") or 0) for h in acct.get("holdings", []))
-            if exclude_529 and status == "deferred" and _is_529(name, sub_by_name.get(name)):
-                excluded += v           # a 529 plan is education money, not retirement money, although it is classed 'deferred' elsewhere
-            else:
-                bal[status] += v
+            bal[status] += sum((h.get("value") or 0) for h in acct.get("holdings", []))
     if include_balance_only:
         listed = {a.get("account") for a in d.get("by_account", [])}
         for a in d.get("accounts", []):
@@ -14300,14 +14304,8 @@ def _balances_by_tax_status(include_balance_only=True, exclude_529=False):
                     and a.get("name") not in listed and (a.get("balance") or 0) > 0):
                 st = acct_status.get(a.get("name"))
                 if st in bal:
-                    if exclude_529 and st == "deferred" and _is_529(a.get("name"), a.get("subtype")):
-                        excluded += a.get("balance") or 0
-                    else:
-                        bal[st] += a.get("balance") or 0
-    out = {k: round(v, 2) for k, v in bal.items()}
-    if exclude_529:
-        out["_excluded_529"] = round(excluded, 2)
-    return out
+                    bal[st] += a.get("balance") or 0
+    return {k: round(v, 2) for k, v in bal.items()}
 
 
 def _bridge_plan(annual_expenses, current_age, retire_age, tax_ctx=None):

@@ -239,14 +239,60 @@ class Api(unittest.TestCase):
             self.assertEqual(self.app.get_plan_timeline().status_code, 400)
 
 
-class Balances529(unittest.TestCase):
-    def test_529_plans_are_left_out_of_the_pretax_bucket_and_reported(self):
+class EducationAccounts(unittest.TestCase):
+    """529 and Coverdell accounts are their own status: out of every retirement figure, still in net worth."""
+
+    def setUp(self):
         import app as appmod
-        data = {"accounts": [{"name": "My 401k", "type": "investment", "subtype": "401k", "balance": 100.0, "is_asset": True, "include_nw": True},
-                             {"name": "Kid 529 College", "type": "investment", "subtype": "529", "balance": 40.0, "is_asset": True, "include_nw": True}],
-                "by_account": [{"account": "My 401k", "holdings": [{"value": 100.0}]}, {"account": "Kid 529 College", "holdings": [{"value": 40.0}]}]}
-        with mock.patch.object(appmod, "_data", lambda: data):
-            plain = appmod._balances_by_tax_status()
-            excl = appmod._balances_by_tax_status(exclude_529=True)
-        self.assertEqual(plain["deferred"], 140.0)               # the existing panels still count it (reported to Jason)
-        self.assertEqual((excl["deferred"], excl["_excluded_529"]), (100.0, 40.0))
+        self.app = appmod
+        self.data = {"accounts": [{"name": "My 401k", "type": "investment", "subtype": "401k", "balance": 100.0, "is_asset": True, "include_nw": True},
+                                  {"name": "Kid 529 College", "type": "investment", "subtype": "529", "balance": 40.0, "is_asset": True, "include_nw": True},
+                                  {"name": "Coverdell ESA", "type": "investment", "subtype": None, "balance": 10.0, "is_asset": True, "include_nw": True},
+                                  {"name": "Brokerage", "type": "Investments", "subtype": "brokerage", "balance": 60.0, "is_asset": True, "include_nw": True}],
+                     "by_account": [{"account": "My 401k", "holdings": [{"value": 100.0}]}, {"account": "Kid 529 College", "holdings": [{"value": 40.0}]},
+                                    {"account": "Brokerage", "holdings": [{"value": 60.0}]}]}
+
+    def test_classifier(self):
+        c = self.app._account_tax_status
+        self.assertEqual(c("Kid 529 College", "investment", None), "education")
+        self.assertEqual(c("Savings plan", "investment", "529"), "education")
+        self.assertEqual(c("Coverdell ESA", "investment", None), "education")
+        self.assertEqual(c("My 401k", "investment", "401k"), "deferred")             # unchanged
+        self.assertEqual(c("Roth IRA", "investment", None), "roth")
+
+    def test_education_money_is_out_of_the_retirement_buckets_and_investable_assets(self):
+        with mock.patch.object(self.app, "_data", lambda: self.data):
+            bal = self.app._balances_by_tax_status()
+            self.assertEqual((bal["deferred"], bal["taxable"]), (100.0, 60.0))
+            self.assertEqual(self.app._investable_assets(self.data, []), 160.0)          # 401k 100 + brokerage 60; the 529 (40) and Coverdell (10) are left out
+
+            self.assertEqual(self.app._education_balance(self.data), 50.0)
+
+    def test_education_accounts_are_not_emergency_fund_sources(self):
+        self.assertIsNone(self.app._ef_tier(self.data["accounts"][1]))
+        self.assertEqual(self.app._registry_group(self.data["accounts"][1]), "advantaged")
+
+    def test_the_timeline_says_what_it_left_out(self):
+        with mock.patch.object(self.app, "_data", lambda: self.data):
+            self.assertEqual(self.app._education_balance(), 50.0)
+
+
+class Page(unittest.TestCase):
+    """Phase 2: the PLAN > TIMELINE page (strings only; the render was also run in Node against real engine output)."""
+
+    def setUp(self):
+        self.html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"), encoding="utf-8").read()
+
+    def test_subtab_inputs_conversion_cells_and_hover_sources_exist(self):
+        for needle in ("{key:'timeline',label:'TIMELINE'", "function timelineContent()", "fetch('/api/plan/timeline'", "'Source: '+S[src]",
+                       "ci.onchange=()=>tlConv(x.year,ci.value)", "RESET TO CURRENT", "COPY REPORT", "WHAT" if False else "YEARS WITH A LOST ACA SUBSIDY",
+                       "LIFETIME TAX", "SHOW BUCKET DETAIL"):
+            self.assertIn(needle, self.html, needle)
+
+    def test_copied_report_carries_the_closing_line(self):
+        self.assertIn("Informational only, produced by a personal tool. Not financial, tax or legal advice.", self.html)
+        self.assertIn("L.push('',r.footer,'',TL_CLOSING)", self.html)
+
+    def test_trials_are_posted_never_saved(self):
+        self.assertIn("method:'POST'", self.html.split("function tlRun()")[1].split("function tlQueue")[0])
+        self.assertNotIn("/api/retirement-config", self.html.split("function tlRun()")[1].split("function panelSubtabs")[0])
