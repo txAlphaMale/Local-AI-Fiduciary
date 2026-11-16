@@ -386,16 +386,25 @@ SETTING_SPECS = {
     "avenue_match_cap_dollars":   {"env": "AVENUE_MATCH_CAP_DOLLARS",   "default": 0.0,  "cast": float, "label": "Cross-avenue: annual match-eligible contribution ($)", "group": "Cross-avenue"},
     "biz_loan_rate_pct":          {"env": "BIZ_LOAN_RATE_PCT",          "default": 10.0, "cast": float, "label": "Business acq: SBA 7(a)/seller loan rate (variable, prime-based) (%)", "group": "Business acquisition"},
     "insider_lookback_days":      {"env": "INSIDER_LOOKBACK_DAYS",      "default": 120,  "cast": int,   "label": "Insider signal: Form 4 lookback window (days)", "group": "Insider signal"},
-    "chat_thinking_mode":         {"env": "CHAT_THINKING_MODE",         "default": 0,    "cast": int,   "label": "Chat: reasoning (thinking) mode. 0 = full reasoning on every step (default, highest quality). 1 = no reasoning only for the short commentary written after the app has printed a ticker's research facts (faster; trial it against 0 before keeping it)", "group": "Chat"},
-    "llm_num_ctx":                {"env": "LLM_NUM_CTX",                "default": 32768, "cast": int,   "label": "Model context size (tokens) used for EVERY call to the big model. Keep it one value: Ollama reloads the model (about 30 s) whenever the size changes. On two 11 GB cards the largest that fits fully on the GPUs is about 32768; if the model stops loading, lower it", "group": "Chat"},
-    "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 80,   "cast": int,   "label": "Insider signal: max Form 4 filings fetched per ticker (a busy company can hit this before the window ends; the signal then says how far back it reaches)", "group": "Insider signal"},
+    "chat_thinking_mode":         {"env": "CHAT_THINKING_MODE",         "default": 0,    "cast": int,   "label": "Chat reasoning mode (0 or 1)", "group": "Chat",
+                                   "help": "0 = full reasoning on every step (default, highest quality). 1 = no reasoning only for the short commentary the model writes after the app has printed a ticker's research facts: faster, but compare its answers against mode 0 before keeping it. Tool-choosing steps and all other answers always keep full reasoning."},
+    "llm_num_ctx":                {"env": "LLM_NUM_CTX",                "default": 32768, "cast": int,   "label": "Model context size (tokens)", "group": "Chat",
+                                   "help": "Used for EVERY call to the big model. Keep it one value: Ollama reloads the model (about 30 s) whenever the requested size changes. On two 11 GB cards the largest size that fits fully on the GPUs is about 32768; if the model stops loading, lower it (or use the fallback model)."},
+    "llm_fallback_num_ctx":       {"env": "LLM_FALLBACK_NUM_CTX",       "default": 16384, "cast": int,   "label": "Fallback model context size (tokens)", "group": "Chat",
+                                   "help": "The context size used when a call falls back to the fallback model. Match what that model was built for (a model named ...-16k expects 16384)."},
+    "insider_max_filings":        {"env": "INSIDER_MAX_FILINGS",        "default": 80,   "cast": int,   "label": "Insider signal: max Form 4 filings per ticker", "group": "Insider signal",
+                                   "help": "How many insider filings are read per company. A busy company can hit this before the lookback window ends; the signal then says how far back it reaches. Higher = more complete but more SEC requests."},
 }
 # Non-secret model/infra config keyed by ENV name (stored in settings.json under that name;
 # applied on RESTART via _boot_merge). NOT read live. app.py reads them into module constants
 # AFTER _boot_merge runs; llm.py (imported BEFORE the merge) resolves its own keys lazily per call.
 CONFIG_SPECS = [
-    {"key": "ANALYSIS_MODEL", "label": "Chat, Strategist and analysis model (pick from the models Ollama has; applies immediately)", "group": "Model", "default": "qwen3.6:27b"},
-    {"key": "VISION_MODEL",   "label": "Picture-reading model (reads fund lists and tickers from an attached screenshot)", "group": "Model", "default": "qwen2.5vl:7b"},
+    {"key": "ANALYSIS_MODEL", "label": "Chat & analysis model", "group": "Model", "default": "qwen3.6:27b",
+     "help": "The model that answers chat, writes the weekly Strategist review, briefs and scout notes. Pick from the models Ollama has (only ones that can use tools are listed). Applies immediately, no restart."},
+    {"key": "FALLBACK_MODEL", "label": "Fallback model", "group": "Model", "default": "", "allow_blank": True,
+     "help": "Optional. Used only when the main model fails to LOAD (out of GPU memory, a CUDA error). The call is retried once on this model, using the fallback context size below, and the answer's timing line says so. Never used for timeouts or for picture reading. Leave blank for none."},
+    {"key": "VISION_MODEL",   "label": "Picture-reading model", "group": "Model", "default": "qwen2.5vl:7b",
+     "help": "Reads fund names and tickers from a screenshot you attach in chat (for example a 401(k) fund list). Only models that can read images are listed. It loads on demand and unloads the main model while it runs."},
     {"key": "LLM_TIMEOUT",    "label": "LLM per-call timeout (seconds)",           "group": "Model", "default": "1200"},
     {"key": "LLM_KEEP_ALIVE", "label": "Keep model resident (e.g. 30m)",           "group": "Model", "default": "30m"},
     # ---- AI / LLM provider (2026-07-24, Claude integration) ----
@@ -524,7 +533,7 @@ ANALYSIS_MODEL = os.environ.get("ANALYSIS_MODEL") or "qwen3.6:27b"     # boot va
 # Model choices are made in SETTINGS (a dropdown filled from Ollama) and apply at once, with no .env edit and no restart. The value
 # saved there wins over the environment, because docker-compose always injects a default for these variables and a user must never
 # have to edit config files to pick a model; with nothing saved, the environment and then the built-in default apply.
-LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL")
+LIVE_CONFIG_KEYS = ("ANALYSIS_MODEL", "VISION_MODEL", "FALLBACK_MODEL")
 
 
 def _live_cfg(key, fallback):
@@ -541,6 +550,25 @@ def _analysis_model():
 
 def _vision_model():
     return _live_cfg("VISION_MODEL", "qwen2.5vl:7b")
+
+
+def _fallback_model():
+    """The model to retry on when the main one fails to load; '' = none."""
+    return _live_cfg("FALLBACK_MODEL", "")
+
+
+def _fallback_choice():
+    m = _fallback_model()
+    if not m:
+        return None
+    try:
+        ctx = max(2048, int(_knob("llm_fallback_num_ctx")))
+    except Exception:
+        ctx = 16384
+    return (m, ctx)
+
+
+llm.FALLBACK_PROVIDER = _fallback_choice
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "1200"))     # big models on Pascal are slow
 LLM_KEEP_ALIVE = os.environ.get("LLM_KEEP_ALIVE", "30m")     # keep model resident between briefs
 ANALYSIS_THINK = os.environ.get("ANALYSIS_THINK", "0").lower() in ("1", "true", "yes", "on")  # reasoning ON = deeper briefs, slower
@@ -12298,7 +12326,7 @@ def _model_options_for(key):
     rows = _ollama_models()
     if rows is None:
         return None
-    need = {"ANALYSIS_MODEL": "tools", "VISION_MODEL": "vision"}.get(key)
+    need = {"ANALYSIS_MODEL": "tools", "VISION_MODEL": "vision", "FALLBACK_MODEL": "tools"}.get(key)
     names = [r["name"] for r in rows if (not need or need in r["capabilities"] or not r["capabilities"])]
     return names or [r["name"] for r in rows]
 
@@ -12321,20 +12349,21 @@ def get_settings():
         source = "env" if env_set else ("settings" if stored.get(key) is not None else "default")
         out.append({"key": key, "label": spec["label"], "group": spec["group"],
                     "value": _knob(key), "default": spec["default"],
-                    "source": source, "env_locked": env_set, "env": spec["env"]})
+                    "source": source, "env_locked": env_set, "env": spec["env"], "help": spec.get("help")})
     cfg_out = []
     for spec in CONFIG_SPECS:
         k = spec["key"]
         env_locked = k in _ENV_SECRETS_AT_BOOT
         staged = stored.get(k) not in (None, "")
         if k in LIVE_CONFIG_KEYS:     # chosen from a dropdown of the models Ollama has; applies at once and beats the compose default
-            cur = _analysis_model() if k == "ANALYSIS_MODEL" else _vision_model()
+            cur = {"ANALYSIS_MODEL": _analysis_model, "VISION_MODEL": _vision_model, "FALLBACK_MODEL": _fallback_model}[k]()
             opts = _model_options_for(k)
-            if opts is not None and cur not in opts:
+            if opts is not None and cur and cur not in opts:
                 opts = [cur] + opts
             cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": cur, "default": spec["default"],
                             "source": "settings" if staged else ("env" if env_locked else "default"), "env_locked": False,
-                            "staged_behind_env": False, "editable": True, "applies": "immediately", "options": opts})
+                            "staged_behind_env": False, "editable": True, "applies": "immediately", "options": opts,
+                            "help": spec.get("help"), "allow_blank": bool(spec.get("allow_blank"))})
             continue
         if env_locked:
             val, source = os.environ.get(k), "env"
@@ -12347,7 +12376,7 @@ def get_settings():
         cfg_out.append({"key": k, "label": spec["label"], "group": spec["group"], "value": val,
                         "default": spec["default"], "source": source, "env_locked": env_locked,
                         "staged_behind_env": bool(env_locked and staged),
-                        "editable": True, "applies": "restart", "options": spec.get("options")})
+                        "editable": True, "applies": "restart", "options": spec.get("options"), "help": spec.get("help")})
     return {"settings": out, "config": cfg_out,
             "note": "Analysis knobs apply at request time (no restart). Model config saves here and applies "
                     "the next time portfolio-api's container is RECREATED (`docker compose up -d` — a plain "
@@ -12413,7 +12442,11 @@ async def post_settings(req: Request):
             applied.append(key)
         else:
             try:
-                stored[key] = SETTING_SPECS[key]["cast"](val)
+                cv = SETTING_SPECS[key]["cast"](val)
+                if cv == SETTING_SPECS[key]["default"]:
+                    stored.pop(key, None)        # the default is not a customization: a future default change must still reach this install
+                else:
+                    stored[key] = cv
                 applied.append(key)
             except (TypeError, ValueError):
                 continue
@@ -17361,6 +17394,8 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                     if chunk.get("error"):
                         yield _sse("error", {"error": chunk["error"]})
                         return
+                    if chunk.get("fallback"):
+                        timing["fallback_model"] = chunk["fallback"]      # the main model failed to load; this turn ran on the fallback
                     if chunk.get("cancelled"):
                         cancelled = True
                         break
