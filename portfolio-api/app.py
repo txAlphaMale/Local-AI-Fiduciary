@@ -16537,6 +16537,15 @@ STRATEGIST_PROMPT = (
     "shares are cheaper. What DOES matter: (a) make each position MATERIAL — big enough that a good move "
     "moves the book (avoid dust positions too small to matter); (b) deploy the capital — don't leave a "
     "meaningful slug of cash idle; you buy fractional shares here, so a dollar amount always fully invests. "
+    "REAL HOLDINGS ABOVE THE CAP: the paper book is yours to run as you like. For the owner's REAL positions above the size cap, call "
+    "get_sale_tax_picture and put a short 'Tax note' in the report: the amount above the cap, how much could be trimmed inside an IRA/Roth "
+    "with no tax, the gain a taxable sale would realize, the one-year tax versus the staged plan, and the lot-selection and gifting points "
+    "that reduce it. State it as the COST of selling, not an instruction: the owner may hold a winner deliberately and has said so; do not "
+    "urge a sale of a real holding. Concentration and dilution worries are fine to mention.\n"
+    "ONE TRADE PER NAME: within a run, never sell and buy the same ticker. A tiny holding you want bigger is TOPPED UP with one buy of the "
+    "difference, not sold and re-bought (the tools refuse the reversal). The portfolio view lists over_cap names with a trim_to_pct and "
+    "sell_about_dollars: trim those to about trim_to_pct (a point under the cap), not to the cap line itself; a name only just over the cap "
+    "(inside the stated band) is left alone. Say in the report that the return vs. start is unchanged by trading itself.\n"
     "Acknowledge uncertainty honestly. This is hypothetical and educational — NOT financial advice."
 )
 
@@ -16564,6 +16573,11 @@ STRATEGIST_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "summary": {"type": "string", "description": "Your written weekly report."}},
             "required": ["summary"]}}},
+    {"type": "function", "function": {"name": "get_sale_tax_picture",
+        "description": "TAX COST of trimming the owner's REAL positions that are over the size cap (from get_holdings): how much sits in IRA/Roth "
+                       "(no tax) versus taxable accounts, the gain realized, the tax if sold in one year, and a multi-year plan using the 0% "
+                       "long-term-gains room first. Information only: the owner may keep a big winner on purpose. Never trades.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_opportunities",
         "description": "Screened idea list (watchlist + peers) scored against the strategy criteria.",
         "parameters": {"type": "object", "properties": {}}}},
@@ -16671,16 +16685,98 @@ def _compact_paper_for_agent(p):
         w = round((x.get("value") or 0) / total * 100, 1) if total else None
         rows.append({"ticker": x.get("ticker"), "shares": x.get("shares"), "price": x.get("price"),
                      "value": x.get("value"), "weight_pct": w, "gain_pct": x.get("gain_pct")})
-    over = [{"ticker": r["ticker"], "weight_pct": r["weight_pct"]} for r in rows
-            if cap and r["weight_pct"] is not None and r["weight_pct"] > cap]
+    over = []
+    for r in rows:
+        if cap and r["weight_pct"] is not None and r["weight_pct"] > cap + OVER_CAP_BAND_PCT:
+            tgt = max(cap - TRIM_BELOW_CAP_PCT, 0)
+            over.append({"ticker": r["ticker"], "weight_pct": r["weight_pct"], "trim_to_pct": tgt,
+                         "sell_about_dollars": round((r["weight_pct"] - tgt) / 100 * total)})
     tx = [{k: t.get(k) for k in ("ts", "action", "ticker", "shares", "price", "value") if k in t}
           for t in (p.get("transactions") or [])[-10:]]
     return {"id": p.get("id"), "name": p.get("name"), "goal_summary": p.get("goal_summary"),
             "cash": p.get("cash"), "cash_pct": round((p.get("cash") or 0) / total * 100, 1) if total else None,
             "holdings_value": p.get("holdings_value"), "total_value": total,
             "return_pct": p.get("return_pct"), "basis_label": p.get("basis_label"),
-            "position_cap_pct": cap, "over_cap": over, "positions": rows,
+            "position_cap_pct": cap, "over_cap": over, "over_cap_band_pct": OVER_CAP_BAND_PCT, "positions": rows,
             "recent_transactions": tx, "note": p.get("note")}
+
+
+OVER_CAP_BAND_PCT = 0.5     # a position within half a point above the cap is not flagged: selling to exactly the cap leaves it "over" by rounding
+TRIM_BELOW_CAP_PCT = 1.0    # when a position IS over, the suggested trim target sits this far under the cap so it does not land on the line
+
+
+def _churn_block(run_sides, tool, args):
+    """RETEST-027 (a): within ONE run a ticker is either bought or sold, never both ('liquidated dust' MSFT/VOO/AVGO, then bought them back
+    at $30k/$30k/$15k). Returns an error dict when this call would reverse an earlier trade of the same ticker in this run, else None.
+    `run_sides` maps TICKER -> 'buy'|'sell' and is updated by `_churn_note` once the trade succeeded."""
+    t = str((args or {}).get("ticker") or "").strip().upper()
+    side = "buy" if tool == "paper_buy" else "sell"
+    prev = run_sides.get(t)
+    if t and prev and prev != side:
+        return {"error": f"{t} was already {'bought' if prev == 'buy' else 'sold'} in this run. Do not sell and buy the same name in one review: "
+                         f"net it into one trade (top up or trim by the difference) and leave the earlier trade as it is."}
+    return None
+
+
+def _churn_note(run_sides, tool, args, result):
+    if isinstance(result, dict) and not result.get("error"):
+        t = str((args or {}).get("ticker") or "").strip().upper()
+        if t:
+            run_sides[t] = "buy" if tool == "paper_buy" else "sell"
+
+
+def _sale_tax_picture(cap_pct=15.0, d=None, ctx=None, gross_ord=0.0):
+    """What trimming each REAL position that is over `cap_pct` would cost in tax, for the Strategist's report (information, never a
+    recommendation: the owner may hold a winner on purpose). Per name: the amount above the cap, how much of it sits in IRA/Roth/HSA-type
+    accounts (no tax) versus taxable accounts, the gain in the taxable part, the tax if sold in one year, the same spread over years
+    using the 0% LTCG room first. Long-term treatment is assumed (lot ages are not known here)."""
+    d = d if d is not None else _data()
+    status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) for a in d.get("accounts", [])}
+    per = {}
+    for acct in d.get("by_account", []):
+        st = status.get(acct.get("account"))
+        for h in acct.get("holdings", []):
+            t = h.get("ticker")
+            if not t or not h.get("value"):
+                continue
+            r = per.setdefault(t, {"taxable_gain": 0.0, "taxable_known_basis_value": 0.0, "sheltered_value": 0.0})
+            if st == "taxable":
+                if h.get("gain") is not None:
+                    r["taxable_gain"] += h["gain"]; r["taxable_known_basis_value"] += h["value"]
+            elif st in ("roth", "deferred", "hsa", "education"):
+                r["sheltered_value"] += h["value"]
+    ctx = ctx or _tax_ctx()
+    ded = tax.standard_deduction(ctx["status"], ctx["age"], ctx["spouse_age"])
+    ord_tax = max(0.0, gross_ord - ded)
+    budget0 = tax.gains_harvest_budget(gross_ord, ctx["status"], ded, ctx["age"], ctx["spouse_age"])["gains_at_0pct_budget"]
+    out = []
+    for c in d.get("consolidated") or []:
+        w, v, t = c.get("weight_pct"), c.get("value"), c.get("ticker")
+        if not t or not w or not v or w <= cap_pct:
+            continue
+        total = v / (w / 100.0)
+        sell = round((w - cap_pct) / 100.0 * total, 0)
+        r = per.get(t, {})
+        shelt = min(sell, r.get("sheltered_value", 0.0))
+        tax_part = max(0.0, sell - shelt)
+        kb = r.get("taxable_known_basis_value", 0.0)
+        gf = (r.get("taxable_gain", 0.0) / kb) if kb > 0 else None
+        row = {"ticker": t, "weight_pct": w, "cap_pct": cap_pct, "value": round(v, 0), "amount_above_cap": sell,
+               "sellable_without_tax_in_ira_roth_hsa": round(shelt, 0), "needs_taxable_sale": round(tax_part, 0)}
+        if tax_part > 0 and gf is not None:
+            gain = max(0.0, tax_part * gf)
+            now_tax = tax.ltcg_tax(ord_tax, gain, ctx["status"])[0]
+            plan = sizing.staged_diversification_plan(tax_part, gain, budget0, _knob("sizing_ltcg_rate_pct"), now_tax,
+                                                      max_years=_knob("sizing_stage_years"))
+            row.update({"gain_fraction_pct_taxable": round(gf * 100, 1), "taxable_gain_realized": round(gain, 0),
+                        "tax_if_sold_in_one_year": round(now_tax, 0), "annual_0pct_ltcg_room": round(budget0, 0), "staged": plan})
+        elif tax_part > 0:
+            row["note"] = "cost basis unknown for the taxable lots, so the tax cannot be estimated"
+        out.append(row)
+    return {"positions": out, "none_over_cap": not out,
+            "assumptions": f"filing status {ctx['status']}, long-term gains, ordinary income {round(gross_ord):,} (the annual-expenses figure "
+            "the position-sizing panel uses), standard deduction; state tax and NIIT not included. The owner may hold a large winner on "
+            "purpose: this is the cost of a sale, not advice to make one. Confirm with a CPA."}
 
 
 def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
@@ -16728,6 +16824,9 @@ def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
                     "holdings": [{"ticker": c.get("ticker"), "name": c.get("name"),
                                   "weight_pct": c.get("weight_pct"), "gain_pct": c.get("gain_pct")}
                                  for c in top[:25] if c.get("ticker")]}
+        if name == "get_sale_tax_picture":
+            cfg = _read_retire()
+            return _sale_tax_picture(float((goal or {}).get("max_position_pct") or 15), gross_ord=float(cfg.get("annual_expenses_override") or 0) or 0.0)
         if name == "get_fees_liquidity":
             return get_fees_liquidity()
         if name == "get_benefits":
@@ -16770,6 +16869,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
              "tool_calls": {}, "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
+    _run_sides = {}          # ticker -> "buy"|"sell" this run (RETEST-027 a: no sell-then-rebuy)
     src_log = []    # what the model looked at this run, stored with the report so figures can be traced
     try:
         risk_guidance = _RISK_PROFILE_GUIDANCE.get(risk_profile, _RISK_PROFILE_GUIDANCE["moderate"])
@@ -16852,7 +16952,11 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                     _seen_sigs.add(_sig)
                 if nm in ("paper_buy", "paper_sell"):
                     telem["trades"] += 1
-                if nm == "web_search":
+                _blocked = _churn_block(_run_sides, nm, a) if nm in ("paper_buy", "paper_sell") else None
+                if _blocked:
+                    result = _blocked
+                    telem["trades"] -= 1
+                elif nm == "web_search":
                     if search_calls >= search_budget:
                         result = {"error": f"web-search budget for this run is spent "
                                            f"({search_budget} calls). Stop searching — decide from the "
@@ -16863,6 +16967,8 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                 else:
                     result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal,
                                                   sources=src_log)
+                if nm in ("paper_buy", "paper_sell") and not _blocked:
+                    _churn_note(_run_sides, nm, a, result)
                 if nm != "log_report":
                     _note_source(src_log, nm, a, result)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
