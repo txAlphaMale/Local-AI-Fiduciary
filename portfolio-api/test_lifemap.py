@@ -362,3 +362,10 @@ class Page(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SettingsPage(unittest.TestCase):
+    def test_the_editor_page_is_an_admin_only_settings_subtab_using_the_config_endpoints(self):
+        for needle in ("_isAdminUser() && {key:'lifemapcfg',label:'LIFE MAP'", "function lifemapSettingsContent()", "fetch('/api/lifemap/config')",
+                       "lmsPost('/api/lifemap/reset'", "SAVE FROM TEXT", "RESET TO DEFAULTS", "STAGE WEIGHTS"):
+            self.assertIn(needle, HTML, needle)

@@ -296,3 +296,16 @@ class Page(unittest.TestCase):
     def test_trials_are_posted_never_saved(self):
         self.assertIn("method:'POST'", self.html.split("function tlRun()")[1].split("function tlQueue")[0])
         self.assertNotIn("/api/retirement-config", self.html.split("function tlRun()")[1].split("function panelSubtabs")[0])
+
+
+class HeaderHelp(unittest.TestCase):
+    def test_every_timeline_column_header_has_its_own_help_text(self):
+        res = plan_timeline.build(base())
+        for k in ("when", "contributions", "withdrawn", "flags", "balances", "spending", "ss", "rmd", "conversion", "tax", "state_tax", "aca", "medicare", "growth"):
+            self.assertTrue(res["sources"].get(k), k)
+        self.assertEqual(len({res["sources"][k] for k in ("balances", "spending", "contributions", "withdrawn")}), 4)        # no copied texts
+        html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html"), encoding="utf-8").read()
+        self.assertIn("{h:'SAVED',src:'contributions'", html)
+        self.assertIn("{h:'WITHDRAWN',src:'withdrawn'", html)
+        self.assertIn("{h:'FLAGS',src:'flags'", html)
+        self.assertIn("cat:'RETIREMENT ODDS'", html)               # the cockpit shows it as well as the ATTENTION list
