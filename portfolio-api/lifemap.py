@@ -48,6 +48,8 @@ def _cmp(op, a, b):
             return isinstance(a, str) and a.startswith(str(b))
         if op == "in":
             return a in b
+        if op == "containsany":
+            return isinstance(a, str) and any(str(w).lower() in a.lower() for w in b)
         return {"==": a == b, "!=": a != b, "<": a < b, "<=": a <= b, ">": a > b, ">=": a >= b}[op]
     except (TypeError, KeyError):
         return False
@@ -71,6 +73,8 @@ def eval_cond(cond, vars_):
     if isinstance(cond, (list, tuple)) and len(cond) >= 2:
         name, op = cond[0], cond[1]
         val = vars_.get(name, _MISSING)
+        if val is None:
+            val = _MISSING
         if op == "missing":
             return val is _MISSING
         if op == "present":
@@ -81,17 +85,31 @@ def eval_cond(cond, vars_):
     return False
 
 
-def resolve_let(let, source):
-    """name -> value for a check. A value is a dotted path into the source, or {"count"|"sum"|"max"|"min": path, "where": cond, "field": f}."""
+def resolve_let(let, source, sources=None, ctx=None):
+    """name -> value for a check. A value is a dotted path into the source, or {"count"|"sum"|"max"|"min"|"list"|"first"|"sub": ...}; a spec
+    may name another source with "from" (the check's own source is the default), so one check can combine two endpoints' results."""
     out = {}
     for name, spec in (let or {}).items():
+        if isinstance(spec, dict) and spec.get("from") and sources is not None:
+            other = sources.get(spec["from"])
+            if not isinstance(other, dict) or other.get("_error"):
+                continue
+            spec = {k: v for k, v in spec.items() if k != "from"}
+            if "path" in spec:
+                spec = spec["path"]
+            sub = resolve_let({name: spec}, other, None, ctx)
+            if name in sub:
+                out[name] = sub[name]
+            continue
         if isinstance(spec, str):
             v = get_path(source, spec)
             if v is not _MISSING:
                 out[name] = v
             continue
-        if "sub" in spec:                      # a difference of two paths: {"sub": [pathA, pathB]}
-            a, b = get_path(source, spec["sub"][0]), get_path(source, spec["sub"][1])
+        if "sub" in spec:                      # a difference of two values: each a path into the source or {"ctx": name}
+            def _val(x):
+                return (ctx or {}).get(x["ctx"], _MISSING) if isinstance(x, dict) else get_path(source, x)
+            a, b = _val(spec["sub"][0]), _val(spec["sub"][1])
             if _num(a) and _num(b):
                 out[name] = a - b
             continue
@@ -155,13 +173,13 @@ def render(template, vars_):
 
 
 # ---------------------------------------------------------------- checks
-def run_check(check, sources):
+def run_check(check, sources, ctx=None):
     """-> {id, label, state, severity, reason, from, next}. The first rule whose condition holds wins; a missing source is 'could not check'."""
     base = {"id": check.get("id"), "label": check.get("label"), "from": check.get("from") or {}}
     src = sources.get(check.get("source"), _MISSING)
     if src is _MISSING or src is None or (isinstance(src, dict) and src.get("_error")):
         return {**base, "state": "error", "severity": "low", "reason": f"Could not check: {check.get('label')} (the source did not answer).", "next": None}
-    vars_ = resolve_let(check.get("let"), src)
+    vars_ = {**{k: v for k, v in (ctx or {}).items() if v is not None}, **resolve_let(check.get("let"), src, sources, ctx)}
     for rule in check.get("rules") or []:
         if not eval_cond(rule.get("when"), vars_):
             continue
@@ -171,7 +189,7 @@ def run_check(check, sources):
             return {**base, "state": "noinfo", "severity": "normal", "reason": f"Not enough information yet to check: {check.get('label')}.",
                     "next": rule.get("next")}
         return {**base, "state": state, "severity": sev, "reason": reason, "next": rule.get("next")}
-    return {**base, "state": "ok", "severity": "low", "reason": "", "next": None}
+    return {**base, "state": "na", "severity": "low", "reason": "", "next": None}      # no rule matched: this check does not apply
 
 
 URGENCY_STATE = {"attention": "attention", "todo": "todo", "noinfo": "noinfo", "error": "error", "ok": "ok"}
@@ -316,12 +334,13 @@ def build(cfg, sources, ctx, pins=None, today=None, variant=None, stage_override
     today = today or datetime.date.today()
     stage = next((s for s in cfg["stages"] if s["id"] == stage_override), None) if stage_override else None
     stage = stage or stage_for(cfg, ctx)
+    cctx = {**ctx, "stage": stage["id"]}                   # checks may read the household context and the stage (for example age, stopped, stage)
     topics = []
     for t in cfg["topics"]:
         d = {"id": t["id"], "name": t["name"], "kind": t["kind"], "why": t.get("why", ""), "pages": t.get("pages", []),
              "stage_line": (t.get("stage_lines") or {}).get(stage["id"]), "checks": []}
         for c in t.get("checks", []) if t["kind"] == "status" else []:
-            d["checks"].append(run_check(c, sources))
+            d["checks"].append(run_check(c, sources, cctx))
         topics.append(d)
     ranked = score_topics(cfg, stage, ctx, topics, pins, today)
     now = [t for t in ranked if t["band"] == "now"]

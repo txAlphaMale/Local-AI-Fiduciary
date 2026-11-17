@@ -24,13 +24,20 @@ def ctx(age, target, children=0, no_income=False, default_target=False):
 
 
 def sources(**kw):
-    src = {"retirement": {"fi_number": 2_000_000, "fi_age": 55, "progress_pct": 40, "assumptions": {"current_age": 49, "target_age": 55}, "monte_carlo": {"success_pct": 85}},
-           "cashdebt": {"emergency_fund": {"status": "ok", "months_covered": 7, "target_months": 6, "gap_dollars": 0}, "avalanche": {"rows": [], "invest_hurdle_pct": 7.5}},
-           "insurance": {"setup_needed": False, "household": {"children": 0}, "policies_echo": [{"n": 1}], "gap_table": []},
-           "benefits": {"setup_needed": False, "sections": {"k401": {"match": {"full_capture": True, "left_on_table": 0, "needed_for_full_pct": 6}}}},
+    src = {"retirement": {"fi_number": 2_000_000, "fi_age": 55, "progress_pct": 40, "assumptions": {"current_age": 49, "target_age": 55}, "monte_carlo": {"success_pct": 85}, "bridge": {"status": "no_bridge_needed"}},
+           "cashdebt": {"emergency_fund": {"status": "ok", "months_covered": 7, "target_months": 6, "gap_dollars": 0, "designated": True, "undesignated_cash": 0},
+                      "avalanche": {"rows": [], "invest_hurdle_pct": 7.5}, "idle_cash": {"drag_annual": 0, "tbill_pct": 4.1}},
+           "insurance": {"setup_needed": False, "household": {"children": 0}, "policies_echo": [{"n": 1}], "gap_table": [], "umbrella": {"recommended": 0, "in_force": 0}, "pnc": [], "alerts": [], "knobs": {"education_per_child": 100000}},
+           "benefits": {"setup_needed": False, "sections": {"k401": {"match": {"full_capture": True, "left_on_table": 0, "needed_for_full_pct": 6}, "headroom": 1000}, "hsa": {"headroom": 500}, "roth_ira": {"remaining_total": 0, "pacing_self": {"status": "on_pace"}}}},
            "continuity": {"doc_currency": [{"doc_type": d, "status": "current"} for d in ("will", "durable_poa", "healthcare_directive", "beneficiary_review")],
                           "account_map": [{"passes_by": "beneficiary designation"}], "executor_name": "A", "will_location": "B", "contacts": ["C"]},
-           "estate": {}, "rebalance": {"concentration": []}}
+           "estate": {"snapshot": {"taxable_estate_if_today": 0, "years_until_exemption_crossed": None, "state_estate_tax": False}, "state_of_residence_source": "config"},
+           "rebalance": {"concentration": [], "allocation": []},
+           "ss": {"available": True, "household_monthly_benefit": 3000}, "roth": {"rmd_age": 75, "trad_balance": 0},
+           "hsa": {"balance": 8000, "pct_of_need": 20, "need": {"total": 40000}}, "ltc": {"ok": True, "uncovered": 0, "total_cost": 0, "funding": {"uncovered_pct_of_investable": 0}},
+           "grounding": {"status": "ok", "stale_count": 0}, "taxaudit": {"tax_loss_harvest": {"count": 0, "total_harvestable_loss": 0}, "asset_location": {"count": 0}},
+           "fees": {"fees": {"funds": [], "total_annual_fee": 100}}, "registry": {"accounts": []},
+           "timeline": {"summary": {"short_year_count": 0, "lost_subsidy_year_count": 0, "first_lost_subsidy_year": None, "medicare_surcharge_years": 0, "first_year_short": None}, "rows": []}}
     for k, v in kw.items():
         src[k] = v
     return src
@@ -139,7 +146,7 @@ class Personas(unittest.TestCase):
         r = self.run_map(ctx(75, 62), src)
         self.assertEqual(r["stage"]["id"], "later")
         self.assertNotIn("education", r["bands"]["now"])
-        self.assertEqual({x["id"]: x for x in r["topics"]}["education"]["status"], "unchecked")
+        self.assertEqual({x["id"]: x for x in r["topics"]}["education"]["parts"]["relevance"], 0)
 
     def test_children_lift_insurance_and_handover(self):
         src = sources(insurance={"setup_needed": False, "household": {"children": 2}, "policies_echo": [{"x": 1}],
@@ -154,11 +161,84 @@ class Personas(unittest.TestCase):
         r = self.run_map(ctx(49, 55), {"retirement": sources()["retirement"]})
         self.assertTrue(all(t["status"] in ("error", "unchecked", "ok", "noinfo", "attention", "todo") for t in r["topics"] if t["kind"] == "status"))
 
-    def test_topics_without_checks_are_listed_but_never_ranked_or_called_fine(self):
-        r = self.run_map(ctx(49, 55), sources())
+    def test_checks_that_cannot_run_say_could_not_check_and_are_never_called_fine(self):
+        r = self.run_map(ctx(49, 55), {"retirement": sources()["retirement"]})
         t = {x["id"]: x for x in r["topics"]}
-        for k in ("taxes", "health", "income", "education"):
-            self.assertEqual((t[k]["status"], t[k]["score"], t[k]["band"]), ("unchecked", 0.0, "later"))
+        for k in ("taxes", "health", "income", "education", "safety"):
+            self.assertIn(t[k]["status"], ("error", "noinfo"), k)
+            self.assertNotEqual(t[k]["status"], "ok", k)
+
+    def test_a_topic_with_no_checks_at_all_is_listed_but_never_ranked(self):
+        cfg = copy.deepcopy(CFG)
+        for tp in cfg["topics"]:
+            if tp["id"] == "taxes":
+                tp["checks"] = []
+        r = lifemap.build(cfg, sources(), ctx(49, 55), today=TODAY)
+        t = {x["id"]: x for x in r["topics"]}["taxes"]
+        self.assertEqual((t["status"], t["score"], t["band"]), ("unchecked", 0.0, "later"))
+
+
+class NewChecks(unittest.TestCase):
+    """The second batch of checks (the design's remaining probes), each against a source shaped like the endpoint."""
+
+    def check(self, topic, cid, c=None, **kw):
+        src = sources(**kw)
+        r = lifemap.build(CFG, src, c or ctx(49, 55), today=TODAY)
+        return {x["id"]: x for x in {t["id"]: t for t in r["topics"]}[topic]["checks"]}[cid]
+
+    def test_emergency_fund_designation_and_idle_cash(self):
+        cd = sources()["cashdebt"]
+        self.assertEqual(self.check("safety", "S2", cashdebt={**cd, "emergency_fund": {**cd["emergency_fund"], "designated": False}})["state"], "todo")
+        self.assertEqual(self.check("safety", "S5", cashdebt={**cd, "idle_cash": {"drag_annual": 900, "tbill_pct": 4.1}})["state"], "attention")
+
+    def test_umbrella_state_estate_and_tax_placement(self):
+        ins = sources()["insurance"]
+        r = self.check("protect", "P4", insurance={**ins, "umbrella": {"recommended": 2_000_000, "in_force": 0}})
+        self.assertEqual(r["state"], "attention")
+        self.assertIn("$2,000,000", r["reason"])
+        self.assertEqual(self.check("handover", "H9", estate={**sources()["estate"], "state_of_residence_source": "default_unconfirmed"})["state"], "noinfo")
+        self.assertEqual(self.check("grow", "G6", taxaudit={**sources()["taxaudit"], "asset_location": {"count": 3}})["state"], "attention")
+
+    def test_timeline_checks_use_the_summary_counts(self):
+        tl = {"summary": {"short_year_count": 4, "first_year_short": 2043, "lost_subsidy_year_count": 4, "first_lost_subsidy_year": 2038, "medicare_surcharge_years": 2}, "rows": []}
+        i5 = self.check("independence", "I5", timeline=tl)
+        self.assertEqual((i5["state"], i5["severity"]), ("attention", "high"))
+        self.assertIn("2043", i5["reason"])
+        self.assertIn("2038", self.check("health", "C7", timeline=tl)["reason"])
+        self.assertEqual(self.check("health", "C6", timeline=tl)["state"], "attention")
+        self.assertEqual(self.check("independence", "I5")["state"], "ok")
+
+    def test_checks_that_use_the_household_context_and_stage(self):
+        roth = {"rmd_age": 75, "trad_balance": 500000}
+        early = self.check("taxes", "T4", c=ctx(66, 60), roth=roth)             # stopped, 9 years before required withdrawals
+        self.assertEqual((early["state"], early["severity"]), ("attention", "low"))
+        near = self.check("taxes", "T4", c=ctx(71, 60), roth=roth)              # 4 years left
+        self.assertEqual((near["state"], near["severity"]), ("attention", "normal"))
+        self.assertEqual(self.check("taxes", "T4", c=ctx(40, 65), roth=roth)["state"], "ok")                     # still working: a fact
+        self.assertEqual(self.check("taxes", "T4", roth={"rmd_age": 75, "trad_balance": 0})["state"], "na")
+        ret = sources()["retirement"]
+        aca_over = {**ret, "bridge": {"status": "bridge_needed", "aca": {"flags": {"over_cliff": True}, "subsidy": {"fpl_pct": 450}}}}
+        c1 = self.check("health", "C1", c=ctx(56, 55), retirement=aca_over)
+        self.assertEqual((c1["state"], c1["severity"]), ("attention", "high"))   # stage 'early'
+        self.assertEqual(self.check("health", "C1", c=ctx(66, 55), retirement=aca_over)["state"], "na")        # 65 or older: Medicare
+
+    def test_social_security_uses_two_sources_and_the_stage(self):
+        n1 = self.check("income", "N1", c=ctx(58, 60), ss={"available": False})
+        self.assertEqual((n1["state"], n1["severity"]), ("noinfo", "high"))                              # final approach
+        self.assertEqual(self.check("income", "N1", c=ctx(35, 65), ss={"available": False})["severity"], "normal")
+        ret = {**sources()["retirement"], "assumptions": {"current_age": 49, "target_age": 55, "ss_claim_age": 67}}
+        self.assertIn("$3,000 a month from age 67", self.check("income", "N2", retirement=ret)["reason"])
+
+    def test_student_loans_are_a_name_guess_and_say_so(self):
+        reg = {"accounts": [{"group": "liability", "name": "Nelnet - xx5352", "balance": 15752.0, "tax_status": "na"},
+                            {"group": "liability", "name": "Visa", "balance": 900.0, "tax_status": "na"},
+                            {"group": "taxable", "name": "529 Plan", "balance": 3000.0, "tax_status": "education"}]}
+        e3 = self.check("education", "E3", registry=reg)
+        self.assertIn("look like student loans ($15,752), going by their names", e3["reason"])
+        self.assertIn("$3,000", self.check("education", "E2", registry=reg)["reason"])
+
+    def test_education_topic_stays_not_enough_information_without_the_profile(self):
+        self.assertEqual(self.check("education", "E5")["state"], "noinfo")
 
 
 class RankingRules(unittest.TestCase):
