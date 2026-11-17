@@ -1309,6 +1309,100 @@
      ]
     },
     {
+     "id": "H2b",
+     "label": "Beneficiaries named on each account",
+     "source": "continuity",
+     "from": {
+      "panel": "PLAN \u203a ESTATE",
+      "tab": "plan",
+      "subtab": "estate"
+     },
+     "let": {
+      "n": {
+       "count": "account_map",
+       "where": [
+        "passes_by",
+        "startswith",
+        "beneficiary designation"
+       ]
+      },
+      "t": {
+       "count": "account_map",
+       "where": [
+        "bene_gap",
+        "in",
+        [
+         "yes",
+         "no",
+         "unknown"
+        ]
+       ]
+      },
+      "gap": {
+       "count": "account_map",
+       "where": [
+        "bene_gap",
+        "==",
+        "yes"
+       ]
+      },
+      "unk": {
+       "count": "account_map",
+       "where": [
+        "bene_gap",
+        "==",
+        "unknown"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "t",
+        "==",
+        0
+       ],
+       "state": "ok",
+       "reason": "No account here passes by a beneficiary form or TOD registration."
+      },
+      {
+       "when": [
+        "gap",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "{gap|n0} of {t|n0} account(s) that pay out by beneficiary form or TOD registration have no one named, or no backup (contingent) person. The form decides, not your will.",
+       "next": {
+        "text": "Open ESTATE and fix the accounts marked.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": [
+        "unk",
+        ">",
+        0
+       ],
+       "state": "todo",
+       "severity": "high",
+       "reason": "You have not said who is named on {unk|n0} of {t|n0} account(s) that pay out by beneficiary form or TOD registration. The app cannot see the forms; it keeps your answer.",
+       "next": {
+        "text": "Answer for each account in ESTATE.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Primary and backup beneficiaries are recorded as named on all {t|n0} account(s)."
+      }
+     ]
+    },
+    {
      "id": "H4",
      "label": "People to call",
      "source": "continuity",

@@ -3914,6 +3914,12 @@ function estateContent(){
   wrap.appendChild(t3);
   const tin=el('div','muted'); tin.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin:4px 0 12px;';
   tin.textContent=ti.note||''; wrap.appendChild(tin);
+  { const bs=ti.beneficiary_summary||{};
+    wrap.appendChild(el('div','ph','WHO IS NAMED ON EACH ACCOUNT · YOUR ANSWERS'));
+    const bl=el('div','muted'); bl.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);';
+    bl.textContent='The app cannot see your beneficiary forms, so you tell it. Only the answer and the date are kept, never names. '+(bs.tracked?(bs.complete+' of '+bs.tracked+' complete (primary and backup named); '+bs.primary_only+' primary only; '+bs.none+' none; '+bs.unset+' not answered yet.'):'');
+    wrap.appendChild(bl);
+    wrap.appendChild(accountRegistryTable({fields:['beneficiary'], groups:['taxable','advantaged']})); }
   // ---- trust triggers ----
   const tr2=(g.trusts||{});
   wrap.appendChild(el('div','ph','TRUST DECISION SUPPORT · TRIGGERS'));
@@ -4512,6 +4518,7 @@ const _REG_FIELD_META={
   rate_pct:      {label:'APR %', kind:'num', step:0.1, width:56, tip:'Annual rate. Drives the avalanche ranking, the interest figure and the payment count.'},
   min_payment:   {label:'MIN PMT/mo', kind:'num', step:5, width:70, tip:'Minimum monthly payment. Required (with the APR) for the payoff simulator and the payments-left count.'},
   pay_in_full:   {label:'PAID IN FULL?', kind:'check', tip:'This card is paid off every statement — its balance is not real revolving debt. Excludes it from pay-first, alerts and the payoff simulator regardless of APR.'},
+  beneficiary:   {label:'WHO INHERITS?', kind:'ben', tip:'Who is named on this account\'s beneficiary form (or TOD/POD registration for a taxable account)? The form decides, not your will. This app cannot see the form: it keeps only your answer and the date you last checked it, never the names. COMPLETE = a primary AND a backup (contingent) person are named; PRIMARY ONLY = no backup; NONE = nobody named; — = not answered yet.'},
   is_mortgage:   {label:'MORTGAGE?', kind:'check', tip:'This IS the mortgage (name detection missed it) — moves it out of the non-mortgage debt table and into the mortgage payoff-vs-invest line.'},
 };
 
@@ -4612,7 +4619,16 @@ function accountRegistryTable(opts){
         // indistinguishable from "not looked at yet". That ambiguity made the panel nag forever
         // about checking balances Jason had deliberately excluded (they're committed to monthly
         // bills). "—" means still unanswered and IS what the prompt counts; NO answers it for good.
-        if(f==='ef' && a.ef_eligible!==false){
+        if(f==='beneficiary'){
+          const sel=document.createElement('select');
+          [['unset','— not answered'],['complete','COMPLETE (primary + backup)'],['primary_only','PRIMARY ONLY'],['none','NONE named']].forEach(([v,lbl])=>{
+            const o=document.createElement('option'); o.value=v; o.textContent=lbl; sel.appendChild(o); });
+          sel.value=a.beneficiary||'unset'; sel.title=meta.tip+' This account passes by: '+(a.beneficiary_kind||'beneficiary form')+'.';
+          sel.style.cssText='font-size:var(--font-size-sm);'+(sel.value==='complete'?'color:var(--color-positive,#4caf50);':(sel.value==='unset'?'color:var(--color-accent);':'color:var(--color-negative);'));
+          sel.onchange=()=>saveAcctRegistry(a.name,{beneficiary:sel.value});
+          td.appendChild(sel);
+          if(a.beneficiary_checked){ const d2=el('div','muted'); d2.style.cssText='font-size:var(--font-size-sm);'; d2.textContent='checked '+a.beneficiary_checked; td.appendChild(d2); }
+        } else if(f==='ef' && a.ef_eligible!==false){
           const sel=document.createElement('select');
           [['unset','—'],['yes','YES'],['no','NO']].forEach(([v,lbl])=>{
             const o=document.createElement('option'); o.value=v; o.textContent=lbl; sel.appendChild(o); });

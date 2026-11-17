@@ -307,11 +307,20 @@ def titling_audit(accounts, state=None):
         else:
             passes = "check registration"
             action = "review with counsel"
+        by_form = status in ("deferred", "roth", "hsa", "taxable")
+        bstate = (a.get("beneficiary_state") or "unset") if by_form else None
         rows.append({"account": a.get("name"), "tax_status": status,
                      "value": round(a.get("value") or 0, 2),
-                     "passes_by": passes, "action": action})
+                     "passes_by": passes, "action": action,
+                     "beneficiary_state": bstate, "beneficiary_checked": a.get("beneficiary_checked") if by_form else None,
+                     "bene_gap": (None if bstate is None else "no" if bstate == "complete" else "unknown" if bstate == "unset" else "yes")})
     rows.sort(key=lambda x: -(x.get("value") or 0))
-    return {"accounts": rows, "state": sf["name"], "tod_deed_available": sf["tod_deed_available"],
+    tracked = [r for r in rows if r["bene_gap"] is not None]
+    summary = {"tracked": len(tracked), "complete": sum(1 for r in tracked if r["beneficiary_state"] == "complete"),
+               "primary_only": sum(1 for r in tracked if r["beneficiary_state"] == "primary_only"),
+               "none": sum(1 for r in tracked if r["beneficiary_state"] == "none"),
+               "unset": sum(1 for r in tracked if r["beneficiary_state"] == "unset")}
+    return {"accounts": rows, "beneficiary_summary": summary, "state": sf["name"], "tod_deed_available": sf["tod_deed_available"],
             "note": ("Beneficiary designations and TOD registrations move assets OUTSIDE the will — "
                      "they win even when the will says otherwise, so they must be audited like code. "
                      f"{sf['name']} probate procedures and typical cost/timeline vary by state — "

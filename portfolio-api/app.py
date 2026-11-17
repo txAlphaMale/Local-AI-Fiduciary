@@ -7199,7 +7199,7 @@ def get_estate():
             costs = [h.get("cost_total") for h in hs if h.get("cost_total") is not None]
             accounts.append({"name": name, "tax_status": status, "value": val,
                              "gain_total": sum(gains) if gains else None,
-                             "basis_total": sum(costs) if costs else None})
+                             "basis_total": sum(costs) if costs else None, **_beneficiary_fields(name)})
             if status == "taxable":
                 for h in hs:
                     g_ = h.get("gain")
@@ -7285,7 +7285,7 @@ def get_continuity():
             costs = [h.get("cost_total") for h in hs if h.get("cost_total") is not None]
             accounts.append({"name": name, "tax_status": status, "value": val,
                              "gain_total": sum(gains) if gains else None,
-                             "basis_total": sum(costs) if costs else None})
+                             "basis_total": sum(costs) if costs else None, **_beneficiary_fields(name)})
         home_basis = cfg.get("estate_home_basis")
         re_accts = [a for a in d.get("accounts", [])
                     if (a.get("type") or "").strip().lower() in ("real estate", "real_estate", "realestate")
@@ -7315,7 +7315,9 @@ def get_continuity():
             sr = stepup_by_name.get(row["account"], {})
             account_map.append({"account": row["account"], "tax_status": row["tax_status"],
                                 "value": row["value"], "passes_by": row["passes_by"],
-                                "action": row["action"], "embedded_gain": sr.get("embedded_gain")})
+                                "action": row["action"], "embedded_gain": sr.get("embedded_gain"),
+                                "beneficiary_state": row.get("beneficiary_state"), "beneficiary_checked": row.get("beneficiary_checked"),
+                                "bene_gap": row.get("bene_gap")})
 
         contacts = icfg.get("contacts") or []
         executor = icfg.get("executor_name")
@@ -7374,7 +7376,7 @@ def get_continuity():
                 "net_worth": d.get("net_worth"),
                 "household": {"married": married, "filing_status": cfg.get("filing_status") or "mfj"},
                 "executor_name": executor, "will_location": will_loc,
-                "account_map": account_map, "liabilities": liabilities,
+                "account_map": account_map, "beneficiary_summary": titling.get("beneficiary_summary"), "liabilities": liabilities,
                 "taxable_embedded_gain": stepup.get("taxable_embedded_gain"),
                 "community_property_note": stepup.get("community_property_note"),
                 "contacts": contacts, "doc_currency": doc_currency, "checklist": checklist,
@@ -12604,6 +12606,24 @@ async def post_budgets_probe(req: Request):
             "providers": _budget.status()}
 
 
+BENEFICIARY_STATES = ("unset", "complete", "primary_only", "none")
+_BENE_MEMO = {"at": 0.0, "cfg": None}
+
+
+def _beneficiary_fields(name):
+    """What the household said about who is named on one account: state (complete = primary and contingent named, primary_only,
+    none named, unset = not answered) and the date it was last confirmed. Only the answer is stored, never the names."""
+    now = time.time()
+    if _BENE_MEMO["cfg"] is None or now - _BENE_MEMO["at"] > 5:
+        try:
+            _BENE_MEMO.update(at=now, cfg=(_read_accounts_cfg().get("accounts") or {}))
+        except Exception:
+            _BENE_MEMO.update(at=0.0, cfg={})
+    a = _BENE_MEMO["cfg"].get(name) or {}
+    st = a.get("beneficiary_state")
+    return {"beneficiary_state": st if st in BENEFICIARY_STATES and st != "unset" else None, "beneficiary_checked": a.get("beneficiary_checked")}
+
+
 def _read_accounts_cfg():
     """Per-account settings: {"defaults": {drip, fractional_ok}, "accounts": {name: {...}}}."""
     try:
@@ -12754,6 +12774,12 @@ def get_account_registry():
             r["is_mortgage"] = (bool(mort[nm]) if nm in mort
                                 else _is_mortgage_account(a, mort))
         else:
+            if st in ("deferred", "roth", "hsa", "taxable"):
+                r["applicable"] += ["beneficiary"]
+                _b = (acct_cfg.get("accounts") or {}).get(nm) or {}
+                r["beneficiary"] = _b.get("beneficiary_state") if _b.get("beneficiary_state") in BENEFICIARY_STATES else "unset"
+                r["beneficiary_checked"] = _b.get("beneficiary_checked")
+                r["beneficiary_kind"] = "TOD / POD registration" if st == "taxable" else "beneficiary form"
             if st != "na":
                 fl = _account_flags(nm, acct_cfg)
                 r["applicable"] += ["drip", "fractional_ok"]
@@ -12813,6 +12839,43 @@ async def post_account_registry(req: Request):
     if acct is None:
         return JSONResponse({"error": f"No account named {nm!r}."}, status_code=404)
     rejected, touched = [], []
+
+    if "beneficiary" in body or "beneficiary_checked" in body:
+        st_ = _account_tax_status(nm, acct.get("type"), acct.get("subtype"))
+        want = body.get("beneficiary")
+        chk = body.get("beneficiary_checked")
+        if st_ not in ("deferred", "roth", "hsa", "taxable"):
+            rejected.append({"field": "beneficiary", "reason": "This account does not pass by a beneficiary form or TOD registration."})
+        elif want is not None and want not in BENEFICIARY_STATES:
+            rejected.append({"field": "beneficiary", "reason": "Must be one of: " + ", ".join(BENEFICIARY_STATES) + "."})
+        else:
+            if chk not in (None, ""):
+                try:
+                    cd = datetime.date.fromisoformat(str(chk))
+                    if cd > datetime.date.today():
+                        raise ValueError
+                    chk = cd.isoformat()
+                except ValueError:
+                    rejected.append({"field": "beneficiary_checked", "reason": "Must be a date (YYYY-MM-DD) that is not in the future."})
+                    chk = "bad"
+            if chk != "bad":
+                old_ac = _read_accounts_cfg()
+                ac = _read_accounts_cfg()
+                cur = dict(ac["accounts"].get(nm) or {})
+                if want is not None:
+                    if want == "unset":
+                        cur.pop("beneficiary_state", None)
+                        cur.pop("beneficiary_checked", None)
+                    else:
+                        cur["beneficiary_state"] = want
+                        cur["beneficiary_checked"] = chk if chk not in (None, "") else datetime.date.today().isoformat()
+                elif chk not in (None, "") and cur.get("beneficiary_state"):
+                    cur["beneficiary_checked"] = chk
+                ac["accounts"][nm] = cur
+                store.write_json(ACCOUNTS_FILE, ac)
+                _BENE_MEMO["at"] = 0.0
+                _emit_config_changed(req, "/api/account-registry", old_ac, ac, summarize_keys={"accounts"})
+                touched += [k for k in ("beneficiary", "beneficiary_checked") if k in body]
 
     if any(k in body for k in ("drip", "fractional_ok")):
         old_ac = _read_accounts_cfg()
