@@ -369,3 +369,31 @@ class SettingsPage(unittest.TestCase):
         for needle in ("_isAdminUser() && {key:'lifemapcfg',label:'LIFE MAP'", "function lifemapSettingsContent()", "fetch('/api/lifemap/config')",
                        "lmsPost('/api/lifemap/reset'", "SAVE FROM TEXT", "RESET TO DEFAULTS", "STAGE WEIGHTS"):
             self.assertIn(needle, HTML, needle)
+
+
+class Onboarding(unittest.TestCase):
+    """New accounts start on LIFE MAP; existing accounts get a one-time invitation; the tour and wiki explain the page."""
+
+    def test_new_accounts_get_the_start_page_preference_and_a_failure_never_blocks_creation(self):
+        import app as appmod
+        with mock.patch.object(appmod.prefs, "update") as up:
+            appmod._new_account_defaults("u1")
+        up.assert_called_once_with("u1", set_={"fidStartPage": "lifemap"})
+        with mock.patch.object(appmod.prefs, "update", side_effect=ValueError("off")):
+            appmod._new_account_defaults("u2")                      # must not raise
+
+    def test_both_account_creation_paths_call_it(self):
+        src = open(os.path.join(HERE, "app.py"), encoding="utf-8").read()
+        self.assertEqual(len(re.findall(r"^\s+_new_account_defaults\(uid\)", src, re.M)), 2)           # first-run account and an admin-created viewer
+
+    def test_preference_keys_are_synced_on_both_sides(self):
+        import prefs
+        for k in ("fidStartPage", "fidLifePins", "fidLifeBannerSeen"):
+            self.assertIn(k, prefs.SYNC_KEYS, k)
+            self.assertIn("'" + k + "'", HTML.split("const PREFS_KEYS=")[1].split("];")[0], k)
+
+    def test_banner_tour_and_wiki_are_present(self):
+        for needle in ("function lifeMapBannerNode()", "body.appendChild(lifeMapBannerNode())", "OPEN LIFE MAP", "NOT NOW", "fidLifeBannerSeen",
+                       "title:'LIFE MAP: start here'", "title:'Look ahead, pins and your start page'", "W('life-map','Getting started'"):
+            self.assertIn(needle, HTML, needle)
+        self.assertIn("if(TAB!=='dashboard' || seen==='1' || start==='lifemap') return box;", HTML)            # only on the Dashboard, only until answered

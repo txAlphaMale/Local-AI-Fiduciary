@@ -1095,6 +1095,15 @@ def auth_status(request: Request):
             "viewer_allowed_write_paths": sorted(_VIEWER_ALLOWED_WRITE_PATHS)}
 
 
+def _new_account_defaults(uid):
+    """A brand-new account starts on the LIFE MAP page (saved as a preference, so it can be switched off and never touches existing accounts).
+    Prefs are off on the public demo and may fail: this must never block account creation."""
+    try:
+        prefs.update(uid, set_={"fidStartPage": "lifemap"})
+    except Exception:
+        pass
+
+
 @app.post("/api/auth/first-run")
 async def auth_first_run(request: Request):
     """Creates the ONE account this deployment will have. Refuses once any account exists —
@@ -1107,6 +1116,7 @@ async def auth_first_run(request: Request):
         uid, recovery_key = auth.create_user(body.get("username"), body.get("password"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    _new_account_defaults(uid)
     request.session["uid"] = uid
     request.session["ep"] = auth.session_epoch(uid)
     # 2026-08-06: session.created is emitted at the two (and only two) points that actually mint a
@@ -1340,6 +1350,7 @@ async def auth_create_user(request: Request):
         uid, recovery_key = auth.create_viewer(body.get("username"), body.get("password"))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    _new_account_defaults(uid)
     new_user = auth.get_user_by_id(uid)
     audit.emit("auth.user.created", request=request, actor=admin["id"], actor_name=admin["username"],
                resource="/api/auth/users",
