@@ -276,6 +276,19 @@
     .lm .lm-scroll table{min-width:560px}
     .lm .lm-scroll td{text-align:left}
   }
+  /* household report: a clean one-page sheet. On screen it is the report; for print a copy is placed on the body and everything else is hidden. */
+  #hhr-sheet-print{display:none}
+  .hhr-sheet h3{margin:10px 0 3px;font-size:12px;letter-spacing:1px}
+  .hhr-sheet p,.hhr-sheet li{margin:2px 0;line-height:1.45}
+  .hhr-sheet ul{margin:2px 0 2px 18px;padding:0}
+  @media print{
+    body.hhr-printing > *:not(#hhr-sheet-print){display:none !important}
+    body.hhr-printing #hhr-sheet-print{display:block !important;background:#fff !important;color:#000 !important;font:10px/1.35 Georgia,serif;padding:0;margin:0}
+    body.hhr-printing #hhr-sheet-print *{color:#000 !important;background:transparent !important;text-decoration:none !important;border-color:#000 !important}
+    body.hhr-printing #hhr-sheet-print h3{margin:6px 0 2px;font-size:10px;border-bottom:1px solid #000}
+    body.hhr-printing #hhr-sheet-print .hhr-src{display:none !important}
+    @page{size:portrait;margin:12mm;}
+  }
   @media print{
     table{display:table !important;overflow:visible !important;width:100% !important;table-layout:auto !important;font-size:10px !important;}
     .col-rs{display:none !important;}
@@ -1190,6 +1203,98 @@ function timelineContent(){
   return wrap;
 }
 
+
+// ---- HOUSEHOLD REPORT (RV-T5): one plain page written from the app's own numbers; every figure's panel is linked on screen ----
+const HHR={d:null,loading:false,err:null,pick:null,msg:'',cfgOpen:false};
+function hhrLoad(id){
+  HHR.loading=true; HHR.err=null;
+  const url=id?'/api/household-report/'+encodeURIComponent(id):'/api/household-report';
+  fetch(url).then(r=>r.json().then(d=>({ok:r.ok,d}))).then(({ok,d})=>{ HHR.loading=false;
+    if(!ok){ HHR.err=d.error||'Could not load the report.'; }
+    else if(id){ HHR.pick={report:d.report,text:d.text}; }
+    else { HHR.d=d; HHR.pick=null; }
+    render(); }).catch(e=>{ HHR.loading=false; HHR.err=String(e); render(); });
+}
+function hhrMoney(v){ return v==null?'—':(v<0?'-$':'$')+Math.abs(Math.round(v)).toLocaleString(); }
+function hhrDate(t){ return t?new Date(t*1000).toLocaleDateString():'—'; }
+function hhrSheet(rep){
+  const S=rep.sections||{}, src=rep.sources||{};
+  const box=el('div','hhr-sheet'); box.style.cssText='max-width:820px;font-size:var(--font-size-base);line-height:1.5;';
+  const link=(key)=>{ const s=src[key]; if(!s) return null; const a=el('a','hhr-src',s.panel+(s.age_note?' · '+s.age_note:'')); a.href='#'; a.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);margin-left:8px;font-weight:normal;letter-spacing:0;';
+    a.title='Open the panel this section comes from'; a.onclick=e=>{ e.preventDefault(); TAB=s.tab; if(s.subtab) setSubtab(s.tab,s.subtab); else render(); }; return a; };
+  const h=(txt,key)=>{ const x=el('h3',null,txt); const l=key&&link(key); if(l) x.appendChild(l); box.appendChild(x); };
+  const stale=(sec)=>{ if(sec&&sec.from_last_known){ const n=el('p','muted','Last known values from '+hhrDate(sec.last_known_date)+' ('+escHtml(sec.reason||'source unavailable')+').'); box.appendChild(n); } else if(sec&&sec.unavailable){ box.appendChild(el('p','muted',escHtml(sec.reason||'Not available.'))); } };
+  const top=el('div'); top.innerHTML='<b style="font-size:15px">'+escHtml(rep.household_name)+': quarterly household report</b><br><span class="muted">Report date '+hhrDate(rep.generated_at)+' · figures as of '+hhrDate(rep.as_of)+(rep.period&&rep.period.from?' · covers '+hhrDate(rep.period.from)+' to '+hhrDate(rep.period.to):' · first report, nothing earlier to compare')+'</span>'; box.appendChild(top);
+  const n=S.net_worth||{};
+  h('NET WORTH','net_worth'); stale(n);
+  if(!n.unavailable){ box.appendChild(el('p',null,'Now <b>'+hhrMoney(n.net_worth)+'</b>: assets '+hhrMoney(n.assets)+', debts '+hhrMoney(n.debts)+'.'));
+    if(n.change!=null){ box.appendChild(el('p',null,'Change since the last report: <b>'+hhrMoney(n.change)+'</b> (assets '+hhrMoney(n.assets_change)+', debts '+hhrMoney(n.debts_change)+').'));
+      if((n.biggest_changes||[]).length){ const ul=el('ul'); n.biggest_changes.forEach(c=>ul.appendChild(el('li',null,escHtml(c.name)+': '+hhrMoney(c.change)+(c.kind==='new'?' (new)':c.kind==='closed'?' (closed)':'')))); box.appendChild(ul); } } }
+  const w=S.where||{};
+  h('WHERE THE MONEY IS','where'); stale(w);
+  if((w.by_institution||[]).length){ const ul=el('ul'); w.by_institution.forEach(x=>ul.appendChild(el('li',null,escHtml(x.label)+': '+hhrMoney(x.value)))); box.appendChild(ul); }
+  if((w.by_kind||[]).length) box.appendChild(el('p',null,'By kind: '+w.by_kind.map(x=>escHtml(x.label)+' '+hhrMoney(x.value)).join(' · ')+(w.debts?' · debts '+hhrMoney(w.debts):'')));
+  const p=S.plan||{};
+  h('PLAN STATUS','plan'); stale(p);
+  (p.lines||[]).forEach(t=>box.appendChild(el('p',null,escHtml(t))));
+  const a=S.attention||{};
+  h('NEEDS ATTENTION','attention'); stale(a);
+  if(a.none) box.appendChild(el('p',null,'Nothing flagged right now.')); else if((a.items||[]).length){ const ul=el('ul'); a.items.forEach(i=>ul.appendChild(el('li',null,escHtml(i.text)))); box.appendChild(ul); }
+  const sf=S.safety||{};
+  h('SAFETY NET','safety'); stale(sf);
+  if(sf.emergency_fund){ const e=sf.emergency_fund; box.appendChild(el('p',null,'Emergency fund: <b>'+escHtml(e.months_covered)+'</b> months covered against a target of '+escHtml(e.target_months)+' ('+escHtml(e.status)+').')); }
+  if((sf.insurance_gaps||[]).length){ const ul=el('ul'); sf.insurance_gaps.forEach(g=>ul.appendChild(el('li',null,escHtml(g.line)+': need '+hhrMoney(g.need)+', in force '+hhrMoney(g.in_force)+', gap '+hhrMoney(g.gap)))); box.appendChild(ul); }
+  const i=S.if_something_happens||{};
+  h('IF SOMETHING HAPPENS','if_something_happens'); stale(i);
+  if(!i.unavailable){ box.appendChild(el('p',null,'Executor: '+escHtml(i.executor||'not recorded')+'. Will kept: '+escHtml(i.will_location||'not recorded')+'.'));
+    (i.contacts||[]).forEach(c=>box.appendChild(el('p',null,'Contact: '+escHtml(c.name)+(c.role?' ('+escHtml(c.role)+')':''))));
+    box.appendChild(el('p',null,escHtml(i.binder||''))); if(i.emergency_access) box.appendChild(el('p',null,escHtml(i.emergency_access))); }
+  (rep.notes||[]).forEach(t=>{ const x=el('p','muted',escHtml(t)); box.appendChild(x); });
+  const est=el('p','muted',escHtml(rep.estimate_label||'')); est.style.marginTop='10px'; box.appendChild(est);
+  const cl=el('p',null,escHtml(rep.closing||'')); cl.style.cssText='margin-top:6px;font-style:italic;'; box.appendChild(cl);
+  return box;
+}
+function hhrPrint(rep){
+  const old=document.getElementById('hhr-sheet-print'); if(old) old.remove();
+  const holder=el('div'); holder.id='hhr-sheet-print'; holder.appendChild(hhrSheet(rep)); document.body.appendChild(holder);
+  document.body.classList.add('hhr-printing');
+  const done=()=>{ document.body.classList.remove('hhr-printing'); const h=document.getElementById('hhr-sheet-print'); if(h) h.remove(); window.removeEventListener('afterprint',done); };
+  window.addEventListener('afterprint',done); window.print();
+}
+function hhrContent(){
+  const wrap=el('div','lm');
+  if(!HHR.d&&!HHR.loading&&!HHR.err) hhrLoad();
+  wrap.appendChild(el('div','ph','HOUSEHOLD REPORT'));
+  if(HHR.err){ wrap.appendChild(el('div','neg',escHtml(HHR.err))); if(!HHR.d) return wrap; }
+  if(!HHR.d){ wrap.appendChild(el('div','muted','Loading…')); return wrap; }
+  const d=HHR.d, admin=!!d.is_admin;
+  const shown=HHR.pick?HHR.pick.report:d.latest, text=HHR.pick?HHR.pick.text:d.text;
+  const intro=el('div','muted','A one-page summary written from the app\'s own numbers, with no model text: where the money is, how the plan stands, what needs attention, the safety net and what to do if something happens. A new one is made on the first day of each quarter'+(admin?'; GENERATE NOW makes one at any time':'')+'.'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);max-width:820px;'; wrap.appendChild(intro);
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin-bottom:var(--space-3);align-items:center;';
+  if(admin){ const g=el('button','mut-btn','GENERATE NOW'); g.onclick=()=>{ g.disabled=true; g.textContent='WORKING…'; _slvJson('/api/household-report/generate','POST',{}).then(x=>{ HHR.msg=x.ok?'Report made.':((x.d&&x.d.error)||'Failed'); HHR.d=null; HHR.pick=null; hhrLoad(); }); }; bar.appendChild(g); }
+  if(shown){ const pr=el('button','mut-btn','PRINT / SAVE AS PDF'); pr.onclick=()=>hhrPrint(shown); bar.appendChild(pr);
+    const cp=el('button','mut-btn','COPY REPORT'); cp.onclick=()=>{ _copyToClipboard(text||'').then(ok=>{ cp.textContent=ok?'COPIED':'COPY FAILED'; setTimeout(()=>{ cp.textContent='COPY REPORT'; },1500); }); }; bar.appendChild(cp); }
+  if(admin){ const cf=el('button','mut-btn',(HHR.cfgOpen?'▾':'▸')+' SETTINGS'); cf.onclick=()=>{ HHR.cfgOpen=!HHR.cfgOpen; render(); }; bar.appendChild(cf); }
+  wrap.appendChild(bar);
+  if(HHR.msg){ const m=el('div','muted',escHtml(HHR.msg)); m.style.marginBottom='var(--space-2)'; wrap.appendChild(m); }
+  if(admin&&HHR.cfgOpen){ const c=d.config||{}; const cb=el('div'); cb.style.cssText='border:1px dashed var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);line-height:1.8;max-width:820px;';
+    const save=(body)=>_slvJson('/api/household-report/config','POST',body).then(x=>{ HHR.msg=x.ok?'Saved.':((x.d&&x.d.error)||'Failed'); HHR.d=null; hhrLoad(); });
+    const nm=document.createElement('input'); nm.className='cfg-inp'; nm.value=c.household_name||''; nm.placeholder='Household name'; nm.maxLength=80; nm.style.minWidth='220px';
+    const nb=el('button','mut-btn','SAVE NAME'); nb.onclick=()=>save({household_name:nm.value}); const r1=el('div'); r1.appendChild(el('span','muted','Household name on the report: ')); r1.appendChild(nm); r1.appendChild(nb); cb.appendChild(r1);
+    const tg=(label,key)=>{ const b=el('button','mut-btn',(c[key]?'ON':'OFF')); b.onclick=()=>save({[key]:!c[key]}); const r=el('div'); r.appendChild(el('span','muted',label+' ')); r.appendChild(b); cb.appendChild(r); };
+    tg('Other household accounts (viewers) can open this report:','viewers_see'); tg('Name the emergency-access contact in the report (only when emergency access is switched on):','show_emergency_contact');
+    wrap.appendChild(cb); }
+  if(!shown){ wrap.appendChild(el('div','muted',admin?'No report yet. Press GENERATE NOW to make the first one.':'No report has been made yet.')); return wrap; }
+  if(HHR.pick){ const bk=el('button','mut-btn','← LATEST REPORT'); bk.onclick=()=>{ HHR.pick=null; render(); }; bk.style.marginBottom='var(--space-2)'; wrap.appendChild(bk); }
+  const sheet=hhrSheet(shown); sheet.style.cssText+=';border:1px solid var(--color-border-strong);padding:var(--space-4);'; wrap.appendChild(sheet);
+  if((d.reports||[]).length>1||admin){ const lh=el('div','ph','EARLIER REPORTS'); lh.style.marginTop='var(--space-4)'; wrap.appendChild(lh);
+    const ul=el('div'); ul.style.cssText='display:flex;flex-direction:column;gap:4px;margin-top:6px;';
+    d.reports.forEach(r=>{ const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;';
+      const o=el('button','mut-btn',hhrDate(r.generated_at)+(r.generated_by==='schedule'?' · quarterly':'')); o.onclick=()=>hhrLoad(r.id); row.appendChild(o);
+      if(admin){ const x=el('button','mut-btn','DELETE'); x.onclick=()=>{ if(confirm('Delete the report from '+hhrDate(r.generated_at)+'? The next report compares against the one before it.')) fetch('/api/household-report/'+encodeURIComponent(r.id),{method:'DELETE'}).then(()=>{ HHR.d=null; HHR.pick=null; hhrLoad(); }); }; row.appendChild(x); }
+      ul.appendChild(row); }); wrap.appendChild(ul); }
+  return wrap;
+}
 
 // ---- LIFE MAP (design: LIFE-STAGE-DESIGN-2026-11-16.md): topics by life stage, built from the other panels' own results ----
 // Everything that is a judgment (stages, weights, wording, thresholds) comes from the server's editable config; this page only draws it.
@@ -3459,7 +3564,7 @@ const SCHEDULE_RUN_ENDPOINTS = {
   analysis: '/api/run-analysis', discovery: '/api/run-discovery',
   opportunities: '/api/run-opportunities', rebalance: '/api/run-rebalance',
   retirement: '/api/run-retirement', strategist: '/api/run-strategist', universe: '/api/run-universe', scout: '/api/run-scout', market_data: '/api/run-market-data', signals: '/api/run-signals',
-  backtest: '/api/run-backtest', narrative: '/api/run-narrative'};
+  backtest: '/api/run-backtest', narrative: '/api/run-narrative', household_report: '/api/run-household-report'};
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
   if(!url){ alert('No manual trigger wired for "'+kind+'" yet.'); return; }
@@ -4441,6 +4546,7 @@ function planContent(r){
     {key:'assumptions',label:'ASSUMPTIONS',build:assumptionsSec},
     {key:'fi',label:'FI · MONTE CARLO',build:fiSec},
     {key:'timeline',label:'TIMELINE',build:()=>timelineContent()},
+    {key:'hhreport',label:'HOUSEHOLD REPORT',build:()=>hhrContent()},
     haveSS && {key:'ss',label:'SOCIAL SECURITY',build:ssSec},
     haveBridge && {key:'bridge',label:'ACA BRIDGE',build:bridgeSec},
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},

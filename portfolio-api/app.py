@@ -57,6 +57,7 @@ import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/eff
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
+import household_report   # RV-T5 quarterly household report (pure composition of existing engines)
 import lifemap       # LIFE MAP: which life topics need attention at this stage (config-driven)
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
@@ -2464,6 +2465,7 @@ _JOB_KINDS = {
     "retirement":    ("Retirement projection",     False, lambda: _retirement()),
     "backtest":      ("Decision backtest vs SPY",  False, lambda: _do_backtest()),
     "narrative":     ("State-of-the-Wealth brief", True,  lambda: _do_narrative()),
+    "household_report": ("Quarterly household report", False, lambda: _do_household_report()),
     "knowledge_reindex": ("Knowledge reindex",     True,  lambda: knowledge.ensure_index(force=True)),
     "earnings_brief": ("Post-earnings brief refresh", True, lambda: _do_earnings_brief()),
     "universe":      ("Universe & first screen",   False, lambda: _do_universe()),
@@ -2757,7 +2759,7 @@ def get_jobs():
 # re-read every minute, so edits take effect without a restart.
 INTERNAL_SCHEDULER = os.environ.get("INTERNAL_SCHEDULER", "1").lower() in ("1", "true", "yes", "on")
 SCHEDULE_FILE = os.environ.get("SCHEDULE_FILE", "/data/schedule.json")
-_SCHEDULE_ORDER = ["scout", "universe", "market_data", "signals", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative"]
+_SCHEDULE_ORDER = ["scout", "universe", "market_data", "signals", "analysis", "discovery", "opportunities", "rebalance", "retirement", "strategist", "backtest", "narrative", "household_report"]
 _SCHEDULE_DEFAULTS = {
     # Inside the 01:00-06:00 scavenging window (Jason 2026-11-12); after SEC rebuilds its bulk file (~2 a.m. Central).
     "scout":         {"label": "Scout notes for sleeve candidates (idea scavenger)", "hour": 1, "minute": 30, "dom": "*", "dow": "*", "cadence": "daily"},
@@ -2772,6 +2774,7 @@ _SCHEDULE_DEFAULTS = {
     "strategist":    {"label": "Strategist review",             "hour": 19, "minute": 0, "dom": "*", "dow": "4", "cadence": "weekly · Friday"},
     "backtest":      {"label": "Decision backtest vs SPY",      "hour": 20, "minute": 0, "dom": "*", "dow": "6", "cadence": "weekly · Sunday"},
     "narrative":     {"label": "State-of-the-Wealth brief",     "hour":  7, "minute": 30, "dom": "*", "dow": "0", "cadence": "weekly · Monday"},
+    "household_report": {"label": "Quarterly household report",  "hour":  9, "minute": 0, "dom":  1,  "dow": "*", "cadence": "quarterly · 1st of Jan, Apr, Jul, Oct"},
 }
 def _read_schedule():
     """Defaults with saved hour/minute overrides merged on top (validated 0-23 / 0-59)."""
@@ -5167,6 +5170,166 @@ def _timeline_run(inp, notes):
     res["inputs"] = {k: v for k, v in inp.items() if k not in ("rmd_divisors",)}
     res["tax_year"] = tax.TAX_YEAR
     return res
+
+
+# ---- Quarterly household report (RV-T5 / TASK-RV-039): written by the app from its own engines' outputs, kept encrypted, one page ----
+HHR_FILE = os.environ.get("HHR_FILE", "/data/household-report.json")
+HHR_KEEP = 40
+HHR_CONFIG_DEFAULT = {"household_name": "", "viewers_see": True, "show_emergency_contact": False}
+_hhr_lock = threading.Lock()
+
+
+def _hhr_read():
+    try:
+        d = store.read_json_strict(HHR_FILE) or {}
+    except Exception:
+        d = {}
+    cfg = {**HHR_CONFIG_DEFAULT, **(d.get("config") if isinstance(d.get("config"), dict) else {})}
+    return cfg, (d.get("reports") if isinstance(d.get("reports"), list) else [])
+
+
+def _hhr_write(cfg, reports):
+    store.write_json(HHR_FILE, {"config": cfg, "reports": reports[-HHR_KEEP:]})
+
+
+def _hhr_sources():
+    """Each engine's own output, read the way the other panels read it; a failing source becomes {'_error': ...} and the report falls back to the last known values."""
+    return {"data": _lifemap_source(_data), "retirement": _lifemap_source(get_retirement), "alerts": _lifemap_source(_alerts_digest),
+            "cashdebt": _lifemap_source(get_cashdebt), "insurance": _lifemap_source(get_insurance), "continuity": _lifemap_source(get_continuity),
+            "emergency": _lifemap_source(lambda: {"config": emergency.get_config()})}
+
+
+def _hhr_generate(who="admin"):
+    with _hhr_lock:
+        cfg, reports = _hhr_read()
+        rep = household_report.build(_hhr_sources(), prev=(reports[-1] if reports else None), config=cfg)
+        rep["generated_by"] = who
+        if reports and reports[-1].get("id") == rep["id"]:
+            rep["id"] += "b"
+        reports = reports + [rep]
+        _hhr_write(cfg, reports)
+    return rep
+
+
+_HHR_MANUAL = threading.Event()      # set by RUN NOW so the queued job writes a report even outside a quarter's first month
+
+
+def _do_household_report():
+    """Scheduled job: runs on the 1st of every month but writes a report only in the first month of a quarter (the schedule has no month field).
+    RUN NOW (SETTINGS > SCHEDULE) always writes one."""
+    manual = _HHR_MANUAL.is_set()
+    _HHR_MANUAL.clear()
+    if not manual and datetime.date.today().month not in (1, 4, 7, 10):
+        return {"skipped": "not the first month of a quarter"}
+    rep = _hhr_generate("admin" if manual else "schedule")
+    try:
+        notifications.notify_reminder("Your quarterly household report is ready", "Open PLAN > HOUSEHOLD REPORT. This message carries no figures.")
+    except Exception:
+        pass
+    return {"id": rep["id"]}
+
+
+def _hhr_viewer_ok(request):
+    """(user, admin?, error response). A viewer may read the report only while the admin setting allows it."""
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    if not user:
+        return None, False, JSONResponse({"error": "sign in required"}, status_code=401)
+    admin = auth.is_admin(user)
+    if not admin and not _hhr_read()[0]["viewers_see"]:
+        return user, False, JSONResponse({"error": "the household report is not shared with this account"}, status_code=403)
+    return user, admin, None
+
+
+def _hhr_public(rep, cfg=None):
+    """The report as shown on screen: the per-account snapshot used for change detection stays server-side."""
+    return {k: v for k, v in rep.items() if k != "accounts_snapshot"}
+
+
+@app.get("/api/household-report")
+def get_household_report(request: Request):
+    user, admin, bad = _hhr_viewer_ok(request)
+    if bad:
+        return bad
+    cfg, reports = _hhr_read()
+    latest = _hhr_public(reports[-1]) if reports else None
+    return {"latest": latest, "text": household_report.to_text(reports[-1]) if reports else None, "is_admin": admin,
+            "reports": [{"id": r["id"], "generated_at": r["generated_at"], "generated_by": r.get("generated_by")} for r in reversed(reports)],
+            "config": cfg if admin else {"household_name": cfg["household_name"]}}
+
+
+@app.get("/api/household-report/{rid}")
+def get_household_report_one(rid: str, request: Request):
+    user, admin, bad = _hhr_viewer_ok(request)
+    if bad:
+        return bad
+    rep = next((r for r in _hhr_read()[1] if r.get("id") == rid), None)
+    if not rep:
+        return JSONResponse({"error": "no such report"}, status_code=404)
+    return {"report": _hhr_public(rep), "text": household_report.to_text(rep)}
+
+
+@app.post("/api/household-report/generate")
+def post_household_report_generate(request: Request):
+    user = _require_admin(request)
+    if not user:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    rep = _hhr_generate("admin")
+    audit.emit("household_report.generated", request=request, actor=request.session.get("uid"), resource="/api/household-report/generate", detail={"id": rep["id"]})
+    return {"ok": True, "id": rep["id"]}
+
+
+@app.delete("/api/household-report/{rid}")
+async def delete_household_report(rid: str, request: Request):
+    user = _require_admin(request)
+    if not user:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    with _hhr_lock:
+        cfg, reports = _hhr_read()
+        keep = [r for r in reports if r.get("id") != rid]
+        if len(keep) == len(reports):
+            return JSONResponse({"error": "no such report"}, status_code=404)
+        _hhr_write(cfg, keep)
+    audit.emit("household_report.deleted", request=request, actor=request.session.get("uid"), resource="/api/household-report", detail={"id": rid})
+    return {"ok": True}
+
+
+@app.post("/api/run-household-report")
+def run_household_report_ep():
+    """Manual trigger for the 'Quarterly household report' scheduled job (admin: the global write gate blocks viewers from every POST /api/run-*)."""
+    _HHR_MANUAL.set()
+    jid, created = _enqueue("household_report", source="manual")
+    if not created:
+        _HHR_MANUAL.clear()
+    return {"ok": True, "job_id": jid, "created": created}
+
+
+@app.post("/api/household-report/config")
+async def post_household_report_config(request: Request):
+    user = _require_admin(request)
+    if not user:
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    with _hhr_lock:
+        cfg, reports = _hhr_read()
+        old = dict(cfg)
+        for k in ("viewers_see", "show_emergency_contact"):
+            if k in body:
+                if not isinstance(body[k], bool):
+                    return JSONResponse({"error": f"{k} must be true or false"}, status_code=400)
+                cfg[k] = body[k]
+        if "household_name" in body:
+            if not isinstance(body["household_name"], str) or len(body["household_name"]) > 80:
+                return JSONResponse({"error": "household_name must be text of at most 80 characters"}, status_code=400)
+            cfg["household_name"] = body["household_name"].strip()
+        _hhr_write(cfg, reports)
+    _emit_config_changed(request, "/api/household-report/config", old, cfg)
+    return {"ok": True, "config": cfg}
 
 
 def _timeline_summary_for_chat(res, years=10):
