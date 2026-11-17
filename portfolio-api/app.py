@@ -9830,6 +9830,10 @@ def get_benefits():
              "match_t2_pct": cfg.get("k401_match_t2_pct"),
              "match_t2_rate": cfg.get("k401_match_t2_rate"),
              "biweekly_total": cfg.get("k401_biweekly_total"),
+             "spouse_salary": cfg.get("income_spouse"),
+             "spouse_pretax_pct": cfg.get("k401_spouse_pretax_pct"), "spouse_aftertax_pct": cfg.get("k401_spouse_aftertax_pct"),
+             "spouse_match_t1_pct": cfg.get("k401_spouse_match_t1_pct"), "spouse_match_t1_rate": cfg.get("k401_spouse_match_t1_rate"),
+             "spouse_match_t2_pct": cfg.get("k401_spouse_match_t2_pct"), "spouse_match_t2_rate": cfg.get("k401_spouse_match_t2_rate"),
              "pay_frequency": cfg.get("k401_pay_frequency"),
              "pay_periods_custom": cfg.get("k401_pay_periods_custom"),
              "plan_aftertax": cfg.get("plan_aftertax"),
@@ -10198,7 +10202,7 @@ def get_cashdebt():
                           # a figure the user entered wins; otherwise the provider's (Plaid /liabilities/get)
                           "rate_pct": rates.get(nm) if rates.get(nm) not in (None, "") else a.get("apr_pct"),
                           "min_payment": min_payments.get(nm) if min_payments.get(nm) not in (None, "") else a.get("min_payment"),
-                          "pay_in_full": bool(pay_in_full.get(nm))})
+                          "pay_in_full": bool(pay_in_full.get(nm)), "fi_exclude": bool((cfg.get("fi_exclude_overrides") or {}).get(nm))})
     inputs = {"cash_total": _cash_total(d),
               "annual_expenses": exp,
               "needs_pct": ret.get("needs_pct_of_expenses") or 65,
@@ -10491,6 +10495,13 @@ DEFAULT_INSURANCE = {"income_self": None, "income_spouse": None,
                      "k401_match_t1_pct": None, "k401_match_t1_rate": None,
                      "k401_match_t2_pct": None, "k401_match_t2_rate": None,
                      "k401_biweekly_total": None,
+                     # A spouse's 401(k) (entered in PLAN>BENEFITS when there is spouse income): counted in the FI annual-savings estimate
+                     "k401_spouse_pretax_pct": None, "k401_spouse_aftertax_pct": 0.0,
+                     "k401_spouse_match_t1_pct": None, "k401_spouse_match_t1_rate": None,
+                     "k401_spouse_match_t2_pct": None, "k401_spouse_match_t2_rate": None,
+                     # fi_exclude_overrides{debt name: bool}: fixed-term debts the household opts to leave OUT of retirement spending when they
+                     # end before the target age (CASH·DEBT column). Same merge-not-replace save semantics as pay_in_full_overrides.
+                     "fi_exclude_overrides": {},
                      # Pay-frequency for the salary cross-check above (Jason, 2026-07-18): used to
                      # be hardcoded to biweekly. "biweekly" default preserves old behavior for
                      # anyone who already saved a per-paycheck total under that assumption.
@@ -10589,6 +10600,8 @@ async def post_insurance_config(req: Request):
               "k401_pretax_pct", "k401_aftertax_pct", "k401_match_t1_pct", "k401_match_t1_rate",
               "k401_match_t2_pct", "k401_match_t2_rate", "k401_biweekly_total",
               "k401_pay_periods_custom", "hsa_contribution",
+              "k401_spouse_pretax_pct", "k401_spouse_aftertax_pct", "k401_spouse_match_t1_pct", "k401_spouse_match_t1_rate",
+              "k401_spouse_match_t2_pct", "k401_spouse_match_t2_rate",
               "debt_extra_monthly", "roth_ira_contribution_self", "roth_ira_contribution_spouse",
               "roth_ira_monthly_self", "roth_ira_monthly_spouse"):
         if k in body:
@@ -10620,6 +10633,11 @@ async def post_insurance_config(req: Request):
         for nm, v in list(body["is_mortgage_overrides"].items())[:30]:
             mo[str(nm)[:120]] = bool(v)
         cfg["is_mortgage_overrides"] = mo
+    if isinstance(body.get("fi_exclude_overrides"), dict):
+        fe = dict(cfg.get("fi_exclude_overrides") or {})
+        for nm, v in list(body["fi_exclude_overrides"].items())[:60]:
+            fe[str(nm)[:120]] = bool(v)
+        cfg["fi_exclude_overrides"] = fe
     if isinstance(body.get("pay_in_full_overrides"), dict):
         # MERGE, same reasoning as is_mortgage_overrides just above.
         pf = dict(cfg.get("pay_in_full_overrides") or {})
@@ -11473,6 +11491,19 @@ def _cashflow_annual():
 DEBT_WORDS = ("loan", "mortgage", "student", "credit card", "debt", "financing", "lease", "interest")
 
 
+def _debt_like_name(name):
+    """Name looks like a loan or mortgage payment. Income-style categories ('Interest Inc', dividends) are never debt."""
+    low = str(name).lower()
+    if any(w in low for w in ("income", " inc", "dividend", "refund", "rebate", "cashback", "cash back", "reward")):
+        return False
+    return any(w in low for w in DEBT_WORDS)
+
+
+def _card_payment_name(name):
+    low = str(name).lower()
+    return "credit card" in low and ("payment" in low or "pymt" in low)
+
+
 def _categories_from_cashflow(data):
     """Rows [{category, group, type, total}] (positive totals, largest first) from Monarch's byCategory list, or []. Defensive: any shape that
     does not match yields nothing rather than a wrong figure. `debt_like` marks categories whose name suggests a loan or mortgage payment
@@ -11490,7 +11521,8 @@ def _categories_from_cashflow(data):
             continue
         name = str(cat.get("name"))
         rows.append({"category": name, "group": grp.get("name"), "type": grp.get("type"), "total": round(abs(tot), 2),
-                     "debt_like": any(w in name.lower() for w in DEBT_WORDS)})
+                     "debt_like": _debt_like_name(name),
+                     "card_payment": _card_payment_name(name)})
     rows.sort(key=lambda r: -r["total"])
     return rows
 
@@ -11516,13 +11548,54 @@ def get_cashflow_breakdown():
     debt = [r for r in exp if r["debt_like"]]
     return {"available": bool(rows), "generated_at": int(now), "expenses": exp[:25], "expense_total": round(sum(r["total"] for r in exp), 2),
             "debt_like_total": round(sum(r["total"] for r in debt), 2), "debt_like": debt,
+            "card_payments": [r for r in exp if r.get("card_payment")],
+            "card_payments_total": round(sum(r["total"] for r in exp if r.get("card_payment")), 2),
             "income_total": round(sum(r["total"] for r in rows if r["type"] == "income"), 2),
             "transfers_total": round(sum(r["total"] for r in rows if r["type"] == "transfer"), 2),
             "note": "Monarch decides which categories are expenses. Loan and mortgage payments usually count as expenses; payments to a credit card are usually "
                     "a transfer (the purchases themselves are the expense). Categories flagged 'looks like debt' are guessed from their names."}
 
 
-def _savings_breakdown(cf_inc, cf_exp, benefits_res, override=None):
+def _spouse_401k(icfg):
+    """A spouse's yearly 401(k) money from the household register: deferral, after-tax and employer match (same match rule as the owner's).
+    None when there is no spouse income or no spouse 401(k) details have been entered."""
+    sal = icfg.get("income_spouse")
+    pre, aft = icfg.get("k401_spouse_pretax_pct"), icfg.get("k401_spouse_aftertax_pct")
+    if not sal or sal <= 0 or (pre is None and not aft):
+        return None
+    m = benefits.match_analysis(sal, pre, icfg.get("k401_spouse_match_t1_pct"), icfg.get("k401_spouse_match_t1_rate"),
+                                icfg.get("k401_spouse_match_t2_pct"), icfg.get("k401_spouse_match_t2_rate"))
+    return {"employee": round(sal * float(pre or 0) / 100.0, 2), "after_tax": round(sal * float(aft or 0) / 100.0, 2), "match": m["earned_match_dollars"]}
+
+
+def _debt_fi_exclusion(age, target_age, rows):
+    """Opt-in (CASH·DEBT column): fixed-term debts the household wants left OUT of retirement spending because they end before the target age.
+    A flagged debt counts only if its own payments run out (at its own payment, nothing else changing) no later than the target age; otherwise
+    its payment continues into retirement and is NOT deducted. -> {items, total_annual}."""
+    items, total = [], 0.0
+    for r in rows or []:
+        if not r.get("fi_exclude"):
+            continue
+        pay, months = r.get("min_payment"), r.get("remaining_payments")
+        it = {"name": r.get("name"), "monthly_payment": pay, "months_left": months, "applied": False}
+        if not isinstance(pay, (int, float)) or pay <= 0:
+            it["reason"] = "No monthly payment is entered for this debt, so nothing can be deducted."
+        elif not isinstance(months, (int, float)):
+            it["reason"] = "The number of payments left cannot be worked out (check the rate and payment), so nothing is deducted."
+        elif age is None or target_age is None:
+            it["reason"] = "Your age or target age is not set, so the end date cannot be compared with it."
+        else:
+            it["ends_age"] = round(age + months / 12.0, 1)
+            if it["ends_age"] <= target_age:
+                it["applied"], it["annual"] = True, round(pay * 12.0, 2)
+                total += it["annual"]
+            else:
+                it["reason"] = f"It ends at about age {it['ends_age']}, after your target age {target_age}, so its payment continues into retirement and is kept in the expenses."
+        items.append(it)
+    return {"items": items, "total_annual": round(total, 2)}
+
+
+def _savings_breakdown(cf_inc, cf_exp, benefits_res, override=None, spouse=None):
     """Annual savings for the FI projection, with its parts. Monarch's income is the pay that reaches the bank, i.e. AFTER payroll 401(k)
     deferrals, so income minus expenses is only the cash left over; the money that goes into the 401(k) straight from the paycheck, and the
     employer's match, never appear in it. Total = cash left over + 401(k) deferrals (pre-tax) + after-tax 401(k) + employer match, taken
@@ -11543,9 +11616,15 @@ def _savings_breakdown(cf_inc, cf_exp, benefits_res, override=None):
         out["employer_match"] = round(float((k.get("match") or {}).get("earned_match_dollars") or 0.0), 2)
         at = (b.get("facts") or {}).get("aftertax_pct")
         out["k401_after_tax"] = round(float(sal) * float(at) / 100.0, 2) if at else 0.0
-        out["notes"].append("Only your own 401(k) is counted (a spouse's contributions are not in the Benefits panel). HSA contributions are left out because the plan treats the HSA as a medical reserve.")
-    parts = [out["left_over"], out["k401_employee"], out["k401_after_tax"], out["employer_match"]]
-    out["total"] = round(sum(x for x in parts if x is not None), 2) if out["left_over"] is not None or out["k401_employee"] or out["employer_match"] else None
+        out["notes"].append("HSA contributions are left out because the plan treats the HSA as a medical reserve.")
+    out["k401_spouse"] = out["k401_spouse_after_tax"] = out["spouse_match"] = 0.0
+    if spouse:
+        out["k401_spouse"], out["k401_spouse_after_tax"], out["spouse_match"] = spouse["employee"], spouse["after_tax"], spouse["match"]
+    parts = [out["left_over"], out["k401_employee"], out["k401_after_tax"], out["employer_match"], out["k401_spouse"], out["k401_spouse_after_tax"], out["spouse_match"]]
+    out["total"] = round(sum(x for x in parts if x is not None), 2) if (out["left_over"] is not None or out["k401_employee"] or out["employer_match"]
+                                                                       or out["k401_spouse"] or out["spouse_match"]) else None
+    if spouse is None and (benefits_res or {}).get("facts", {}).get("spouse_salary"):
+        out["notes"].append("There is spouse income but no spouse 401(k) details are entered in PLAN > BENEFITS, so a spouse's contributions and match are NOT included.")
     if out["left_over"] is None:
         out["notes"].append("Monarch cash flow is not available, so the cash left over is unknown and is not included.")
     else:
@@ -11978,6 +12057,20 @@ def _retirement():
     if exp_override is None or sav_override is None:
         cf_inc, cf_exp = _cashflow_annual()
     annual_expenses = exp_override if exp_override is not None else cf_exp
+    monarch_expenses = cf_exp
+    # Opt-in: fixed-term debts that end before the target age are left out of RETIREMENT spending (the savings estimate below keeps using the
+    # actual cash flow, because the money still goes to the lender today). Never applied on top of an expenses figure the user typed.
+    try:
+        _age_now = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
+        _debt_rows = ((get_cashdebt() or {}).get("avalanche") or {}).get("rows") or []
+        debt_ex = _debt_fi_exclusion(_age_now, cfg.get("target_age"), _debt_rows)
+    except Exception:
+        debt_ex = {"items": [], "total_annual": 0.0}
+    debt_ex["applied"] = bool(exp_override is None and cf_exp is not None and debt_ex["total_annual"] > 0)
+    if debt_ex["applied"]:
+        annual_expenses = max(0.0, round(cf_exp - debt_ex["total_annual"], 2))
+    elif debt_ex["items"] and exp_override is not None:
+        debt_ex["note"] = "You typed your own Annual expenses, so no debt payments are deducted from it automatically."
     # Healthcare as a yearly expense line (2026-11-10): the typical retirement-year cost (Fidelity estimate or the household's own figure,
     # spread over 65-90). ON by default (Jason, 2026-11-10: the tool should make younger users plan for it early); the household can turn it
     # off in PLAN because Monarch's trailing expenses already contain today's premiums and medical bills, so it can partly double count.
@@ -11997,7 +12090,7 @@ def _retirement():
         _bres = get_benefits()
     except Exception:
         _bres = None
-    sav_break = _savings_breakdown(cf_inc, cf_exp, _bres, sav_override)
+    sav_break = _savings_breakdown(cf_inc, cf_exp, _bres, sav_override, spouse=_spouse_401k(_read_insurance_cfg()))
     annual_savings = sav_break["total"]
 
     notes = [
@@ -12024,7 +12117,7 @@ def _retirement():
                    "healthcare_line": {**_hc, "included": bool(_hc_on and base_expenses is not None),
                                        "fi_number_without": (round(base_expenses / wr, 2) if (base_expenses and wr) else None),
                                        "fi_number_with": (round((base_expenses + _hc["annual"]) / wr, 2) if (base_expenses and wr and _hc["annual"] is not None) else None)},
-                   "annual_savings": annual_savings, "savings_breakdown": sav_break,
+                   "annual_savings": annual_savings, "savings_breakdown": sav_break, "debt_exclusion": debt_ex, "monarch_expenses": monarch_expenses,
                    # current_age/spouse_age (2026-07-23, superseding the same-day fix that added a
                    # manual "Spouse age" input): DERIVED from birth_year/spouse_birth_year via
                    # _derive_age() rather than manually entered — Jason caught, entering spouse

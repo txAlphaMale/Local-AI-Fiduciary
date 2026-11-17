@@ -1348,6 +1348,7 @@ function savBreakHtml(sb){
   if(sb.source==='override') return 'Annual savings: you entered '+u(sb.total)+', which replaces the estimate (clear the box to go back to it).';
   const parts=[]; if(sb.left_over!=null) parts.push(u(sb.left_over)+' cash left over (Monarch income minus expenses)');
   if(sb.k401_employee) parts.push(u(sb.k401_employee)+' your 401(k)'); if(sb.k401_after_tax) parts.push(u(sb.k401_after_tax)+' after-tax 401(k)'); if(sb.employer_match) parts.push(u(sb.employer_match)+' employer match');
+  if(sb.k401_spouse) parts.push(u(sb.k401_spouse)+' spouse 401(k)'); if(sb.k401_spouse_after_tax) parts.push(u(sb.k401_spouse_after_tax)+' spouse after-tax 401(k)'); if(sb.spouse_match) parts.push(u(sb.spouse_match)+' spouse employer match');
   return '<b>Estimated annual savings'+(sb.total!=null?' '+u(sb.total):'')+'</b> = '+(parts.length?parts.join(' + '):'not enough information')+'. '+(sb.notes||[]).map(e).join(' ')+' Type a number in the box to replace the whole total.';
 }
 function loadExpenseBreakdown(box){
@@ -1357,7 +1358,7 @@ function loadExpenseBreakdown(box){
     if(!d.available){ box.textContent=d.reason||'Monarch category detail is not available.'; return; }
     const rows=d.expenses.slice(0,14).map(x=>'<tr><td style="padding:2px 10px 2px 0;">'+e(x.category)+(x.debt_like?' <span title="Looks like a loan or mortgage payment, going by the name" style="color:var(--color-accent)">(looks like debt)</span>':'')+'</td><td class="muted" style="padding:2px 10px;">'+e(x.group||'')+'</td><td style="padding:2px 0;text-align:right;">'+u(x.total)+'</td></tr>').join('');
     box.innerHTML='<div>Counted as expenses: <b>'+u(d.expense_total)+'</b>. Categories that look like loan or mortgage payments: <b>'+u(d.debt_like_total)+'</b>. Transfers (left out of both income and expenses): '+u(d.transfers_total)+'.</div>'+
-      '<table style="margin:4px 0;border-collapse:collapse;">'+rows+'</table><div>'+e(d.note)+'</div>'+
+      '<table style="margin:4px 0;border-collapse:collapse;">'+rows+'</table>'+(d.card_payments_total>0?'<div style="color:var(--color-accent);margin:4px 0;">⚑ '+u(d.card_payments_total)+' of the expenses is a <b>credit-card payment</b> category. If that card is linked in Monarch, its purchases are already counted as expenses above, so this may count the same money twice. Check in Monarch whether this category should be a transfer; the fix is there, because this app only reports what Monarch counts. To correct the figure here meanwhile, type a lower Annual expenses.</div>':'')+'<div>'+e(d.note)+'</div>'+
       '<div style="margin-top:4px;">If some of these payments will end before you retire (a car or student loan), type a lower number in <b>Annual expenses</b> to say what retirement spending will really be. That changes the FI target only; the savings estimate keeps using your actual cash flow, because the money still goes to the lender today.</div>';
   }).catch(()=>{ box.textContent='Could not load the breakdown.'; });
 }
@@ -4174,6 +4175,9 @@ function planContent(r){
       `<div style="margin-bottom:var(--space-2);">Target age <input id="ret-tage" type="number" value="${pv(a.target_age)}" style="width:54px;"/> <span class="muted" style="font-size:var(--font-size-sm);">(current age is derived from birth year below — no longer entered separately)</span></div>`+
       `<div style="margin-bottom:var(--space-2);">Annual expenses <input id="ret-exp" type="number" value="${a.expenses_source==='override'?Math.round(a.annual_expenses_base!=null?a.annual_expenses_base:a.annual_expenses):''}" placeholder="${a.expenses_source==='monarch_cashflow'?'Monarch '+Math.round(a.annual_expenses_base!=null?a.annual_expenses_base:a.annual_expenses):'set target $'}" style="width:120px;"/> &nbsp; Annual savings <input id="ret-sav" type="number" value="" placeholder="${a.annual_savings!=null?Math.round(a.annual_savings):'set $'}" style="width:120px;"/></div>`+
       `<div id="ret-sav-break" class="muted" style="font-size:var(--font-size-sm);line-height:1.5;margin:-2px 0 var(--space-2);">${savBreakHtml(a.savings_breakdown)}</div>`+
+      (a.debt_exclusion&&(a.debt_exclusion.items||[]).length?`<div class="muted" style="font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-2);"><b>Debt payments left out of retirement spending (your choice in CASH·DEBT):</b> `+
+        a.debt_exclusion.items.map(i=>esc(i.name)+': '+(i.applied?('ends about age '+i.ends_age+', so $'+Math.round(i.annual).toLocaleString()+'/yr is deducted'):('not deducted. '+esc(i.reason||'')))).join(' · ')+
+        (a.debt_exclusion.note?' '+esc(a.debt_exclusion.note):'')+(a.debt_exclusion.applied?` Total deducted: $${Math.round(a.debt_exclusion.total_annual||0).toLocaleString()}/yr from the $${Math.round(a.monarch_expenses||0).toLocaleString()} Monarch shows.`:'')+`</div>`:'')+
       `<details id="ret-exp-details" style="margin-bottom:var(--space-2);"><summary class="muted" style="cursor:pointer;font-size:var(--font-size-sm);">What is in my expenses figure? (Monarch categories, last 12 months)</summary><div id="ret-exp-body" class="muted" style="font-size:var(--font-size-sm);line-height:1.5;margin-top:4px;">Loading…</div></details>`+
       `<div style="margin-bottom:var(--space-2);">Healthcare in retirement, lifetime total <input id="ret-hc" type="number" step="1000" min="0" value="${a.healthcare_need_override!=null?Math.round(a.healthcare_need_override):''}" placeholder="${((r.hsa&&r.hsa.need&&r.hsa.need.total)!=null)?'estimate '+Math.round(r.hsa.need.total):'estimate'}" style="width:120px;" title="Your own figure replaces the Fidelity estimate. Leave blank to use the estimate."/> `+
       `<label style="font-size:var(--font-size-sm);"><input id="ret-hcadd" type="checkbox" ${a.healthcare_expense_mode==='add'?'checked':''}/> add the yearly cost to my retirement expenses</label> `+
@@ -7570,6 +7574,9 @@ function benefitsContent(){
   ed.innerHTML=`<div class="ph" style="border:none;margin-bottom:var(--space-2);padding:0;">PLAN FACTS · EDIT</div>`+
     `<div style="font-size:var(--font-size-base);line-height:2.2;">401k pre-tax <input id="bn-pre" type="number" step="0.5" value="${pv(f.pretax_pct)}" style="width:52px;"/>% after-tax <input id="bn-aft" type="number" step="0.5" value="${pv(f.aftertax_pct)}" style="width:52px;"/>% `+
     `match: <input id="bn-t1r" type="number" value="${pv(f.match_t1_rate)}" style="width:48px;"/>% of first <input id="bn-t1p" type="number" step="0.5" value="${pv(f.match_t1_pct)}" style="width:44px;"/>% + <input id="bn-t2r" type="number" value="${pv(f.match_t2_rate)}" style="width:48px;"/>% of next <input id="bn-t2p" type="number" step="0.5" value="${pv(f.match_t2_pct)}" style="width:44px;"/>% `+
+    (f.spouse_salary>0?(`<div style="margin:var(--space-1) 0;"><b>Spouse 401(k)</b> <span class="muted" style="font-size:var(--font-size-sm);">(spouse income is on file, so you can add their plan; it is counted in the savings estimate)</span><br/>`+
+      `pre-tax <input id="bn-s-pre" type="number" step="0.5" value="${pv(f.spouse_pretax_pct)}" style="width:52px;"/>% after-tax <input id="bn-s-aft" type="number" step="0.5" value="${pv(f.spouse_aftertax_pct)}" style="width:52px;"/>% `+
+      `match: <input id="bn-s-t1r" type="number" value="${pv(f.spouse_match_t1_rate)}" style="width:48px;"/>% of first <input id="bn-s-t1p" type="number" step="0.5" value="${pv(f.spouse_match_t1_pct)}" style="width:44px;"/>% + <input id="bn-s-t2r" type="number" value="${pv(f.spouse_match_t2_rate)}" style="width:48px;"/>% of next <input id="bn-s-t2p" type="number" step="0.5" value="${pv(f.spouse_match_t2_pct)}" style="width:44px;"/>%</div>`):'')+
     `per-paycheck total <input id="bn-bw" type="number" step="0.01" value="${pv(f.biweekly_total)}" style="width:78px;" title="employee+match per paycheck — cross-checks the salary"/> `+
     `<select id="bn-freq" title="how often you're paid — used to annualize the per-paycheck total above">`+
       `<option value="weekly"${f.pay_frequency==='weekly'?' selected':''}>weekly</option>`+
@@ -7599,6 +7606,9 @@ function benefitsContent(){
           k401_match_t1_rate:numOrNull(g('bn-t1r').value), k401_match_t1_pct:numOrNull(g('bn-t1p').value),
           k401_match_t2_rate:numOrNull(g('bn-t2r').value), k401_match_t2_pct:numOrNull(g('bn-t2p').value),
           k401_biweekly_total:numOrNull(g('bn-bw').value),
+          ...(g('bn-s-pre')?{k401_spouse_pretax_pct:numOrNull(g('bn-s-pre').value), k401_spouse_aftertax_pct:g('bn-s-aft').value===''?0:parseFloat(g('bn-s-aft').value),
+            k401_spouse_match_t1_rate:numOrNull(g('bn-s-t1r').value), k401_spouse_match_t1_pct:numOrNull(g('bn-s-t1p').value),
+            k401_spouse_match_t2_rate:numOrNull(g('bn-s-t2r').value), k401_spouse_match_t2_pct:numOrNull(g('bn-s-t2p').value)}:{}),
           k401_pay_frequency:g('bn-freq').value, k401_pay_periods_custom:numOrNull(g('bn-freq-custom').value),
           plan_aftertax:g('bn-pa').value==='1', inservice_rollover:g('bn-isr').value,
           hsa_coverage:g('bn-hc').value, hsa_contribution:numOrNull(g('bn-hsa').value),
@@ -7774,7 +7784,7 @@ function cashdebtContent(){
       dn.textContent=`⚑ Highest real dollar cost is ${av.top_dollar_cost.name} (${u(av.top_dollar_cost.annual_interest)}/yr) — not the top-APR row below.`;
       wrap.appendChild(dn);
     }
-    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PAYMENTS LEFT<br/><span class="muted" style="font-size:var(--font-size-xs);">alone → in plan</span></th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
+    const t=el('table'); const hr=el('tr'); hr.innerHTML='<th class="l">DEBT</th><th>BALANCE</th><th>APR</th><th>MIN PMT/mo</th><th title="Payments left. Top: at this debt&#39;s own payment, nothing else changing. Bottom (→): the month it clears under the AVALANCHE plan, where every retired debt&#39;s minimum rolls onto the next and your extra $/mo is included.">PAYMENTS LEFT<br/><span class="muted" style="font-size:var(--font-size-xs);">alone → in plan</span></th><th>INTEREST/yr</th><th>$-RANK</th><th>CALL</th><th>PAID IN FULL?</th><th title="Optional. Tick a loan with a fixed end date (a car or student loan) to leave its payment OUT of your retirement spending, but only if it will be paid off by your target age. Your savings estimate is not changed. Credit cards do not qualify.">LEFT OUT OF RETIREMENT SPENDING?</th><th>MORTGAGE?</th>'; t.appendChild(hr);
     const rowsShown=SNOW ? (av.snowball_order||[]).map(n=>av.rows.find(x=>x.name===n)).filter(Boolean) : av.rows;
     rowsShown.forEach(x0=>{ const x=SNOW?Object.assign({},x0,{plan_months:x0.plan_months_snowball}):x0; const tr=el('tr');
       const pc=x.priority==='pay-first'?'neg':((x.priority==='carry'||x.priority==='paid-in-full')?'pos':'muted');
@@ -7786,10 +7796,11 @@ function cashdebtContent(){
       // out of pay-first/avalanche-alerts/the payoff simulator regardless of its point-in-time APR
       // or balance.
       const paidFullCell=`<input class="cd-paidfull" data-nm="${esc(x.name)}" type="checkbox" ${x.pay_in_full?'checked':''} title="This card is always paid off in full — its balance isn't real revolving debt. Check + SAVE to pull it out of pay-first/alerts/the payoff simulator regardless of APR or snapshot balance."/>`;
+      const fiCell=`<input class="cd-fiexcl" data-nm="${esc(x.name)}" type="checkbox" ${x.fi_exclude?'checked':''} title="Leave this payment out of retirement spending if it ends before your target age. Check + SAVE."/>`;
       const mortCell=`<input class="cd-mort" data-nm="${esc(x.name)}" type="checkbox" title="This IS actually the mortgage (name detection missed it) — check + SAVE to move it out of this table and into the MORTGAGE line above."/>`;
       tr.innerHTML=`<td class="l sym">${esc(x.name)}</td><td>${u(x.balance)}</td><td>${aprCell}</td><td>${minCell}</td>`+
         `<td>${_pmtsCell(x)}</td>`+
-        `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${paidFullCell}</td><td>${mortCell}</td>`;
+        `<td>${u(x.annual_interest)}</td><td class="muted">${x.dollar_rank||'—'}</td><td class="${pc}">${esc(x.priority)}</td><td>${paidFullCell}</td><td>${fiCell}</td><td>${mortCell}</td>`;
       t.appendChild(tr); });
     wrap.appendChild(t);
   }
@@ -7873,6 +7884,7 @@ function cashdebtContent(){
       // checked boxes, which means unchecking it never clears a previous override; don't repeat
       // that here.
       const pf={}; document.querySelectorAll('.cd-paidfull').forEach(x=>{ pf[x.dataset.nm]=x.checked; });
+      const fx={}; document.querySelectorAll('.cd-fiexcl').forEach(x=>{ fx[x.dataset.nm]=x.checked; });
       await fetch('/api/insurance-config',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({mortgage_rate_pct:numOrNull(g('cd-mr').value),
                              mortgage_payment_monthly:numOrNull(g('cd-mp').value),
@@ -7880,7 +7892,7 @@ function cashdebtContent(){
                              refi_rate_pct:numOrNull(g('cd-rr').value),
                              refi_closing_costs:numOrNull(g('cd-cc').value),
                              debt_extra_monthly:numOrNull(g('cd-extra').value),
-                             pay_in_full_overrides:pf,
+                             pay_in_full_overrides:pf, fi_exclude_overrides:fx,
                              debt_rates:dr, debt_min_payments:dmp, is_mortgage_overrides:mo})});
       // optimistic: patch the just-saved APR/min-payment/paid-in-full values straight into
       // CASHDEBT.avalanche.rows and recompute each row's priority/annual_interest locally (same

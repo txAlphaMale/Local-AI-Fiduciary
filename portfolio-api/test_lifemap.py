@@ -397,3 +397,33 @@ class Onboarding(unittest.TestCase):
                        "title:'LIFE MAP: start here'", "title:'Look ahead, pins and your start page'", "W('life-map','Getting started'"):
             self.assertIn(needle, HTML, needle)
         self.assertIn("if(TAB!=='dashboard' || seen==='1' || start==='lifemap') return box;", HTML)            # only on the Dashboard, only until answered
+
+
+class NumericValidation(unittest.TestCase):
+    def _cfg(self, **kw):
+        import copy
+        import json
+        import lifemap
+        c = copy.deepcopy(json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lifemap_default.json"))))
+        c.update(kw)
+        return lifemap.validate(c)
+
+    def test_default_is_valid(self):
+        self.assertEqual(self._cfg(), [])
+
+    def test_bad_numbers_are_refused_with_a_reason(self):
+        for kw in ({"max_cards": -3}, {"max_cards": 0}, {"max_cards": 2.5}, {"max_cards": True}, {"timing_boost": "abc"},
+                   {"timing_boost": 99}, {"pin_bonus": -1}, {"pin_bonus": None}):
+            errs = self._cfg(**kw)
+            self.assertTrue(errs, kw)
+            self.assertIn(list(kw)[0], " ".join(errs))
+
+    def test_bad_urgency_is_refused(self):
+        import copy
+        import json
+        import lifemap
+        c = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lifemap_default.json")))
+        c = copy.deepcopy(c)
+        c["urgency"]["attention"]["high"] = "x"
+        c["urgency"]["ok"] = 5
+        self.assertEqual(len(lifemap.validate(c)), 2)
