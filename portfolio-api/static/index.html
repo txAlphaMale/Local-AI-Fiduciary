@@ -3778,6 +3778,13 @@ function sleeveExperiments(){
   const body=el('div'); body.style.cssText='font-size:var(--font-size-base);line-height:1.6;margin-top:var(--space-2);';
   body.innerHTML='<div><b>1. Small-base marker</b> is <b>'+(f.small_base_flag?'ON':'OFF')+'</b>: a flag next to any revenue growth above 1,000% (a tiny starting base or an acquisition). Display only; it changes no ranking.</div>'+
     '<div style="margin-top:var(--space-2)"><b>2. Dilution cap</b> in Growth is <b>'+esc(d.current_cap)+'%</b> '+(f.dilution_cap==null?'(the built-in rule)':'(your experiment; built-in is '+esc(d.default_cap)+'%)')+'. Growth now has <b>'+d.growth_now+'</b> names (built-in rule: '+d.growth_baseline+'). The dilution cap screens out companies whose share count grew by more than this in a year; it is ignored in the first 2 years after listing.</div>';
+  const T=d.trial||{}, on=f.growth_rule==='trial';
+  const tr3=el('div'); tr3.style.cssText='margin-top:var(--space-2)';
+  tr3.innerHTML='<b>3. Trial Growth rule</b> is <b>'+(on?'ON':'OFF')+'</b>. Growth by the better of the fiscal-year and last-12-months figure (at least 25%), revenue per share must be growing (replaces the share-count cap), ranked by a composite of growth, acceleration, gross margin and runway minus a dilution penalty. Compared with the built-in rule it would give <b>'+esc(T.count)+'</b> names ('+esc(d.growth_baseline)+' now).'+
+    (T.data_ready===false?' <span class="neg">The new figures are filled in by the nightly SEC screen; only '+esc(T.rows_with_data)+' of '+esc(T.rows)+' names have them so far, so this list is not yet meaningful.</span>':'')+
+    '<div class="muted" style="font-size:var(--font-size-sm);white-space:normal">WOULD ADD ('+esc(T.added_count||0)+'): '+((T.added||[]).length?esc(T.added.join(', '))+(T.added_count>T.added.length?' …':''):'—')+'<br>WOULD DROP ('+esc(T.dropped_count||0)+'): '+((T.dropped||[]).length?esc(T.dropped.join(', '))+(T.dropped_count>T.dropped.length?' …':''):'—')+'<br>TOP OF THE TRIAL RANKING: '+((T.top||[]).length?esc(T.top.join(', ')):'—')+'</div>';
+  const tbt=el('button','mut-btn',on?'TURN TRIAL RULE OFF':'TRY THE TRIAL RULE'); tbt.style.marginTop='var(--space-1)'; tbt.onclick=()=>{ if(confirm(on?'Go back to the built-in Growth rule?':'Switch Growth to the trial rule? Growth will change from '+d.growth_now+' to '+T.count+' names. You can undo it with REVERT.')) _slvExpPost({growth_rule:on?'standard':'trial'}); }; tr3.appendChild(tbt);
+  body.appendChild(tr3);
   box.appendChild(body);
   const tb=el('table'); tb.style.cssText='margin-top:var(--space-2);font-size:var(--font-size-sm);border-collapse:collapse;';
   tb.innerHTML='<tr><th class="l">CAP</th><th>GROWTH NAMES</th><th class="l">WOULD DROP (versus 300%)</th><th></th></tr>';
@@ -3790,7 +3797,7 @@ function sleeveExperiments(){
   if(SLV_EXP_MSG){ const m=el('div','muted',SLV_EXP_MSG); m.style.marginTop='var(--space-1)'; box.appendChild(m); }
   const lg=(d.log||[]).slice().reverse();
   if(lg.length){ const h=el('div','muted','CHANGE LOG (newest first; shows what each change added or dropped from Growth, for judging whether it worked)'); h.style.cssText='margin-top:var(--space-3);font-size:var(--font-size-sm);'; box.appendChild(h);
-    lg.forEach(e=>{ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.5;'; r.textContent=new Date(e.at*1000).toLocaleString()+' · '+e.change+' · cap '+((e.now&&e.now.dilution_cap)||300)+'%, marker '+((e.now&&e.now.small_base_flag)?'on':'off')+' · Growth '+e.growth_before+' → '+e.growth_after+(e.dropped&&e.dropped.length?' · dropped: '+e.dropped.join(', '):'')+(e.added&&e.added.length?' · added: '+e.added.join(', '):''); box.appendChild(r); }); }
+    lg.forEach(e=>{ const r=el('div'); r.style.cssText='font-size:var(--font-size-sm);line-height:1.5;'; r.textContent=new Date(e.at*1000).toLocaleString()+' · '+e.change+' · cap '+((e.now&&e.now.dilution_cap)||300)+'%, '+((e.now&&e.now.growth_rule==='trial')?'trial rule, ':'')+'marker '+((e.now&&e.now.small_base_flag)?'on':'off')+' · Growth '+e.growth_before+' → '+e.growth_after+(e.dropped&&e.dropped.length?' · dropped: '+e.dropped.join(', '):'')+(e.added&&e.added.length?' · added: '+e.added.join(', '):''); box.appendChild(r); }); }
   return box;
 }
 function sleeveForm(){

@@ -298,7 +298,15 @@ def compact(result, facts):
     op_m = r.get("operating_margin_pct")
     if used_alt:
         op_m = nm
+    # RV-B8 (Growth trial): revenue per share, this fiscal year over last, from the same annual revenue and weighted share counts
+    # the dilution figure uses. A company that issues shares but grows faster than it dilutes still shows a gain here.
+    a_r, a_rp, _a_e = edgar._latest(facts, "revenue")
+    rps = None
+    if not used_alt and None not in (a_r, a_rp, sh, sh_p) and min(a_r, a_rp, sh, sh_p) > 0:
+        rps = round(((a_r / sh) / (a_rp / sh_p) - 1) * 100, 2)
+    ttm_g = None if used_alt else m.get("ttm_revenue_growth_pct")
     return {
+        "rev_ttm_growth_pct": ttm_g, "rev_per_share_growth_pct": rps,
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
         "cash": cash, "cash_as_of": cash_as_of, "negative_equity": bool(r.get("negative_equity")),
         "period_mismatch": m.get("period_mismatch") or [], "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),

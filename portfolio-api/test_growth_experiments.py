@@ -24,6 +24,12 @@ def row(t, share_change, growth=60.0, first="2012-01-01"):
                    "net_margin_pct": 1, "fcf_margin_pct": 1}, "s2": {"price": 10.0}, "s3": None}
 
 
+def trow(t, rps, ttm=None, growth=60.0, share_change=5, **kw):
+    r = row(t, share_change, growth=growth)
+    r["s1"].update(rev_per_share_growth_pct=rps, rev_ttm_growth_pct=ttm, gross_margin_pct=60, rev_cagr_pct=40, **kw)
+    return r
+
+
 ROWS = [row("LOW", 5), row("MID", 217), row("HIGH", 280), row("NEWCO", 440, first="2025-09-22"), row("BIG", 20, growth=11925.0)]
 
 
@@ -104,6 +110,66 @@ class TestExperiments(unittest.TestCase):
         before = json.dumps(sleeves.BUILTIN["growth"], sort_keys=True)
         self.post({"dilution_cap": 100}); appmod.get_sleeve_experiments(); self.post({"revert": True})
         self.assertEqual(json.dumps(sleeves.BUILTIN["growth"], sort_keys=True), before)
+
+
+
+
+class TestTrialRule(unittest.TestCase):
+    """RV-B8: TTM growth, revenue per share instead of the share-count cap, composite rank, behind the switch."""
+    TROWS = [trow("DILUTES", rps=-10, growth=80, share_change=250),            # grows only by issuing shares: out under the trial
+             trow("FUNDED", rps=12, growth=40, share_change=280),             # issues shares AND grows faster: in (the 300 cap also lets it in)
+             trow("FRESH", rps=30, ttm=90, growth=10, share_change=20),       # last annual report slow, last 12 months fast: in only under the trial
+             trow("OLDFAST", rps=5, growth=60, share_change=400),             # over the 300 cap but revenue/share growing: in under the trial only
+             trow("NODATA", rps=None, growth=70)]
+
+    def setUp(self):
+        self.path = os.path.join(_TMP, "growth-trial-%d.json" % id(self))
+        self.p = [mock.patch.object(appmod, "GROWTH_EXPERIMENTS_FILE", self.path),
+                  mock.patch.object(ticker_state, "screened_rows", return_value=self.TROWS),
+                  mock.patch.object(appmod, "_emit_config_changed")]
+        for x in self.p: x.start()
+
+    def tearDown(self):
+        for x in self.p: x.stop()
+        if os.path.exists(self.path): os.remove(self.path)
+
+    def post(self, body):
+        return asyncio.run(appmod.post_sleeve_experiments(FakeReq(body)))
+
+    def test_preview_shows_added_and_dropped_without_changing_anything(self):
+        d = appmod.get_sleeve_experiments()
+        self.assertEqual(sorted(d["trial"]["added"]), ["FRESH", "OLDFAST"])
+        self.assertEqual(sorted(d["trial"]["dropped"]), ["DILUTES", "NODATA"])
+        self.assertEqual(d["flags"]["growth_rule"], "standard")
+        self.assertEqual(d["growth_now"], 3)                                    # LOW-style baseline unchanged by previewing
+        self.assertTrue(d["trial"]["data_ready"])
+
+    def test_switching_on_replaces_growth_logs_and_reverts(self):
+        r = self.post({"growth_rule": "trial"})
+        self.assertTrue(r["ok"])
+        g = next(x for x in appmod._sleeve_list() if x["id"] == "growth")
+        self.assertEqual(g["rank_by"], "growth_composite")
+        self.assertEqual(appmod.get_sleeve_experiments()["log"][-1]["change"], "growth_rule")
+        self.post({"revert": True})
+        g = next(x for x in appmod._sleeve_list() if x["id"] == "growth")
+        self.assertEqual(g["rank_by"], "growth_capped")
+
+    def test_bad_value_is_refused(self):
+        r = self.post({"growth_rule": "yolo"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_composite_rewards_growth_and_penalises_dilution(self):
+        t = datetime.date(2026, 11, 17)
+        a, b = trow("A", rps=5, growth=60, share_change=5), trow("B", rps=5, growth=60, share_change=90)
+        self.assertGreater(sleeves.value_of(a, "growth_composite", t), sleeves.value_of(b, "growth_composite", t))
+        fast = trow("F", rps=5, growth=120)
+        self.assertGreater(sleeves.value_of(fast, "growth_composite", t), sleeves.value_of(a, "growth_composite", t))
+
+    def test_new_listing_has_no_per_share_test(self):
+        t = datetime.date(2026, 11, 17)
+        n = trow("N", rps=-50, growth=90)
+        n["s1"]["first_filed"] = "2025-09-22"
+        self.assertEqual(sleeves.value_of(n, "rev_per_share_growth_pct", t), 90)
 
 
 if __name__ == "__main__":

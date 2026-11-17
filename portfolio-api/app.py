@@ -6853,7 +6853,7 @@ def _read_sleeves_cfg():
 
 
 GROWTH_EXPERIMENTS_FILE = os.environ.get("GROWTH_EXPERIMENTS_FILE", "/data/growth-experiments.json")
-EXP_DEFAULT = {"small_base_flag": True, "dilution_cap": None}      # dilution_cap None = the built-in rule (300%)
+EXP_DEFAULT = {"small_base_flag": True, "dilution_cap": None, "growth_rule": "standard"}   # growth_rule: "standard" | "trial" (RV-B8)      # dilution_cap None = the built-in rule (300%)
 EXP_CAPS_TO_PREVIEW = (300, 200, 150, 100, 75)
 _exp_lock = threading.Lock()
 
@@ -6871,6 +6871,11 @@ def _exp_flags():
     return _exp_read()[0]
 
 
+def _growth_base(rule):
+    """The Growth sleeve for the chosen rule: the built-in one, or the RV-B8 trial version."""
+    return sleeves_mod.GROWTH_TRIAL if rule == "trial" else sleeves_mod.BUILTIN["growth"]
+
+
 def _growth_with_cap(sl, cap):
     """Copy of the Growth sleeve with its dilution cap replaced (None leaves the built-in rule alone)."""
     if cap is None:
@@ -6883,9 +6888,11 @@ def _growth_with_cap(sl, cap):
 
 def _sleeve_list():
     out = [{"id": k, **v} for k, v in sleeves_mod.BUILTIN.items()]
-    cap = _exp_flags()["dilution_cap"]
-    if cap is not None:
-        out = [_growth_with_cap(x, cap) if x["id"] == "growth" else x for x in out]
+    fl = _exp_flags()
+    if fl["growth_rule"] == "trial":
+        out = [{"id": "growth", **sleeves_mod.GROWTH_TRIAL} if x["id"] == "growth" else x for x in out]
+    elif fl["dilution_cap"] is not None:
+        out = [_growth_with_cap(x, fl["dilution_cap"]) if x["id"] == "growth" else x for x in out]
     out += [{"id": k, "builtin": False, **v} for k, v in _read_sleeves_cfg()["custom"].items()]
     return out
 
@@ -7067,9 +7074,12 @@ async def post_sleeve(req: Request):
     return {"ok": True, "id": sid}
 
 
-def _growth_names(cap):
-    """Tickers passing the Growth sleeve with the dilution cap set to `cap` (None = built-in rule)."""
-    sl = _growth_with_cap({"id": "growth", **sleeves_mod.BUILTIN["growth"]}, cap)
+def _growth_names(cap, rule="standard"):
+    """Tickers passing the Growth sleeve with the dilution cap set to `cap` (None = built-in rule); rule="trial" uses the RV-B8 rules
+    (the cap does not apply to them)."""
+    sl = {"id": "growth", **_growth_base(rule)}
+    if rule != "trial":
+        sl = _growth_with_cap(sl, cap)
     ev = sleeves_mod.evaluate(sl, ticker_state.screened_rows(sleeves_mod.STATES), datetime.date.today(), None)
     return [r["ticker"] for r in ev["matches"]]
 
@@ -7085,13 +7095,19 @@ def get_sleeve_experiments():
     for cap in EXP_CAPS_TO_PREVIEW:
         names = set(_growth_names(None if cap == 300 else cap))
         preview.append({"cap": cap, "count": len(names), "dropped": sorted(bset - names)[:40], "dropped_count": len(bset - names)})
-    return {"flags": flags, "default_cap": 300, "current_cap": flags["dilution_cap"] or 300, "growth_now": len(_growth_names(flags["dilution_cap"])),
+    rows = ticker_state.screened_rows(sleeves_mod.STATES)
+    have = sum(1 for r in rows if (r.get("s1") or {}).get("rev_per_share_growth_pct") is not None or (r.get("s1") or {}).get("rev_ttm_growth_pct") is not None)
+    trial_names = _growth_names(None, "trial")
+    trial = {"count": len(trial_names), "added": sorted(set(trial_names) - bset)[:60], "added_count": len(set(trial_names) - bset),
+             "dropped": sorted(bset - set(trial_names))[:60], "dropped_count": len(bset - set(trial_names)),
+             "top": trial_names[:15], "rows_with_data": have, "rows": len(rows), "data_ready": have >= max(1, len(rows) // 10)}
+    return {"flags": flags, "trial": trial, "default_cap": 300, "current_cap": flags["dilution_cap"] or 300, "growth_now": len(_growth_names(flags["dilution_cap"], flags["growth_rule"])),
             "growth_baseline": len(base), "preview": preview, "log": log[-30:]}
 
 
 @app.post("/api/sleeves/experiments")
 async def post_sleeve_experiments(req: Request):
-    """{"small_base_flag": bool} and/or {"dilution_cap": number 25-1000 | null} to change; {"revert": true} undoes the last change."""
+    """{"small_base_flag": bool}, {"dilution_cap": number 25-1000 | null} and/or {"growth_rule": "standard" | "trial"} to change; {"revert": true} undoes the last change."""
     try:
         body = await req.json()
     except Exception:
@@ -7117,10 +7133,14 @@ async def post_sleeve_experiments(req: Request):
                 if c is not None and (isinstance(c, bool) or not isinstance(c, (int, float)) or not 25 <= c <= 1000):
                     return JSONResponse({"error": "dilution_cap must be a number from 25 to 1000, or null for the built-in rule"}, status_code=400)
                 flags["dilution_cap"] = c; what.append("dilution_cap")
+            if "growth_rule" in body:
+                if body["growth_rule"] not in ("standard", "trial"):
+                    return JSONResponse({"error": "growth_rule must be \"standard\" or \"trial\""}, status_code=400)
+                flags["growth_rule"] = body["growth_rule"]; what.append("growth_rule")
             if not what:
                 return JSONResponse({"error": "nothing to change"}, status_code=400)
             what = "+".join(what)
-        was, now = set(_growth_names(before["dilution_cap"])), set(_growth_names(flags["dilution_cap"]))
+        was, now = set(_growth_names(before["dilution_cap"], before["growth_rule"])), set(_growth_names(flags["dilution_cap"], flags["growth_rule"]))
         entry = {"at": int(time.time()), "change": what, "prev": before, "now": dict(flags), "growth_before": len(was), "growth_after": len(now),
                  "dropped": sorted(was - now)[:40], "added": sorted(now - was)[:40]}
         log = (log + [entry])[-100:]

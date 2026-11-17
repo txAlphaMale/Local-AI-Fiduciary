@@ -21,6 +21,10 @@ METRICS = {
     "revenue": ("Revenue (last 12 months)", "$", "s1"),
     "rev_growth_pct": ("Revenue growth, year over year", "%", "s1"),
     "growth_capped": ("Revenue growth, capped at 150% (so a tiny base cannot dominate a ranking)", "%", "s1"),
+    "rev_ttm_growth_pct": ("Revenue growth, last 12 months over the 12 months before", "%", "s1"),
+    "rev_best_growth_pct": ("Revenue growth, the better of the fiscal-year and the last-12-months figure", "%", "s1"),
+    "rev_per_share_growth_pct": ("Revenue per share growth, fiscal year over year (growth net of dilution; no dilution test in the first 2 years after listing)", "%", "s1"),
+    "growth_composite": ("Growth composite score (0-90): growth, acceleration, gross margin, runway, minus a dilution penalty", "pts", "s1"),
     "rev_cagr_pct": ("Revenue growth, multi-year average", "%", "s1"),
     "rev_accel_pts": ("Revenue growth acceleration (this year minus multi-year average)", "pts", "s1"),
     "gross_margin_pct": ("Gross margin", "%", "s1"),
@@ -90,6 +94,20 @@ BUILTIN = {
 }
 
 
+# RV-B8: the trial version of the Growth rule, switched on from GROWTH EXPERIMENTS (never the default). Differences from the built-in rule:
+# growth is the better of the fiscal-year and trailing-12-month figure; revenue per share must be growing instead of a raw share-count cap;
+# the ranking is a composite instead of one capped percentage.
+GROWTH_TRIAL = dict(BUILTIN["growth"], name="Growth (speculative) - trial rule",
+                    rules=[{"metric": "revenue", "op": ">=", "value": 10_000_000}, {"metric": "rev_best_growth_pct", "op": ">=", "value": 25},
+                           {"metric": "rev_per_share_growth_pct", "op": ">", "value": 0}, {"metric": "runway_months", "op": ">=", "value": 12}],
+                    rank_by="growth_composite", rank_dir="desc",
+                    notes=("TRIAL RULE (your experiment). Does not require profit. Revenue at least $10M. Growth is the better of the fiscal-year and the "
+                           "last-12-months figure, at least 25%, so a company is not dropped because its last annual report is old. Revenue per share must be "
+                           "growing: a company that issues shares but grows faster than it dilutes passes, one that grows only by diluting does not (replaces the "
+                           "300% share-count cap). Cash must last at least a year. Ranked by a composite of growth (capped at 150%), acceleration, gross margin and "
+                           "runway, minus a dilution penalty."))
+
+
 def _num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
@@ -103,6 +121,34 @@ def value_of(row, metric, today=None):
     if metric == "growth_capped":
         g = s1.get("rev_growth_pct")
         return min(g, 150.0) if _num(g) else None
+    if metric == "rev_best_growth_pct":
+        c = [g for g in (s1.get("rev_growth_pct"), s1.get("rev_ttm_growth_pct")) if _num(g)]
+        return max(c) if c else None
+    if metric == "rev_per_share_growth_pct":
+        age = value_of(row, "age_years", today)
+        if age is not None and age < 2:
+            return value_of(row, "rev_best_growth_pct", today)   # the share count before the listing is not comparable: no dilution test yet
+        v = s1.get("rev_per_share_growth_pct")
+        return v if _num(v) else None
+    if metric == "growth_composite":
+        g = value_of(row, "rev_best_growth_pct", today)
+        if g is None:
+            return None
+        clamp = lambda x, lo, hi: max(lo, min(hi, x))
+        pts = clamp(g, 0, 150) / 150 * 40                                        # growth, up to 40
+        cagr = s1.get("rev_cagr_pct")
+        if _num(cagr):
+            pts += (clamp(g - cagr, -25, 25) + 25) / 50 * 15                     # acceleration against the multi-year average, up to 15
+        gm = s1.get("gross_margin_pct")
+        if _num(gm):
+            pts += clamp(gm, 0, 80) / 80 * 20                                    # gross margin, up to 20
+        rw = s1.get("runway_months")
+        if _num(rw):
+            pts += clamp(rw, 0, 36) / 36 * 15                                    # runway (999 = funds itself counts as 36 months), up to 15
+        sc = value_of(row, "share_change_pct", today)
+        if _num(sc) and sc > 0:
+            pts -= clamp(sc, 0, 100) / 100 * 20                                  # dilution penalty, up to 20
+        return round(pts, 2)
     if metric == "age_years":
         try:
             d = datetime.date.fromisoformat(str(s1.get("first_filed"))[:10])
