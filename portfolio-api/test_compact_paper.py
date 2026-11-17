@@ -35,6 +35,31 @@ class CompactPaper(unittest.TestCase):
         self.assertEqual([x["ticker"] for x in out["over_cap"]], ["T0"])
         self.assertEqual(out["position_cap_pct"], 15)
 
+    def test_over_cap_carries_a_trim_target_under_the_cap(self):      # RETEST-027 (d)
+        o = app._compact_paper_for_agent(self._book())["over_cap"][0]
+        self.assertEqual(o["trim_to_pct"], 14)
+        self.assertGreater(o["sell_about_dollars"], 0)
+
+    def test_a_name_just_over_the_cap_is_inside_the_band(self):       # RKLB 15.04% was flagged after selling down to the cap
+        book = {"id": "d", "name": "D", "goal": {"max_position_pct": 15}, "cash": 0.0, "holdings_value": 10000.0, "total_value": 10000.0,
+                "positions": [{"ticker": "A", "shares": 1, "price": 1, "value": 1504.0, "gain_pct": 0},
+                              {"ticker": "B", "shares": 1, "price": 1, "value": 8496.0, "gain_pct": 0}]}
+        self.assertEqual([x["ticker"] for x in app._compact_paper_for_agent(book)["over_cap"]], ["B"])
+
+    def test_churn_guard_refuses_sell_then_buy_and_buy_then_sell(self):   # RETEST-027 (a)
+        sides = {}
+        self.assertIsNone(app._churn_block(sides, "paper_sell", {"ticker": "msft"}))
+        app._churn_note(sides, "paper_sell", {"ticker": "msft"}, {"ok": True})
+        self.assertIn("already sold", app._churn_block(sides, "paper_buy", {"ticker": "MSFT"})["error"])
+        self.assertIsNone(app._churn_block(sides, "paper_sell", {"ticker": "MSFT"}))      # a second sell is not a reversal
+        app._churn_note(sides, "paper_buy", {"ticker": "VOO"}, {"ok": True})
+        self.assertIn("already bought", app._churn_block(sides, "paper_sell", {"ticker": "voo"})["error"])
+
+    def test_a_failed_trade_does_not_lock_the_name(self):
+        sides = {}
+        app._churn_note(sides, "paper_sell", {"ticker": "MSFT"}, {"error": "no such position"})
+        self.assertIsNone(app._churn_block(sides, "paper_buy", {"ticker": "MSFT"}))
+
     def test_passthrough_on_error_shape(self):
         self.assertEqual(app._compact_paper_for_agent({"error": "x"}), {"error": "x"})
 

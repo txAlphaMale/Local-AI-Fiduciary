@@ -16517,6 +16517,10 @@ STRATEGIST_PROMPT = (
     "shares are cheaper. What DOES matter: (a) make each position MATERIAL — big enough that a good move "
     "moves the book (avoid dust positions too small to matter); (b) deploy the capital — don't leave a "
     "meaningful slug of cash idle; you buy fractional shares here, so a dollar amount always fully invests. "
+    "ONE TRADE PER NAME: within a run, never sell and buy the same ticker. A tiny holding you want bigger is TOPPED UP with one buy of the "
+    "difference, not sold and re-bought (the tools refuse the reversal). The portfolio view lists over_cap names with a trim_to_pct and "
+    "sell_about_dollars: trim those to about trim_to_pct (a point under the cap), not to the cap line itself; a name only just over the cap "
+    "(inside the stated band) is left alone. Say in the report that the return vs. start is unchanged by trading itself.\n"
     "Acknowledge uncertainty honestly. This is hypothetical and educational — NOT financial advice."
 )
 
@@ -16651,16 +16655,44 @@ def _compact_paper_for_agent(p):
         w = round((x.get("value") or 0) / total * 100, 1) if total else None
         rows.append({"ticker": x.get("ticker"), "shares": x.get("shares"), "price": x.get("price"),
                      "value": x.get("value"), "weight_pct": w, "gain_pct": x.get("gain_pct")})
-    over = [{"ticker": r["ticker"], "weight_pct": r["weight_pct"]} for r in rows
-            if cap and r["weight_pct"] is not None and r["weight_pct"] > cap]
+    over = []
+    for r in rows:
+        if cap and r["weight_pct"] is not None and r["weight_pct"] > cap + OVER_CAP_BAND_PCT:
+            tgt = max(cap - TRIM_BELOW_CAP_PCT, 0)
+            over.append({"ticker": r["ticker"], "weight_pct": r["weight_pct"], "trim_to_pct": tgt,
+                         "sell_about_dollars": round((r["weight_pct"] - tgt) / 100 * total)})
     tx = [{k: t.get(k) for k in ("ts", "action", "ticker", "shares", "price", "value") if k in t}
           for t in (p.get("transactions") or [])[-10:]]
     return {"id": p.get("id"), "name": p.get("name"), "goal_summary": p.get("goal_summary"),
             "cash": p.get("cash"), "cash_pct": round((p.get("cash") or 0) / total * 100, 1) if total else None,
             "holdings_value": p.get("holdings_value"), "total_value": total,
             "return_pct": p.get("return_pct"), "basis_label": p.get("basis_label"),
-            "position_cap_pct": cap, "over_cap": over, "positions": rows,
+            "position_cap_pct": cap, "over_cap": over, "over_cap_band_pct": OVER_CAP_BAND_PCT, "positions": rows,
             "recent_transactions": tx, "note": p.get("note")}
+
+
+OVER_CAP_BAND_PCT = 0.5     # a position within half a point above the cap is not flagged: selling to exactly the cap leaves it "over" by rounding
+TRIM_BELOW_CAP_PCT = 1.0    # when a position IS over, the suggested trim target sits this far under the cap so it does not land on the line
+
+
+def _churn_block(run_sides, tool, args):
+    """RETEST-027 (a): within ONE run a ticker is either bought or sold, never both ('liquidated dust' MSFT/VOO/AVGO, then bought them back
+    at $30k/$30k/$15k). Returns an error dict when this call would reverse an earlier trade of the same ticker in this run, else None.
+    `run_sides` maps TICKER -> 'buy'|'sell' and is updated by `_churn_note` once the trade succeeded."""
+    t = str((args or {}).get("ticker") or "").strip().upper()
+    side = "buy" if tool == "paper_buy" else "sell"
+    prev = run_sides.get(t)
+    if t and prev and prev != side:
+        return {"error": f"{t} was already {'bought' if prev == 'buy' else 'sold'} in this run. Do not sell and buy the same name in one review: "
+                         f"net it into one trade (top up or trim by the difference) and leave the earlier trade as it is."}
+    return None
+
+
+def _churn_note(run_sides, tool, args, result):
+    if isinstance(result, dict) and not result.get("error"):
+        t = str((args or {}).get("ticker") or "").strip().upper()
+        if t:
+            run_sides[t] = "buy" if tool == "paper_buy" else "sell"
 
 
 def _strategist_dispatch(name, args, scenario_id=None, goal=None, sources=None):
@@ -16750,6 +16782,7 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
              "tool_calls": {}, "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
              "nudged": False, "converged": False, "ended": "unknown", "error": None}
     _seen_sigs = set()
+    _run_sides = {}          # ticker -> "buy"|"sell" this run (RETEST-027 a: no sell-then-rebuy)
     src_log = []    # what the model looked at this run, stored with the report so figures can be traced
     try:
         risk_guidance = _RISK_PROFILE_GUIDANCE.get(risk_profile, _RISK_PROFILE_GUIDANCE["moderate"])
@@ -16832,7 +16865,11 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                     _seen_sigs.add(_sig)
                 if nm in ("paper_buy", "paper_sell"):
                     telem["trades"] += 1
-                if nm == "web_search":
+                _blocked = _churn_block(_run_sides, nm, a) if nm in ("paper_buy", "paper_sell") else None
+                if _blocked:
+                    result = _blocked
+                    telem["trades"] -= 1
+                elif nm == "web_search":
                     if search_calls >= search_budget:
                         result = {"error": f"web-search budget for this run is spent "
                                            f"({search_budget} calls). Stop searching — decide from the "
@@ -16843,6 +16880,8 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                 else:
                     result = _strategist_dispatch(nm, a, scenario_id=scenario_id, goal=goal,
                                                   sources=src_log)
+                if nm in ("paper_buy", "paper_sell") and not _blocked:
+                    _churn_note(_run_sides, nm, a, result)
                 if nm != "log_report":
                     _note_source(src_log, nm, a, result)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):
