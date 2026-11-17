@@ -16757,8 +16757,9 @@ def _sale_tax_picture(cap_pct=15.0, d=None, ctx=None, gross_ord=0.0):
             t = h.get("ticker")
             if not t or not h.get("value"):
                 continue
-            r = per.setdefault(t, {"taxable_gain": 0.0, "taxable_known_basis_value": 0.0, "sheltered_value": 0.0})
+            r = per.setdefault(t, {"taxable_gain": 0.0, "taxable_known_basis_value": 0.0, "taxable_value": 0.0, "sheltered_value": 0.0})
             if st == "taxable":
+                r["taxable_value"] += h["value"]
                 if h.get("gain") is not None:
                     r["taxable_gain"] += h["gain"]; r["taxable_known_basis_value"] += h["value"]
             elif st in ("roth", "deferred", "hsa", "education"):
@@ -16780,7 +16781,11 @@ def _sale_tax_picture(cap_pct=15.0, d=None, ctx=None, gross_ord=0.0):
         kb = r.get("taxable_known_basis_value", 0.0)
         gf = (r.get("taxable_gain", 0.0) / kb) if kb > 0 else None
         row = {"ticker": t, "weight_pct": w, "cap_pct": cap_pct, "value": round(v, 0), "amount_above_cap": sell,
-               "sellable_without_tax_in_ira_roth_hsa": round(shelt, 0), "needs_taxable_sale": round(tax_part, 0)}
+               "held_in_ira_roth_hsa": round(r.get("sheltered_value", 0.0), 0), "held_in_taxable": round(r.get("taxable_value", 0.0), 0),
+               "sellable_without_tax_in_ira_roth_hsa": round(shelt, 0), "needs_taxable_sale": round(tax_part, 0),
+               "basis": f"the amount above the {cap_pct:g}% position cap, not the position-sizing panel's loss-budget trim (a different, separate measure)"}
+        if tax_part <= 0:
+            row["note"] = "the whole amount above the cap fits inside IRA/Roth/HSA holdings of this name, so selling there triggers no tax; no taxable gain is involved"
         if tax_part > 0 and gf is not None:
             gain = max(0.0, tax_part * gf)
             now_tax = tax.ltcg_tax(ord_tax, gain, ctx["status"])[0]
@@ -16885,7 +16890,8 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
     telem = {"ts": int(_t0), "scenario_id": scenario_id, "scenario_name": scenario_name,
              "risk_profile": risk_profile, "goal_snapshot": goal, "max_iter": max_iter, "iterations": 0,
              "tool_calls": {}, "repeat_calls": 0, "trades": 0, "search_calls": 0, "search_budget": None,
-             "nudged": False, "converged": False, "ended": "unknown", "error": None}
+             "nudged": False, "converged": False, "ended": "unknown", "error": None,
+             "over_cap_seen": None, "sale_tax_rows": None}
     _seen_sigs = set()
     _run_sides = {}          # ticker -> "buy"|"sell" this run (RETEST-027 a: no sell-then-rebuy)
     src_log = []    # what the model looked at this run, stored with the report so figures can be traced
@@ -16987,6 +16993,12 @@ def _do_strategist_one(scenario_id, scenario_name, max_iter, risk_profile="moder
                                                   sources=src_log)
                 if nm in ("paper_buy", "paper_sell") and not _blocked:
                     _churn_note(_run_sides, nm, a, result)
+                if nm == "get_paper_portfolio" and isinstance(result, dict) and telem["over_cap_seen"] is None:
+                    telem["over_cap_seen"] = result.get("over_cap")          # first view of the book: who was over the cap and the trim target shown (RETEST-037)
+                if nm == "get_sale_tax_picture" and isinstance(result, dict):
+                    telem["sale_tax_rows"] = [{k: r.get(k) for k in ("ticker", "weight_pct", "cap_pct", "amount_above_cap", "held_in_ira_roth_hsa",
+                                                                    "held_in_taxable", "needs_taxable_sale", "tax_if_sold_in_one_year")}
+                                              for r in (result.get("positions") or [])]
                 if nm != "log_report":
                     _note_source(src_log, nm, a, result)
                 if nm == "log_report" and isinstance(result, dict) and result.get("ok"):

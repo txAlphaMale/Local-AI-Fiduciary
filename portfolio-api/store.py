@@ -217,6 +217,7 @@ def init_db():
             _ensure_column(c, "paper_reports", "goal_snapshot", "TEXT")
             _ensure_column(c, "paper_reports", "sources", "TEXT")
             _ensure_column(c, "strategist_runs", "goal_snapshot", "TEXT")
+            _ensure_column(c, "strategist_runs", "extra_json", "TEXT")      # RETEST-037: over-cap rows seen and the tax-picture rows, encrypted like goal_snapshot
             # ---- Knowledge/RAG DB-backed storage (2026-07-24h) ----
             c.execute("""CREATE TABLE IF NOT EXISTS knowledge_docs(
                 hash TEXT PRIMARY KEY,
@@ -575,14 +576,16 @@ def strategist_run_log(rec):
     with _conn() as c:
         c.execute("""INSERT INTO strategist_runs(ts,scenario_id,scenario_name,risk_profile,max_iter,
                         iterations,tool_calls_json,repeat_calls,trades,search_calls,search_budget,
-                        nudged,converged,ended,error,duration_s,goal_snapshot)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        nudged,converged,ended,error,duration_s,goal_snapshot,extra_json)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (rec.get("ts"), rec.get("scenario_id"), _enc(rec.get("scenario_name")), rec.get("risk_profile"),
                    rec.get("max_iter"), rec.get("iterations"), _enc(json.dumps(rec.get("tool_calls") or {})),
                    rec.get("repeat_calls"), rec.get("trades"), rec.get("search_calls"), rec.get("search_budget"),
                    int(bool(rec.get("nudged"))), int(bool(rec.get("converged"))), rec.get("ended"),
                    _enc(rec.get("error")), rec.get("duration_s"),
-                   _enc(json.dumps(gs)) if gs is not None else None))
+                   _enc(json.dumps(gs)) if gs is not None else None,
+                   _enc(json.dumps({k: rec.get(k) for k in ("over_cap_seen", "sale_tax_rows") if rec.get(k) is not None}))
+                   if any(rec.get(k) is not None for k in ("over_cap_seen", "sale_tax_rows")) else None))
 
 
 def strategist_runs_read(limit=None):
@@ -601,6 +604,11 @@ def strategist_runs_read(limit=None):
         r["tool_calls"] = json.loads(_dec(r.pop("tool_calls_json")) or "{}")
         r["nudged"] = bool(r["nudged"])
         r["converged"] = bool(r["converged"])
+        try:
+            ex = json.loads(_dec(r.pop("extra_json", None)) or "{}")
+        except Exception:
+            ex = {}
+        r.update({k: ex.get(k) for k in ("over_cap_seen", "sale_tax_rows") if k in ex})
         gs_raw = r.get("goal_snapshot")
         try:
             r["goal_snapshot"] = json.loads(_dec(gs_raw)) if gs_raw is not None else None

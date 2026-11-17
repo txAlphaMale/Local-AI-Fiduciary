@@ -30,6 +30,21 @@ class SaleTaxPicture(unittest.TestCase):
         self.assertIn("staged", p)
         self.assertIn("not advice", r["assumptions"])
 
+    def test_row_states_its_basis_and_the_account_split(self):          # RETEST-037
+        p = app._sale_tax_picture(15.0, d=self._d(), gross_ord=60000.0)["positions"][0]
+        self.assertEqual((p["held_in_ira_roth_hsa"], p["held_in_taxable"]), (50000, 500000))
+        self.assertIn("15% position cap", p["basis"])
+
+    def test_fully_sheltered_excess_says_so_instead_of_staying_silent(self):
+        d = self._d()
+        d["by_account"][0]["holdings"][0]["value"] = 1000.0                # taxable PLTR almost nothing; the Roth holds the excess
+        d["by_account"][1]["holdings"][0]["value"] = 600000.0
+        d["consolidated"][0]["value"] = 601000.0
+        d["consolidated"][0]["weight_pct"] = 50.0
+        p = app._sale_tax_picture(15.0, d=d, gross_ord=60000.0)["positions"][0]
+        self.assertEqual(p["needs_taxable_sale"], 0)
+        self.assertIn("no tax", p["note"])
+
     def test_unknown_basis_gives_no_invented_tax(self):
         d = self._d()
         for h in d["by_account"][0]["holdings"]:
