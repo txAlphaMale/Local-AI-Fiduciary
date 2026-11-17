@@ -42,6 +42,7 @@ from typing import Optional, Dict, List, Literal
 
 import edgar   # SEC EDGAR / GAAP fundamentals
 import tavily_client   # Tavily news search, called directly (no mcpo helper)
+import tavily_policy   # what may be KEPT from a Tavily search: references only, never the content of results
 import answer_check, scavenger, ticker_state, market_data, signals, scout, sleeves as sleeves_mod   # idea scavenger: universe + quant screen (no API quota), ticker-state table
 import budget as budget_mod   # API budget gate: pause on quota / rate limit, probe, recover (idea-scavenger groundwork)
 import valuehist       # value-history guards + cost-basis series (2026-10-23)
@@ -2633,6 +2634,12 @@ def _job_worker():
             _record_job_run(rec["kind"], rec.get("started"), rec["finished"], rec["status"], rec.get("source"))
             _inflight_write()
 
+try:       # entries cached before the rule existed: reduce them to references (idempotent, a no-op once clean)
+    _n_t = store.ext_cache_rewrite("tavily", tavily_policy.clean_stored_articles) + store.ext_cache_rewrite("tavily_news_raw", tavily_policy.clean_stored_news_text)
+    if _n_t:
+        print(f"[tavily] reduced {_n_t} cached search result(s) to links and titles (content is not stored)", flush=True)
+except Exception as _e:
+    print(f"[tavily] cache clean-up skipped: {type(_e).__name__}", flush=True)
 _jobs_recover_interrupted()
 threading.Thread(target=_job_worker, daemon=True, name="job-worker").start()
 
@@ -7175,6 +7182,7 @@ def _sleeve_row(r, today, briefs=None, small_base=None):
             "financials_old": _older_than_days(s1.get("fiscal_year_end"), 366, today),
             "price_old": _price_is_old(s2.get("fetched_at"), today),
             "negative_equity": bool(s1.get("negative_equity")), "small_base": bool(small_base and isinstance(g, (int, float)) and g > 1000),
+            "rev_tag_conflict": bool(s1.get("rev_tag_conflict")),
             "insider": signals.display(r.get("s3"))[0], "analyst": signals.display(r.get("s3"))[1],
             "scout": (briefs or {}).get(r["ticker"])}
 
@@ -8205,7 +8213,8 @@ def _news(sym, name, with_meta=False):
     # scores as the success it is. Kept as a bare string rather than an envelope dict on purpose:
     # changing the cached shape would orphan every existing disk entry for this source.
     text, meta = store.cached_fetch("tavily_news_raw", query, TAVILY_CACHE_TTL, _compute,
-                                    is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER)
+                                    is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER,
+                                    persist_fn=tavily_policy.clean_stored_news_text)      # disk keeps titles only; the full text lives in memory
     return (text, meta) if with_meta else text
 
 
@@ -15589,7 +15598,8 @@ def _tavily_results(query, days=14, max_results=5, with_meta=False):
 
     key = f"{query}|{days}|{max_results}"
     results, meta = store.cached_fetch("tavily", key, TAVILY_CACHE_TTL, _compute,
-                                       is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER)
+                                       is_ok=lambda r: bool(r), stale_after=NEWS_STALE_AFTER,
+                                       persist_fn=tavily_policy.refs)                       # disk keeps links, titles, sites and dates only
     return (results, meta) if with_meta else results
 
 
@@ -17036,6 +17046,7 @@ def _note_source(log, name, args, result, max_items=40, max_chars=2000):
     of each result."""
     if len(log) >= max_items:
         return
+    result = tavily_policy.sources_for_report(name, args, result)      # a web search is recorded as links only
     try:
         txt = json.dumps(result, default=str)
     except Exception:

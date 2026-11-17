@@ -158,3 +158,32 @@ class TtmGrowthTests(unittest.TestCase):
     def test_unbridgeable_prior_year_is_none_not_a_guess(self):
         f = facts(Revenues=[fy(2025, 200), self.q(2025, "01-01", "09-30", 180)])
         self.assertIsNone(edgar.ttm_revenue_growth(f))
+
+
+class RevenueTagConflict(unittest.TestCase):
+    """ASTS: two revenue tags give different figures for the same fiscal year; the screen keeps the best-supported series and says the growth is unverified."""
+    def test_tags_that_disagree_about_a_recent_year_are_flagged(self):
+        f = facts(RevenueFromContractWithCustomerExcludingAssessedTax=[fy(2024, 13825000), fy(2025, 70918000)],
+                  RevenueFromContractWithCustomerIncludingAssessedTax=[fy(2024, 4418000), fy(2025, 70918000)])
+        self.assertTrue(edgar.revenue_tag_conflict(f))
+
+    def test_tags_that_agree_are_not_flagged(self):
+        f = facts(Revenues=[fy(2024, 1000), fy(2025, 1300)], RevenueFromContractWithCustomerExcludingAssessedTax=[fy(2024, 1010), fy(2025, 1290)])
+        self.assertFalse(edgar.revenue_tag_conflict(f))
+
+    def test_a_single_tag_or_a_zero_year_is_not_a_conflict(self):
+        self.assertFalse(edgar.revenue_tag_conflict(facts(Revenues=[fy(2024, 100), fy(2025, 200)])))
+        f = facts(Revenues=[fy(2024, 0), fy(2025, 4400)], RevenueFromContractWithCustomerExcludingAssessedTax=[fy(2024, 0), fy(2025, 4400)])
+        self.assertFalse(edgar.revenue_tag_conflict(f))
+
+    def test_an_old_disagreement_does_not_flag_todays_growth(self):
+        f = facts(Revenues=[fy(2021, 100), fy(2024, 500), fy(2025, 600)], RevenueFromContractWithCustomerExcludingAssessedTax=[fy(2021, 900), fy(2024, 505), fy(2025, 600)])
+        self.assertFalse(edgar.revenue_tag_conflict(f))
+
+    def test_the_flag_reaches_the_metrics_and_the_screen_record(self):
+        f = facts(RevenueFromContractWithCustomerExcludingAssessedTax=[fy(2024, 13825000), fy(2025, 70918000)],
+                  RevenueFromContractWithCustomerIncludingAssessedTax=[fy(2024, 4418000), fy(2025, 70918000)],
+                  NetIncomeLoss=[fy(2024, -1), fy(2025, -2)], Assets=[inst("2025-12-31", 10)])
+        r = edgar._metrics_from_facts("X", "1", f)
+        self.assertTrue(r["metrics"]["revenue_tag_conflict"])
+        self.assertTrue(ss.compact(r, f)["rev_tag_conflict"])
