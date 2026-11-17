@@ -307,6 +307,23 @@ def validate(cfg):
     sids = [s.get("id") for s in cfg["stages"]]
     if len(set(sids)) != len(sids):
         errs.append("duplicate stage id")
+
+    def _num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) != float("inf")
+    mc = cfg.get("max_cards", 3)
+    if not (isinstance(mc, int) and not isinstance(mc, bool) and 1 <= mc <= 9):
+        errs.append("max_cards must be a whole number from 1 to 9")
+    for k, lo, hi in (("timing_boost", 1.0, 3.0), ("pin_bonus", 0.0, 2.0)):
+        if k in cfg and not (_num(cfg[k]) and lo <= cfg[k] <= hi):
+            errs.append(f"{k} must be a number from {lo:g} to {hi:g}")
+    urg = cfg.get("urgency")
+    if not isinstance(urg, dict):
+        errs.append("urgency must be a table of numbers")
+    else:
+        for k, v in urg.items():
+            for sub, x in (v.items() if isinstance(v, dict) else [(None, v)]):
+                if not (_num(x) and 0 <= x <= 1):
+                    errs.append(f"urgency {k}{'/' + str(sub) if sub else ''} must be a number from 0 to 1")
     seen = set()
     for t in cfg["topics"]:
         if t.get("id") in seen:

@@ -135,3 +135,13 @@ class SpouseAndDebtExclusion(unittest.TestCase):
     def test_missing_ages_deduct_nothing(self):
         r = appmod._debt_fi_exclusion(None, 55, [{"name": "Car", "fi_exclude": True, "min_payment": 500, "remaining_payments": 12}])
         self.assertEqual(r["total_annual"], 0.0)
+
+
+class BreakdownFlags(unittest.TestCase):
+    def test_income_style_names_are_not_debt_and_card_payments_are_flagged(self):
+        self.assertFalse(appmod._debt_like_name("Interest Inc"))
+        self.assertFalse(appmod._debt_like_name("Dividends & Capital Gains"))
+        self.assertTrue(appmod._debt_like_name("Education:Student Loan:Interest"))
+        self.assertTrue(appmod._debt_like_name("Mortgage"))
+        self.assertTrue(appmod._card_payment_name("Credit Card Payment"))
+        self.assertFalse(appmod._card_payment_name("Restaurants"))

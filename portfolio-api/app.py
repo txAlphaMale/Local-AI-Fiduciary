@@ -11491,6 +11491,19 @@ def _cashflow_annual():
 DEBT_WORDS = ("loan", "mortgage", "student", "credit card", "debt", "financing", "lease", "interest")
 
 
+def _debt_like_name(name):
+    """Name looks like a loan or mortgage payment. Income-style categories ('Interest Inc', dividends) are never debt."""
+    low = str(name).lower()
+    if any(w in low for w in ("income", " inc", "dividend", "refund", "rebate", "cashback", "cash back", "reward")):
+        return False
+    return any(w in low for w in DEBT_WORDS)
+
+
+def _card_payment_name(name):
+    low = str(name).lower()
+    return "credit card" in low and ("payment" in low or "pymt" in low)
+
+
 def _categories_from_cashflow(data):
     """Rows [{category, group, type, total}] (positive totals, largest first) from Monarch's byCategory list, or []. Defensive: any shape that
     does not match yields nothing rather than a wrong figure. `debt_like` marks categories whose name suggests a loan or mortgage payment
@@ -11508,7 +11521,8 @@ def _categories_from_cashflow(data):
             continue
         name = str(cat.get("name"))
         rows.append({"category": name, "group": grp.get("name"), "type": grp.get("type"), "total": round(abs(tot), 2),
-                     "debt_like": any(w in name.lower() for w in DEBT_WORDS)})
+                     "debt_like": _debt_like_name(name),
+                     "card_payment": _card_payment_name(name)})
     rows.sort(key=lambda r: -r["total"])
     return rows
 
@@ -11534,6 +11548,8 @@ def get_cashflow_breakdown():
     debt = [r for r in exp if r["debt_like"]]
     return {"available": bool(rows), "generated_at": int(now), "expenses": exp[:25], "expense_total": round(sum(r["total"] for r in exp), 2),
             "debt_like_total": round(sum(r["total"] for r in debt), 2), "debt_like": debt,
+            "card_payments": [r for r in exp if r.get("card_payment")],
+            "card_payments_total": round(sum(r["total"] for r in exp if r.get("card_payment")), 2),
             "income_total": round(sum(r["total"] for r in rows if r["type"] == "income"), 2),
             "transfers_total": round(sum(r["total"] for r in rows if r["type"] == "transfer"), 2),
             "note": "Monarch decides which categories are expenses. Loan and mortgage payments usually count as expenses; payments to a credit card are usually "
