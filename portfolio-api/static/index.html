@@ -476,7 +476,7 @@ let AUTH_STATUS=null;
 // tab order, theme, calculator inputs...) are mirrored to the server per signed-in account (GET/POST /api/prefs). localStorage stays as the
 // local copy. On sign-in the server copy wins where both exist; local-only keys are uploaded (so existing customisations migrate); changes are
 // sent a moment after you make them. Off on the public demo (one shared login). Keep PREFS_KEYS in step with prefs.SYNC_KEYS on the server.
-const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths','fidDebtStrategy','fidLifePins','fidStartPage'];
+const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths','fidDebtStrategy','fidLifePins','fidStartPage','fidLifeBannerSeen'];
 let PREFS_READY=false, PREFS_ENABLED=true, _prefsQ={set:{},remove:{}}, _prefsT=null;
 (function(){
   try{
@@ -741,6 +741,9 @@ function buildTourSteps(){
     {tab:'dashboard', title:'Welcome to the terminal', desc:'A quick tour of what\'s where, and which fields unlock more of the app. Close any time with the ✕ or Esc — nothing here is required.'},
     {tab:'dashboard', element:'#cockpit-panel', title:'Cockpit', desc:'Always-visible "what needs attention" strip. Click any chip to jump straight to the tab with the full detail.'},
     {tab:'dashboard', element:'#main-tabbar', title:'Tabs', desc:'Everything is organized into these top-level tabs, each with its own sub-tabs. Drag a tab to reorder it.'},
+    {tab:'lifemap', element:'#tab-lifemap', title:'LIFE MAP: start here', desc:'The map reads the other panels and puts the life topics that matter most at your stage of life, and where you have gaps, at the top. Every sentence on a card is a fact from another panel, with a link back to it.'},
+    {tab:'lifemap', title:'Needs attention, then what is coming', desc:'Up to three big cards show what needs attention now, each with the reason and a next step. Click a card for its topic page. Below are topics that are on track and ones that will matter at your next stage. "Why this order?" shows the numbers behind the ranking.'},
+    {tab:'lifemap', title:'Look ahead, pins and your start page', desc:'"Look ahead" redraws the map as if you were at a later stage, to see what will matter next; it changes the order, never your data. Star a topic to keep it near the top, and use "Make this my start page" to open here every time. The classic tabs are all still there.'},
     {tab:'calculators', element:'#tab-calculators', title:'Calculators',
      desc:'Planning calculators that run on your own numbers: WHAT-IF · MY DEBTS (pick one of your real debts and see how much sooner and cheaper an extra payment gets it paid off), MORTGAGE true cost, LOAN, LAND LOAN, DRIP (dividend reinvestment, with ticker lookup), a TVM solver, RENT vs BUY and more. Nothing here changes your data; the Fiduciary chat uses the same engine.'},
     // 2026-07-24: nothing else in this tour (or the checklist it's driven from) ever explained
@@ -1322,6 +1325,21 @@ function lifemapSettingsContent(){
   return wrap;
 }
 
+
+// One-time invitation for accounts that existed before LIFE MAP: shown on the Dashboard until it is answered (saved as a preference).
+function lifeMapBannerNode(){
+  const box=el('div'); box.id='lifemap-banner';
+  let seen='', start=''; try{ seen=localStorage.getItem('fidLifeBannerSeen')||''; start=localStorage.getItem('fidStartPage')||''; }catch(_){}
+  if(TAB!=='dashboard' || seen==='1' || start==='lifemap') return box;
+  box.style.cssText='border:1px solid var(--color-accent);padding:var(--space-3);margin:0 0 var(--space-3);display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;';
+  const t=el('div'); t.style.cssText='flex:1 1 320px;line-height:1.5;'; t.innerHTML='<b>New: LIFE MAP.</b> <span class="muted">A first page that puts the topics that matter most at your stage of life, and where you have gaps, at the top. Nothing else has moved.</span>'; box.appendChild(t);
+  const done=()=>{ try{ localStorage.setItem('fidLifeBannerSeen','1'); }catch(_){} };
+  const open=el('button','mut-btn','OPEN LIFE MAP'); open.onclick=()=>{ done(); TAB='lifemap'; render(); }; box.appendChild(open);
+  const mk=el('button','mut-btn','MAKE IT MY START PAGE'); mk.onclick=()=>{ done(); try{ localStorage.setItem('fidStartPage','lifemap'); }catch(_){} TAB='lifemap'; render(); }; box.appendChild(mk);
+  const no=el('button','mut-btn','NOT NOW'); no.onclick=()=>{ done(); render(); }; box.appendChild(no);
+  return box;
+}
+
 function panelSubtabs(panel, sections){
   const wrap=el('div');
   let avail=(sections||[]).filter(Boolean);
@@ -1440,6 +1458,10 @@ W('setup-guide','Getting started','First-time setup checklist',
   'A ranked checklist of the optional forms — scattered across a few panels — that unlock the rest of the app beyond what your connected holdings alone already produce (Positions, Research, Risk/Exposure, Fees/Liquidity, Tax-Loss Harvesting, and the Dashboard all work with zero setup). Ranked by biggest unlock for the least typing, not a hard dependency chain — skip anything you don\'t want to enter and that module just stays a placeholder.',
   '**Tier 1 (PLAN → ASSUMPTIONS, do this one first)**: state of residence (biggest single lever — Estate/ACA/Tax/Cash·Debt all read it; left blank, the app silently assumes Texas and flags it in ⚠ ATTENTION until set), filing status, ages, target retirement age, annual expenses/savings, household size, birth year + SS estimate, estate donee count, home cost basis. **Tier 2**: PLAN → INSURANCE (household income — nothing on that page computes without it; children; policies in force; home value override), PLAN → CASH·DEBT (mortgage rate/payment, refi rate, deposit yield, per-debt APRs, the mortgage checkbox for oddly-named loans), PLAN → BENEFITS (401(k) %/match formula, per-paycheck total, after-tax/ISR status for mega-backdoor Roth, HSA facts). **Tier 3**: ACA benchmark premium, IPS policy targets/position caps, Finnhub/Tavily API keys (`.env`, unlocks Research/news/scanning).',
   'Do these in any order, whenever — nothing breaks by skipping them, and most panels update live once you save. After a first pass, check ⚠ ATTENTION (header badge): it flags anything still obviously incomplete instead of making you hunt for it. Full field-by-field detail lives in `NEW-USER-SETUP-GUIDE.md` in the app folder if you want the long-form version of this checklist. **The live checklist tracking your actual saved config is right below this entry** (2026-07-23 — moved here from a Dashboard card, per a user request to keep the Dashboard itself uncluttered) — a ✓/○ per field, a running "X of N done", and a GO → link that jumps straight to the panel that has it. A small "First-time setup: X of N done" chip + a 🎯 tour button also show on the Dashboard while anything is still outstanding. **Prefer a guided walkthrough instead?** Click 🎯 next to COCKPIT on any tab (or the button below) for a step-by-step tour that highlights each unfilled field directly, one panel at a time.');
+W('life-map','Getting started','LIFE MAP: what matters at your stage',
+  'The first tab. It does not add new analysis: it reads results the other panels already compute (emergency fund, insurance gaps, FIRE odds, documents, taxes, health costs) and sorts them into life topics, putting the ones that matter most at your stage of life, and where you have a gap, at the top. Your stage is worked out from the years left until your stop-work age (PLAN → ASSUMPTIONS).',
+  'Needs attention now: up to three cards with the reason and a next step. On track: topics whose checks pass. Coming up: topics that will matter at your next stage. Status chips: Needs attention (a check found a gap against a stated line), Not started (something you record yourself is missing), Not enough information yet (the reason says what to enter), Could not check, On track. "Why this order?" shows relevance, urgency, timing and score per topic. Look ahead redraws the map as if you were in a later stage (only the order changes, never the data). Design variant re-draws it under an alternative rule, to compare design decisions.',
+  'Click a card for its topic page: each check with its reason, the next step and a link to the panel that produced the figure, plus the pages that belong to the topic. Star a topic to keep it near the top; "Make this my start page" opens the map first every time. Admins can change the weights and numbers in SETTINGS → LIFE MAP. It states priorities and facts about your own data, never advice.');
 W('overview','Getting started','What this terminal is',
   'A local-first financial cockpit: it ingests your holdings, researches each one against SEC fundamentals, analyst consensus and news, and runs read-only planning agents (retirement, tax, risk, estate, opportunity scanning). A sandboxed Strategist trades a hypothetical paper ledger so you can watch how it reasons — no real orders are ever placed.',
   'Everything is organized into top-level tabs (Dashboard, Overview, Research, Insights, Plan, Audits, Strategist, Calculators, Chat) with sub-tabs inside each. The cockpit strip at the top flags what needs attention and its chips jump you to the relevant tab.',
@@ -2003,6 +2025,7 @@ function render(){
   charts.forEach(c=>c.destroy()); charts=[];
 
   if(TAB!=='chat' && TAB!=='wiki' && TAB!=='lifemap'){   // CHAT, WIKI and LIFE MAP use the full panel; skip the cockpit strip above them
+    body.appendChild(lifeMapBannerNode());      // one-time invitation to try LIFE MAP (Dashboard only, until answered)
     body.appendChild(emergencyBannerNode());   // TASK-002: red banner while an emergency request is pending (admin)
     body.appendChild(staleBannerNode());       // last-good portfolio shown while the live refresh is failing
     body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip + tile router
