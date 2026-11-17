@@ -5169,6 +5169,24 @@ def _timeline_run(inp, notes):
     return res
 
 
+def _timeline_summary_for_chat(res, years=10):
+    """Chat-sized view of a timeline result (RV-T2 phase 3): the table's own summary plus ONE short row per year for the first `years` years
+    (age, phase, spending funded, tax, conversion, required distribution, coverage status, end total, flags). No bucket detail, no tax
+    breakdown. Every figure is the table's; nothing is recomputed here."""
+    years = max(1, min(int(years or 10), 70))
+    rows = []
+    for x in (res.get("rows") or [])[:years]:
+        t, c = x.get("tax") or {}, x.get("coverage") or {}
+        rows.append({"year": x["year"], "age": x["age"], "phase": x["phase"],
+                     "tax": round((t.get("federal") or 0) + (t.get("state") or 0) + (t.get("penalty") or 0), 0) if t else None,
+                     "conversion": x.get("conversion"), "required_distribution": x.get("rmd"),
+                     "coverage": c.get("kind"), "subsidy_lost": c.get("subsidy_lost"), "medicare_surcharge": c.get("surcharge"),
+                     "shortfall": x.get("shortfall"), "end_total": x.get("end_total"), "flags": x.get("flags") or []})
+    return {"summary": res.get("summary"), "rows": rows, "rows_shown": len(rows), "rows_total": len(res.get("rows") or []),
+            "footer": res.get("footer"), "problems": res.get("problems"), "notes": res.get("notes"), "tax_year": res.get("tax_year"),
+            "where": "PLAN > TIMELINE has every column, the bucket detail and a way to try a different retirement age or Roth conversions."}
+
+
 @app.get("/api/plan/timeline")
 def get_plan_timeline():
     """The year-by-year plan table with the current inputs (one row per year to the plan's end age). Read-only. Real dollars, deterministic."""
@@ -17510,6 +17528,7 @@ FIDUCIARY_PROMPT = (
     "their actual positions and targets. Then reach for the tool that fits the question: get_exposure "
     "(sector/beta/concentration), get_rebalance (IPS sleeve drift), get_risk_metrics (realized vol / "
     "drawdown / Sharpe), get_retirement and get_income_plan (long-range plan, Monte Carlo, glide path), "
+    "get_plan_timeline (the year-by-year table: taxes, Roth conversions, required distributions, ACA and Medicare years, one deterministic path), "
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
     "get_social_security, get_benefits (401k match / HSA / Roth contribution room), get_fees_liquidity, "
     "get_lookthrough (fund holdings), get_scorecard, get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice). When you describe a company from this tool, use ONLY its figures, sector labels and wording: do not add what the company does, former names, mergers or other background from memory, and if the tool does not say it, leave it out, "
@@ -17597,6 +17616,11 @@ FIDUCIARY_TOOLS = [
     {"type": "function", "function": {"name": "get_retirement",
         "description": "Retirement projection: funding, Monte Carlo success, FI timeline, withdrawal picture.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "get_plan_timeline",
+        "description": "Year-by-year plan table (PLAN > TIMELINE): for each year taxes, Roth conversions, required distributions, ACA subsidy "
+                       "or Medicare surcharge, shortfall and the end balance, plus lifetime totals and flagged years. Deterministic, real dollars; "
+                       "the Monte Carlo (get_retirement) covers uncertainty. Short rows only; optional years = how many years from now (default 10).",
+        "parameters": {"type": "object", "properties": {"years": {"type": "integer", "description": "Years from now to show, 1 to 70. Default 10."}}}}},
     {"type": "function", "function": {"name": "get_income_plan",
         "description": "Income glide path: coverage of target income by year and the shift schedule.",
         "parameters": {"type": "object", "properties": {}}}},
@@ -17799,6 +17823,11 @@ def _fiduciary_dispatch(name, args):
         if name == "get_rebalance":       return get_rebalance()
         if name == "get_risk_metrics":    return get_risk_metrics()
         if name == "get_retirement":      return get_retirement()
+        if name == "get_plan_timeline":
+            inp, notes = _timeline_inputs()
+            if not inp["start_age"]:
+                return {"error": "The year-by-year table needs a birth year or current age in PLAN > ASSUMPTIONS."}
+            return _timeline_summary_for_chat(_timeline_run(inp, notes), args.get("years") or 10)
         if name == "get_income_plan":     return get_income_plan()
         if name == "get_tax_audit":       return _tax_audit()
         if name == "get_aca":             return get_aca()

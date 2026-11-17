@@ -4251,6 +4251,9 @@ function planContent(r){
         st('PATHS',mc.runs);
       wrap.appendChild(ms);
       const mn=el('div','muted'); mn.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-4);'; mn.textContent=mc.note||''; wrap.appendChild(mn);
+      { const tl=el('div'); tl.style.cssText='font-size:var(--font-size-base);margin:calc(-1 * var(--space-2)) 0 var(--space-4);line-height:1.5;';
+        tl.appendChild(el('span','muted','The Monte Carlo gives the odds across many possible markets. For one year-by-year path with taxes, Roth conversions, required distributions and ACA or Medicare years: '));
+        const a=el('a',null,'open PLAN › TIMELINE'); a.href='#'; a.style.cssText='color:var(--color-accent);'; a.onclick=e=>{ e.preventDefault(); TAB='plan'; setSubtab('plan','timeline'); }; tl.appendChild(a); wrap.appendChild(tl); }
       if(mc.holdings_volatility){
         const hv=mc.holdings_volatility, hl=el('div'); hl.style.cssText='font-size:var(--font-size-base);margin-bottom:var(--space-3);line-height:1.5;';
         if(hv.available){
