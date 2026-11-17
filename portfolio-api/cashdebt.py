@@ -459,7 +459,7 @@ def avalanche(debts, invest_hurdle_pct):
         # which is where rollover and the extra $/mo actually live.
         rp = remaining_payments(bal, rate, minp, pay_in_full)
         rows.append({"name": d.get("name"), "balance": round(bal, 2), "rate_pct": rate,
-                     "min_payment": minp, "pay_in_full": pay_in_full,
+                     "min_payment": minp, "pay_in_full": pay_in_full, "fi_exclude": bool(d.get("fi_exclude")),
                      "priority": priority, "annual_interest": annual_interest,
                      "remaining_payments": rp["months"],
                      "remaining_payments_status": rp["status"],

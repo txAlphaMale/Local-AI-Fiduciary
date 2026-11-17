@@ -94,3 +94,44 @@ class Page(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpouseAndDebtExclusion(unittest.TestCase):
+    def test_spouse_401k_is_added_and_the_note_goes_away(self):
+        sp = {"employee": 6000.0, "after_tax": 0.0, "match": 2000.0}
+        sb = appmod._savings_breakdown(200000.0, 191613.0, BEN, spouse=sp)
+        self.assertEqual((sb["k401_spouse"], sb["spouse_match"]), (6000.0, 2000.0))
+        self.assertEqual(sb["total"], 8387.0 + 19250.0 + 7700.0 + 6000.0 + 2000.0)
+
+    def test_spouse_income_without_details_is_flagged_not_guessed(self):
+        b = {"facts": {"salary": 100000, "spouse_salary": 80000}, "sections": {"k401": {"deferral_dollars": 10000.0, "match": {"earned_match_dollars": 0.0}}}}
+        sb = appmod._savings_breakdown(90000.0, 80000.0, b)
+        self.assertTrue([n for n in sb["notes"] if "spouse" in n.lower()])
+        self.assertEqual(sb["k401_spouse"], 0.0)
+
+    def test_spouse_401k_needs_income_and_details(self):
+        self.assertIsNone(appmod._spouse_401k({"income_spouse": 0, "k401_spouse_pretax_pct": 5}))
+        self.assertIsNone(appmod._spouse_401k({"income_spouse": 80000}))
+        r = appmod._spouse_401k({"income_spouse": 80000, "k401_spouse_pretax_pct": 10, "k401_spouse_match_t1_pct": 4, "k401_spouse_match_t1_rate": 50})
+        self.assertEqual(r["employee"], 8000.0)
+        self.assertEqual(r["match"], 1600.0)
+
+    def test_only_debts_ending_by_the_target_age_are_deducted(self):
+        rows = [{"name": "Car", "fi_exclude": True, "min_payment": 500, "remaining_payments": 36},
+                {"name": "Student", "fi_exclude": True, "min_payment": 300, "remaining_payments": 240},
+                {"name": "Card", "fi_exclude": True, "min_payment": 100, "remaining_payments": None},
+                {"name": "Unticked", "fi_exclude": False, "min_payment": 900, "remaining_payments": 12},
+                {"name": "NoPay", "fi_exclude": True, "min_payment": None, "remaining_payments": 12}]
+        r = appmod._debt_fi_exclusion(49, 55, rows)
+        self.assertEqual(r["total_annual"], 6000.0)
+        by = {i["name"]: i for i in r["items"]}
+        self.assertTrue(by["Car"]["applied"])
+        self.assertFalse(by["Student"]["applied"])
+        self.assertIn("after your target age", by["Student"]["reason"])
+        self.assertFalse(by["Card"]["applied"])
+        self.assertNotIn("Unticked", by)
+        self.assertFalse(by["NoPay"]["applied"])
+
+    def test_missing_ages_deduct_nothing(self):
+        r = appmod._debt_fi_exclusion(None, 55, [{"name": "Car", "fi_exclude": True, "min_payment": 500, "remaining_payments": 12}])
+        self.assertEqual(r["total_annual"], 0.0)
