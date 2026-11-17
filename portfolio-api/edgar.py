@@ -993,7 +993,7 @@ def _usd_rows(facts, tags):
     return [e for _, e in best.values()]
 
 
-def _ttm_val(facts, tags, ref_end=None):
+def _ttm_val(facts, tags, ref_end=None, back=0, dur=None, _info=None):
     """Trailing-twelve-month sum for a FLOW concept (revenue, net income, cash flows).
     TTM = latest full FY (10-K) + current-year YTD interim - prior-year same-length YTD,
     which bridges the un-filed standalone Q4. Falls back to the latest annual when no
@@ -1017,6 +1017,19 @@ def _ttm_val(facts, tags, ref_end=None):
         g = _gap_days(series[-1][0], ref_end)
         if g is None or abs(g) > 7:
             return None
+    nxt_end = None
+    if back:                                      # the TTM that ended one year earlier (RV-B8: TTM growth = this TTM over that one)
+        if len(series) < 2:
+            return None
+        g = _gap_days(series[-2][0], series[-1][0])
+        if g is None or not 330 <= g <= 400:
+            return None
+        nxt_end = a_end
+        a_end, a_val = _d(series[-2][0]), series[-2][1]
+        if a_end is None or a_val is None:
+            return None
+        if dur is None:
+            return round(a_val, 2)                # the current TTM is the latest annual, so the earlier one is the prior annual
     cur = []
     for e in rows:
         s, en = _d(e.get("start")), _d(e.get("end"))
@@ -1024,11 +1037,17 @@ def _ttm_val(facts, tags, ref_end=None):
             continue
         if (en - s).days >= 350:                  # skip another full-year span
             continue
+        if nxt_end is not None and en >= nxt_end:
+            continue
         if abs((s - a_end).days) <= 12:           # YTD interim starting at the new fiscal year
             cur.append((en, (en - s).days, e.get("val")))
+    if back:
+        cur = [c for c in cur if abs(c[1] - dur) <= 25]
     if not cur:
-        return round(a_val, 2)                    # nothing newer filed -> TTM == latest annual
+        return None if back else round(a_val, 2)  # nothing newer filed -> TTM == latest annual
     c_end, c_dur, c_val = max(cur, key=lambda x: x[0])
+    if _info is not None:
+        _info["dur"] = c_dur
     if c_val is None:
         return None
     prior = []
@@ -1044,6 +1063,17 @@ def _ttm_val(facts, tags, ref_end=None):
     if p_val is None:
         return None
     return round(a_val + c_val - p_val, 2)
+
+
+def ttm_revenue_growth(facts, ref_end=None):
+    """Revenue growth, trailing twelve months over the twelve months before them, in % (None when either cannot be bridged).
+    Fresher than the fiscal-year figure, which can be 2 to 15 months old (RV-011)."""
+    tags, info = TAGS["revenue"], {}
+    cur = _ttm_val(facts, tags, ref_end, _info=info)
+    if cur is None:
+        return None
+    prev = _ttm_val(facts, tags, ref_end, back=1, dur=info.get("dur"))
+    return round((cur - prev) / prev * 100, 2) if (prev and prev > 0) else None
 
 
 def _compute(ticker):
@@ -1151,6 +1181,7 @@ def _metrics_from_facts(ticker, cik, facts):
         "capex": capex,
         "total_assets": assets,
         "stockholders_equity": equity,
+        "ttm_revenue_growth_pct": ttm_revenue_growth(facts, ref_end),
         "ttm": {"revenue": ttm_rev, "net_income": ttm_ni, "free_cash_flow": ttm_fcf,
                 "net_margin_pct": _pct(ttm_ni, ttm_rev), "fcf_margin_pct": _pct(ttm_fcf, ttm_rev)},
         "trends": {"revenue": _series(facts, "revenue"),

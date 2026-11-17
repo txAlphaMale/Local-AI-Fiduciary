@@ -137,3 +137,24 @@ class OperatingMarginTests(unittest.TestCase):
     def test_operating_margin_carried(self):
         s1 = ss.compact(self._res(-12.0, 40.0), facts())
         self.assertEqual((s1["operating_margin_pct"], s1["net_margin_pct"]), (-12.0, 40.0))
+
+
+class TtmGrowthTests(unittest.TestCase):
+    """RV-B8: trailing-twelve-month revenue growth, bridged the same way as the TTM value itself."""
+    def q(self, year, start, end, val, form="10-Q"):
+        return {"start": f"{year}-{start}", "end": f"{year}-{end}", "val": val, "form": form, "fp": "Q3", "filed": f"{year}-{end}"}
+
+    def test_interim_ttm_growth(self):
+        # FY2023 = 80, FY2024 = 100; nine months: 2023 = 45, 2024 = 60, 2025 = 180.
+        # TTM = 100 + 180 - 60 = 220; the TTM a year earlier = 80 + 60 - 45 = 95.
+        f = facts(Revenues=[fy(2023, 80), fy(2024, 100), self.q(2023, "01-01", "09-30", 45),
+                            self.q(2024, "01-01", "09-30", 60), self.q(2025, "01-01", "09-30", 180)])
+        self.assertEqual(edgar.ttm_revenue_growth(f), round((220 - 95) / 95 * 100, 2))
+
+    def test_no_interim_uses_annual_growth(self):
+        f = facts(Revenues=[fy(2024, 100), fy(2025, 150)])
+        self.assertEqual(edgar.ttm_revenue_growth(f), 50.0)
+
+    def test_unbridgeable_prior_year_is_none_not_a_guess(self):
+        f = facts(Revenues=[fy(2025, 200), self.q(2025, "01-01", "09-30", 180)])
+        self.assertIsNone(edgar.ttm_revenue_growth(f))
