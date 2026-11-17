@@ -305,6 +305,28 @@ def ext_cache_set(source, key, value, fetched_at=None):
                   (source, key, fetched_at, _enc(json.dumps(value))))
 
 
+def ext_cache_rewrite(source, fn):
+    """Rewrites every stored value of `source` through fn(value) (a falsy result deletes the row). Returns how many rows changed. Used once at
+    startup to bring entries written before a storage rule existed in line with it."""
+    n = 0
+    with _conn() as c:
+        rows = c.execute("SELECT key, value FROM external_cache WHERE source=?", (source,)).fetchall()
+        for r in rows:
+            try:
+                old = json.loads(_dec(r["value"]))
+                new = fn(old)
+            except Exception:
+                old, new = None, None
+            if new == old:
+                continue
+            if new:
+                c.execute("UPDATE external_cache SET value=? WHERE source=? AND key=?", (_enc(json.dumps(new)), source, r["key"]))
+            else:
+                c.execute("DELETE FROM external_cache WHERE source=? AND key=?", (source, r["key"]))
+            n += 1
+    return n
+
+
 # ---- cached_fetch: the shared two-tier helper every external-data call site converts to ----
 # 2026-07-30. In-memory hot cache (fast, TTL-gated, cleared on restart) backed by external_cache
 # (disk, survives restart). This is the ONE reusable pattern the "last-known-good cache" backlog
@@ -337,7 +359,7 @@ _MEM_CACHE = {}   # (source, key) -> (fetched_at, value)
 _STALE_AFTER_DEFAULT_FLOOR = 86400      # never call a fallback stale until it has missed a full day
 
 
-def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_after=None):
+def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_after=None, persist_fn=None):
     """`compute_fn()` performs the fresh fetch (must not raise -- every current caller already
     catches its own fetch exceptions internally and returns a shaped failure value instead, same
     contract as before this helper existed).
@@ -356,6 +378,10 @@ def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_
     `stale_after` is measured in TRADING TIME, not wall-clock (2026-08-08, market_calendar):
     weekend and NYSE-holiday seconds do not age the data, because no fresher value exists while
     the market is shut. A Friday-evening pull read on Saturday morning is 6 hours old, not 15.
+
+    `persist_fn(value)` (optional): what is written to DISK. The in-memory hot cache keeps the full value for this process; the disk copy (the
+    restart / outage fallback) keeps only what persist_fn returns. Used for Tavily results, whose licence does not allow keeping the content
+    of results: the disk copy holds links, titles and dates only.
 
     Returns (value, meta), meta =
       {"fetched_at": epoch secs or None,   # when the returned value was actually retrieved
@@ -386,7 +412,7 @@ def cached_fetch(source, key, ttl, compute_fn, is_ok=None, is_empty=None, stale_
     if (is_empty and is_empty(res)) or is_ok(res):
         empty = bool(is_empty and is_empty(res))
         _MEM_CACHE[(source, key)] = (now, res)
-        ext_cache_set(source, key, res, now)
+        ext_cache_set(source, key, persist_fn(res) if persist_fn else res, now)
         return res, _meta(now, empty=empty)
     # failure this call -- fall back to the last-known-good: memory first (cheaper, this
     # process), then disk (survives a restart -- the whole point of Part 2).

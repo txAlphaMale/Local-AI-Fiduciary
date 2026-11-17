@@ -306,7 +306,7 @@ def compact(result, facts):
         rps = round(((a_r / sh) / (a_rp / sh_p) - 1) * 100, 2)
     ttm_g = None if used_alt else m.get("ttm_revenue_growth_pct")
     return {
-        "rev_ttm_growth_pct": ttm_g, "rev_per_share_growth_pct": rps,
+        "rev_ttm_growth_pct": ttm_g, "rev_per_share_growth_pct": rps, "rev_tag_conflict": bool(m.get("revenue_tag_conflict")),
         "revenue": rev, "revenue_alt_tags": used_alt, "current_ratio": r.get("current_ratio"),
         "cash": cash, "cash_as_of": cash_as_of, "negative_equity": bool(r.get("negative_equity")),
         "period_mismatch": m.get("period_mismatch") or [], "runway_months": runway_from_fcf(cash, ttm.get("free_cash_flow") if ttm.get("free_cash_flow") is not None else m.get("free_cash_flow")),

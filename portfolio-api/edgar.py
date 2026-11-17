@@ -1065,6 +1065,33 @@ def _ttm_val(facts, tags, ref_end=None, back=0, dur=None, _info=None):
     return round(a_val + c_val - p_val, 2)
 
 
+def revenue_tag_conflict(facts, tol=0.25):
+    """True when the company's own revenue tags disagree about one of the two latest fiscal years by more than `tol` (ASTS: 13.8M under one
+    tag and 4.4M under another for 2024). The series the screen uses is still the best-supported one; this only says the filing is ambiguous, so
+    a growth figure built on it should be read as unverified. A tag reporting zero is not a disagreement (a company that had no revenue)."""
+    us = (facts.get("facts") or {}).get("us-gaap") or {}
+    per = {}
+    for tag in TAGS["revenue"]:
+        node = us.get(tag)
+        if not node:
+            continue
+        units = node.get("units") or {}
+        rows = units.get("USD") or (next(iter(units.values()), []) if units else [])
+        for e in rows:
+            if not (str(e.get("form", "")).startswith("10-K") and e.get("fp") == "FY") or not e.get("end") or not e.get("start"):
+                continue
+            s_, en = _d(e.get("start")), _d(e.get("end"))
+            if not s_ or not en or not 340 <= (en - s_).days <= 380 or not isinstance(e.get("val"), (int, float)):
+                continue
+            per.setdefault(e["end"][:10], {}).setdefault(tag, {})[str(e.get("filed"))] = e["val"]     # latest filing wins within a tag
+    ends = sorted(per)[-2:]
+    for end in ends:
+        vals = [v[max(v)] for v in per[end].values() if v and v[max(v)] > 0]
+        if len(vals) >= 2 and max(vals) > min(vals) * (1 + tol):
+            return True
+    return False
+
+
 def ttm_revenue_growth(facts, ref_end=None):
     """Revenue growth, trailing twelve months over the twelve months before them, in % (None when either cannot be bridged).
     Fresher than the fiscal-year figure, which can be 2 to 15 months old (RV-011)."""
@@ -1182,6 +1209,7 @@ def _metrics_from_facts(ticker, cik, facts):
         "total_assets": assets,
         "stockholders_equity": equity,
         "ttm_revenue_growth_pct": ttm_revenue_growth(facts, ref_end),
+        "revenue_tag_conflict": revenue_tag_conflict(facts),
         "ttm": {"revenue": ttm_rev, "net_income": ttm_ni, "free_cash_flow": ttm_fcf,
                 "net_margin_pct": _pct(ttm_ni, ttm_rev), "fcf_margin_pct": _pct(ttm_fcf, ttm_rev)},
         "trends": {"revenue": _series(facts, "revenue"),
