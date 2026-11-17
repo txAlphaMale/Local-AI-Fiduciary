@@ -264,6 +264,18 @@
   .chat-list{flex:1;overflow:auto;}
   /* Printing / saving a page as PDF (2026-11-10): wide tables used to be clipped to their first two columns (overflow-x:auto does not print). */
   @page{size:landscape;margin:10mm;}
+  /* LIFE MAP at phone width: finger-sized links/buttons/selects, long words wrap, wide tables scroll inside their own box */
+  .lm a,.lm button,.lm select{touch-action:manipulation}
+  .lm .lm-card,.lm .lm-card *{overflow-wrap:anywhere}
+  @media (max-width:640px){
+    .lm a{display:inline-block;padding:11px 2px;min-height:44px;box-sizing:border-box}
+    .lm .lm-card a{padding:12px 2px}
+    .lm button,.lm select{min-height:44px;font-size:14px}
+    .lm .lm-card{min-width:0!important;flex-basis:100%!important}
+    .lm .lm-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .lm .lm-scroll table{min-width:560px}
+    .lm .lm-scroll td{text-align:left}
+  }
   @media print{
     table{display:table !important;overflow:visible !important;width:100% !important;table-layout:auto !important;font-size:10px !important;}
     .col-rs{display:none !important;}
@@ -1196,7 +1208,7 @@ const LM_STATE={ok:['✓','On track','pos'],attention:['▲','Needs attention','
 function lmChip(status){ const m=LM_STATE[status]||LM_STATE.noinfo; const c=el('span',m[2]||null,m[0]+' '+m[1]); c.style.cssText='font-size:var(--font-size-sm);letter-spacing:.5px;white-space:nowrap;'; return c; }
 function lmLink(text,tab,sub){ const a=el('a',null,text); a.href='#'; a.style.cssText='color:var(--color-accent);'; a.onclick=e=>{ e.preventDefault(); lmGo(tab,sub); }; return a; }
 function lmCard(t,full){
-  const card=el('div'); card.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);min-width:240px;flex:1 1 280px;cursor:pointer;';
+  const card=el('div','lm-card'); card.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);min-width:240px;flex:1 1 280px;cursor:pointer;';
   card.tabIndex=0; card.setAttribute('role','button'); card.setAttribute('aria-label',t.name+': '+(LM_STATE[t.status]||LM_STATE.noinfo)[1]);
   const open=()=>{ LM.topic=t.id; render(); }; card.onclick=open; card.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } };
   const h=el('div'); h.style.cssText='display:flex;justify-content:space-between;gap:8px;align-items:baseline;';
@@ -1208,7 +1220,7 @@ function lmCard(t,full){
   return card;
 }
 function lifemapContent(){
-  const wrap=el('div');
+  const wrap=el('div','lm');
   if(LM.topic&&LM.data) return lifeTopicContent(LM.topic);
   if(!LM.data&&!LM.loading&&!LM.err) lmLoad();
   const head=el('div','ph','LIFE MAP'); wrap.appendChild(head);
@@ -1245,7 +1257,7 @@ function lifemapContent(){
     const hr=document.createElement('tr'); ['TOPIC','RELEVANCE','URGENCY','TIMING','SCORE','SET BY'].forEach(h=>{ const th=document.createElement('th'); th.textContent=h; th.style.cssText='text-align:left;padding:3px 10px;'; hr.appendChild(th); }); t.appendChild(hr);
     d.order.forEach(i=>{ const x=byId[i]; const tr=document.createElement('tr'); const p=x.parts||{};
       [x.name+(x.pinned?' ★':''),p.relevance+(p.modifiers&&p.modifiers.length?' (stage '+p.base_weight+' + '+p.modifiers.map(m=>m.id+' '+(m.add>0?'+':'')+m.add).join(', ')+')':' (stage weight)'),p.urgency,p.timing,x.score,p.urgency_from||'—'].forEach(v=>{ const td=document.createElement('td'); td.textContent=String(v); td.style.cssText='padding:3px 10px;border-top:1px solid var(--color-border);'; tr.appendChild(td); }); t.appendChild(tr); });
-    wrap.appendChild(t);
+    const sc=el('div','lm-scroll'); sc.appendChild(t); wrap.appendChild(sc);
   }
   // on track
   const ot=(d.bands.ontrack||[]).map(i=>byId[i]);
@@ -1264,7 +1276,7 @@ function lifemapContent(){
   return wrap;
 }
 function lifeTopicContent(id){
-  const wrap=el('div'); const d=LM.data; const t=(d.topics||[]).find(x=>x.id===id);
+  const wrap=el('div','lm'); const d=LM.data; const t=(d.topics||[]).find(x=>x.id===id);
   const back=el('button','mut-btn','← LIFE MAP'); back.onclick=()=>{ LM.topic=null; render(); }; wrap.appendChild(back);
   if(!t){ wrap.appendChild(el('div','muted','That topic is not in the map.')); return wrap; }
   const h=el('div'); h.style.cssText='margin:var(--space-3) 0;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;';
@@ -1293,7 +1305,7 @@ function lmsLoad(){ LMS.loading=true; fetch('/api/lifemap/config').then(r=>r.jso
 function lmsPost(url,body){ LMS.msg=null; LMS.err=null; return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json().then(d=>({ok:r.ok,d}))); }
 function lmsSave(cfg){ lmsPost('/api/lifemap/config',{config:cfg}).then(({ok,d})=>{ if(ok){ LMS.msg='Saved. The map uses it immediately.'; LMS.cfg=cfg; LMS.isDefault=false; LMS.text=null; LM.data=null; } else { LMS.err=(d.error||'refused')+(d.problems?': '+d.problems.join('; '):''); } if(TAB==='settings') render(); }); }
 function lifemapSettingsContent(){
-  const wrap=el('div'); if(!LMS.cfg&&!LMS.loading) lmsLoad();
+  const wrap=el('div','lm'); if(!LMS.cfg&&!LMS.loading) lmsLoad();
   wrap.appendChild(el('div','ph','LIFE MAP · DESIGN'));
   const intro=el('div','muted','The stage weights, numbers and wording behind the LIFE MAP page. Changes apply at once and can be undone with RESET TO DEFAULTS. Alternative designs for comparing live under "variants" in the text editor (see LIFE-MAP-GUIDE.md).'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);'; wrap.appendChild(intro);
   if(LMS.err){ const e=el('div','neg',LMS.err); e.style.margin='6px 0'; wrap.appendChild(e); }
@@ -1308,7 +1320,7 @@ function lifemapSettingsContent(){
       const tr=document.createElement('tr'); const n=document.createElement('td'); n.textContent=tp.name; n.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);'; tr.appendChild(n);
       stages.forEach(sid=>{ const td=document.createElement('td'); td.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);'; const i=document.createElement('input'); i.type='number'; i.min='0'; i.max='3'; i.step='1'; i.className='set-inp'; i.style.width='52px'; i.value=(cfg.weights[tp.id]||{})[sid]; i.onchange=()=>{ const v=parseInt(i.value,10); if(!isNaN(v)) cfg.weights[tp.id][sid]=Math.max(0,Math.min(3,v)); }; td.appendChild(i); tr.appendChild(td); });
       const w=document.createElement('td'); w.textContent=(cfg.weights[tp.id]||{}).why||''; w.className='muted'; w.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);max-width:420px;'; tr.appendChild(w); t.appendChild(tr); });
-    wrap.appendChild(t);
+    const sc=el('div','lm-scroll'); sc.appendChild(t); wrap.appendChild(sc);
     const nh=el('div','ph','NUMBERS'); nh.style.marginTop='var(--space-4)'; wrap.appendChild(nh);
     const row=el('div'); row.style.cssText='display:flex;gap:var(--space-4);flex-wrap:wrap;margin:6px 0;';
     [['timing_boost','Calendar boost (x)',0.1,'Gaps inside a date window count this many times more'],['pin_bonus','Pin bonus',0.1,'Added to a pinned topic\'s score'],['max_cards','Big cards shown',1,'How many topics get a full card']].forEach(([k,l,st,tip])=>{ const d=el('label'); d.style.cssText='display:flex;flex-direction:column;font-size:var(--font-size-sm);gap:2px;'; d.title=tip; d.appendChild(el('span','muted',l)); const i=document.createElement('input'); i.type='number'; i.step=String(st); i.className='set-inp'; i.style.width='96px'; i.value=cfg[k]; i.onchange=()=>{ const v=parseFloat(i.value); if(!isNaN(v)) cfg[k]=v; }; d.appendChild(i); row.appendChild(d); });
