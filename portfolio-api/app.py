@@ -11470,6 +11470,89 @@ def _cashflow_annual():
     return (abs(inc), abs(exp)) if found else (None, None)
 
 
+DEBT_WORDS = ("loan", "mortgage", "student", "credit card", "debt", "financing", "lease", "interest")
+
+
+def _categories_from_cashflow(data):
+    """Rows [{category, group, type, total}] (positive totals, largest first) from Monarch's byCategory list, or []. Defensive: any shape that
+    does not match yields nothing rather than a wrong figure. `debt_like` marks categories whose name suggests a loan or mortgage payment
+    (a guess from the name: Monarch's own category groups decide what counted as an expense)."""
+    cf = (data or {}).get("cashflow") or data or {}
+    by = cf.get("byCategory") if isinstance(cf, dict) else None
+    rows = []
+    for e in (by if isinstance(by, list) else []):
+        if not isinstance(e, dict):
+            continue
+        cat = ((e.get("groupBy") or {}).get("category") or {})
+        grp = cat.get("group") or {}
+        tot = (e.get("summary") or {}).get("sum")
+        if not isinstance(tot, (int, float)) or not cat.get("name"):
+            continue
+        name = str(cat.get("name"))
+        rows.append({"category": name, "group": grp.get("name"), "type": grp.get("type"), "total": round(abs(tot), 2),
+                     "debt_like": any(w in name.lower() for w in DEBT_WORDS)})
+    rows.sort(key=lambda r: -r["total"])
+    return rows
+
+
+_CF_CAT_MEMO = {"at": 0.0, "rows": None}
+
+
+@app.get("/api/cashflow-breakdown")
+def get_cashflow_breakdown():
+    """What is inside the yearly 'expenses' figure taken from Monarch: spending by category over the last twelve months, split into the
+    categories Monarch counts as expenses, income, and transfers (left out of both), with a marker on categories that look like loan or
+    mortgage payments. Read-only; it only shows what the provider reported, so you can decide whether to override the expenses figure."""
+    now = time.time()
+    if _CF_CAT_MEMO["rows"] is None or now - _CF_CAT_MEMO["at"] > 600:
+        end = datetime.date.today()
+        try:
+            data = _post("get_cashflow", {"start_date": end.replace(year=end.year - 1).isoformat(), "end_date": end.isoformat()}, trip=False)
+        except Exception:
+            return {"available": False, "reason": "Monarch cash flow could not be read right now."}
+        _CF_CAT_MEMO.update(at=now, rows=_categories_from_cashflow(data))
+    rows = _CF_CAT_MEMO["rows"]
+    exp = [r for r in rows if r["type"] == "expense"]
+    debt = [r for r in exp if r["debt_like"]]
+    return {"available": bool(rows), "generated_at": int(now), "expenses": exp[:25], "expense_total": round(sum(r["total"] for r in exp), 2),
+            "debt_like_total": round(sum(r["total"] for r in debt), 2), "debt_like": debt,
+            "income_total": round(sum(r["total"] for r in rows if r["type"] == "income"), 2),
+            "transfers_total": round(sum(r["total"] for r in rows if r["type"] == "transfer"), 2),
+            "note": "Monarch decides which categories are expenses. Loan and mortgage payments usually count as expenses; payments to a credit card are usually "
+                    "a transfer (the purchases themselves are the expense). Categories flagged 'looks like debt' are guessed from their names."}
+
+
+def _savings_breakdown(cf_inc, cf_exp, benefits_res, override=None):
+    """Annual savings for the FI projection, with its parts. Monarch's income is the pay that reaches the bank, i.e. AFTER payroll 401(k)
+    deferrals, so income minus expenses is only the cash left over; the money that goes into the 401(k) straight from the paycheck, and the
+    employer's match, never appear in it. Total = cash left over + 401(k) deferrals (pre-tax) + after-tax 401(k) + employer match, taken
+    from the Benefits panel's own figures. HSA payroll contributions are NOT added: the retirement projection keeps the HSA out of
+    spendable money (a medical reserve). An override typed by the user replaces the whole total. -> dict with `total` (None if unknown)."""
+    left = round(cf_inc - cf_exp, 2) if (cf_inc is not None and cf_exp is not None) else None
+    if override is not None:
+        return {"total": override, "source": "override", "left_over": left, "k401_employee": None, "k401_after_tax": None, "employer_match": None,
+                "notes": ["You entered this total yourself: it replaces the estimate."]}
+    out = {"left_over": left, "k401_employee": 0.0, "k401_after_tax": 0.0, "employer_match": 0.0, "source": "estimate", "notes": []}
+    b = benefits_res if isinstance(benefits_res, dict) else {}
+    sal = (b.get("facts") or {}).get("salary")
+    if not b or b.get("setup_needed") or not sal:
+        out["notes"].append("Salary and 401(k) details are not entered in PLAN > BENEFITS, so payroll 401(k) contributions and the employer match are NOT included.")
+    else:
+        k = (b.get("sections") or {}).get("k401") or {}
+        out["k401_employee"] = round(float(k.get("deferral_dollars") or 0.0), 2)
+        out["employer_match"] = round(float((k.get("match") or {}).get("earned_match_dollars") or 0.0), 2)
+        at = (b.get("facts") or {}).get("aftertax_pct")
+        out["k401_after_tax"] = round(float(sal) * float(at) / 100.0, 2) if at else 0.0
+        out["notes"].append("Only your own 401(k) is counted (a spouse's contributions are not in the Benefits panel). HSA contributions are left out because the plan treats the HSA as a medical reserve.")
+    parts = [out["left_over"], out["k401_employee"], out["k401_after_tax"], out["employer_match"]]
+    out["total"] = round(sum(x for x in parts if x is not None), 2) if out["left_over"] is not None or out["k401_employee"] or out["employer_match"] else None
+    if out["left_over"] is None:
+        out["notes"].append("Monarch cash flow is not available, so the cash left over is unknown and is not included.")
+    else:
+        out["notes"].append("The cash left over (Monarch income minus expenses) is an estimate: it is not necessarily all invested.")
+    return out
+
+
 def _years_to_fi(assets, annual_savings, real_return, target):
     """Years until assets + contributions (end-of-year) compound to the FI target. None if >80yrs."""
     if assets >= target:
@@ -11910,12 +11993,12 @@ def _retirement():
     if _lt_on and annual_expenses is not None:
         annual_expenses = round(annual_expenses + _lt["expected"]["annual"], 2)
     exp_source = "override" if exp_override is not None else ("monarch_cashflow" if cf_exp is not None else None)
-    if sav_override is not None:
-        annual_savings = sav_override
-    elif cf_inc is not None and cf_exp is not None:
-        annual_savings = round(cf_inc - cf_exp, 2)
-    else:
-        annual_savings = None
+    try:
+        _bres = get_benefits()
+    except Exception:
+        _bres = None
+    sav_break = _savings_breakdown(cf_inc, cf_exp, _bres, sav_override)
+    annual_savings = sav_break["total"]
 
     notes = [
         "Investable assets exclude your home equity (you live there) per FIRE convention.",
@@ -11941,7 +12024,7 @@ def _retirement():
                    "healthcare_line": {**_hc, "included": bool(_hc_on and base_expenses is not None),
                                        "fi_number_without": (round(base_expenses / wr, 2) if (base_expenses and wr) else None),
                                        "fi_number_with": (round((base_expenses + _hc["annual"]) / wr, 2) if (base_expenses and wr and _hc["annual"] is not None) else None)},
-                   "annual_savings": annual_savings,
+                   "annual_savings": annual_savings, "savings_breakdown": sav_break,
                    # current_age/spouse_age (2026-07-23, superseding the same-day fix that added a
                    # manual "Spouse age" input): DERIVED from birth_year/spouse_birth_year via
                    # _derive_age() rather than manually entered — Jason caught, entering spouse
