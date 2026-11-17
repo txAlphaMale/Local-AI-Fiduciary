@@ -476,7 +476,7 @@ let AUTH_STATUS=null;
 // tab order, theme, calculator inputs...) are mirrored to the server per signed-in account (GET/POST /api/prefs). localStorage stays as the
 // local copy. On sign-in the server copy wins where both exist; local-only keys are uploaded (so existing customisations migrate); changes are
 // sent a moment after you make them. Off on the public demo (one shared login). Keep PREFS_KEYS in step with prefs.SYNC_KEYS on the server.
-const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths','fidDebtStrategy'];
+const PREFS_KEYS=['fidDashOrder','fidGraphs','fidTabOrder','fidSubOrder','fidTheme','fidCustomThemes','fidMixView','fidChMode','fidChWin','fidChFrom','fidChTo','fidCalcIn','fidCalcWiSel','fidScenarioId','fidTourDone','fidColWidths','fidDebtStrategy','fidLifePins','fidStartPage'];
 let PREFS_READY=false, PREFS_ENABLED=true, _prefsQ={set:{},remove:{}}, _prefsT=null;
 (function(){
   try{
@@ -581,6 +581,7 @@ let RISK_REGISTER=null, RISK_REGISTER_SHOW_CLOSED=false, RISK_REGISTER_FORM=null
 let BACKUP_STATUS=null, BACKUP_BUSY=false, BACKUP_LAST_RESULT=null;  // 2026-07-27 — SEC-7a UI-triggered backup/restore
 let DEMO_STATUS=null;  // Demo harness (2026-07-25) — {demo_mode, demo_admin_username}, drives the demo banner
 let DATA=null, SORT={key:'value',dir:-1}, charts=[], VIEW='consolidated', ANALYSIS=null, INSIGHTS=null, RETIRE=null, IDEAS=null, DISCO=null, STRAT=null, STRAT_SERIES=null, SCENARIOS=null, USER_LEDGER=null, TAX=null, TAXAUDIT=null, TAX_INCOME=null, TAX_LTCG=0, FL=null, EXP=null, LT=null, RISK=null, RISKSUITE=null, ATTRIB=null, SIZING=null, ROTH=null, LEVERAGE=null, AVENUES=null, THESES=null, REALESTATE=null, BUSINESS=null, ATTENTION=null, SCORE=null, INCOME=null, ACCTCFG=null, SETTINGS_CFG=null, SECRETS_CFG=null, PROMPTS_CFG=null, KNOWLEDGE_CFG=null, VH=null, GROUND=null, EST=null, SCHEDULE=null, BUDGETS=null, BUDGETS_LOADING=false, SLEEVES=null, SLEEVES_LOADING=false, SLEEVE_EDIT=null, SLEEVE_PREVIEW=null, SLEEVE_ERR=null, BT=null, INS=null, INS_POLS=null, HEDGE=null, CASHDEBT=null, PERF=null, NARR=null, BEN=null, CONTIN=null, CONTIN_CONTACTS=null, LAST_SCAN_ANALYSIS=null, RESEARCH_CACHE={recent:[],items:{}}, RESEARCH_POLLS={}, RESEARCH_ERR=null, TAB='dashboard', FOCUS_TICKER=null, SETUPPROG=null, HOLDCSV=null, MANLIAB=null, ACCTREG=null, CD_EF_EDIT_OPEN=false;
+try{ if(localStorage.getItem('fidStartPage')==='lifemap') TAB='lifemap'; }catch(_){}   // LIFE MAP as the start page (a saved preference; set from the page itself)
 // Multiple-income-sources drafts (2026-07-24) — one editable array per earner, rebuilt from
 // INS.income_sources_self/_spouse each time assumptionsSec() renders (so a freshly loaded page
 // always reflects the saved state), then mutated in place by add/remove-row clicks and synced
@@ -1171,6 +1172,114 @@ function timelineContent(){
   sc.appendChild(t); wrap.appendChild(sc);
   const ft=el('div','muted',r.footer); ft.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-top:var(--space-3);'; wrap.appendChild(ft);
   const cl=el('div','muted',TL_CLOSING); cl.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);'; wrap.appendChild(cl);
+  return wrap;
+}
+
+
+// ---- LIFE MAP (design: LIFE-STAGE-DESIGN-2026-11-16.md): topics by life stage, built from the other panels' own results ----
+// Everything that is a judgment (stages, weights, wording, thresholds) comes from the server's editable config; this page only draws it.
+const LM={data:null,loading:false,err:null,topic:null,stage:'',variant:'',showWhy:false,showLater:false};
+function lmPins(){ try{ const v=JSON.parse(localStorage.getItem('fidLifePins')||'[]'); return Array.isArray(v)?v:[]; }catch(_){ return []; } }
+function lmSetPins(a){ try{ localStorage.setItem('fidLifePins',JSON.stringify(a)); }catch(_){} }
+function lmTogglePin(id){ const p=lmPins(); const i=p.indexOf(id); if(i>=0) p.splice(i,1); else p.push(id); lmSetPins(p); lmLoad(); }
+function lmLoad(){
+  LM.loading=true; LM.err=null;
+  const q=[]; const pins=lmPins(); if(pins.length) q.push('pins='+encodeURIComponent(pins.join(','))); if(LM.stage) q.push('stage='+encodeURIComponent(LM.stage)); if(LM.variant) q.push('variant='+encodeURIComponent(LM.variant));
+  fetch('/api/lifemap'+(q.length?'?'+q.join('&'):'')).then(r=>r.json()).then(d=>{ LM.loading=false; if(d.error) LM.err=d.error; else LM.data=d; if(TAB==='lifemap') render(); })
+    .catch(e=>{ LM.loading=false; LM.err=String(e); if(TAB==='lifemap') render(); });
+}
+function lmGo(tab,sub){ TAB=tab; if(sub) setSubtab(tab,sub); else render(); }
+const LM_STATE={ok:['✓','On track','pos'],attention:['▲','Needs attention','neg'],todo:['○','Not started',''],noinfo:['?','Not enough information yet','muted'],error:['!','Could not check','muted'],na:['–','Does not apply','muted'],unchecked:['·','Checks for this topic are coming','muted']};
+function lmChip(status){ const m=LM_STATE[status]||LM_STATE.noinfo; const c=el('span',m[2]||null,m[0]+' '+m[1]); c.style.cssText='font-size:var(--font-size-sm);letter-spacing:.5px;white-space:nowrap;'; return c; }
+function lmLink(text,tab,sub){ const a=el('a',null,text); a.href='#'; a.style.cssText='color:var(--color-accent);'; a.onclick=e=>{ e.preventDefault(); lmGo(tab,sub); }; return a; }
+function lmCard(t,full){
+  const card=el('div'); card.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);min-width:240px;flex:1 1 280px;cursor:pointer;';
+  card.tabIndex=0; card.setAttribute('role','button'); card.setAttribute('aria-label',t.name+': '+(LM_STATE[t.status]||LM_STATE.noinfo)[1]);
+  const open=()=>{ LM.topic=t.id; render(); }; card.onclick=open; card.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } };
+  const h=el('div'); h.style.cssText='display:flex;justify-content:space-between;gap:8px;align-items:baseline;';
+  const nm=el('b',null,(t.pinned?'★ ':'')+t.name); h.appendChild(nm); h.appendChild(lmChip(t.status)); card.appendChild(h);
+  if(full){
+    (t.checks||[]).filter(c=>c.state==='attention'||c.state==='todo'||c.state==='noinfo').slice(0,2).forEach(c=>{ const r=el('div','muted',c.reason); r.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-top:6px;'; card.appendChild(r); });
+    const nx=(t.checks||[]).find(c=>c.next&&(c.state==='attention'||c.state==='todo')); if(nx){ const n=el('div'); n.style.cssText='margin-top:6px;font-size:var(--font-size-sm);'; n.appendChild(el('span','muted','Next: ')); n.appendChild(lmLink(nx.next.text,nx.next.tab,nx.next.subtab)); card.appendChild(n); }
+  }
+  return card;
+}
+function lifemapContent(){
+  const wrap=el('div');
+  if(LM.topic&&LM.data) return lifeTopicContent(LM.topic);
+  if(!LM.data&&!LM.loading&&!LM.err) lmLoad();
+  const head=el('div','ph','LIFE MAP'); wrap.appendChild(head);
+  if(LM.err){ wrap.appendChild(el('div','neg',LM.err)); }
+  if(LM.loading&&!LM.data){ wrap.appendChild(el('div','muted','Reading your plan…')); return wrap; }
+  const d=LM.data; if(!d) return wrap;
+  const st=d.stage;
+  const hd=el('div'); hd.style.cssText='margin:var(--space-2) 0 var(--space-3);line-height:1.6;';
+  hd.innerHTML='<b>Where you are: '+st.name.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</b> <span class="muted">· '+String(st.line||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</span>'+
+    '<div class="muted" style="font-size:var(--font-size-sm)">'+(st.age!=null?'Age '+st.age:'Age not set')+(st.target_age!=null?' · stop-work age '+st.target_age+(st.target_age_is_default?' (the default: set yours in ASSUMPTIONS)':''):'')+(st.next?' · next stage: '+st.next.name:'')+'</div>';
+  wrap.appendChild(hd);
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
+  const stSel=document.createElement('select'); stSel.className='cfg-inp'; stSel.title='See what the map would stress at another stage';
+  const o0=document.createElement('option'); o0.value=''; o0.textContent='Look ahead: my stage'; stSel.appendChild(o0);
+  ['start','build','peak','approach','early','later'].forEach(id=>{ const o=document.createElement('option'); o.value=id; o.textContent='Look ahead: '+id; if(LM.stage===id) o.selected=true; stSel.appendChild(o); });
+  stSel.onchange=()=>{ LM.stage=stSel.value; lmLoad(); }; bar.appendChild(stSel);
+  if((d.variants||[]).length){ const vs=document.createElement('select'); vs.className='cfg-inp'; vs.title='Design variants, for comparing decisions (testing)';
+    ['',...d.variants].forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v?('Variant: '+v):'Variant: default'; if(LM.variant===v) o.selected=true; vs.appendChild(o); }); vs.onchange=()=>{ LM.variant=vs.value; lmLoad(); }; bar.appendChild(vs); }
+  const startBtn=el('button','mut-btn',(localStorage.getItem('fidStartPage')==='lifemap')?'START PAGE: LIFE MAP ✓':'MAKE THIS MY START PAGE'); startBtn.onclick=()=>{ try{ localStorage.setItem('fidStartPage',localStorage.getItem('fidStartPage')==='lifemap'?'':'lifemap'); }catch(_){} render(); }; bar.appendChild(startBtn);
+  wrap.appendChild(bar);
+  const byId={}; d.topics.forEach(t=>{ byId[t.id]=t; });
+  const secHead=(txt)=>{ const h=el('div','ph',txt); h.style.marginTop='var(--space-4)'; return h; };
+  // needs attention now
+  const now=(d.bands.now||[]).map(i=>byId[i]);
+  wrap.appendChild(secHead('NEEDS ATTENTION NOW'));
+  if(!now.length){ wrap.appendChild(el('div','muted','Nothing in your current stage needs attention from the checks that exist so far.')); }
+  else {
+    const row=el('div'); row.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;'; now.slice(0,d.top.length||3).forEach(t=>row.appendChild(lmCard(t,true))); wrap.appendChild(row);
+    if(now.length>(d.top.length||3)){ const more=el('div','muted','Also open: '+now.slice(d.top.length||3).map(t=>t.name).join(', ')); more.style.cssText='font-size:var(--font-size-sm);margin-top:6px;'; wrap.appendChild(more); }
+  }
+  const why=el('a',null,LM.showWhy?'Hide why this order':'Why this order?'); why.href='#'; why.style.cssText='font-size:var(--font-size-sm);color:var(--color-accent);display:inline-block;margin-top:8px;'; why.onclick=e=>{ e.preventDefault(); LM.showWhy=!LM.showWhy; render(); }; wrap.appendChild(why);
+  if(LM.showWhy){
+    const t=document.createElement('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);margin-top:6px;';
+    const hr=document.createElement('tr'); ['TOPIC','RELEVANCE','URGENCY','TIMING','SCORE','SET BY'].forEach(h=>{ const th=document.createElement('th'); th.textContent=h; th.style.cssText='text-align:left;padding:3px 10px;'; hr.appendChild(th); }); t.appendChild(hr);
+    d.order.forEach(i=>{ const x=byId[i]; const tr=document.createElement('tr'); const p=x.parts||{};
+      [x.name+(x.pinned?' ★':''),p.relevance+(p.modifiers&&p.modifiers.length?' (stage '+p.base_weight+' + '+p.modifiers.map(m=>m.id+' '+(m.add>0?'+':'')+m.add).join(', ')+')':' (stage weight)'),p.urgency,p.timing,x.score,p.urgency_from||'—'].forEach(v=>{ const td=document.createElement('td'); td.textContent=String(v); td.style.cssText='padding:3px 10px;border-top:1px solid var(--color-border);'; tr.appendChild(td); }); t.appendChild(tr); });
+    wrap.appendChild(t);
+  }
+  // on track
+  const ot=(d.bands.ontrack||[]).map(i=>byId[i]);
+  if(ot.length){ wrap.appendChild(secHead('ON TRACK')); const r=el('div'); r.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;'; ot.forEach(t=>{ const c=el('button','mut-btn',(t.pinned?'★ ':'')+'✓ '+t.name); c.onclick=()=>{ LM.topic=t.id; render(); }; r.appendChild(c); }); wrap.appendChild(r); }
+  // coming up
+  const cu=(d.bands.coming||[]).map(i=>byId[i]);
+  if(cu.length){ wrap.appendChild(secHead('COMING UP')); const r=el('div'); r.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;'; cu.forEach(t=>r.appendChild(lmCard(t,false))); wrap.appendChild(r); }
+  // later / not for you yet, and explore
+  const lt=(d.bands.later||[]).map(i=>byId[i]);
+  if(lt.length){ const tg=el('a',null,(LM.showLater?'Hide ':'Show ')+'later or not for you yet ('+lt.length+')'); tg.href='#'; tg.style.cssText='display:inline-block;margin-top:var(--space-4);font-size:var(--font-size-sm);color:var(--color-accent);'; tg.onclick=e=>{ e.preventDefault(); LM.showLater=!LM.showLater; render(); }; wrap.appendChild(tg);
+    if(LM.showLater){ const r=el('div'); r.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;margin-top:6px;'; lt.forEach(t=>r.appendChild(lmCard(t,false))); wrap.appendChild(r); } }
+  const ex=d.topics.filter(t=>t.kind==='explore');
+  if(ex.length){ wrap.appendChild(secHead('EXPLORE')); const r=el('div'); r.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;'; ex.forEach(t=>{ const c=el('div'); c.style.cssText='border:1px solid var(--color-border);padding:var(--space-2) var(--space-3);cursor:pointer;flex:1 1 240px;'; c.tabIndex=0; c.setAttribute('role','button');
+      c.appendChild(el('b',null,t.name)); const w=el('div','muted',t.why); w.style.cssText='font-size:var(--font-size-sm);'; c.appendChild(w); c.onclick=()=>{ LM.topic=t.id; render(); }; c.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); LM.topic=t.id; render(); } }; r.appendChild(c); }); wrap.appendChild(r); }
+  const note=el('div','muted',(d.note||'')+' Figures come from the panels each line links to.'); note.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-4);'; wrap.appendChild(note);
+  return wrap;
+}
+function lifeTopicContent(id){
+  const wrap=el('div'); const d=LM.data; const t=(d.topics||[]).find(x=>x.id===id);
+  const back=el('button','mut-btn','← LIFE MAP'); back.onclick=()=>{ LM.topic=null; render(); }; wrap.appendChild(back);
+  if(!t){ wrap.appendChild(el('div','muted','That topic is not in the map.')); return wrap; }
+  const h=el('div'); h.style.cssText='margin:var(--space-3) 0;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;';
+  h.appendChild(el('b',null,t.name)); if(t.kind==='status') h.appendChild(lmChip(t.status));
+  if(t.kind==='status'){ const pn=el('button','mut-btn',t.pinned?'★ PINNED':'☆ PIN'); pn.title='Pinned topics count as central at every stage'; pn.onclick=()=>lmTogglePin(t.id); h.appendChild(pn); }
+  wrap.appendChild(h);
+  const why=el('div','muted',t.why+(t.stage_line?' '+t.stage_line:'')); why.style.cssText='line-height:1.5;margin-bottom:var(--space-3);'; wrap.appendChild(why);
+  if(t.kind==='status'&&!(t.checks||[]).length) wrap.appendChild(el('div','muted','The checks for this topic are not built yet; its pages are listed below.'));
+  (t.checks||[]).forEach(c=>{
+    const r=el('div'); r.style.cssText='border-top:1px solid var(--color-border);padding:var(--space-2) 0;';
+    const top=el('div'); top.style.cssText='display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;'; top.appendChild(el('b',null,c.label)); top.appendChild(lmChip(c.state)); r.appendChild(top);
+    if(c.reason){ const rs=el('div',null,c.reason); rs.style.cssText='line-height:1.5;margin:4px 0;'; r.appendChild(rs); }
+    const meta=el('div'); meta.style.cssText='font-size:var(--font-size-sm);display:flex;gap:16px;flex-wrap:wrap;';
+    if(c.next){ const n=el('span'); n.appendChild(el('span','muted','Next: ')); n.appendChild(lmLink(c.next.text,c.next.tab,c.next.subtab)); meta.appendChild(n); }
+    if(c.from&&c.from.tab){ const f=el('span'); f.appendChild(el('span','muted','Source: ')); f.appendChild(lmLink(c.from.panel||c.from.tab,c.from.tab,c.from.subtab)); meta.appendChild(f); }
+    r.appendChild(meta); wrap.appendChild(r);
+  });
+  if((t.pages||[]).length){ const ph=el('div','ph','PAGES FOR THIS TOPIC'); ph.style.marginTop='var(--space-4)'; wrap.appendChild(ph); const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:6px;'; t.pages.forEach(pg=>{ const b=el('button','mut-btn',pg.label); b.onclick=()=>lmGo(pg.tab,pg.subtab); row.appendChild(b); }); wrap.appendChild(row); }
   return wrap;
 }
 
@@ -1854,7 +1963,7 @@ function render(){
   const body=document.getElementById('body'); body.innerHTML='';
   charts.forEach(c=>c.destroy()); charts=[];
 
-  if(TAB!=='chat' && TAB!=='wiki'){   // CHAT and WIKI use the full panel; skip the cockpit strip above them
+  if(TAB!=='chat' && TAB!=='wiki' && TAB!=='lifemap'){   // CHAT, WIKI and LIFE MAP use the full panel; skip the cockpit strip above them
     body.appendChild(emergencyBannerNode());   // TASK-002: red banner while an emergency request is pending (admin)
     body.appendChild(staleBannerNode());       // last-good portfolio shown while the live refresh is failing
     body.appendChild(cockpitPanel());   // always-visible "what needs attention" strip + tile router
@@ -1888,7 +1997,7 @@ function render(){
   const _gear=document.getElementById('gear'); if(_gear) _gear.style.color=(TAB==='settings')?'var(--color-accent)':'';
   const p=el('div','panel'); p.style.marginTop='10px';
   const tabBar=el('div'); tabBar.id='main-tabbar'; tabBar.style.cssText='display:flex;align-items:center;gap:var(--space-3);border-bottom:1px solid var(--color-border);padding-bottom:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap;';
-  const tabSpecsRaw=[['dashboard','DASHBOARD'],['positions',`OVERVIEW · ${d.unique_securities}`]];
+  const tabSpecsRaw=[['lifemap','LIFE MAP'],['dashboard','DASHBOARD'],['positions',`OVERVIEW · ${d.unique_securities}`]];
   if(haveResearch) tabSpecsRaw.push(['research','RESEARCH · IDEAS']);
   if(haveInsights) tabSpecsRaw.push(['insights','RISK · EXPOSURE']);
   if(havePlan) tabSpecsRaw.push(['plan','PLAN · FI']);
@@ -1982,6 +2091,7 @@ function render(){
   else if(TAB==='calculators'){ tc.appendChild(calculatorsContent()); }
   else if(TAB==='chat'){ tc.appendChild(chatContent()); }
   else if(TAB==='wiki'){ tc.appendChild(wikiContent()); }
+  else if(TAB==='lifemap'){ tc.appendChild(lifemapContent()); }
   else if(TAB==='settings'){
     tc.appendChild(envOverrideBanner());
     tc.appendChild(panelSubtabs('settings',[

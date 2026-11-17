@@ -57,6 +57,7 @@ import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/eff
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
+import lifemap       # LIFE MAP: which life topics need attention at this stage (config-driven)
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
 import backtest as backtest_mod  # decision backtest (P0-2) — fixed-horizon call scoring vs SPY
@@ -5185,6 +5186,120 @@ async def post_plan_timeline(req: Request):
         return _timeline_run(inp, notes)
     except Exception as e:
         return JSONResponse({"error": f"could not build the table: {_errref(e)}"}, status_code=500)
+
+
+# ---- LIFE MAP (design: LIFE-STAGE-DESIGN-2026-11-16.md; decisions: LIFE-MAP-DECISIONS.md) ----
+LIFEMAP_FILE = os.environ.get("LIFEMAP_FILE", "/data/lifemap.json")
+_LIFEMAP_DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lifemap_default.json")
+_LM_MEMO = {"at": 0.0, "retirement": None}          # /api/retirement runs a 3,000-path simulation: reuse it for a minute
+
+
+def _lifemap_default():
+    with open(_LIFEMAP_DEFAULT_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _lifemap_cfg():
+    """The saved config (edited in SETTINGS) when there is a valid one, else the default that ships with the app."""
+    try:
+        saved = store.read_json_strict(LIFEMAP_FILE)
+        if isinstance(saved, dict) and not lifemap.validate(saved):
+            return saved
+    except Exception:
+        pass
+    return _lifemap_default()
+
+
+def _lifemap_source(fn, *a):
+    try:
+        r = fn(*a)
+        if isinstance(r, JSONResponse):
+            return {"_error": f"HTTP {r.status_code}"}
+        return r
+    except Exception as e:
+        return {"_error": type(e).__name__}
+
+
+def _lifemap_sources(request=None):
+    now = time.time()
+    if _LM_MEMO["retirement"] is None or now - _LM_MEMO["at"] > 60:
+        _LM_MEMO.update(at=now, retirement=_lifemap_source(_retirement))
+    return {"retirement": _LM_MEMO["retirement"], "cashdebt": _lifemap_source(get_cashdebt), "insurance": _lifemap_source(get_insurance),
+            "benefits": _lifemap_source(get_benefits), "continuity": _lifemap_source(get_continuity), "estate": _lifemap_source(get_estate),
+            "rebalance": _lifemap_source(get_rebalance)}
+
+
+def _lifemap_context(sources):
+    ret = sources.get("retirement") or {}
+    a = ret.get("assumptions") or {}
+    age, target = a.get("current_age"), a.get("target_age")
+    ins = (sources.get("insurance") or {}).get("household") or {}
+    ctx = {"age": age, "target_age": target, "children": ins.get("children") or 0, "no_income": bool(ins.get("no_income"))}
+    if isinstance(age, (int, float)) and isinstance(target, (int, float)):
+        ctx["years_to_stop"] = target - age
+        ctx["stopped"] = bool(age >= target or ctx["no_income"])
+    else:
+        ctx.update(years_to_stop=None, stopped=False)
+    ctx["target_age_is_default"] = _read_retire().get("target_age") is None
+    return ctx
+
+
+def _lifemap_pins(raw, cfg):
+    ids = {t["id"] for t in cfg["topics"] if t["kind"] == "status"}
+    return [p for p in (raw or "").split(",") if p in ids]
+
+
+@app.get("/api/lifemap")
+def get_lifemap(request: Request, pins: str = "", stage: str = "", variant: str = ""):
+    """The LIFE MAP: the household's stage, each life topic's checks (read from the other panels' own results), scores and bands. Read-only."""
+    cfg = _lifemap_cfg()
+    src = _lifemap_sources(request)
+    ctx = _lifemap_context(src)
+    res = lifemap.build(cfg, src, ctx, pins=_lifemap_pins(pins, cfg), variant=(variant or None), stage_override=(stage or None))
+    res["generated_at"] = int(time.time())
+    res["variants"] = sorted((cfg.get("variants") or {}).keys())
+    return res
+
+
+@app.get("/api/lifemap/compare")
+def get_lifemap_compare(variants: str = "default", pins: str = ""):
+    """Side-by-side top topics for named variants of the config (default plus any under 'variants'), to revisit a design decision with real data."""
+    cfg = _lifemap_cfg()
+    names = [v for v in variants.split(",") if v and (v == "default" or v in (cfg.get("variants") or {}))] or ["default"]
+    src = _lifemap_sources()
+    ctx = _lifemap_context(src)
+    return {"generated_at": int(time.time()), "variants": lifemap.compare(cfg, src, ctx, names, pins=_lifemap_pins(pins, cfg)),
+            "why": {v: (cfg.get("variants") or {}).get(v, {}).get("_why") for v in names}}
+
+
+@app.get("/api/lifemap/config")
+def get_lifemap_config():
+    return {"config": _lifemap_cfg(), "is_default": _lifemap_cfg() == _lifemap_default()}
+
+
+@app.post("/api/lifemap/config")
+async def post_lifemap_config(req: Request):
+    """Replace the LIFE MAP config (admin only through the global write gate). The whole document is validated first, including the wording rule
+    (no 'you should' / buy / sell phrasing); a bad document is refused with the reasons and nothing changes."""
+    body = await req.json()
+    cfg = body.get("config") if isinstance(body, dict) else None
+    if not isinstance(cfg, dict):
+        return JSONResponse({"error": "body must be {config: {...}}"}, status_code=400)
+    problems = lifemap.validate(cfg)
+    if problems:
+        return JSONResponse({"error": "config refused", "problems": problems}, status_code=400)
+    old = _lifemap_cfg()
+    store.write_json(LIFEMAP_FILE, cfg)
+    _emit_config_changed(req, "/api/lifemap/config", {"version": old.get("version")}, {"version": cfg.get("version")})
+    return {"ok": True}
+
+
+@app.post("/api/lifemap/reset")
+async def post_lifemap_reset(req: Request):
+    old = _lifemap_cfg()
+    store.write_json(LIFEMAP_FILE, {})
+    _emit_config_changed(req, "/api/lifemap/reset", {"version": old.get("version")}, {"version": _lifemap_default().get("version")})
+    return {"ok": True}
 
 
 def _roth_plan():
