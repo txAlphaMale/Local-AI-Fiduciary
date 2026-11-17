@@ -1,0 +1,1672 @@
+{
+ "version": 1,
+ "description": "LIFE MAP defaults (design: LIFE-STAGE-DESIGN-2026-11-16.md). Edit freely; 'variants' are named partial overrides for comparing decisions.",
+ "stages": [
+  {
+   "id": "start",
+   "name": "Starting out",
+   "line": "Building the first cushion and the first habits.",
+   "when": {
+    "all": [
+     [
+      "stopped",
+      "==",
+      false
+     ],
+     [
+      "years_to_stop",
+      ">",
+      25
+     ],
+     [
+      "age",
+      "<",
+      35
+     ]
+    ]
+   }
+  },
+  {
+   "id": "build",
+   "name": "Building",
+   "line": "Saving steadily and protecting the people who rely on you.",
+   "when": {
+    "all": [
+     [
+      "stopped",
+      "==",
+      false
+     ],
+     [
+      "years_to_stop",
+      ">",
+      12
+     ]
+    ]
+   }
+  },
+  {
+   "id": "peak",
+   "name": "Peak years",
+   "line": "Your strongest earning years. The plan gets real numbers.",
+   "when": {
+    "all": [
+     [
+      "stopped",
+      "==",
+      false
+     ],
+     [
+      "years_to_stop",
+      ">",
+      5
+     ]
+    ]
+   }
+  },
+  {
+   "id": "approach",
+   "name": "Final approach",
+   "line": "Five years or fewer to go. Turning savings into income.",
+   "when": {
+    "all": [
+     [
+      "stopped",
+      "==",
+      false
+     ]
+    ]
+   }
+  },
+  {
+   "id": "early",
+   "name": "Early retirement",
+   "line": "Living on savings before the later-life rules begin.",
+   "when": {
+    "all": [
+     [
+      "age",
+      "<",
+      73
+     ]
+    ]
+   }
+  },
+  {
+   "id": "later",
+   "name": "Later years",
+   "line": "Keeping income steady, planning for care, making things easy to hand over.",
+   "when": true
+  }
+ ],
+ "context": {
+  "age": {
+   "source": "retirement",
+   "path": "assumptions.current_age"
+  },
+  "target_age": {
+   "source": "retirement",
+   "path": "assumptions.target_age"
+  },
+  "no_income": {
+   "source": "insurance",
+   "path": "household.no_income"
+  },
+  "children": {
+   "source": "insurance",
+   "path": "household.children"
+  }
+ },
+ "urgency": {
+  "attention": {
+   "high": 1.0,
+   "normal": 0.7,
+   "low": 0.4
+  },
+  "todo": {
+   "high": 0.8,
+   "normal": 0.5,
+   "low": 0.3
+  },
+  "noinfo": {
+   "high": 0.6,
+   "normal": 0.4,
+   "low": 0.2
+  },
+  "error": 0.3,
+  "ok": 0.1
+ },
+ "timing_boost": 1.3,
+ "pin_bonus": 0.5,
+ "max_cards": 3,
+ "weights": {
+  "safety": {
+   "start": 3,
+   "build": 3,
+   "peak": 2,
+   "approach": 2,
+   "early": 2,
+   "later": 2,
+   "why": "Nothing else holds without a cushion; later it is a habit to keep, not to build."
+  },
+  "protect": {
+   "start": 2,
+   "build": 3,
+   "peak": 3,
+   "approach": 2,
+   "early": 1,
+   "later": 1,
+   "why": "Matters most while others depend on a pay cheque; fades when savings can carry the household."
+  },
+  "handover": {
+   "start": 1,
+   "build": 2,
+   "peak": 3,
+   "approach": 3,
+   "early": 3,
+   "later": 3,
+   "why": "Grows with what there is to hand over and with age; never fades."
+  },
+  "grow": {
+   "start": 3,
+   "build": 3,
+   "peak": 3,
+   "approach": 2,
+   "early": 2,
+   "later": 1,
+   "why": "The saving habit and the employer match early, upkeep later."
+  },
+  "independence": {
+   "start": 1,
+   "build": 2,
+   "peak": 3,
+   "approach": 3,
+   "early": 1,
+   "later": 0,
+   "why": "The goal becomes concrete within about 15 years of it, and is done once work stops."
+  },
+  "income": {
+   "start": 0,
+   "build": 0,
+   "peak": 1,
+   "approach": 3,
+   "early": 3,
+   "later": 3,
+   "why": "Only meaningful once withdrawals are near."
+  },
+  "taxes": {
+   "start": 1,
+   "build": 1,
+   "peak": 2,
+   "approach": 3,
+   "early": 3,
+   "later": 2,
+   "why": "The biggest choices sit between stopping work and required withdrawals."
+  },
+  "health": {
+   "start": 1,
+   "build": 1,
+   "peak": 2,
+   "approach": 3,
+   "early": 3,
+   "later": 3,
+   "why": "Cover before Medicare, then the cost of care."
+  },
+  "education": {
+   "start": 2,
+   "build": 2,
+   "peak": 2,
+   "approach": 1,
+   "early": 0,
+   "later": 0,
+   "why": "Own loans early, children's costs mid-life; switched by the modifiers."
+  }
+ },
+ "modifiers": [
+  {
+   "id": "children",
+   "when": [
+    "children",
+    ">",
+    0
+   ],
+   "add": {
+    "protect": 1,
+    "handover": 1,
+    "education": 1
+   },
+   "why": "Others depend on the income; guardianship matters."
+  },
+  {
+   "id": "early_stop",
+   "when": [
+    "target_age",
+    "<",
+    60
+   ],
+   "add": {
+    "independence": 1,
+    "health": 1,
+    "taxes": 1
+   },
+   "why": "Years without employer cover or penalty-free access."
+  }
+ ],
+ "windows": [
+  {
+   "id": "marketplace",
+   "from": "11-01",
+   "to": "01-15",
+   "checks": [
+    "health.C1",
+    "health.C2"
+   ],
+   "source": "federal marketplace open enrolment, 1 Nov to 15 Jan [unverified: Cowork to confirm]"
+  },
+  {
+   "id": "year_end",
+   "from": "10-15",
+   "to": "12-31",
+   "checks": [
+    "taxes.T2",
+    "taxes.T4",
+    "grow.G1",
+    "grow.G2"
+   ],
+   "source": "calendar-year tax deadlines [unverified: Cowork to confirm]"
+  },
+  {
+   "id": "ira_hsa",
+   "from": "02-01",
+   "to": "04-15",
+   "checks": [
+    "grow.G2",
+    "health.C4"
+   ],
+   "source": "IRA and HSA contribution deadline [unverified: Cowork to confirm]"
+  }
+ ],
+ "topics": [
+  {
+   "id": "safety",
+   "name": "Safety net",
+   "kind": "status",
+   "why": "Cash for a bad month, and no expensive debt, come before everything else.",
+   "stage_lines": {
+    "start": "One surprise bill should not become a debt."
+   },
+   "pages": [
+    {
+     "label": "CASH \u00b7 DEBT",
+     "tab": "plan",
+     "subtab": "cashdebt",
+     "role": "do"
+    },
+    {
+     "label": "WHAT-IF \u00b7 MY DEBTS",
+     "tab": "calculators",
+     "subtab": "whatif",
+     "role": "do"
+    },
+    {
+     "label": "ACCOUNTS",
+     "tab": "settings",
+     "subtab": "accounts",
+     "role": "settings"
+    }
+   ],
+   "checks": [
+    {
+     "id": "S1",
+     "label": "Emergency fund",
+     "source": "cashdebt",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "status": "emergency_fund.status",
+      "months": "emergency_fund.months_covered",
+      "target": "emergency_fund.target_months",
+      "gap": "emergency_fund.gap_dollars"
+     },
+     "rules": [
+      {
+       "when": [
+        "status",
+        "missing"
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter your yearly spending.",
+       "next": {
+        "text": "Enter it in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "status",
+        "==",
+        "critical"
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "Your emergency fund covers {months|n1} months of essential spending. The target is {target|n0} months (short by {gap|usd}).",
+       "next": {
+        "text": "Open CASH \u00b7 DEBT to see which accounts count.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": [
+        "status",
+        "==",
+        "low"
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "Your emergency fund covers {months|n1} months of essential spending. The target is {target|n0} months (short by {gap|usd}).",
+       "next": {
+        "text": "Open CASH \u00b7 DEBT to see which accounts count.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your emergency fund covers {months|n1} months; the target is {target|n0}."
+      }
+     ]
+    },
+    {
+     "id": "S3",
+     "label": "Expensive debt",
+     "source": "cashdebt",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "n": {
+       "count": "avalanche.rows",
+       "where": [
+        "priority",
+        "==",
+        "pay-first"
+       ]
+      },
+      "interest": {
+       "sum": "avalanche.rows",
+       "where": [
+        "priority",
+        "==",
+        "pay-first"
+       ],
+       "field": "annual_interest"
+      },
+      "top": {
+       "max": "avalanche.rows",
+       "where": [
+        "priority",
+        "==",
+        "pay-first"
+       ],
+       "field": "rate_pct"
+      },
+      "hurdle": "avalanche.invest_hurdle_pct"
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "n",
+          ">",
+          0
+         ],
+         [
+          "top",
+          ">=",
+          15
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "high",
+       "reason": "{n|n0} debt(s) charge more than {hurdle|n1}% a year, the return the plan assumes for investing. Together they cost about {interest|usd} a year in interest.",
+       "next": {
+        "text": "See the payoff order in CASH \u00b7 DEBT.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "{n|n0} debt(s) charge more than {hurdle|n1}% a year, the return the plan assumes for investing. Together they cost about {interest|usd} a year in interest.",
+       "next": {
+        "text": "See the payoff order in CASH \u00b7 DEBT.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No debt charges more than the plan's investing return."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "protect",
+   "name": "Insurance",
+   "kind": "status",
+   "why": "If a pay cheque stopped or something big went wrong, would the household be OK?",
+   "pages": [
+    {
+     "label": "INSURANCE",
+     "tab": "plan",
+     "subtab": "insurance",
+     "role": "do"
+    },
+    {
+     "label": "ASSUMPTIONS",
+     "tab": "plan",
+     "subtab": "assumptions",
+     "role": "settings"
+    }
+   ],
+   "checks": [
+    {
+     "id": "P1",
+     "label": "Policies recorded",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "n": {
+       "count": "policies_echo"
+      },
+      "setup": "setup_needed"
+     },
+     "rules": [
+      {
+       "when": [
+        "setup",
+        "==",
+        true
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter each earner's income (or tick 'no earned income').",
+       "next": {
+        "text": "Enter income in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "n",
+        "==",
+        0
+       ],
+       "state": "todo",
+       "severity": "high",
+       "reason": "No insurance policies are recorded, so every need below shows as uncovered.",
+       "next": {
+        "text": "Add each policy from its summary page.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "{n|n0} policies are recorded."
+      }
+     ]
+    },
+    {
+     "id": "P2",
+     "label": "Life cover",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "setup": "setup_needed",
+      "children": "household.children",
+      "gaps": {
+       "count": "gap_table",
+       "where": {
+        "all": [
+         [
+          "line",
+          "startswith",
+          "Life ("
+         ],
+         [
+          "status",
+          "==",
+          "gap"
+         ]
+        ]
+       }
+      },
+      "need": {
+       "sum": "gap_table",
+       "where": [
+        "line",
+        "startswith",
+        "Life ("
+       ],
+       "field": "need"
+      },
+      "in_force": {
+       "sum": "gap_table",
+       "where": [
+        "line",
+        "startswith",
+        "Life ("
+       ],
+       "field": "in_force"
+      },
+      "gap": {
+       "sum": "gap_table",
+       "where": {
+        "all": [
+         [
+          "line",
+          "startswith",
+          "Life ("
+         ],
+         [
+          "status",
+          "==",
+          "gap"
+         ]
+        ]
+       },
+       "field": "gap"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "setup",
+        "==",
+        true
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter each earner's income.",
+       "next": {
+        "text": "Enter income in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "gaps",
+        "==",
+        0
+       ],
+       "state": "ok",
+       "reason": "Life insurance on record covers the app's estimated need."
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "gaps",
+          ">",
+          0
+         ],
+         [
+          "children",
+          ">",
+          0
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "high",
+       "reason": "Life insurance on record is {in_force|usd}. The estimated need is {need|usd}, a gap of {gap|usd}.",
+       "next": {
+        "text": "See how the need is worked out.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": [
+        "gaps",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Life insurance on record is {in_force|usd} against an estimated need of {need|usd}. This matters most when someone depends on the income.",
+       "next": {
+        "text": "See how the need is worked out.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      }
+     ]
+    },
+    {
+     "id": "P3",
+     "label": "Disability cover",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "setup": "setup_needed",
+      "gaps": {
+       "count": "gap_table",
+       "where": {
+        "all": [
+         [
+          "line",
+          "startswith",
+          "Disability ("
+         ],
+         [
+          "status",
+          "==",
+          "gap"
+         ]
+        ]
+       }
+      },
+      "need": {
+       "sum": "gap_table",
+       "where": [
+        "line",
+        "startswith",
+        "Disability ("
+       ],
+       "field": "need"
+      },
+      "in_force": {
+       "sum": "gap_table",
+       "where": [
+        "line",
+        "startswith",
+        "Disability ("
+       ],
+       "field": "in_force"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "setup",
+        "==",
+        true
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter each earner's income.",
+       "next": {
+        "text": "Enter income in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "gaps",
+          ">",
+          0
+         ],
+         [
+          "in_force",
+          "==",
+          0
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "high",
+       "reason": "No disability cover is on record. Replacing part of your income would take about {need|usd} a month.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": [
+        "gaps",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "Disability cover on record pays {in_force|usd} a month. The estimated need is {need|usd} a month.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Disability cover on record meets the app's estimated need."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "handover",
+   "name": "If something happens to you",
+   "kind": "status",
+   "why": "Could someone else find everything and act, and would the money reach the right people?",
+   "pages": [
+    {
+     "label": "CONTINUITY",
+     "tab": "plan",
+     "subtab": "continuity",
+     "role": "do"
+    },
+    {
+     "label": "ESTATE",
+     "tab": "plan",
+     "subtab": "estate",
+     "role": "do"
+    },
+    {
+     "label": "VAULT",
+     "tab": "plan",
+     "subtab": "vault",
+     "role": "do"
+    }
+   ],
+   "checks": [
+    {
+     "id": "H1",
+     "label": "Will, power of attorney, medical directive",
+     "source": "continuity",
+     "from": {
+      "panel": "PLAN \u203a CONTINUITY",
+      "tab": "plan",
+      "subtab": "continuity"
+     },
+     "let": {
+      "missing": {
+       "list": "doc_currency",
+       "where": {
+        "all": [
+         [
+          "doc_type",
+          "in",
+          [
+           "will",
+           "durable_poa",
+           "healthcare_directive"
+          ]
+         ],
+         [
+          "status",
+          "==",
+          "missing"
+         ]
+        ]
+       },
+       "field": "doc_type"
+      },
+      "n_missing": {
+       "count": "doc_currency",
+       "where": {
+        "all": [
+         [
+          "doc_type",
+          "in",
+          [
+           "will",
+           "durable_poa",
+           "healthcare_directive"
+          ]
+         ],
+         [
+          "status",
+          "==",
+          "missing"
+         ]
+        ]
+       }
+      },
+      "n_stale": {
+       "count": "doc_currency",
+       "where": {
+        "all": [
+         [
+          "doc_type",
+          "in",
+          [
+           "will",
+           "durable_poa",
+           "healthcare_directive"
+          ]
+         ],
+         [
+          "status",
+          "==",
+          "stale"
+         ]
+        ]
+       }
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n_missing",
+        ">",
+        0
+       ],
+       "state": "todo",
+       "severity": "high",
+       "reason": "No review year is recorded for: {missing|list}.",
+       "next": {
+        "text": "Record the year each was last reviewed.",
+        "tab": "plan",
+        "subtab": "continuity"
+       }
+      },
+      {
+       "when": [
+        "n_stale",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "{n_stale|n0} of these documents are overdue for review.",
+       "next": {
+        "text": "Open CONTINUITY.",
+        "tab": "plan",
+        "subtab": "continuity"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your will, power of attorney and medical directive have a current review year."
+      }
+     ]
+    },
+    {
+     "id": "H2",
+     "label": "Beneficiaries checked",
+     "source": "continuity",
+     "from": {
+      "panel": "PLAN \u203a CONTINUITY",
+      "tab": "plan",
+      "subtab": "continuity"
+     },
+     "let": {
+      "n": {
+       "count": "account_map",
+       "where": [
+        "passes_by",
+        "startswith",
+        "beneficiary designation"
+       ]
+      },
+      "st": {
+       "first": "doc_currency",
+       "where": [
+        "doc_type",
+        "==",
+        "beneficiary_review"
+       ],
+       "field": "status"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "st",
+        "==",
+        "missing"
+       ],
+       "state": "todo",
+       "severity": "high",
+       "reason": "{n|n0} account(s) pass to the people named on a beneficiary form, not by your will. No date is recorded for when those forms were last checked. The app cannot see the forms themselves.",
+       "next": {
+        "text": "See the list of accounts and how each passes.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": [
+        "st",
+        "==",
+        "stale"
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "{n|n0} account(s) pass to the people named on a beneficiary form. The last recorded check is out of date. The app cannot see the forms themselves.",
+       "next": {
+        "text": "Open CONTINUITY.",
+        "tab": "plan",
+        "subtab": "continuity"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "A beneficiary review is recorded and current ({n|n0} account(s) pass by beneficiary form)."
+      }
+     ]
+    },
+    {
+     "id": "H4",
+     "label": "People to call",
+     "source": "continuity",
+     "from": {
+      "panel": "PLAN \u203a CONTINUITY",
+      "tab": "plan",
+      "subtab": "continuity"
+     },
+     "let": {
+      "ex": "executor_name",
+      "wl": "will_location",
+      "ct": "contacts"
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "ex",
+          "missing"
+         ],
+         [
+          "wl",
+          "missing"
+         ],
+         [
+          "ct",
+          "missing"
+         ]
+        ]
+       },
+       "state": "todo",
+       "severity": "normal",
+       "reason": "Not recorded yet: who carries out the will, where the will is kept, and key contacts.",
+       "next": {
+        "text": "Open CONTINUITY.",
+        "tab": "plan",
+        "subtab": "continuity"
+       }
+      },
+      {
+       "when": {
+        "any": [
+         [
+          "ex",
+          "missing"
+         ],
+         [
+          "wl",
+          "missing"
+         ],
+         [
+          "ct",
+          "missing"
+         ]
+        ]
+       },
+       "state": "todo",
+       "severity": "low",
+       "reason": "Some of the details people would need are still blank.",
+       "next": {
+        "text": "Open CONTINUITY.",
+        "tab": "plan",
+        "subtab": "continuity"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "The executor, the will's location and key contacts are recorded."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "grow",
+   "name": "Saving and investing",
+   "kind": "status",
+   "why": "Free employer money, tax-sheltered room, low fees and no single holding that can sink you.",
+   "pages": [
+    {
+     "label": "BENEFITS",
+     "tab": "plan",
+     "subtab": "benefits",
+     "role": "do"
+    },
+    {
+     "label": "POLICY \u00b7 DRIFT",
+     "tab": "insights",
+     "subtab": "drift",
+     "role": "do"
+    },
+    {
+     "label": "FEES \u00b7 LIQUIDITY",
+     "tab": "audits",
+     "subtab": "fees",
+     "role": "do"
+    }
+   ],
+   "checks": [
+    {
+     "id": "G1",
+     "label": "Employer match",
+     "source": "benefits",
+     "from": {
+      "panel": "PLAN \u203a BENEFITS",
+      "tab": "plan",
+      "subtab": "benefits"
+     },
+     "let": {
+      "setup": "setup_needed",
+      "full": "sections.k401.match.full_capture",
+      "left": "sections.k401.match.left_on_table",
+      "needed": "sections.k401.match.needed_for_full_pct"
+     },
+     "rules": [
+      {
+       "when": [
+        "setup",
+        "==",
+        true
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter your salary and your 401(k) percentage.",
+       "next": {
+        "text": "Open BENEFITS.",
+        "tab": "plan",
+        "subtab": "benefits"
+       }
+      },
+      {
+       "when": [
+        "full",
+        "missing"
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "No employer match is entered.",
+       "next": {
+        "text": "Open BENEFITS.",
+        "tab": "plan",
+        "subtab": "benefits"
+       }
+      },
+      {
+       "when": [
+        "full",
+        "==",
+        false
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "Your contributions earn only part of the employer match. About {left|usd} a year of match is not being collected; the full match needs {needed|n1}% of pay.",
+       "next": {
+        "text": "Open BENEFITS.",
+        "tab": "plan",
+        "subtab": "benefits"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "You are collecting the full employer match."
+      }
+     ]
+    },
+    {
+     "id": "G4",
+     "label": "One holding too large",
+     "source": "rebalance",
+     "from": {
+      "panel": "RISK \u00b7 EXPOSURE \u203a POLICY \u00b7 DRIFT",
+      "tab": "insights",
+      "subtab": "drift"
+     },
+     "let": {
+      "n": {
+       "count": "concentration"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "{n|n0} holding(s) are above the size limit you set.",
+       "next": {
+        "text": "See them in POLICY \u00b7 DRIFT.",
+        "tab": "insights",
+        "subtab": "drift"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No holding is above the size limit you set."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "independence",
+   "name": "Financial independence",
+   "kind": "status",
+   "why": "Enough saved that work becomes a choice (the 'FI' in FIRE).",
+   "pages": [
+    {
+     "label": "FI \u00b7 MONTE CARLO",
+     "tab": "plan",
+     "subtab": "fi",
+     "role": "do"
+    },
+    {
+     "label": "TIMELINE",
+     "tab": "plan",
+     "subtab": "timeline",
+     "role": "do"
+    },
+    {
+     "label": "ASSUMPTIONS",
+     "tab": "plan",
+     "subtab": "assumptions",
+     "role": "settings"
+    }
+   ],
+   "checks": [
+    {
+     "id": "I1",
+     "label": "On time for your goal",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a FI \u00b7 MONTE CARLO",
+      "tab": "plan",
+      "subtab": "fi"
+     },
+     "let": {
+      "fi": "fi_number",
+      "age": "assumptions.current_age",
+      "fiage": "fi_age",
+      "target": "assumptions.target_age",
+      "pct": "progress_pct",
+      "late": {
+       "sub": [
+        "fi_age",
+        "assumptions.target_age"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": {
+        "any": [
+         [
+          "fi",
+          "missing"
+         ],
+         [
+          "age",
+          "missing"
+         ]
+        ]
+       },
+       "state": "noinfo",
+       "severity": "high",
+       "reason": "Not enough information yet: enter your birth year and yearly spending.",
+       "next": {
+        "text": "Open ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "late",
+        ">",
+        3
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "You are {pct|n0}% of the way to your number. At the current saving rate the projection reaches it at age {fiage|n0}; your goal is {target|n0}.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": [
+        "late",
+        ">=",
+        1
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "You are {pct|n0}% of the way to your number. At the current saving rate the projection reaches it at age {fiage|n0}; your goal is {target|n0}.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "You are {pct|n0}% of the way to your number, on pace for your goal age."
+      }
+     ]
+    },
+    {
+     "id": "I2",
+     "label": "Odds the money lasts",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a FI \u00b7 MONTE CARLO",
+      "tab": "plan",
+      "subtab": "fi"
+     },
+     "let": {
+      "p": "monte_carlo.success_pct"
+     },
+     "rules": [
+      {
+       "when": [
+        "p",
+        "missing"
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "The simulation has not been run: it needs your spending and balances.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": [
+        "p",
+        "<",
+        60
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "In the app's simulation the money lasts in {p|n0}% of the runs.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": [
+        "p",
+        "<",
+        80
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "In the app's simulation the money lasts in {p|n0}% of the runs.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "In the app's simulation the money lasts in {p|n0}% of the runs."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "income",
+   "name": "Retirement income",
+   "kind": "status",
+   "why": "Turning savings and Social Security into a pay cheque that lasts.",
+   "pages": [
+    {
+     "label": "SOCIAL SECURITY",
+     "tab": "plan",
+     "subtab": "ss",
+     "role": "do"
+    },
+    {
+     "label": "INCOME",
+     "tab": "plan",
+     "subtab": "income",
+     "role": "do"
+    },
+    {
+     "label": "TIMELINE",
+     "tab": "plan",
+     "subtab": "timeline",
+     "role": "do"
+    }
+   ],
+   "checks": []
+  },
+  {
+   "id": "taxes",
+   "name": "Taxes",
+   "kind": "status",
+   "why": "Paying tax in the cheapest years, and not by accident.",
+   "pages": [
+    {
+     "label": "ROTH \u00b7 RATE CURVE",
+     "tab": "plan",
+     "subtab": "roth",
+     "role": "do"
+    },
+    {
+     "label": "TAX \u00b7 TLH",
+     "tab": "audits",
+     "subtab": "tax",
+     "role": "do"
+    },
+    {
+     "label": "TIMELINE",
+     "tab": "plan",
+     "subtab": "timeline",
+     "role": "do"
+    }
+   ],
+   "checks": []
+  },
+  {
+   "id": "health",
+   "name": "Health costs and care",
+   "kind": "status",
+   "why": "Cover before Medicare, the cost of health in retirement, and paying for care late in life.",
+   "pages": [
+    {
+     "label": "ACA BRIDGE",
+     "tab": "plan",
+     "subtab": "bridge",
+     "role": "do"
+    },
+    {
+     "label": "BENEFITS",
+     "tab": "plan",
+     "subtab": "benefits",
+     "role": "do"
+    },
+    {
+     "label": "INSURANCE",
+     "tab": "plan",
+     "subtab": "insurance",
+     "role": "do"
+    }
+   ],
+   "checks": []
+  },
+  {
+   "id": "education",
+   "name": "Children and education",
+   "kind": "status",
+   "why": "School costs for children, or for you, without wrecking the rest of the plan.",
+   "pages": [
+    {
+     "label": "WHAT-IF \u00b7 MY DEBTS",
+     "tab": "calculators",
+     "subtab": "whatif",
+     "role": "do"
+    },
+    {
+     "label": "ACCOUNTS",
+     "tab": "settings",
+     "subtab": "accounts",
+     "role": "settings"
+    }
+   ],
+   "checks": []
+  },
+  {
+   "id": "home",
+   "name": "Home and big purchases",
+   "kind": "explore",
+   "why": "Tools for buying, borrowing and comparing.",
+   "pages": [
+    {
+     "label": "MORTGAGE",
+     "tab": "calculators",
+     "subtab": "mortgage",
+     "role": "do"
+    },
+    {
+     "label": "AFFORDABILITY",
+     "tab": "calculators",
+     "subtab": "affordability",
+     "role": "do"
+    },
+    {
+     "label": "REAL ESTATE",
+     "tab": "plan",
+     "subtab": "realestate",
+     "role": "do"
+    }
+   ]
+  },
+  {
+   "id": "research",
+   "name": "Research and ideas",
+   "kind": "explore",
+   "why": "Stock ideas, screens and the paper portfolio, for people who enjoy them. A research lead is not a recommendation.",
+   "pages": [
+    {
+     "label": "SLEEVES",
+     "tab": "research",
+     "subtab": "sleeves",
+     "role": "do"
+    },
+    {
+     "label": "STRATEGIST",
+     "tab": "strategist",
+     "role": "do"
+    }
+   ]
+  }
+ ],
+ "variants": {
+  "age_stages": {
+   "_why": "Decision 1 alternative: five stages by age alone (the original draft) instead of years to the stop-work age.",
+   "stages": [
+    {
+     "id": "start",
+     "name": "Starting out",
+     "line": "Building the first cushion and the first habits.",
+     "when": [
+      "age",
+      "<",
+      30
+     ]
+    },
+    {
+     "id": "build",
+     "name": "Building",
+     "line": "Saving steadily and protecting the people who rely on you.",
+     "when": [
+      "age",
+      "<",
+      40
+     ]
+    },
+    {
+     "id": "peak",
+     "name": "Peak years",
+     "line": "Your strongest earning years. The plan gets real numbers.",
+     "when": [
+      "age",
+      "<",
+      50
+     ]
+    },
+    {
+     "id": "approach",
+     "name": "Final approach",
+     "line": "Turning savings into income.",
+     "when": [
+      "age",
+      "<",
+      62
+     ]
+    },
+    {
+     "id": "early",
+     "name": "Early retirement",
+     "line": "Living on savings before the later-life rules begin.",
+     "when": [
+      "age",
+      "<",
+      73
+     ]
+    },
+    {
+     "id": "later",
+     "name": "Later years",
+     "line": "Keeping income steady, planning for care, making things easy to hand over.",
+     "when": true
+    }
+   ]
+  },
+  "pins_force_top": {
+   "_why": "Decision 6 alternative: a pin forces a topic to the top instead of only lifting it.",
+   "pin_bonus": 5.0
+  },
+  "no_timing": {
+   "_why": "Decision (timing windows): ignore the calendar boost entirely.",
+   "timing_boost": 1.0
+  },
+  "equal_weights": {
+   "_why": "Control: every topic equally relevant at every stage, to see how much the stage weights matter.",
+   "weights": {
+    "safety": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "protect": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "handover": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "grow": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "independence": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "income": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "taxes": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "health": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    },
+    "education": {
+     "start": 2,
+     "build": 2,
+     "peak": 2,
+     "approach": 2,
+     "early": 2,
+     "later": 2
+    }
+   }
+  }
+ }
+}
