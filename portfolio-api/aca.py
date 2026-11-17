@@ -190,6 +190,15 @@ def ptc_estimate(magi_value, household_size, slcsp_annual=None, state=None):
     return out
 
 
+REPAYMENT_RULE = {
+    "text": ("If you take the premium credit in advance each month and your final income for the year turns out higher than you estimated, "
+             "the extra credit must be paid back. For 2026 coverage and later the old repayment caps are gone: all of the excess is repaid in full "
+             "on Form 8962 with that year's tax return (filed in early 2027 for 2026)."),
+    "source": ("Section 71305 of H.R. 1 (the 2025 budget law), as summarised by healthinsurance.org; Cowork research 2026-11-17, medium-high confidence "
+               "(secondary source; the 2026 Form 8962 instructions are not yet published). Check the instructions when they appear."),
+}
+
+
 def summary(components=None, household_size=1, slcsp_annual=None,
             planned_conversion=0.0, planned_gains=0.0, state=None):
     """One-call rollup for /api/aca: MAGI ledger, %-FPL, subsidy band + estimate,
@@ -240,6 +249,7 @@ def summary(components=None, household_size=1, slcsp_annual=None,
         "cliff": cl,
         "planned": planned,
         "flags": flags,
+        "repayment": dict(REPAYMENT_RULE, relevant=bool(est.get("band") == "subsidized" or flags["planned_crosses_cliff"] or flags["on_cliff_edge"])),
         "source": SOURCE,
         "note": ("ACA MAGI = AGI + tax-exempt interest + 100% of Social Security. For 2026 the "
                  "enhanced subsidies expired: PTC runs 100-400% FPL with a HARD CLIFF at 400% in "

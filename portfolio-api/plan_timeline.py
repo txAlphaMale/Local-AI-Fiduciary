@@ -191,7 +191,7 @@ def build(inp):
             if lost:
                 flags.append(f"Over the ACA cliff by ${-cl['headroom_to_cliff']:,.0f}: no premium subsidy this year.")
             elif sub.get("band") == "subsidized" and cl["headroom_to_cliff"] < 0.1 * cl["cliff_magi"]:
-                flags.append(f"Within ${cl['headroom_to_cliff']:,.0f} of the ACA cliff.")
+                flags.append(f"Within ${cl['headroom_to_cliff']:,.0f} of the ACA cliff. Credit taken in advance that your final income does not earn must be repaid in full (2026 on).")
         elif retired and age >= 65 and taxr is not None:
             look = magi_hist.get(year - 2)
             people = (1 if age >= 65 else 0) + (1 if (st == "mfj" and spouse_age is not None and spouse_age >= 65) else 0)

@@ -4369,6 +4369,7 @@ function planContent(r){
         ac2.textContent=(over?'⚠ Bridge-year conversions push MAGI OVER the 400% FPL cliff — $0 subsidy. ':(gap?'⚠ MAGI below 100% FPL — TX coverage gap. ':'✓ Under the 400% FPL cliff — subsidy preserved. '))+'Cliff at '+u0(cl.cliff_magi)+' MAGI.';
         wrap.appendChild(ac2);
         const an=el('div','muted'); an.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);'; an.textContent=ac.interpretation||''; wrap.appendChild(an);
+        if(ac.repayment && ac.repayment.relevant){ const rp=el('div'); rp.style.cssText='font-size:var(--font-size-sm);line-height:1.45;margin-bottom:var(--space-2);color:var(--color-accent);'; rp.textContent='⚑ Repayment: '+ac.repayment.text; rp.title='Source: '+ac.repayment.source; wrap.appendChild(rp); }
         const awf=el('div'); awf.style.cssText='font-size:var(--font-size-base);margin:0 0 8px;';
         awf.innerHTML=`<span class="muted">What-if (not saved):</span> MAGI <input id="acaw-magi" type="number" placeholder="${ac.magi!=null?Math.round(ac.magi):'$'}" style="width:84px;"/> · household <input id="acaw-hh" type="number" placeholder="2" style="width:44px;"/> · SLCSP <input id="acaw-slcsp" type="number" placeholder="$/yr" style="width:78px;"/> <button ${A('click','acaWhatif')}>↻ recompute</button> <span id="acaw-out"></span>`;
         wrap.appendChild(awf);

@@ -256,12 +256,12 @@
   {
    "id": "marketplace",
    "from": "11-01",
-   "to": "01-15",
+   "to": "12-15",
    "checks": [
     "health.C1",
     "health.C2"
    ],
-   "source": "federal marketplace open enrolment, 1 Nov to 15 Jan [unverified: Cowork to confirm]"
+   "source": "Open enrolment for 2027 coverage: HealthCare.gov 1 Nov to 15 Dec; state exchanges may run to 31 Dec (federal Marketplace Integrity and Affordability rule; secondary source, checked by Cowork 2026-11-17, medium-high confidence)"
   },
   {
    "id": "year_end",
@@ -273,7 +273,7 @@
     "grow.G1",
     "grow.G2"
    ],
-   "source": "calendar-year tax deadlines [unverified: Cowork to confirm]"
+   "source": "Calendar-year filers: the tax year ends 31 Dec (401(k) deferrals must be made through payroll by then); checked by Cowork 2026-11-17"
   },
   {
    "id": "ira_hsa",
@@ -283,7 +283,7 @@
     "grow.G2",
     "health.C4"
    ],
-   "source": "IRA and HSA contribution deadline [unverified: Cowork to confirm]"
+   "source": "IRA and HSA contributions for a tax year are due by the filing deadline, 15 Apr of the next year; an extension does not move it (taxact.com important tax dates; checked by Cowork 2026-11-17, high confidence)"
   }
  ],
  "topics": [
