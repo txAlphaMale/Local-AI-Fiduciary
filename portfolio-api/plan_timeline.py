@@ -225,8 +225,11 @@ def build(inp):
     total_tax = sum((x["tax"]["federal"] + (x["tax"]["state"] or 0.0) + x["tax"]["penalty"]) for x in rows if x["tax"])
     lost_years = [x["year"] for x in rows if x["coverage"].get("subsidy_lost")]
     short_years = [x["year"] for x in rows if x["shortfall"] > 0.5]
+    med_years = [x["year"] for x in rows if (x["coverage"].get("surcharge") or 0) > 0]
     summary = {"lifetime_tax": round(total_tax, 2), "final_total": rows[-1]["end_total"] if rows else None,
-               "years_with_lost_subsidy": lost_years, "years_short": short_years, "first_year_short": short_years[0] if short_years else None}
+               "years_with_lost_subsidy": lost_years, "years_short": short_years, "first_year_short": short_years[0] if short_years else None,
+               "short_year_count": len(short_years), "lost_subsidy_year_count": len(lost_years), "first_lost_subsidy_year": lost_years[0] if lost_years else None,
+               "medicare_surcharge_years": len(med_years)}
     footer = (f"Real (today's-dollar) terms. Deterministic: one path at the plan's real return of {r * 100:.1f}% a year; see the Monte Carlo for uncertainty. "
               f"Tax tables: {tax.TAX_YEAR} figures in real terms for every year. Pre-tax money is used last before 59 1/2 (10% penalty otherwise). "
               "Required distributions start at the age set by your birth year (SECURE 2.0).")

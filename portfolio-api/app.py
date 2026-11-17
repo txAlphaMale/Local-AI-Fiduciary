@@ -5226,7 +5226,10 @@ def _lifemap_sources(request=None):
         _LM_MEMO.update(at=now, retirement=_lifemap_source(_retirement))
     return {"retirement": _LM_MEMO["retirement"], "cashdebt": _lifemap_source(get_cashdebt), "insurance": _lifemap_source(get_insurance),
             "benefits": _lifemap_source(get_benefits), "continuity": _lifemap_source(get_continuity), "estate": _lifemap_source(get_estate),
-            "rebalance": _lifemap_source(get_rebalance)}
+            "rebalance": _lifemap_source(get_rebalance), "ss": _lifemap_source(get_ss), "roth": _lifemap_source(get_roth),
+            "hsa": _lifemap_source(get_hsa), "ltc": _lifemap_source(get_ltc), "grounding": _lifemap_source(get_grounding),
+            "taxaudit": _lifemap_source(get_tax_audit), "fees": _lifemap_source(get_fees_liquidity),
+            "registry": _lifemap_source(get_account_registry), "timeline": _lifemap_source(get_plan_timeline)}
 
 
 def _lifemap_context(sources):

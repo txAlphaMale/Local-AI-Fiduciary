@@ -1218,12 +1218,12 @@ function lifemapContent(){
     '<div class="muted" style="font-size:var(--font-size-sm)">'+(st.age!=null?'Age '+st.age:'Age not set')+(st.target_age!=null?' · stop-work age '+st.target_age+(st.target_age_is_default?' (the default: set yours in ASSUMPTIONS)':''):'')+(st.next?' · next stage: '+st.next.name:'')+'</div>';
   wrap.appendChild(hd);
   const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-3);font-size:var(--font-size-sm);';
-  const stSel=document.createElement('select'); stSel.className='cfg-inp'; stSel.title='See what the map would stress at another stage';
+  const stSel=document.createElement('select'); stSel.className='cfg-inp'; stSel.title='See the map as if you were in another stage of life. Only the stage weights change (so the order of the cards); your data and every check result stay the same.';
   const o0=document.createElement('option'); o0.value=''; o0.textContent='Look ahead: my stage'; stSel.appendChild(o0);
   ['start','build','peak','approach','early','later'].forEach(id=>{ const o=document.createElement('option'); o.value=id; o.textContent='Look ahead: '+id; if(LM.stage===id) o.selected=true; stSel.appendChild(o); });
   stSel.onchange=()=>{ LM.stage=stSel.value; lmLoad(); }; bar.appendChild(stSel);
-  if((d.variants||[]).length){ const vs=document.createElement('select'); vs.className='cfg-inp'; vs.title='Design variants, for comparing decisions (testing)';
-    ['',...d.variants].forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v?('Variant: '+v):'Variant: default'; if(LM.variant===v) o.selected=true; vs.appendChild(o); }); vs.onchange=()=>{ LM.variant=vs.value; lmLoad(); }; bar.appendChild(vs); }
+  if((d.variants||[]).length){ const vs=document.createElement('select'); vs.className='cfg-inp'; vs.title='Re-draw the map under an alternative design rule, on the same data, to compare design decisions. Nothing is saved. See LIFE-MAP-GUIDE.md.';
+    ['',...d.variants].forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v?('Design variant: '+v):'Design variant: default'; if(LM.variant===v) o.selected=true; vs.appendChild(o); }); vs.onchange=()=>{ LM.variant=vs.value; lmLoad(); }; bar.appendChild(vs); }
   const startBtn=el('button','mut-btn',(localStorage.getItem('fidStartPage')==='lifemap')?'START PAGE: LIFE MAP ✓':'MAKE THIS MY START PAGE'); startBtn.onclick=()=>{ try{ localStorage.setItem('fidStartPage',localStorage.getItem('fidStartPage')==='lifemap'?'':'lifemap'); }catch(_){} render(); }; bar.appendChild(startBtn);
   wrap.appendChild(bar);
   const byId={}; d.topics.forEach(t=>{ byId[t.id]=t; });

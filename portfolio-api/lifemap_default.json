@@ -467,6 +467,135 @@
        "reason": "No debt charges more than the plan's investing return."
       }
      ]
+    },
+    {
+     "id": "S2",
+     "label": "Which accounts are the fund",
+     "source": "cashdebt",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "des": "emergency_fund.designated",
+      "und": "emergency_fund.undesignated_cash"
+     },
+     "rules": [
+      {
+       "when": [
+        "des",
+        "==",
+        false
+       ],
+       "state": "todo",
+       "severity": "normal",
+       "reason": "You have not said which accounts are your emergency fund, so the figure is the app's estimate from cash it found.",
+       "next": {
+        "text": "Choose the accounts.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": [
+        "und",
+        ">",
+        0
+       ],
+       "state": "todo",
+       "severity": "low",
+       "reason": "Some cash is in accounts you have not answered yes or no for, so it is not counted.",
+       "next": {
+        "text": "Choose the accounts.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your emergency-fund accounts are chosen."
+      }
+     ]
+    },
+    {
+     "id": "S4",
+     "label": "Debts with no rate",
+     "source": "cashdebt",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "n": {
+       "count": "avalanche.rows",
+       "where": [
+        "priority",
+        "==",
+        "set-rate"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "{n|n0} debt(s) have no interest rate entered, so they cannot be ranked.",
+       "next": {
+        "text": "Enter the rates.",
+        "tab": "settings",
+        "subtab": "accounts"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Every debt has a rate."
+      }
+     ]
+    },
+    {
+     "id": "S5",
+     "label": "Idle cash",
+     "source": "cashdebt",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "drag": "idle_cash.drag_annual",
+      "t": "idle_cash.tbill_pct"
+     },
+     "rules": [
+      {
+       "when": [
+        "drag",
+        ">=",
+        500
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Cash above your emergency fund earns about {drag|usd} a year less than it would at the {t|n1}% Treasury-bill rate.",
+       "next": {
+        "text": "Open CASH \u00b7 DEBT.",
+        "tab": "plan",
+        "subtab": "cashdebt"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Idle cash is not costing much."
+      }
+     ]
     }
    ]
   },
@@ -783,6 +912,194 @@
        "reason": "Disability cover on record meets the app's estimated need."
       }
      ]
+    },
+    {
+     "id": "P4",
+     "label": "Liability (umbrella)",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "rec": "umbrella.recommended",
+      "inf": "umbrella.in_force",
+      "short": {
+       "sub": [
+        "umbrella.recommended",
+        "umbrella.in_force"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "rec",
+        "missing"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "rec",
+        "==",
+        0
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "short",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "Umbrella liability cover on record is {inf|usd}. The app sizes it to net worth, rounded up: {rec|usd}.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Umbrella cover on record meets the app's sizing."
+      }
+     ]
+    },
+    {
+     "id": "P5",
+     "label": "Home and car",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "unk": {
+       "count": "pnc",
+       "where": {
+        "all": [
+         [
+          "status",
+          "==",
+          "unknown"
+         ],
+         {
+          "not": [
+           "item",
+           "startswith",
+           "Flood"
+          ]
+         }
+        ]
+       }
+      },
+      "rev": {
+       "count": "pnc",
+       "where": {
+        "all": [
+         [
+          "status",
+          "==",
+          "review"
+         ],
+         {
+          "not": [
+           "item",
+           "startswith",
+           "Flood"
+          ]
+         }
+        ]
+       }
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "rev",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{rev|n0} home or car coverage limit(s) on record are below the app's check line.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": [
+        "unk",
+        ">",
+        0
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "{unk|n0} home or car coverage item(s) have no limit entered.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Home and car limits on record meet the app's check lines."
+      }
+     ]
+    },
+    {
+     "id": "P6",
+     "label": "Term ending soon",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "n": {
+       "count": "alerts",
+       "where": [
+        "level",
+        "==",
+        "review"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "{n|n0} policy term(s) end soon.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No policy term ends soon."
+      }
+     ]
     }
    ]
   },
@@ -1064,6 +1381,162 @@
        "reason": "The executor, the will's location and key contacts are recorded."
       }
      ]
+    },
+    {
+     "id": "H3",
+     "label": "Accounts that may go through probate",
+     "source": "continuity",
+     "from": {
+      "panel": "PLAN \u203a ESTATE",
+      "tab": "plan",
+      "subtab": "estate"
+     },
+     "let": {
+      "m": {
+       "count": "account_map",
+       "where": [
+        "tax_status",
+        "in",
+        [
+         "taxable",
+         "real_estate"
+        ]
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "m",
+        ">",
+        0
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "{m|n0} account(s) or properties pass by a transfer-on-death registration if one is set, otherwise through the will and the court. The app does not know which have one.",
+       "next": {
+        "text": "Open ESTATE.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No account here is likely to go through probate."
+      }
+     ]
+    },
+    {
+     "id": "H8",
+     "label": "Estate tax",
+     "source": "estate",
+     "from": {
+      "panel": "PLAN \u203a ESTATE",
+      "tab": "plan",
+      "subtab": "estate"
+     },
+     "let": {
+      "over": "snapshot.taxable_estate_if_today",
+      "yrs": "snapshot.years_until_exemption_crossed",
+      "state": "snapshot.state_estate_tax"
+     },
+     "rules": [
+      {
+       "when": [
+        "over",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "At today's values the estate is {over|usd} over the federal exemption.",
+       "next": {
+        "text": "Open ESTATE.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "yrs",
+          ">=",
+          0
+         ],
+         [
+          "yrs",
+          "<=",
+          10
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "low",
+       "reason": "At the plan's growth rate the estate crosses the federal exemption in {yrs|n0} year(s).",
+       "next": {
+        "text": "Open ESTATE.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": [
+        "state",
+        "==",
+        true
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Your state also taxes estates.",
+       "next": {
+        "text": "Open ESTATE.",
+        "tab": "plan",
+        "subtab": "estate"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "The estate is under the federal exemption at today's values."
+      }
+     ]
+    },
+    {
+     "id": "H9",
+     "label": "State confirmed",
+     "source": "estate",
+     "from": {
+      "panel": "PLAN \u203a ASSUMPTIONS",
+      "tab": "plan",
+      "subtab": "assumptions"
+     },
+     "let": {
+      "src": "state_of_residence_source"
+     },
+     "rules": [
+      {
+       "when": [
+        "src",
+        "==",
+        "default_unconfirmed"
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Your state is not set, so the transfer rules shown are a guess.",
+       "next": {
+        "text": "Set it in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your state is set."
+      }
+     ]
     }
    ]
   },
@@ -1194,6 +1667,163 @@
        "when": true,
        "state": "ok",
        "reason": "No holding is above the size limit you set."
+      }
+     ]
+    },
+    {
+     "id": "G2",
+     "label": "Room left this year",
+     "source": "benefits",
+     "from": {
+      "panel": "PLAN \u203a BENEFITS",
+      "tab": "plan",
+      "subtab": "benefits"
+     },
+     "let": {
+      "k": "sections.k401.headroom",
+      "h": "sections.hsa.headroom",
+      "r": "sections.roth_ira.remaining_total",
+      "pace": "sections.roth_ira.pacing_self.status"
+     },
+     "rules": [
+      {
+       "when": [
+        "pace",
+        "==",
+        "behind_pace"
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Tax-sheltered room left this year: {k|usd} in the 401(k), {r|usd} in Roth IRAs. Roth IRA contributions are behind the pace needed to use the year.",
+       "next": {
+        "text": "Open BENEFITS.",
+        "tab": "plan",
+        "subtab": "benefits"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Tax-sheltered room left this year: {k|usd} in the 401(k), {r|usd} in Roth IRAs."
+      }
+     ]
+    },
+    {
+     "id": "G3",
+     "label": "Fund costs",
+     "source": "fees",
+     "from": {
+      "panel": "AUDITS \u203a FEES \u00b7 LIQUIDITY",
+      "tab": "audits",
+      "subtab": "fees"
+     },
+     "let": {
+      "n": {
+       "count": "fees.funds",
+       "where": [
+        "high",
+        "==",
+        true
+       ]
+      },
+      "tot": "fees.total_annual_fee"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{n|n0} fund(s) charge more than the app's high-cost line. All funds together cost about {tot|usd} a year.",
+       "next": {
+        "text": "Open FEES \u00b7 LIQUIDITY.",
+        "tab": "audits",
+        "subtab": "fees"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No fund is above the app's high-cost line."
+      }
+     ]
+    },
+    {
+     "id": "G5",
+     "label": "Mix against your targets",
+     "source": "rebalance",
+     "from": {
+      "panel": "RISK \u203a POLICY \u00b7 DRIFT",
+      "tab": "insights",
+      "subtab": "drift"
+     },
+     "let": {
+      "n": {
+       "count": "allocation",
+       "where": [
+        "flag",
+        "present"
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{n|n0} part(s) of the portfolio are outside the range you set.",
+       "next": {
+        "text": "Open POLICY \u00b7 DRIFT.",
+        "tab": "insights",
+        "subtab": "drift"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "The portfolio mix is within the ranges you set."
+      }
+     ]
+    },
+    {
+     "id": "G6",
+     "label": "Tax placement",
+     "source": "taxaudit",
+     "from": {
+      "panel": "AUDITS \u203a TAX \u00b7 TLH",
+      "tab": "audits",
+      "subtab": "tax"
+     },
+     "let": {
+      "n": "asset_location.count"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{n|n0} high-income holding(s) sit in taxable accounts.",
+       "next": {
+        "text": "Open TAX \u00b7 TLH.",
+        "tab": "audits",
+        "subtab": "tax"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No high-income holding sits in a taxable account."
       }
      ]
     }
@@ -1370,6 +2000,159 @@
        "reason": "In the app's simulation the money lasts in {p|n0}% of the runs."
       }
      ]
+    },
+    {
+     "id": "I3",
+     "label": "Odds at your real swings",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a FI \u00b7 MONTE CARLO",
+      "tab": "plan",
+      "subtab": "fi"
+     },
+     "let": {
+      "ex": "monte_carlo.holdings_volatility.exceeds_assumption",
+      "m": "monte_carlo.holdings_volatility.measured_pct",
+      "a": "monte_carlo.holdings_volatility.assumed_pct",
+      "p": "monte_carlo.holdings_volatility.success_pct"
+     },
+     "rules": [
+      {
+       "when": [
+        "ex",
+        "==",
+        true
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Your portfolio has swung {m|n0}% a year; the plan assumes {a|n0}%. At the real figure the money lasts in {p|n0}% of the runs.",
+       "next": {
+        "text": "Open FI \u00b7 MONTE CARLO.",
+        "tab": "plan",
+        "subtab": "fi"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your portfolio's swings are close to what the plan assumes."
+      }
+     ]
+    },
+    {
+     "id": "I4",
+     "label": "Money for the early years",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a ACA BRIDGE",
+      "tab": "plan",
+      "subtab": "bridge"
+     },
+     "let": {
+      "st": "bridge.status",
+      "cov": "bridge.roth_ladder.seed_covered",
+      "gap": "bridge.roth_ladder.seed_gap",
+      "ra": "bridge.retire_age",
+      "by": "bridge.bridge_years"
+     },
+     "rules": [
+      {
+       "when": [
+        "st",
+        "==",
+        "no_bridge_needed"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "st",
+        "missing"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "st",
+        "==",
+        "insufficient_data"
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet to model the years before retirement accounts open.",
+       "next": {
+        "text": "Open ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "cov",
+        "==",
+        false
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "Stopping at {ra|n0} means {by|n0} years before retirement accounts open without penalty. Money you can reach in that time is short by {gap|usd}.",
+       "next": {
+        "text": "Open ACA BRIDGE.",
+        "tab": "plan",
+        "subtab": "bridge"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Money you can reach covers the years before retirement accounts open."
+      }
+     ]
+    },
+    {
+     "id": "I5",
+     "label": "Money lasts year by year",
+     "source": "timeline",
+     "from": {
+      "panel": "PLAN \u203a TIMELINE",
+      "tab": "plan",
+      "subtab": "timeline"
+     },
+     "let": {
+      "n": "summary.short_year_count",
+      "first": "summary.first_year_short"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "high",
+       "reason": "The year-by-year plan runs short of money in {n|n0} year(s), starting in {first|year}.",
+       "next": {
+        "text": "Open TIMELINE.",
+        "tab": "plan",
+        "subtab": "timeline"
+       }
+      },
+      {
+       "when": [
+        "n",
+        "present"
+       ],
+       "state": "ok",
+       "reason": "The year-by-year plan has money in every year."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
     }
    ]
   },
@@ -1398,7 +2181,210 @@
      "role": "do"
     }
    ],
-   "checks": []
+   "checks": [
+    {
+     "id": "N1",
+     "label": "Social Security estimate",
+     "source": "ss",
+     "from": {
+      "panel": "PLAN \u203a ASSUMPTIONS",
+      "tab": "plan",
+      "subtab": "assumptions"
+     },
+     "let": {
+      "av": "available"
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "av",
+          "==",
+          false
+         ],
+         [
+          "stage",
+          "in",
+          [
+           "approach",
+           "early"
+          ]
+         ]
+        ]
+       },
+       "state": "noinfo",
+       "severity": "high",
+       "reason": "Not enough information yet: enter your benefit estimate from ssa.gov.",
+       "next": {
+        "text": "Open ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": [
+        "av",
+        "==",
+        false
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Not enough information yet: enter your benefit estimate from ssa.gov.",
+       "next": {
+        "text": "Open ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "A Social Security estimate is entered."
+      }
+     ]
+    },
+    {
+     "id": "N2",
+     "label": "Claim age chosen",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a SOCIAL SECURITY",
+      "tab": "plan",
+      "subtab": "ss"
+     },
+     "let": {
+      "claim": "assumptions.ss_claim_age",
+      "bm": {
+       "from": "ss",
+       "path": "household_monthly_benefit"
+      },
+      "av": {
+       "from": "ss",
+       "path": "available"
+      }
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "claim",
+          "missing"
+         ],
+         [
+          "av",
+          "==",
+          true
+         ],
+         [
+          "stage",
+          "in",
+          [
+           "approach",
+           "early"
+          ]
+         ]
+        ]
+       },
+       "state": "todo",
+       "severity": "normal",
+       "reason": "No claiming age is set; the plan uses the app's default.",
+       "next": {
+        "text": "Open SOCIAL SECURITY.",
+        "tab": "plan",
+        "subtab": "ss"
+       }
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "claim",
+          "missing"
+         ],
+         [
+          "av",
+          "==",
+          true
+         ]
+        ]
+       },
+       "state": "todo",
+       "severity": "low",
+       "reason": "No claiming age is set; the plan uses the app's default.",
+       "next": {
+        "text": "Open SOCIAL SECURITY.",
+        "tab": "plan",
+        "subtab": "ss"
+       }
+      },
+      {
+       "when": [
+        "claim",
+        "present"
+       ],
+       "state": "ok",
+       "reason": "The plan assumes {bm|usd} a month from age {claim|n0}."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    },
+    {
+     "id": "N3",
+     "label": "Required withdrawals",
+     "source": "roth",
+     "from": {
+      "panel": "PLAN \u203a ROTH \u00b7 RATE CURVE",
+      "tab": "plan",
+      "subtab": "roth"
+     },
+     "let": {
+      "rmd": "rmd_age",
+      "bal": "trad_balance"
+     },
+     "rules": [
+      {
+       "when": [
+        "bal",
+        "missing"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "bal",
+        "==",
+        0
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "age",
+          ">=",
+          0
+         ],
+         [
+          "rmd",
+          "present"
+         ]
+        ]
+       },
+       "state": "ok",
+       "reason": "Required yearly withdrawals from pre-tax accounts start at age {rmd|n0}. The pre-tax balance today is {bal|usd}."
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "taxes",
@@ -1425,7 +2411,214 @@
      "role": "do"
     }
    ],
-   "checks": []
+   "checks": [
+    {
+     "id": "T1",
+     "label": "Tax figures current",
+     "source": "grounding",
+     "from": {
+      "panel": "AUDITS \u203a GROUNDING",
+      "tab": "audits",
+      "subtab": "grounding"
+     },
+     "let": {
+      "st": "status",
+      "n": "stale_count"
+     },
+     "rules": [
+      {
+       "when": [
+        "st",
+        "==",
+        "stale"
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{n|n0} published tax figure(s) the app uses are out of date.",
+       "next": {
+        "text": "Open GROUNDING.",
+        "tab": "audits",
+        "subtab": "grounding"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "The tax figures the app uses are current."
+      }
+     ]
+    },
+    {
+     "id": "T2",
+     "label": "Losses that could offset gains",
+     "source": "taxaudit",
+     "from": {
+      "panel": "AUDITS \u203a TAX \u00b7 TLH",
+      "tab": "audits",
+      "subtab": "tax"
+     },
+     "let": {
+      "n": "tax_loss_harvest.count",
+      "tot": "tax_loss_harvest.total_harvestable_loss"
+     },
+     "rules": [
+      {
+       "when": [
+        "tot",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "{n|n0} holding(s) are below what you paid, by {tot|usd} in all.",
+       "next": {
+        "text": "Open TAX \u00b7 TLH.",
+        "tab": "audits",
+        "subtab": "tax"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No holding in a taxable account is below what you paid."
+      }
+     ]
+    },
+    {
+     "id": "T4",
+     "label": "Low-tax years before required withdrawals",
+     "source": "roth",
+     "from": {
+      "panel": "PLAN \u203a ROTH \u00b7 RATE CURVE",
+      "tab": "plan",
+      "subtab": "roth"
+     },
+     "let": {
+      "rmd": "rmd_age",
+      "bal": "trad_balance",
+      "years": {
+       "sub": [
+        "rmd_age",
+        {
+         "ctx": "age"
+        }
+       ]
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "bal",
+        "missing"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "bal",
+        "==",
+        0
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "stopped",
+          "==",
+          true
+         ],
+         [
+          "years",
+          "<=",
+          5
+         ],
+         [
+          "years",
+          ">=",
+          0
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "normal",
+       "reason": "There are {years|n0} year(s) between now and age {rmd|n0}, when required withdrawals begin on a pre-tax balance of {bal|usd}.",
+       "next": {
+        "text": "Open ROTH \u00b7 RATE CURVE.",
+        "tab": "plan",
+        "subtab": "roth"
+       }
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "stopped",
+          "==",
+          true
+         ],
+         [
+          "years",
+          ">",
+          5
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "low",
+       "reason": "There are {years|n0} year(s) between now and age {rmd|n0}, when required withdrawals begin on a pre-tax balance of {bal|usd}.",
+       "next": {
+        "text": "Open ROTH \u00b7 RATE CURVE.",
+        "tab": "plan",
+        "subtab": "roth"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Required withdrawals begin at age {rmd|n0} on a pre-tax balance of {bal|usd}."
+      }
+     ]
+    },
+    {
+     "id": "T6",
+     "label": "State",
+     "source": "estate",
+     "from": {
+      "panel": "PLAN \u203a ASSUMPTIONS",
+      "tab": "plan",
+      "subtab": "assumptions"
+     },
+     "let": {
+      "src": "state_of_residence_source"
+     },
+     "rules": [
+      {
+       "when": [
+        "src",
+        "==",
+        "default_unconfirmed"
+       ],
+       "state": "noinfo",
+       "severity": "normal",
+       "reason": "Your state is not set, so state tax and estate figures are a guess.",
+       "next": {
+        "text": "Set it in ASSUMPTIONS.",
+        "tab": "plan",
+        "subtab": "assumptions"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Your state is set."
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "health",
@@ -1452,7 +2645,351 @@
      "role": "do"
     }
    ],
-   "checks": []
+   "checks": [
+    {
+     "id": "C1",
+     "label": "Cover before Medicare",
+     "source": "retirement",
+     "from": {
+      "panel": "PLAN \u203a ACA BRIDGE",
+      "tab": "plan",
+      "subtab": "bridge"
+     },
+     "let": {
+      "over": "bridge.aca.flags.over_cliff",
+      "gap": "bridge.aca.flags.below_floor_gap",
+      "edge": "bridge.aca.flags.on_cliff_edge",
+      "fpl": "bridge.aca.subsidy.fpl_pct"
+     },
+     "rules": [
+      {
+       "when": [
+        "age",
+        ">=",
+        65
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": [
+        "over",
+        "missing"
+       ],
+       "state": "na",
+       "reason": ""
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "over",
+          "==",
+          true
+         ],
+         [
+          "stage",
+          "in",
+          [
+           "approach",
+           "early"
+          ]
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "high",
+       "reason": "In the years between stopping work and Medicare, planned income is {fpl|n0}% of the poverty line. Above 400% there is no help with marketplace premiums.",
+       "next": {
+        "text": "Open ACA BRIDGE.",
+        "tab": "plan",
+        "subtab": "bridge"
+       }
+      },
+      {
+       "when": [
+        "over",
+        "==",
+        true
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "In the years between stopping work and Medicare, planned income is {fpl|n0}% of the poverty line. Above 400% there is no help with marketplace premiums.",
+       "next": {
+        "text": "Open ACA BRIDGE.",
+        "tab": "plan",
+        "subtab": "bridge"
+       }
+      },
+      {
+       "when": [
+        "gap",
+        "==",
+        true
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "Planned income is below the level where marketplace help starts, and your state has not expanded Medicaid.",
+       "next": {
+        "text": "Open ACA BRIDGE.",
+        "tab": "plan",
+        "subtab": "bridge"
+       }
+      },
+      {
+       "when": [
+        "edge",
+        "==",
+        true
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "Planned income is close to the 400% line where marketplace premium help ends.",
+       "next": {
+        "text": "Open ACA BRIDGE.",
+        "tab": "plan",
+        "subtab": "bridge"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "Planned income keeps marketplace premium help in the years before Medicare."
+      }
+     ]
+    },
+    {
+     "id": "C3",
+     "label": "Health money in retirement",
+     "source": "hsa",
+     "from": {
+      "panel": "PLAN \u203a BENEFITS",
+      "tab": "plan",
+      "subtab": "benefits"
+     },
+     "let": {
+      "bal": "balance",
+      "pct": "pct_of_need",
+      "need": "need.total"
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "bal",
+          "present"
+         ],
+         [
+          "pct",
+          "present"
+         ]
+        ]
+       },
+       "state": "ok",
+       "reason": "Your HSA holds {bal|usd}, about {pct|n0}% of the estimated lifetime health cost in retirement ({need|usd})."
+      }
+     ]
+    },
+    {
+     "id": "C4",
+     "label": "HSA room",
+     "source": "benefits",
+     "from": {
+      "panel": "PLAN \u203a BENEFITS",
+      "tab": "plan",
+      "subtab": "benefits"
+     },
+     "let": {
+      "h": "sections.hsa.headroom"
+     },
+     "rules": [
+      {
+       "when": [
+        "h",
+        "missing"
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "HSA room is not known: enter your HSA details.",
+       "next": {
+        "text": "Open BENEFITS.",
+        "tab": "plan",
+        "subtab": "benefits"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "HSA room left this year: {h|usd}."
+      }
+     ]
+    },
+    {
+     "id": "C5",
+     "label": "Long-term care",
+     "source": "ltc",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "ok": "ok",
+      "unc": "uncovered",
+      "pct": "funding.uncovered_pct_of_investable",
+      "tot": "total_cost",
+      "band": {
+       "from": "insurance",
+       "path": "ltc.band"
+      },
+      "inf": {
+       "from": "insurance",
+       "path": "ltc.in_force"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "ok",
+        "==",
+        false
+       ],
+       "state": "error",
+       "reason": "Could not check long-term care."
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "age",
+          "<",
+          50
+         ]
+        ]
+       },
+       "state": "ok",
+       "reason": "The care scenario in your plan costs {tot|usd}; {unc|usd} of it is not covered by a policy on record ({pct|n0}% of your investable money)."
+      },
+      {
+       "when": {
+        "all": [
+         [
+          "band",
+          "==",
+          "exposed"
+         ],
+         [
+          "inf",
+          "==",
+          0
+         ]
+        ]
+       },
+       "state": "attention",
+       "severity": "normal",
+       "reason": "The care scenario in your plan costs {tot|usd}; {unc|usd} of it is not covered by a policy on record. That is {pct|n0}% of your investable money.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "The care scenario in your plan costs {tot|usd}; {unc|usd} of it is not covered by a policy on record."
+      }
+     ]
+    },
+    {
+     "id": "C6",
+     "label": "Medicare surcharge",
+     "source": "timeline",
+     "from": {
+      "panel": "PLAN \u203a TIMELINE",
+      "tab": "plan",
+      "subtab": "timeline"
+     },
+     "let": {
+      "n": "summary.medicare_surcharge_years"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "low",
+       "reason": "In {n|n0} year(s) of the plan, income is high enough to add a Medicare premium surcharge.",
+       "next": {
+        "text": "Open TIMELINE.",
+        "tab": "plan",
+        "subtab": "timeline"
+       }
+      },
+      {
+       "when": [
+        "n",
+        "present"
+       ],
+       "state": "ok",
+       "reason": "The plan has no Medicare premium surcharge years."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    },
+    {
+     "id": "C7",
+     "label": "Lost subsidy years",
+     "source": "timeline",
+     "from": {
+      "panel": "PLAN \u203a TIMELINE",
+      "tab": "plan",
+      "subtab": "timeline"
+     },
+     "let": {
+      "n": "summary.lost_subsidy_year_count",
+      "first": "summary.first_lost_subsidy_year"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "attention",
+       "severity": "normal",
+       "reason": "The plan loses the marketplace premium subsidy in {n|n0} year(s), starting in {first|year}.",
+       "next": {
+        "text": "Open TIMELINE.",
+        "tab": "plan",
+        "subtab": "timeline"
+       }
+      },
+      {
+       "when": [
+        "n",
+        "present"
+       ],
+       "state": "ok",
+       "reason": "The plan keeps the marketplace premium subsidy in every year before 65."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "education",
@@ -1473,7 +3010,230 @@
      "role": "settings"
     }
    ],
-   "checks": []
+   "checks": [
+    {
+     "id": "E1",
+     "label": "Children",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "n": "household.children"
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "{n|n0} child(ren) recorded. The app does not know their ages yet.",
+       "next": {
+        "text": "Open INSURANCE.",
+        "tab": "plan",
+        "subtab": "insurance"
+       }
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": "No children are recorded."
+      }
+     ]
+    },
+    {
+     "id": "E2",
+     "label": "Education accounts",
+     "source": "registry",
+     "from": {
+      "panel": "SETTINGS \u203a ACCOUNTS",
+      "tab": "settings",
+      "subtab": "accounts"
+     },
+     "let": {
+      "n": {
+       "count": "accounts",
+       "where": [
+        "tax_status",
+        "==",
+        "education"
+       ]
+      },
+      "sum": {
+       "sum": "accounts",
+       "where": [
+        "tax_status",
+        "==",
+        "education"
+       ],
+       "field": "balance"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "ok",
+       "reason": "{n|n0} education account(s) hold {sum|usd}. They are kept out of every retirement figure."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    },
+    {
+     "id": "E3",
+     "label": "Student loans",
+     "source": "registry",
+     "from": {
+      "panel": "PLAN \u203a CASH \u00b7 DEBT",
+      "tab": "plan",
+      "subtab": "cashdebt"
+     },
+     "let": {
+      "n": {
+       "count": "accounts",
+       "where": {
+        "all": [
+         [
+          "group",
+          "==",
+          "liability"
+         ],
+         [
+          "name",
+          "containsany",
+          [
+           "student",
+           "navient",
+           "nelnet",
+           "mohela",
+           "great lakes",
+           "sallie",
+           "aidvantage",
+           "edfinancial",
+           "fedloan"
+          ]
+         ]
+        ]
+       }
+      },
+      "sum": {
+       "sum": "accounts",
+       "where": {
+        "all": [
+         [
+          "group",
+          "==",
+          "liability"
+         ],
+         [
+          "name",
+          "containsany",
+          [
+           "student",
+           "navient",
+           "nelnet",
+           "mohela",
+           "great lakes",
+           "sallie",
+           "aidvantage",
+           "edfinancial",
+           "fedloan"
+          ]
+         ]
+        ]
+       },
+       "field": "balance"
+      }
+     },
+     "rules": [
+      {
+       "when": [
+        "n",
+        ">",
+        0
+       ],
+       "state": "ok",
+       "reason": "{n|n0} debt(s) look like student loans ({sum|usd}), going by their names. They are ranked with your other debts under Safety net."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    },
+    {
+     "id": "E4",
+     "label": "Cost per child in the life-insurance estimate",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a INSURANCE",
+      "tab": "plan",
+      "subtab": "insurance"
+     },
+     "let": {
+      "amt": "knobs.education_per_child",
+      "kids": "household.children"
+     },
+     "rules": [
+      {
+       "when": {
+        "all": [
+         [
+          "kids",
+          ">",
+          0
+         ],
+         [
+          "amt",
+          "present"
+         ]
+        ]
+       },
+       "state": "ok",
+       "reason": "The life-insurance estimate sets aside {amt|usd} per child for education."
+      },
+      {
+       "when": true,
+       "state": "ok",
+       "reason": ""
+      }
+     ]
+    },
+    {
+     "id": "E5",
+     "label": "Funding gap and own schooling",
+     "source": "insurance",
+     "from": {
+      "panel": "PLAN \u203a ASSUMPTIONS",
+      "tab": "plan",
+      "subtab": "assumptions"
+     },
+     "let": {
+      "k": "household.children"
+     },
+     "rules": [
+      {
+       "when": true,
+       "state": "noinfo",
+       "severity": "low",
+       "reason": "Not enough information yet: the app does not hold children's ages, school plans or your own study plans. These arrive with the household profile."
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "home",
