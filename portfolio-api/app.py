@@ -5184,7 +5184,10 @@ def _timeline_summary_for_chat(res, years=10):
                      "shortfall": x.get("shortfall"), "end_total": x.get("end_total"), "flags": x.get("flags") or []})
     return {"summary": res.get("summary"), "rows": rows, "rows_shown": len(rows), "rows_total": len(res.get("rows") or []),
             "footer": res.get("footer"), "problems": res.get("problems"), "notes": res.get("notes"), "tax_year": res.get("tax_year"),
-            "where": "PLAN > TIMELINE has every column, the bucket detail and a way to try a different retirement age or Roth conversions."}
+            "where": "PLAN > TIMELINE has every column, the bucket detail and a way to try a different retirement age or Roth conversions.",
+            "how_to_answer": ("Say what the rows say, in the rows' own words. A null tax or coverage in a working year means only that the table does not model it "
+                              "there (no wage input): do NOT explain why, and do not say withholding or employer coverage handles it, because the table says neither. "
+                              "Give the years, amounts and flags as listed. End the answer by telling the user the full table is at PLAN > TIMELINE.")}
 
 
 @app.get("/api/plan/timeline")
@@ -17540,7 +17543,8 @@ FIDUCIARY_PROMPT = (
     "their actual positions and targets. Then reach for the tool that fits the question: get_exposure "
     "(sector/beta/concentration), get_rebalance (IPS sleeve drift), get_risk_metrics (realized vol / "
     "drawdown / Sharpe), get_retirement and get_income_plan (long-range plan, Monte Carlo, glide path), "
-    "get_plan_timeline (the year-by-year table: taxes, Roth conversions, required distributions, ACA and Medicare years, one deterministic path), "
+    "get_plan_timeline (the year-by-year table: taxes, Roth conversions, required distributions, ACA and Medicare years, one deterministic path; "
+    "report its flags in its own words, never add a reason the table does not give, and always end by pointing the user to PLAN > TIMELINE for the full table), "
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
     "get_social_security, get_benefits (401k match / HSA / Roth contribution room), get_fees_liquidity, "
     "get_lookthrough (fund holdings), get_scorecard, get_opportunities, get_discovery and get_idea_research (the app's own whole-market sleeves + scout notes: ideas to research, never advice). When you describe a company from this tool, use ONLY its figures, sector labels and wording: do not add what the company does, former names, mergers or other background from memory, and if the tool does not say it, leave it out, "
