@@ -56,6 +56,7 @@ import estate     # estate & generational-wealth engine (G2) — step-up, gift-v
 import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/effective bets, factors
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
+import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
 import avenues     # cross-avenue after-tax comparison sheet (G12) — where the marginal dollar goes
 import backtest as backtest_mod  # decision backtest (P0-2) — fixed-horizon call scoring vs SPY
@@ -850,7 +851,7 @@ _VIEWER_ALLOWED_WRITE_PATHS = {
     # arithmetic (calculators.run) — it reads no household data and writes nothing — so it is a
     # read in every sense that matters; a viewer can already see every figure these use. The
     # What-If panel's optional "save to account" uses /api/account-registry, which stays denied.
-    "/api/calc",
+    "/api/calc", "/api/plan/timeline",      # the timeline trial is pure arithmetic on trial inputs (nothing saved), like the calculators
     # TASK-002 emergency access: the designee is a VIEWER, so these two (and ONLY these two) are
     # reachable by viewers. Each handler re-checks "is the configured designee" itself
     # (emergency.request_access / cancel); every other emergency write is admin-only.
@@ -5041,6 +5042,149 @@ def _marginal_curve():
                     "conversion), composing federal ordinary tax + the LTCG bump zone + NIIT + the "
                     "ACA subsidy phase-out/cliff (pre-65) + IRMAA steps (63+). Texas adds no state "
                     "tax, so this IS the whole marginal cost. Educational — size with a CPA."}
+
+
+def _taxable_gain_fraction(d):
+    """Share of the taxable accounts' value that is unrealized gain (from holdings with a known cost basis); None when it cannot be computed."""
+    val = gain = 0.0
+    status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) for a in d.get("accounts", [])}
+    for acct in d.get("by_account", []):
+        if status.get(acct.get("account")) != "taxable":
+            continue
+        for h in acct.get("holdings", []):
+            if h.get("gain") is not None and h.get("value"):
+                val += h["value"]
+                gain += h["gain"]
+    return round(max(0.0, min(1.0, gain / val)), 3) if val > 0 else None
+
+
+def _timeline_inputs():
+    """The current inputs of the year-by-year table, assembled from the same config and engines the other PLAN panels use. -> (inputs, notes)."""
+    d = _data()
+    cfg = _read_retire()
+    notes = []
+    age = _derive_age(cfg.get("birth_year"), cfg.get("current_age"))
+    sp_age = _derive_age(cfg.get("spouse_birth_year"), cfg.get("spouse_age"))
+    bal = _balances_by_tax_status()
+    excl = _education_balance(d)
+    if excl:
+        notes.append(f"Education accounts (529, Coverdell: ${excl:,.0f}) are left out: they are for schooling, not retirement.")
+    _hs = _hsa_summary(d, cfg)
+    hc = hsa.annual_cost(_hs["need"]["people"], override=cfg.get("healthcare_need_override"))
+    hc_on = cfg.get("healthcare_expense_mode") == "add" and hc.get("annual") is not None
+    investable = _investable_assets(d, cfg.get("exclude_account_types"))
+    lt = _ltc_summary(d, cfg, investable, _hs)
+    lt_on = cfg.get("ltc_expense_mode") == "add" and lt.get("ok")
+    cf_inc = cf_exp = None
+    if cfg.get("annual_expenses_override") is None or cfg.get("annual_savings_override") is None:
+        cf_inc, cf_exp = _cashflow_annual()
+    living = cfg.get("annual_expenses_override") if cfg.get("annual_expenses_override") is not None else cf_exp
+    saving = cfg.get("annual_savings_override") if cfg.get("annual_savings_override") is not None else (
+        round(cf_inc - cf_exp, 2) if (cf_inc is not None and cf_exp is not None) else None)
+    ssctx = _ss_ctx(cfg)
+    ss_info = {"include": False, "claim_age": ssctx["self"].get("claim_age"), "annual_benefit": 0.0}
+    try:
+        if ssctx["enabled"]:
+            sm = ss.estimate(**{k: v for k, v in ssctx["self"].items() if v is not None})
+            if sm.get("available"):
+                ss_info["annual_benefit"] = sm["annual_benefit"]
+                ss_info["claim_age"] = sm.get("claim_age") or ss_info["claim_age"]
+    except Exception:
+        pass
+    inp = {"start_year": datetime.date.today().year, "start_age": age, "spouse_age": sp_age, "end_age": MC_END_AGE,
+           "retire_age": cfg.get("target_age") or age, "birth_year": cfg.get("birth_year") or ((datetime.date.today().year - age) if age else None),
+           "status": _tax_ctx(cfg)["status"], "household_size": _aca_ctx(cfg)["household_size"], "slcsp_annual": _aca_ctx(cfg)["slcsp_annual"],
+           "state": _state_of_residence_info(cfg)["code"],
+           "balances": {"taxable": bal["taxable"], "pretax": bal["deferred"], "roth": bal["roth"], "hsa": bal["hsa"]},
+           "real_return_pct": cfg.get("expected_real_return_pct") or 5.0,
+           "savings": {"taxable": float(saving or 0.0)}, "living_expenses": float(living or 0.0),
+           "healthcare_annual": (hc["annual"] if hc_on else 0.0), "ltc_annual": (lt["expected"]["annual"] if lt_on else 0.0),
+           "care_from_age": 65, "care_to_age": 90,
+           "withdrawal_order": ["taxable", "pretax", "roth"], "conversions": {}, "ss": ss_info,
+           "taxable_gain_fraction": _taxable_gain_fraction(d), "prior_magi": {}, "rmd_divisors": dict(roth.RMD_DIVISORS)}
+    if inp["taxable_gain_fraction"] is None:
+        inp["taxable_gain_fraction"] = 0.0
+        notes.append("No cost basis is available for the taxable accounts, so realized gains on taxable withdrawals are assumed to be zero.")
+    if living is None:
+        notes.append("No annual living expenses are set (no cashflow data and no override): set them in PLAN > ASSUMPTIONS.")
+    return inp, notes
+
+
+def _timeline_apply_overrides(inp, body):
+    """Trial overrides from the page (nothing saved): numbers and simple lists only, each validated."""
+    out = dict(inp)
+    def num(k, lo, hi):
+        if k in body and body[k] not in (None, ""):
+            try:
+                v = float(body[k])
+            except (TypeError, ValueError):
+                raise ValueError(f"{k} must be a number")
+            if not lo <= v <= hi:
+                raise ValueError(f"{k} must be between {lo} and {hi}")
+            out[k] = v
+    for k, lo, hi in (("retire_age", 30, 100), ("end_age", 50, 120), ("real_return_pct", -10, 20), ("living_expenses", 0, 5_000_000),
+                      ("taxable_gain_fraction", 0, 1)):
+        num(k, lo, hi)
+    out["retire_age"], out["end_age"] = int(out["retire_age"]), int(out["end_age"])
+    if isinstance(body.get("balances"), dict):
+        out["balances"] = {**out["balances"], **{b: float(body["balances"][b]) for b in ("taxable", "pretax", "roth", "hsa")
+                                                 if b in body["balances"] and body["balances"][b] is not None}}
+    if isinstance(body.get("savings"), dict):
+        out["savings"] = {b: float(v) for b, v in body["savings"].items() if b in ("taxable", "pretax", "roth", "hsa", "employer_match") and v not in (None, "")}
+    if isinstance(body.get("withdrawal_order"), list):
+        o = [b for b in body["withdrawal_order"] if b in ("taxable", "pretax", "roth")]
+        if len(set(o)) != len(o):
+            raise ValueError("withdrawal_order lists a bucket twice")
+        out["withdrawal_order"] = o
+    if isinstance(body.get("conversions"), dict):
+        out["conversions"] = {int(y): float(v) for y, v in body["conversions"].items() if v not in (None, "")}
+    if isinstance(body.get("ss"), dict):
+        out["ss"] = {**out["ss"], **{k: body["ss"][k] for k in ("include", "claim_age") if k in body["ss"]}}
+    if out["end_age"] <= out["retire_age"] or out["end_age"] < (out["start_age"] or 0):
+        raise ValueError("end_age must be after the retirement age")
+    return out
+
+
+def _timeline_run(inp, notes):
+    a, e = inp["care_from_age"], inp["care_to_age"]
+    full = dict(inp)
+    full["healthcare_fn"] = lambda age: inp["healthcare_annual"] if a <= age <= e else 0.0
+    full["ltc_fn"] = lambda age: inp["ltc_annual"] if a <= age <= e else 0.0
+    res = plan_timeline.build(full)
+    res["notes"] = notes
+    res["inputs"] = {k: v for k, v in inp.items() if k not in ("rmd_divisors",)}
+    res["tax_year"] = tax.TAX_YEAR
+    return res
+
+
+@app.get("/api/plan/timeline")
+def get_plan_timeline():
+    """The year-by-year plan table with the current inputs (one row per year to the plan's end age). Read-only. Real dollars, deterministic."""
+    inp, notes = _timeline_inputs()
+    if not inp["start_age"]:
+        return JSONResponse({"error": "Set your birth year (or current age) in PLAN > ASSUMPTIONS to build the year-by-year table."}, status_code=400)
+    try:
+        return _timeline_run(inp, notes)
+    except Exception as e:
+        return JSONResponse({"error": f"could not build the table: {_errref(e)}"}, status_code=500)
+
+
+@app.post("/api/plan/timeline")
+async def post_plan_timeline(req: Request):
+    """The same table with TRIAL inputs from the page (retirement age, conversions, withdrawal order...). Nothing is saved; viewers may run it,
+    like the calculators."""
+    body = await req.json()
+    inp, notes = _timeline_inputs()
+    if not inp["start_age"]:
+        return JSONResponse({"error": "Set your birth year (or current age) in PLAN > ASSUMPTIONS to build the year-by-year table."}, status_code=400)
+    try:
+        inp = _timeline_apply_overrides(inp, body if isinstance(body, dict) else {})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    try:
+        return _timeline_run(inp, notes)
+    except Exception as e:
+        return JSONResponse({"error": f"could not build the table: {_errref(e)}"}, status_code=500)
 
 
 def _roth_plan():
@@ -9779,6 +9923,8 @@ def _ef_tier(a):
     if a.get("is_asset") is False:
         return None
     st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
+    if st == "education":
+        return None                      # earmarked for schooling: not an emergency-fund source, and the toggle is hidden
     if st == "roth":
         return "roth_basis"
     if st in ("deferred", "hsa"):
@@ -11146,8 +11292,17 @@ def _investable_assets(d, exclude_types):
     total = 0.0
     for a in (d.get("accounts") or []):
         if a.get("is_asset") and str(a.get("type") or "").lower() not in ex:
+            if _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "education":
+                continue                 # 529 / Coverdell money is for schooling, not retirement
             total += a.get("balance") or 0
     return round(total, 2)
+
+
+def _education_balance(d=None):
+    """Total in dedicated education accounts (529, Coverdell): shown beside retirement figures as 'left out', never counted in them."""
+    d = d if d is not None else _data()
+    return round(sum((a.get("balance") or 0) for a in (d.get("accounts") or [])
+                     if a.get("is_asset") is not False and _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) == "education"), 2)
 
 
 def _cashflow_annual():
@@ -12253,7 +12408,7 @@ def _registry_group(a):
     st = _account_tax_status(a.get("name"), a.get("type"), a.get("subtype"))
     if st == "taxable":
         return "taxable"
-    if st in ("roth", "deferred", "hsa"):
+    if st in ("roth", "deferred", "hsa", "education"):
         return "advantaged"
     if _is_cash_account(a):
         return "cash"
@@ -13973,13 +14128,17 @@ LOC_MIN_YIELD = float(os.environ.get("LOC_MIN_YIELD", "3.0"))    # % dividend yi
 
 
 def _account_tax_status(name, atype, subtype=None):
-    """Classify an account: taxable | roth | deferred | hsa | na (non-investment).
+    """Classify an account: taxable | roth | deferred | hsa | education | na (non-investment).
     Roth/HSA/IRA/401k/etc. = tax-advantaged; a plain brokerage = taxable.
     `subtype` is the provider's own account subtype when it sends one (Monarch: "Roth IRA", "IRA", "401k", "HSA", "Brokerage", ...). A
     tax-advantaged subtype is more specific than a name that merely mentions IRA (2026-11-10: "IRA BROKERAGE CASH" synced from a Roth IRA's
     cash sweep read as a traditional IRA), so it wins; any other subtype (Checking, Brokerage, none) falls through to the name rules."""
     n = (name or "").upper()
     st = (subtype or "").upper()
+    # Dedicated education money (529 plans, Coverdell accounts) is its own status: it is not retirement money, so every retirement,
+    # bridge, Roth and emergency-fund panel leaves it out (as the HSA is kept out of spendable retirement money), while net worth still counts it.
+    if any(k in st for k in ("529", "COVERDELL")) or any(k in n for k in ("529", "COVERDELL")):
+        return "education"
     if st:
         if "ROTH" in st or "TFSA" in st:
             return "roth"

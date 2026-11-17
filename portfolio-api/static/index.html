@@ -1051,6 +1051,129 @@ function commitTopOrder(ks){
 // Render a 2nd-row sub-tab bar for `panel` and ONLY the active section's node.
 // sections: [{key,label,build:()=>Node}] (falsy entries are ignored). Lazy build =
 // unselected sections aren't constructed (cheaper + the hook for per-section refresh).
+
+// ---- PLAN > TIMELINE (RV-032 phase 2): the year-by-year table from /api/plan/timeline ----
+// State lives outside render(): trial inputs are POSTed (nothing is saved), the first result with the current inputs is the baseline for
+// the "what changed" strip. Every figure's hover says which engine produced it (res.sources).
+const TL={res:null,base:null,loading:false,err:null,trial:{},detail:false,timer:null};
+const TL_CLOSING='Informational only, produced by a personal tool. Not financial, tax or legal advice.';
+function tlMoney(n){ return n==null?'—':(n<0?'-':'')+'$'+Math.abs(Math.round(n)).toLocaleString(); }
+function tlRun(){
+  TL.loading=true; TL.err=null;
+  if(!TL.base && Object.keys(TL.trial).length){ fetch('/api/plan/timeline').then(r=>r.json()).then(d=>{ if(d&&!d.error){ TL.base=d; if(TAB==='plan') render(); } }).catch(()=>{}); }
+  const hasTrial=Object.keys(TL.trial).length>0;
+  const req=hasTrial?fetch('/api/plan/timeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(TL.trial)})
+                    :fetch('/api/plan/timeline');
+  req.then(r=>r.json()).then(d=>{
+    TL.loading=false;
+    if(d.error){ TL.err=d.error; }
+    else { TL.res=d; if(!hasTrial) TL.base=d; }
+    if(TAB==='plan') render();
+  }).catch(e=>{ TL.loading=false; TL.err=String(e); if(TAB==='plan') render(); });
+}
+function tlQueue(){ if(TL.timer) clearTimeout(TL.timer); TL.timer=setTimeout(tlRun,600); }
+function tlSet(key,val){ if(val===''||val==null||isNaN(val)) delete TL.trial[key]; else TL.trial[key]=Number(val); tlQueue(); }
+function tlConv(year,val){ const c=Object.assign({},TL.trial.conversions||{}); if(val===''||isNaN(val)||Number(val)===0) delete c[year]; else c[year]=Number(val); if(Object.keys(c).length) TL.trial.conversions=c; else delete TL.trial.conversions; tlQueue(); }
+function tlCoverage(c){
+  if(!c||!c.kind) return '—';
+  if(c.kind==='aca') return c.subsidy_lost?'subsidy LOST ('+c.fpl_pct+'% of poverty line)':(c.subsidy_dollars!=null?tlMoney(c.subsidy_dollars)+' subsidy':'subsidy kept')+' ('+c.fpl_pct+'%)';
+  if(c.kind==='medicare') return c.surcharge==null?'—':(c.surcharge>0?'surcharge '+tlMoney(c.surcharge):'no surcharge');
+  return '—';
+}
+function tlReport(){
+  const r=TL.res; if(!r) return '';
+  const L=['YEAR-BY-YEAR PLAN (real, today\'s dollars; deterministic)',''];
+  L.push('Lifetime tax '+tlMoney(r.summary.lifetime_tax)+' · final total '+tlMoney(r.summary.final_total)+' · years with a lost ACA subsidy: '+(r.summary.years_with_lost_subsidy.join(', ')||'none')+' · years short: '+(r.summary.years_short.join(', ')||'none'),'');
+  r.rows.forEach(x=>{ L.push(x.year+' (age '+x.age+'): end '+tlMoney(x.end_total)+(x.tax?' · tax '+tlMoney(x.tax.federal+(x.tax.state||0)+x.tax.penalty):'')+(x.conversion?' · conversion '+tlMoney(x.conversion):'')+(x.rmd?' · required distribution '+tlMoney(x.rmd):'')+(x.flags.length?' — '+x.flags.join(' '):'')); });
+  L.push('',r.footer,'',TL_CLOSING);
+  return L.join('\n');
+}
+function timelineContent(){
+  const wrap=el('div');
+  if(!TL.res&&!TL.loading&&!TL.err) tlRun();
+  const head=el('div','ph','YEAR-BY-YEAR PLAN'); wrap.appendChild(head);
+  const intro=el('div','muted'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);';
+  intro.textContent='One row per year, built from the same engines as the other PLAN panels (tax brackets, ACA subsidy and cliff, Medicare surcharge, Social Security, required distributions). Real, today\'s dollars; one deterministic path, so see FI · MONTE CARLO for uncertainty. Changes here are trials: nothing is saved.';
+  wrap.appendChild(intro);
+  if(TL.err){ const e=el('div','neg',TL.err); e.style.margin='8px 0'; wrap.appendChild(e); }
+  if(TL.loading&&!TL.res){ wrap.appendChild(el('div','muted','Building the table…')); return wrap; }
+  const r=TL.res; if(!r) return wrap;
+  const inp=r.inputs||{};
+  // ---- inputs ----
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:flex-end;margin:0 0 var(--space-3);';
+  const field=(label,key,val,step,title)=>{ const d=el('label'); d.style.cssText='display:flex;flex-direction:column;font-size:var(--font-size-sm);gap:2px;'; d.title=title||''; d.appendChild(el('span','muted',label));
+    const i=document.createElement('input'); i.type='number'; i.step=step||'1'; i.className='set-inp'; i.style.width='96px'; i.value=(TL.trial[key]!=null?TL.trial[key]:val); i.onchange=()=>tlSet(key,i.value); d.appendChild(i); return d; };
+  bar.appendChild(field('Retirement age','retire_age',inp.retire_age,1,'The age withdrawals begin and wages stop'));
+  bar.appendChild(field('Plan to age','end_age',inp.end_age,1,'The last year in the table'));
+  bar.appendChild(field('Real return %','real_return_pct',inp.real_return_pct,0.5,'Return above inflation, applied to every bucket'));
+  bar.appendChild(field('Living expenses $/yr','living_expenses',Math.round(inp.living_expenses||0),1000,'Today\'s dollars; healthcare and long-term care are added separately'));
+  const ordSel=document.createElement('select'); ordSel.className='cfg-inp'; ordSel.title='Which account type funds spending first (HSA pays healthcare first; pre-tax waits until 59½)';
+  [['taxable,pretax,roth','Taxable, pre-tax, Roth'],['taxable,roth,pretax','Taxable, Roth, pre-tax'],['pretax,taxable,roth','Pre-tax, taxable, Roth'],['roth,taxable,pretax','Roth, taxable, pre-tax']].forEach(([v,l])=>{ const o=document.createElement('option'); o.value=v; o.textContent=l; if((TL.trial.withdrawal_order||inp.withdrawal_order||[]).join(',')===v) o.selected=true; ordSel.appendChild(o); });
+  ordSel.onchange=()=>{ TL.trial.withdrawal_order=ordSel.value.split(','); tlQueue(); };
+  const od=el('label'); od.style.cssText='display:flex;flex-direction:column;font-size:var(--font-size-sm);gap:2px;'; od.appendChild(el('span','muted','Withdrawal order')); od.appendChild(ordSel); bar.appendChild(od);
+  const ssd=el('label'); ssd.style.cssText='display:flex;flex-direction:column;font-size:var(--font-size-sm);gap:2px;'; ssd.title='Off by default: many households plan without it';
+  ssd.appendChild(el('span','muted','Include Social Security'));
+  const ssc=document.createElement('input'); ssc.type='checkbox'; ssc.checked=!!((TL.trial.ss&&TL.trial.ss.include!=null)?TL.trial.ss.include:(inp.ss&&inp.ss.include));
+  ssc.onchange=()=>{ TL.trial.ss=Object.assign({},TL.trial.ss||{},{include:ssc.checked}); tlQueue(); }; ssd.appendChild(ssc); bar.appendChild(ssd);
+  const reset=el('button','mut-btn','RESET TO CURRENT'); reset.onclick=()=>{ TL.trial={}; TL.base=null; tlRun(); }; bar.appendChild(reset);
+  const copy=el('button','mut-btn','COPY REPORT'); copy.onclick=()=>{ const t=tlReport(); (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>{ copy.textContent='COPIED'; setTimeout(()=>copy.textContent='COPY REPORT',1500); }).catch(()=>{ prompt('Copy this report:',t); }); };
+  bar.appendChild(copy);
+  const dt=el('button','mut-btn',TL.detail?'HIDE BUCKET DETAIL':'SHOW BUCKET DETAIL'); dt.onclick=()=>{ TL.detail=!TL.detail; render(); }; bar.appendChild(dt);
+  wrap.appendChild(bar);
+  if(TL.loading){ const l=el('div','muted','Updating…'); wrap.appendChild(l); }
+  // ---- what changed ----
+  const sm=r.summary, bs=TL.base?TL.base.summary:null;
+  const strip=el('div'); strip.style.cssText='display:flex;gap:var(--space-6);flex-wrap:wrap;margin:var(--space-2) 0 var(--space-3);font-size:var(--font-size-base);';
+  const delta=(a,b)=>(b==null||a==null||Object.keys(TL.trial).length===0)?'':' <span class="muted">('+(a-b>=0?'+':'-')+tlMoney(Math.abs(a-b))+' vs current inputs)</span>';
+  const cell=(l,v,extra)=>{ const d=el('div'); d.innerHTML='<div class="muted" style="font-size:var(--font-size-sm)">'+l+'</div><div>'+v+(extra||'')+'</div>'; return d; };
+  strip.appendChild(cell('LIFETIME TAX',tlMoney(sm.lifetime_tax),delta(sm.lifetime_tax,bs&&bs.lifetime_tax)));
+  strip.appendChild(cell('FINAL TOTAL (age '+inp.end_age+')',tlMoney(sm.final_total),delta(sm.final_total,bs&&bs.final_total)));
+  strip.appendChild(cell('YEARS WITH A LOST ACA SUBSIDY',sm.years_with_lost_subsidy.length?'<span class="neg">'+sm.years_with_lost_subsidy.length+' ('+sm.years_with_lost_subsidy.slice(0,6).join(', ')+(sm.years_with_lost_subsidy.length>6?'…':'')+')</span>':'none'));
+  strip.appendChild(cell('YEARS THE PLAN RUNS SHORT',sm.years_short.length?'<span class="neg">'+sm.years_short.length+' (from '+sm.years_short[0]+')</span>':'<span class="pos">none</span>'));
+  wrap.appendChild(strip);
+  (r.notes||[]).concat(r.problems||[]).forEach(n=>{ const d=el('div','muted',n); d.style.cssText='font-size:var(--font-size-sm);margin:2px 0;'; wrap.appendChild(d); });
+  // ---- table ----
+  const S=r.sources||{};
+  const cols=[
+    {h:'YEAR',src:null,v:x=>x.year},{h:'AGE',src:null,v:x=>x.age+(x.spouse_age!=null?' / '+x.spouse_age:'')},
+    {h:'START',src:'balances',v:x=>tlMoney(x.start_total),tip:x=>'taxable '+tlMoney(x.start.taxable)+' · pre-tax '+tlMoney(x.start.pretax)+' · Roth '+tlMoney(x.start.roth)+' · HSA '+tlMoney(x.start.hsa)},
+    {h:'SPENDING',src:'spending',v:x=>tlMoney(x.spending.total),tip:x=>x.spending.total==null?'working year':'living '+tlMoney(x.spending.living)+' · healthcare '+tlMoney(x.spending.healthcare)+' · long-term care '+tlMoney(x.spending.ltc)},
+    {h:'SOC. SEC.',src:'ss',v:x=>x.money_in.social_security?tlMoney(x.money_in.social_security):'—'},
+    {h:'SAVED',src:'balances',v:x=>{ const n=Object.values(x.contributions).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; }},
+    {h:'WITHDRAWN',src:'spending',v:x=>{ const n=Object.values(x.funding).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; },tip:x=>'taxable '+tlMoney(x.funding.taxable)+' · pre-tax '+tlMoney(x.funding.pretax)+' · Roth '+tlMoney(x.funding.roth)+' · HSA '+tlMoney(x.funding.hsa)},
+    {h:'REQ. DIST.',src:'rmd',v:x=>x.rmd?tlMoney(x.rmd):'—'},
+    {h:'CONVERT',src:'conversion',conv:true},
+    {h:'FED TAX',src:'tax',v:x=>x.tax?tlMoney(x.tax.federal+x.tax.penalty):'—',tip:x=>x.tax?('taxable income '+tlMoney(x.tax.ordinary_taxable)+' · gains '+tlMoney(x.tax.ltcg)+' · marginal '+x.tax.marginal_pct+'%'+(x.tax.penalty?' · penalty '+tlMoney(x.tax.penalty):'')):'not modeled in working years'},
+    {h:'STATE TAX',src:'state_tax',v:x=>x.tax?(x.tax.state==null?'n/m':tlMoney(x.tax.state)):'—',tip:x=>x.tax&&x.tax.state_note?x.tax.state_note:''},
+    {h:'HEALTH COVERAGE',src:x=>x.coverage&&x.coverage.kind==='medicare'?'medicare':'aca',v:x=>tlCoverage(x.coverage)},
+    {h:'GROWTH',src:'growth',v:x=>tlMoney(x.growth_total)},
+    {h:'END',src:'balances',v:x=>tlMoney(x.end_total),tip:x=>'taxable '+tlMoney(x.end.taxable)+' · pre-tax '+tlMoney(x.end.pretax)+' · Roth '+tlMoney(x.end.roth)+' · HSA '+tlMoney(x.end.hsa)},
+    {h:'FLAGS',src:null,flags:true}];
+  if(TL.detail){ const bi=cols.findIndex(c=>c.h==='END'); ['taxable','pretax','roth','hsa'].forEach((b,i)=>cols.splice(bi+i,0,{h:'END '+b.toUpperCase(),src:'balances',v:x=>tlMoney(x.end[b])})); }
+  const sc=el('div'); sc.style.cssText='overflow:auto;max-width:100%;max-height:70vh;border:1px solid var(--color-border-strong);';
+  const t=document.createElement('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);white-space:nowrap;width:100%;';
+  const hr=document.createElement('tr');
+  cols.forEach((c,i)=>{ const th=document.createElement('th'); th.textContent=c.h; th.style.cssText='position:sticky;top:0;background:var(--color-bg-elevated,#161616);text-align:'+(i<2?'left':'right')+';padding:4px 8px;z-index:2;'+(i===0?'left:0;':''); if(c.src&&typeof c.src==='string'&&S[c.src]) th.title=S[c.src]; hr.appendChild(th); });
+  t.appendChild(hr);
+  r.rows.forEach(x=>{
+    const tr=document.createElement('tr'); tr.style.cssText=(x.coverage&&x.coverage.subsidy_lost?'background:rgba(220,70,70,0.10);':(x.shortfall>0.5?'background:rgba(220,70,70,0.16);':(x.phase==='working'?'opacity:.8;':'')));
+    cols.forEach((c,i)=>{
+      const td=document.createElement('td'); td.style.cssText='padding:3px 8px;text-align:'+(i<2?'left':'right')+';border-top:1px solid var(--color-border);'+(i===0?'position:sticky;left:0;background:var(--color-bg,#101010);':'');
+      if(c.conv){
+        if(x.phase==='retired'){ const ci=document.createElement('input'); ci.type='number'; ci.step='5000'; ci.min='0'; ci.className='set-inp'; ci.style.cssText='width:90px;text-align:right;'; const cur=(TL.trial.conversions||{})[x.year]; ci.value=cur!=null?cur:(x.conversion||''); ci.placeholder='0'; ci.onchange=()=>tlConv(x.year,ci.value); td.appendChild(ci); td.title=S.conversion||''; }
+        else td.textContent='—';
+      } else if(c.flags){ td.style.whiteSpace='normal'; td.style.minWidth='260px'; td.style.textAlign='left'; td.textContent=x.flags.join(' '); }
+      else { td.textContent=c.v(x); const src=typeof c.src==='function'?c.src(x):c.src; const tip=(c.tip?c.tip(x)+(src&&S[src]?'\n':''):'')+(src&&S[src]?'Source: '+S[src]:''); if(tip) td.title=tip; }
+      tr.appendChild(td);
+    });
+    t.appendChild(tr);
+  });
+  sc.appendChild(t); wrap.appendChild(sc);
+  const ft=el('div','muted',r.footer); ft.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-top:var(--space-3);'; wrap.appendChild(ft);
+  const cl=el('div','muted',TL_CLOSING); cl.style.cssText='font-size:var(--font-size-sm);margin-top:var(--space-1);'; wrap.appendChild(cl);
+  return wrap;
+}
+
 function panelSubtabs(panel, sections){
   const wrap=el('div');
   let avail=(sections||[]).filter(Boolean);
@@ -4082,6 +4205,7 @@ function planContent(r){
   outer.appendChild(panelSubtabs('plan',[
     {key:'assumptions',label:'ASSUMPTIONS',build:assumptionsSec},
     {key:'fi',label:'FI · MONTE CARLO',build:fiSec},
+    {key:'timeline',label:'TIMELINE',build:()=>timelineContent()},
     haveSS && {key:'ss',label:'SOCIAL SECURITY',build:ssSec},
     haveBridge && {key:'bridge',label:'ACA BRIDGE',build:bridgeSec},
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},
