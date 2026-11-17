@@ -1136,12 +1136,12 @@ function timelineContent(){
   // ---- table ----
   const S=r.sources||{};
   const cols=[
-    {h:'YEAR',src:null,v:x=>x.year},{h:'AGE',src:null,v:x=>x.age+(x.spouse_age!=null?' / '+x.spouse_age:'')},
+    {h:'YEAR',src:'when',v:x=>x.year},{h:'AGE',src:'when',v:x=>x.age+(x.spouse_age!=null?' / '+x.spouse_age:'')},
     {h:'START',src:'balances',v:x=>tlMoney(x.start_total),tip:x=>'taxable '+tlMoney(x.start.taxable)+' · pre-tax '+tlMoney(x.start.pretax)+' · Roth '+tlMoney(x.start.roth)+' · HSA '+tlMoney(x.start.hsa)},
     {h:'SPENDING',src:'spending',v:x=>tlMoney(x.spending.total),tip:x=>x.spending.total==null?'working year':'living '+tlMoney(x.spending.living)+' · healthcare '+tlMoney(x.spending.healthcare)+' · long-term care '+tlMoney(x.spending.ltc)},
     {h:'SOC. SEC.',src:'ss',v:x=>x.money_in.social_security?tlMoney(x.money_in.social_security):'—'},
-    {h:'SAVED',src:'balances',v:x=>{ const n=Object.values(x.contributions).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; }},
-    {h:'WITHDRAWN',src:'spending',v:x=>{ const n=Object.values(x.funding).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; },tip:x=>'taxable '+tlMoney(x.funding.taxable)+' · pre-tax '+tlMoney(x.funding.pretax)+' · Roth '+tlMoney(x.funding.roth)+' · HSA '+tlMoney(x.funding.hsa)},
+    {h:'SAVED',src:'contributions',v:x=>{ const n=Object.values(x.contributions).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; }},
+    {h:'WITHDRAWN',src:'withdrawn',v:x=>{ const n=Object.values(x.funding).reduce((a,b)=>a+b,0); return n?tlMoney(n):'—'; },tip:x=>'taxable '+tlMoney(x.funding.taxable)+' · pre-tax '+tlMoney(x.funding.pretax)+' · Roth '+tlMoney(x.funding.roth)+' · HSA '+tlMoney(x.funding.hsa)},
     {h:'REQ. DIST.',src:'rmd',v:x=>x.rmd?tlMoney(x.rmd):'—'},
     {h:'CONVERT',src:'conversion',conv:true},
     {h:'FED TAX',src:'tax',v:x=>x.tax?tlMoney(x.tax.federal+x.tax.penalty):'—',tip:x=>x.tax?('taxable income '+tlMoney(x.tax.ordinary_taxable)+' · gains '+tlMoney(x.tax.ltcg)+' · marginal '+x.tax.marginal_pct+'%'+(x.tax.penalty?' · penalty '+tlMoney(x.tax.penalty):'')):'not modeled in working years'},
@@ -1149,12 +1149,12 @@ function timelineContent(){
     {h:'HEALTH COVERAGE',src:x=>x.coverage&&x.coverage.kind==='medicare'?'medicare':'aca',v:x=>tlCoverage(x.coverage)},
     {h:'GROWTH',src:'growth',v:x=>tlMoney(x.growth_total)},
     {h:'END',src:'balances',v:x=>tlMoney(x.end_total),tip:x=>'taxable '+tlMoney(x.end.taxable)+' · pre-tax '+tlMoney(x.end.pretax)+' · Roth '+tlMoney(x.end.roth)+' · HSA '+tlMoney(x.end.hsa)},
-    {h:'FLAGS',src:null,flags:true}];
+    {h:'FLAGS',src:'flags',flags:true}];
   if(TL.detail){ const bi=cols.findIndex(c=>c.h==='END'); ['taxable','pretax','roth','hsa'].forEach((b,i)=>cols.splice(bi+i,0,{h:'END '+b.toUpperCase(),src:'balances',v:x=>tlMoney(x.end[b])})); }
   const sc=el('div'); sc.style.cssText='overflow:auto;max-width:100%;max-height:70vh;border:1px solid var(--color-border-strong);';
   const t=document.createElement('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);white-space:nowrap;width:100%;';
   const hr=document.createElement('tr');
-  cols.forEach((c,i)=>{ const th=document.createElement('th'); th.textContent=c.h; th.style.cssText='position:sticky;top:0;background:var(--color-bg-elevated,#161616);text-align:'+(i<2?'left':'right')+';padding:4px 8px;z-index:2;'+(i===0?'left:0;':''); if(c.src&&typeof c.src==='string'&&S[c.src]) th.title=S[c.src]; hr.appendChild(th); });
+  cols.forEach((c,i)=>{ const th=document.createElement('th'); th.textContent=c.h; th.style.cssText='position:sticky;top:0;background:var(--color-bg-elevated,#161616);text-align:'+(i<2?'left':'right')+';padding:4px 8px;z-index:2;'+(i===0?'left:0;':''); if(c.src&&typeof c.src==='string'&&S[c.src]) th.title=S[c.src]; else if(typeof c.src==='function') th.title=[S.aca,S.medicare].filter(Boolean).join('\n'); hr.appendChild(th); });
   t.appendChild(hr);
   r.rows.forEach(x=>{
     const tr=document.createElement('tr'); tr.style.cssText=(x.coverage&&x.coverage.subsidy_lost?'background:rgba(220,70,70,0.10);':(x.shortfall>0.5?'background:rgba(220,70,70,0.16);':(x.phase==='working'?'opacity:.8;':'')));
@@ -1280,6 +1280,45 @@ function lifeTopicContent(id){
     r.appendChild(meta); wrap.appendChild(r);
   });
   if((t.pages||[]).length){ const ph=el('div','ph','PAGES FOR THIS TOPIC'); ph.style.marginTop='var(--space-4)'; wrap.appendChild(ph); const row=el('div'); row.style.cssText='display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:6px;'; t.pages.forEach(pg=>{ const b=el('button','mut-btn',pg.label); b.onclick=()=>lmGo(pg.tab,pg.subtab); row.appendChild(b); }); wrap.appendChild(row); }
+  return wrap;
+}
+
+
+// ---- SETTINGS > LIFE MAP: edit the design without touching a file (weights grid, numbers, or the whole document as text) ----
+const LMS={cfg:null,loading:false,err:null,msg:null,text:null,isDefault:true};
+function lmsLoad(){ LMS.loading=true; fetch('/api/lifemap/config').then(r=>r.json()).then(d=>{ LMS.loading=false; if(d.error){ LMS.err=d.error; } else { LMS.cfg=d.config; LMS.isDefault=!!d.is_default; LMS.err=null; } if(TAB==='settings') render(); }).catch(e=>{ LMS.loading=false; LMS.err=String(e); if(TAB==='settings') render(); }); }
+function lmsPost(url,body){ LMS.msg=null; LMS.err=null; return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json().then(d=>({ok:r.ok,d}))); }
+function lmsSave(cfg){ lmsPost('/api/lifemap/config',{config:cfg}).then(({ok,d})=>{ if(ok){ LMS.msg='Saved. The map uses it immediately.'; LMS.cfg=cfg; LMS.isDefault=false; LMS.text=null; LM.data=null; } else { LMS.err=(d.error||'refused')+(d.problems?': '+d.problems.join('; '):''); } if(TAB==='settings') render(); }); }
+function lifemapSettingsContent(){
+  const wrap=el('div'); if(!LMS.cfg&&!LMS.loading) lmsLoad();
+  wrap.appendChild(el('div','ph','LIFE MAP · DESIGN'));
+  const intro=el('div','muted','The stage weights, numbers and wording behind the LIFE MAP page. Changes apply at once and can be undone with RESET TO DEFAULTS. Alternative designs for comparing live under "variants" in the text editor (see LIFE-MAP-GUIDE.md).'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);'; wrap.appendChild(intro);
+  if(LMS.err){ const e=el('div','neg',LMS.err); e.style.margin='6px 0'; wrap.appendChild(e); }
+  if(LMS.msg){ const m=el('div','pos',LMS.msg); m.style.margin='6px 0'; wrap.appendChild(m); }
+  const cfg=LMS.cfg; if(!cfg){ wrap.appendChild(el('div','muted','Loading…')); return wrap; }
+  const stages=cfg.stages.map(s=>s.id);
+  if(LMS.text==null){
+    const gh=el('div','ph','STAGE WEIGHTS (0 = not for this stage, 3 = central)'); gh.style.marginTop='var(--space-3)'; wrap.appendChild(gh);
+    const t=document.createElement('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);';
+    const hr=document.createElement('tr'); ['TOPIC'].concat(cfg.stages.map(s=>s.name)).concat(['WHY']).forEach(h=>{ const th=document.createElement('th'); th.textContent=h; th.style.cssText='text-align:left;padding:3px 8px;'; hr.appendChild(th); }); t.appendChild(hr);
+    cfg.topics.filter(x=>x.kind==='status').forEach(tp=>{
+      const tr=document.createElement('tr'); const n=document.createElement('td'); n.textContent=tp.name; n.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);'; tr.appendChild(n);
+      stages.forEach(sid=>{ const td=document.createElement('td'); td.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);'; const i=document.createElement('input'); i.type='number'; i.min='0'; i.max='3'; i.step='1'; i.className='set-inp'; i.style.width='52px'; i.value=(cfg.weights[tp.id]||{})[sid]; i.onchange=()=>{ const v=parseInt(i.value,10); if(!isNaN(v)) cfg.weights[tp.id][sid]=Math.max(0,Math.min(3,v)); }; td.appendChild(i); tr.appendChild(td); });
+      const w=document.createElement('td'); w.textContent=(cfg.weights[tp.id]||{}).why||''; w.className='muted'; w.style.cssText='padding:3px 8px;border-top:1px solid var(--color-border);max-width:420px;'; tr.appendChild(w); t.appendChild(tr); });
+    wrap.appendChild(t);
+    const nh=el('div','ph','NUMBERS'); nh.style.marginTop='var(--space-4)'; wrap.appendChild(nh);
+    const row=el('div'); row.style.cssText='display:flex;gap:var(--space-4);flex-wrap:wrap;margin:6px 0;';
+    [['timing_boost','Calendar boost (x)',0.1,'Gaps inside a date window count this many times more'],['pin_bonus','Pin bonus',0.1,'Added to a pinned topic\'s score'],['max_cards','Big cards shown',1,'How many topics get a full card']].forEach(([k,l,st,tip])=>{ const d=el('label'); d.style.cssText='display:flex;flex-direction:column;font-size:var(--font-size-sm);gap:2px;'; d.title=tip; d.appendChild(el('span','muted',l)); const i=document.createElement('input'); i.type='number'; i.step=String(st); i.className='set-inp'; i.style.width='96px'; i.value=cfg[k]; i.onchange=()=>{ const v=parseFloat(i.value); if(!isNaN(v)) cfg[k]=v; }; d.appendChild(i); row.appendChild(d); });
+    wrap.appendChild(row);
+  } else {
+    const ta=document.createElement('textarea'); ta.value=LMS.text; ta.style.cssText='width:100%;min-height:380px;font-family:var(--font-mono,monospace);font-size:var(--font-size-sm);background:var(--color-bg,#101010);color:inherit;border:1px solid var(--color-border-strong);'; ta.oninput=()=>{ LMS.text=ta.value; }; wrap.appendChild(ta);
+  }
+  const bar=el('div'); bar.style.cssText='display:flex;gap:var(--space-3);flex-wrap:wrap;margin-top:var(--space-3);';
+  const save=el('button','mut-btn',LMS.text==null?'SAVE':'SAVE FROM TEXT'); save.onclick=()=>{ if(LMS.text==null) lmsSave(cfg); else { let o; try{ o=JSON.parse(LMS.text); }catch(e){ LMS.err='That is not valid JSON: '+e.message; render(); return; } lmsSave(o); } }; bar.appendChild(save);
+  const tg=el('button','mut-btn',LMS.text==null?'EDIT AS TEXT':'BACK TO THE GRID'); tg.onclick=()=>{ LMS.text=(LMS.text==null)?JSON.stringify(cfg,null,1):null; LMS.err=null; render(); }; bar.appendChild(tg);
+  const rs=el('button','mut-btn','RESET TO DEFAULTS'); rs.onclick=()=>{ if(!confirm('Replace the saved design with the defaults that ship with the app?')) return; lmsPost('/api/lifemap/reset',{}).then(({ok,d})=>{ LMS.cfg=null; LMS.text=null; LM.data=null; LMS.msg=ok?'Reset to the defaults.':null; LMS.err=ok?null:(d.error||'failed'); render(); }); }; bar.appendChild(rs);
+  wrap.appendChild(bar);
+  const st=el('div','muted',LMS.isDefault?'Currently using the defaults that ship with the app.':'Currently using your saved design.'); st.style.cssText='font-size:var(--font-size-sm);margin-top:8px;'; wrap.appendChild(st);
   return wrap;
 }
 
@@ -2097,6 +2136,7 @@ function render(){
     tc.appendChild(panelSubtabs('settings',[
       {key:'accounts',label:'ACCOUNTS',build:()=>accountRegistryContent()},
       _isAdminUser() && {key:'cashcheck',label:'CASH CHECK',build:()=>cashCheckContent()},
+      _isAdminUser() && {key:'lifemapcfg',label:'LIFE MAP',build:()=>lifemapSettingsContent()},
       {key:'theme',label:'THEME',build:()=>themeContent()},
       {key:'iam',label:'IAM',build:()=>iamContent()},
       {key:'security',label:'SECURITY',build:()=>securityContent()},
@@ -2175,6 +2215,10 @@ function cockpitPanel(){
   if(RETIRE && !RETIRE.error && RETIRE.monte_carlo && RETIRE.monte_carlo.success_pct!=null){
     const sp=RETIRE.monte_carlo.success_pct;
     A.push({sev: sp>=80?'ok':(sp>=60?'info':'warn'), cat:'FIRE', msg:sp+'% success', tab:'plan', subtab:'fi'});
+    const hv=RETIRE.monte_carlo.holdings_volatility;        // the real book swings more than the plan assumes: say so in the cockpit too
+    if(hv && hv.available && hv.exceeds_assumption)
+      A.push({sev:'warn',cat:'RETIREMENT ODDS',msg:'book swings '+hv.measured_pct+'% vs '+hv.assumed_pct+'% assumed',tab:'plan',subtab:'fi',
+              tip:'At your real volatility the money lasts in '+hv.success_pct+'% of runs. Open FI · MONTE CARLO.'});
   }
   // TASK-004: EMERGENCY FUND — red/yellow/green from PLAN → CASH·DEBT's own status (no new maths).
   if(CASHDEBT && !CASHDEBT.error && CASHDEBT.emergency_fund){

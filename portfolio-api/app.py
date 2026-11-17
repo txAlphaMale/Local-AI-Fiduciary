@@ -6039,8 +6039,8 @@ def _alerts_digest():
                     f"Your portfolio's realized volatility is {_rk['annualized_volatility_pct']:.0f}% a year (last {_rk['days_recorded']} recorded days), "
                     f"well above the {_assumed:.0f}% the retirement success rate assumes. The headline odds are likely optimistic; "
                     "PLAN → MONTE CARLO shows them at your real volatility too.", "plan.assumptions")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[alerts] retirement-odds check failed: {type(e).__name__}: {str(e)[:160]}", flush=True)       # never silent: a missing alert must be explainable
     # 0) Earnings on holdings this week (P1 adoption — event awareness beats cron-only research)
     for e in _earnings_this_week():
         est = f", est EPS {e['eps_estimate']}" if e.get("eps_estimate") is not None else ""

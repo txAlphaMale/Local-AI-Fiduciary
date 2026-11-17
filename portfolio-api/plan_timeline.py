@@ -36,6 +36,10 @@ SOURCES = {
     "aca": "aca.summary: modified AGI vs the federal poverty line, premium-subsidy band and the 400% cliff (before 65)",
     "medicare": "roth.irmaa_annual_part_b on the modified AGI of two years earlier (from 65)",
     "growth": "the plan's real return applied to the balance left after the year's withdrawals and conversions",
+    "when": "the calendar year and your age (your spouse's age after the slash); one row per year to the plan's end age",
+    "contributions": "money saved in working years: the retirement config's annual saving (all into taxable unless set on this page) plus employer match into pre-tax",
+    "withdrawn": "withdrawals by bucket: required distributions first, then healthcare from the HSA, then the chosen order (pre-tax is the last resort before 59 1/2); hover a cell for the split",
+    "flags": "plain-text notes the engines raised for that year (cliffs, penalties, first required distribution, shortfalls, five-year clocks)",
 }
 
 
