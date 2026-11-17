@@ -30,6 +30,12 @@ class ChatTimeline(unittest.TestCase):
             self.assertNotIn("start", short)                       # no bucket detail in chat
             self.assertNotIn("growth", short)
 
+    def test_the_answer_is_told_to_point_to_the_table_and_not_to_invent_reasons(self):      # RETEST-038
+        out = app._timeline_summary_for_chat(self.res, 5)
+        self.assertIn("PLAN > TIMELINE", out["how_to_answer"])
+        self.assertIn("do NOT explain why", out["how_to_answer"])
+        self.assertIn("PLAN > TIMELINE", app.FIDUCIARY_PROMPT)
+
     def test_years_is_clamped_and_defaults_to_ten(self):
         self.assertEqual(app._timeline_summary_for_chat(self.res)["rows_shown"], 10)
         self.assertEqual(app._timeline_summary_for_chat(self.res, 0)["rows_shown"], 10)
