@@ -3573,7 +3573,23 @@ const SCHEDULE_RUN_ENDPOINTS = {
 function runScheduleNow(kind, btn){
   const url=SCHEDULE_RUN_ENDPOINTS[kind];
   if(!url){ alert('No manual trigger wired for "'+kind+'" yet.'); return; }
+  if(kind==='universe'){ return runUniverseNow(btn); }
   runJob(url, btn, 'queued…').then(()=>load(false));
+}
+// The universe job often finds nothing to do (SEC's bulk file has not changed since the last screen). That used to look like a button that did
+// nothing; now the result is shown on the button, and the person can ask for a full re-screen.
+let SCHED_UNIV_MSG='';
+function runUniverseNow(btn){
+  if(isViewer()){ if(btn){ btn.textContent='view-only — ask an admin'; btn.disabled=true; } return; }
+  const force=confirm('Re-screen even if SEC\'s file has not changed?\n\nOK = full re-screen (downloads the SEC file; several minutes).\nCancel = quick check, which only screens when the SEC file has changed.');
+  const t0=Math.floor(Date.now()/1000)-2; btn.disabled=true; btn.textContent=force?'re-screening…':'checking…';
+  fetch('/api/run-universe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({force:force})})
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(()=>{ let tries=0; const poll=()=>{ fetch('/api/universe').then(r=>r.json()).then(d=>{ const lc=d&&d.last_check;
+        if(lc&&lc.ran_at>=t0){ SCHED_UNIV_MSG='Universe check just now: '+(lc.screened?('re-screened the market in '+lc.seconds+' s.'):((lc.note||'nothing to do')+' Choose OK on the prompt for a full re-screen anyway.')); load(false); return; }
+        if(++tries<(force?150:15)) setTimeout(poll,force?4000:2000); else { btn.disabled=false; btn.textContent='still running (see the gear badge)'; }
+      }).catch(()=>{ btn.disabled=false; btn.textContent='check failed'; }); }; setTimeout(poll,1500); })
+    .catch(e=>{ btn.disabled=false; btn.textContent='failed: '+e.message; });
 }
 function promptsContent(){
   const wrap=el('div');
@@ -3647,6 +3663,7 @@ function scheduleContent(){
   const esc=x=>(x==null?'':x).toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const p2=n=>String(n==null?0:n).padStart(2,'0');
   wrap.appendChild(el('div','ph','TASK SCHEDULE · AUTOMATED JOBS'));
+  if(SCHED_UNIV_MSG){ const um=el('div'); um.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--font-size-base);line-height:1.5;'; um.textContent=SCHED_UNIV_MSG; wrap.appendChild(um); }
   const info=el('div','muted'); info.style.cssText='font-size:var(--font-size-base);line-height:1.5;margin-bottom:var(--space-3);';
   info.innerHTML=`Times are 24-hour, in the app timezone (<b>${esc(s.tz||'server local')}</b>). Each job is enqueued into the serial job queue at its time; edits apply within a minute (no restart needed). Every job can also be run on demand — ▸ RUN NOW below.`+
     (s.scheduler_enabled===false?' <span class="neg">⚠ The scheduler is currently DISABLED (INTERNAL_SCHEDULER=0) — these times won\'t fire until it\'s re-enabled.</span>':'');

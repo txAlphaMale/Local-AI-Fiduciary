@@ -62,6 +62,19 @@ class Content(unittest.TestCase):
         self.assertNotIn("emergency_access", none["sections"]["if_something_happens"])
 
 
+class Names(unittest.TestCase):
+    def test_login_page_wording_is_dropped_from_institution_names(self):          # RETEST-039
+        for raw, want in (("Principal Financial Group - Participant Logon", "Principal Financial Group"), ("Fidelity NetBenefits Login", "Fidelity NetBenefits"),
+                          ("Vanguard", "Vanguard"), ("Wells Fargo Online Banking", "Wells Fargo"), ("Charles Schwab - Sign In", "Charles Schwab")):
+            self.assertEqual(hr.clean_institution(raw), want)
+        self.assertEqual(hr.clean_institution("Logon"), "Logon")                   # nothing left after stripping: keep the original
+
+    def test_where_the_money_is_uses_the_clean_name(self):
+        accts = [{"name": "401k", "institution": "Principal Financial Group - Participant Logon", "type": "Retirement", "balance": 5000.0, "is_asset": True}]
+        rep = hr.build(src(accounts=accts), now=NOW)
+        self.assertEqual(rep["sections"]["where"]["by_institution"][0]["label"], "Principal Financial Group")
+
+
 class Changes(unittest.TestCase):
     def test_second_report_names_what_changed(self):
         first = hr.build(src(), now=NOW)

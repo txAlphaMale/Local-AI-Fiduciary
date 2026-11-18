@@ -22,6 +22,17 @@ def clean_name(name):
     return _DIGITS.sub("••••", str(name or "")).strip()[:80] or "Account"
 
 
+_LOGIN_TAIL = re.compile(r"\s*(?:[-\u2013|:,]\s*)?(?:participant\s+)?(?:log\s?on|log\s?in|sign\s?in|online(?:\s+banking)?|web\s*access|portal)\b.*$", re.I)
+
+
+def clean_institution(name):
+    """An institution's display name without the aggregator's login-page wording ('Principal Financial Group - Participant Logon' ->
+    'Principal Financial Group') and with any account-number-like digits masked."""
+    n = clean_name(name)
+    short = _LOGIN_TAIL.sub("", n).strip(" -\u2013|:,")
+    return short or n
+
+
 def _money(v):
     return "—" if v is None else ("-$" if v < 0 else "$") + f"{abs(v):,.0f}"
 
@@ -107,7 +118,7 @@ def build(src, now=None, prev=None, config=None):
             if a_.get("is_asset") is False:
                 debts += float(a_["balance"])
                 continue
-            i_, k_ = clean_name(a_.get("institution") or "Other"), str(a_.get("type") or "Other").strip().title() or "Other"
+            i_, k_ = clean_institution(a_.get("institution") or "Other"), str(a_.get("type") or "Other").strip().title() or "Other"
             inst[i_] = inst.get(i_, 0.0) + float(a_["balance"])
             kind[k_] = kind.get(k_, 0.0) + float(a_["balance"])
         top = lambda m, n: [{"label": k, "value": round(v, 2)} for k, v in sorted(m.items(), key=lambda kv: -kv[1])[:n]]
