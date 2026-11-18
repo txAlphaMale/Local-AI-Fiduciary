@@ -15,7 +15,9 @@ import re
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROW_TOL = 3.0                                   # fragments within this many points vertically are on one row
-_NUM = re.compile(r"^\(?-?\$?\d[\d,]*(?:\.\d{1,2})?\)?$")
+NEAR_TOL = 8.0                                  # an amount whose baseline sits a little off its line marker is still taken if nothing is on the row
+# An amount as tax software prints it: 1,234  (1,234)  -1,234  1,234.  (Intuit ends whole-dollar amounts with a period)  1,234.56
+_NUM = re.compile(r"^\(?-?\$?\d[\d,]*(?:\.\d{0,2})?\)?-?$")
 _MARK = re.compile(r"^\d{1,2}[a-z]?$")
 _FOOT = re.compile(r"Form\s+1040\s*\((20\d\d)\)(?:\s+Page\s+(\d))?", re.I)
 STATUS_LABELS = (("single", "Single"), ("married filing jointly", "Married filing jointly"), ("married filing separately", "Married filing separately"),
@@ -31,8 +33,32 @@ def supported_years(maps=None):
     return sorted((maps or load_maps())["years"])
 
 
+def _widget_fragments(page):
+    """Entered values kept as form fields (some tax programs write them as widgets, not page text): [(text, x, y)] at the field's left edge and middle."""
+    out = []
+    try:
+        annots = page.get("/Annots") or []
+    except Exception:
+        return out
+    for a in annots:
+        try:
+            a = a.get_object() if hasattr(a, "get_object") else a
+            if str(a.get("/Subtype")) != "/Widget":
+                continue
+            v = a.get("/V")
+            r = a.get("/Rect")
+            if v is None or r is None or isinstance(v, (list, dict)):
+                continue
+            t = str(v).strip()
+            if t:
+                out.append((t, round(float(r[0]), 1), round((float(r[1]) + float(r[3])) / 2.0 - 3.0, 1)))
+        except Exception:
+            continue
+    return out
+
+
 def page_fragments(page):
-    """Positioned text fragments of one pypdf page: [(text, x, y)]. Only coordinates and text, nothing else."""
+    """Positioned text fragments of one pypdf page: [(text, x, y)], plus any entered form-field values. Only coordinates and text, nothing else."""
     out = []
 
     def visit(text, cm, tm, font_dict, font_size):
@@ -42,7 +68,7 @@ def page_fragments(page):
             y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
             out.append((t, round(x, 1), round(y, 1)))
     page.extract_text(visitor_text=visit)
-    return out
+    return out + _widget_fragments(page)
 
 
 def _norm(s):
@@ -57,8 +83,8 @@ def _to_amount(tok):
     t = tok.strip()
     if re.fullmatch(r"\d{9}", t) or re.fullmatch(r"\d{3}-\d{2}-\d{4}", t):
         return None                                           # a 9-digit run is an identification number, never an amount
-    neg = t.startswith("(") or t.startswith("-") or t.startswith("$-")
-    digits = re.sub(r"[^\d.]", "", t)
+    neg = t.startswith("(") or t.startswith("-") or t.startswith("$-") or t.endswith("-")
+    digits = re.sub(r"[^\d.]", "", t).rstrip(".")
     if not digits:
         return None
     try:
@@ -97,7 +123,8 @@ def classify_pages(pages):
 
 def _find(frags, line, label, ids):
     """-> (status, value, reason). Looks for the box marker `line` on a row that also carries `label`, and reads the nearest amount to its right.
-    `ids` = every line number the map knows on this page: another marker to the right of ours means our line is blank."""
+    `ids` = every line number the map knows on this page: another marker to the right of ours means our line is blank. When the row holds no amount,
+    an amount within NEAR_TOL points above or below the row (a baseline that sits slightly off) to the right of the marker is taken instead."""
     want = _compact(label)
     for y, row in _rows(frags):
         rowtext = _compact(" ".join(t for t, _x in row))
@@ -105,11 +132,21 @@ def _find(frags, line, label, ids):
             continue
         marks = [i for i, (t, _x) in enumerate(row) if t == line]
         for i in reversed(marks):                                  # the box marker is the right-most occurrence
+            mx = row[i][1]
             for t, _x in row[i + 1:]:
                 if t in ids and t != line and not re.search(r"[,.]", t):
                     break                                          # the next line's marker: this line is blank
                 if _NUM.match(t.replace(" ", "")):
                     v = _to_amount(t)
+                    if v is None:
+                        return "unreliable", None, "a number that looks like an identification number was found there and was not read"
+                    return "ok", v, None
+            else:
+                near = sorted(((abs(fy - y), fx, ft) for ft, fx, fy in frags if fx > mx and 0 < abs(fy - y) <= NEAR_TOL and _NUM.match(ft.replace(" ", "")) and ft not in ids),
+                              key=lambda c: (c[0], c[1]))
+                nxt = [x for t, x in row[i + 1:] if t in ids and t != line]
+                if near and not nxt:
+                    v = _to_amount(near[0][2])
                     if v is None:
                         return "unreliable", None, "a number that looks like an identification number was found there and was not read"
                     return "ok", v, None
@@ -222,3 +259,49 @@ def summary(values):
             "effective_rate_pct": round(tt / agi * 100, 1) if (agi and tt is not None and agi > 0) else None,
             "capital_gain": v.get("capital_gain"), "ordinary_dividends": v.get("ordinary_dividends"), "qualified_dividends": v.get("qualified_dividends"),
             "additional_medicare_tax": v.get("additional_medicare_tax"), "wages": v.get("wages")}
+
+
+def diagnose(pages):
+    """Structure only, NO values: what the PDF's text layer looks like, so a layout that will not read can be understood without sharing any amount.
+    -> per page: fragment counts, how many look like amounts (and in which style), form-field values, and for each mapped line whether its marker and label were
+    found, whether an amount sits on the same row, and how far (in points) the nearest amount is."""
+    out = []
+    info = classify_pages(pages)
+    for i, frags in enumerate(pages):
+        nums = [t for t, _x, _y in frags if _NUM.match(t.replace(" ", ""))]
+        out.append({"page": i + 1, "fragments": len(frags), "amount_like": len(nums),
+                    "amount_styles": {"with_comma": sum(1 for t in nums if "," in t), "trailing_period": sum(1 for t in nums if t.rstrip(")-").endswith(".")),
+                                      "with_cents": sum(1 for t in nums if re.search(r"\.\d\d$", t)), "parenthesised_or_negative": sum(1 for t in nums if t.startswith(("(", "-")))},
+                    "ssn_like_runs": sum(1 for t, _x, _y in frags if re.fullmatch(r"\d{9}|\d{3}-\d{2}-\d{4}", t.strip()))})
+    return {"year": info["year"], "pages": out, "form_pages": {"1040": {k: v + 1 for k, v in info["1040"].items()}, "8959": (info["8959"] + 1) if info["8959"] is not None else None}}
+
+
+def diagnose_lines(pages, year, maps=None):
+    maps = maps or load_maps()
+    info = classify_pages(pages)
+    ymap = (maps["years"].get(str(year or info["year"])) or {}).get("forms", {}).get("1040")
+    if not ymap:
+        return []
+    ids_by_page = {}
+    for ln in ymap["lines"]:
+        ids_by_page.setdefault(ln["page"], set()).add(ln["line"])
+    out = []
+    for ln in ymap["lines"]:
+        idx = info["1040"].get(ln["page"])
+        if idx is None:
+            out.append({"line": ln["line"], "found": False}); continue
+        frags = pages[idx]
+        want = _compact(ln["label"])
+        row_hit = None
+        for y, row in _rows(frags):
+            if want in _compact(" ".join(t for t, _x in row)) and any(t == ln["line"] for t, _x in row):
+                row_hit = (y, row); break
+        if not row_hit:
+            out.append({"line": ln["line"], "found": False}); continue
+        y, row = row_hit
+        mx = max(x for t, x in row if t == ln["line"])
+        same = [t for t, x in row if x > mx and _NUM.match(t.replace(" ", ""))]
+        near = sorted((round(abs(fy - y), 1) for ft, fx, fy in frags if fx > mx and _NUM.match(ft.replace(" ", ""))))
+        out.append({"line": ln["line"], "found": True, "amount_on_row": bool(same), "nearest_amount_right_dy": near[0] if near else None,
+                    "row_texts_right_of_marker": len([1 for t, x in row if x > mx])})
+    return out
