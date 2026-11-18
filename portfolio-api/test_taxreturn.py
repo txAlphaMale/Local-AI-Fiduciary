@@ -33,8 +33,12 @@ def make_pdf(pages):
     return out
 
 
+AMOUNT_STYLE = {"plain": lambda v: f"{v:,.0f}", "trailing_period": lambda v: f"{v:,.0f}."}      # tax software prints whole dollars with or without a final period
+AMOUNT_DY = [0.0]                                                                              # how far an amount's baseline sits below its line marker
+
+
 def money(v):
-    return f"{v:,.0f}"
+    return AMOUNT_STYLE[os.environ.get("TR_STYLE", "plain")](v)
 
 
 def layout(year, vals, with_8959=None, extra_p1=()):
@@ -56,12 +60,12 @@ def layout(year, vals, with_8959=None, extra_p1=()):
             b, la, lb = paired[ln["line"]]
             fa, fb = next(l for l in spec if l["line"] == ln["line"]), next(l for l in spec if l["line"] == b)
             row = [(40, y, f"{ln['line']} {la} . . ."), (230, y, ln["line"]), (40, y, ln["line"]), (300, y, f"b {lb} . . ."), (430, y, b)]
-            if fa["field"] in vals: row.append((260, y, money(vals[fa["field"]])))
-            if fb["field"] in vals: row.append((470, y, money(vals[fb["field"]])))
+            if fa["field"] in vals: row.append((260, y - AMOUNT_DY[0], money(vals[fa["field"]])))
+            if fb["field"] in vals: row.append((470, y - AMOUNT_DY[0], money(vals[fb["field"]])))
             pages[pg] += row; done |= {ln["line"], b}
         else:
             row = [(40, y, f"{ln['line']} {ln['label'].capitalize()} . . . . ."), (30, y, ln["line"]), (420, y, ln["line"])]
-            if ln["field"] in vals: row.append((470, y, money(vals[ln["field"]])))
+            if ln["field"] in vals: row.append((470, y - AMOUNT_DY[0], money(vals[ln["field"]])))
             pages[pg] += row
     out = [pages[1], pages[2]]
     if with_8959 is not None:
@@ -112,6 +116,63 @@ class EveryYear(unittest.TestCase):
         f = by(read(2024))
         self.assertEqual((f["ira_gross"]["value"], f["ira_gross"]["status"]), (0.0, "blank"))
         self.assertEqual(f["amount_owed"]["status"], "blank")
+
+
+class RealWorldFormats(unittest.TestCase):
+    """What the first real file showed: amounts printed with a trailing period (Intuit), baselines a little off their line markers, values kept as form fields."""
+    def test_whole_dollar_amounts_with_a_trailing_period_are_read(self):
+        os.environ["TR_STYLE"] = "trailing_period"
+        try:
+            res = read(2025)
+        finally:
+            os.environ.pop("TR_STYLE", None)
+        f = by(res)
+        self.assertEqual((f["wages"]["value"], f["agi"]["value"], f["total_tax"]["value"]), (120000.0, 126700.0, 11000.0))
+        self.assertTrue(all(c["ok"] in (True, None) for c in res["checks"]))
+
+    def test_an_amount_whose_baseline_sits_below_its_marker_is_still_read(self):
+        AMOUNT_DY[0] = 5.5
+        try:
+            res = read(2024)
+        finally:
+            AMOUNT_DY[0] = 0.0
+        f = by(res)
+        self.assertEqual((f["wages"]["value"], f["agi"]["value"]), (120000.0, 126700.0))
+        self.assertEqual(f["ira_gross"]["status"], "blank")                                 # a truly blank line is still blank
+
+    def test_amount_parsing_of_each_style(self):
+        for tok, want in (("1,234", 1234.0), ("1,234.", 1234.0), ("(1,234)", -1234.0), ("-1,234.", -1234.0), ("1,234.56", 1234.56), ("0.", 0.0), ("$1,234", 1234.0), ("1,234-", -1234.0)):
+            self.assertTrue(tr._NUM.match(tok), tok)
+            self.assertEqual(tr._to_amount(tok), want, tok)
+        self.assertIsNone(tr._to_amount("123456789"))
+        self.assertIsNone(tr._NUM.match("Wages"))
+
+    def test_values_kept_as_form_fields_become_fragments(self):
+        class Dict(dict):
+            def get_object(self): return self
+        class Page:
+            def __init__(self, annots): self._a = annots
+            def get(self, k, d=None): return self._a if k == "/Annots" else d
+            def extract_text(self, visitor_text=None): return ""
+        w = Dict({"/Subtype": "/Widget", "/V": "12,345.", "/Rect": [470, 695, 560, 710]})
+        other = Dict({"/Subtype": "/Link", "/V": "x", "/Rect": [0, 0, 1, 1]})
+        out = tr.page_fragments(Page([w, other]))
+        self.assertEqual([t for t, _x, _y in out], ["12,345."])
+        self.assertEqual(out[0][1], 470.0)
+
+
+class Diagnose(unittest.TestCase):
+    def test_structure_only_no_amounts_no_secrets(self):
+        pages = [tr.page_fragments(p) for p in PdfReader(io.BytesIO(make_pdf(layout(2025, valid(2025), with_8959=412)))).pages]
+        d = tr.diagnose(pages)
+        d["lines"] = tr.diagnose_lines(pages, 2025)
+        blob = json.dumps(d)
+        for secret in ("120,000", "126,700", "Jason", "123-45-6789", "Main Street"):
+            self.assertNotIn(secret, blob)
+        self.assertEqual(d["pages"][0]["ssn_like_runs"], 1)                                # counted, never shown
+        wages = next(l for l in d["lines"] if l["line"] == "1a")
+        self.assertTrue(wages["found"] and wages["amount_on_row"])
+        self.assertEqual(wages["nearest_amount_right_dy"], 0.0)
 
 
 class Checks(unittest.TestCase):

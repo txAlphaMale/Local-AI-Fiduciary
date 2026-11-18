@@ -5447,6 +5447,37 @@ async def post_taxreturn_extract(request: Request):
     return {"ok": True, "year": res["year"], "review": res}
 
 
+@app.post("/api/taxreturn/diagnose")
+async def post_taxreturn_diagnose(request: Request):
+    """Admin only. Body {item_id, year?}: the STRUCTURE of a vault PDF's text layer with no values at all (counts, amount styles, whether each mapped line's
+    marker and an amount were found, distances): for working out why a layout will not read without anyone sharing an amount. Stores nothing."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    item_id = str((body or {}).get("item_id") or "")
+    row = vault.get_item_row(item_id) if item_id else None
+    if not row or row.get("deleted") or row.get("mime") != "application/pdf":
+        return JSONResponse({"error": "that is not a PDF in the vault"}, status_code=404)
+    try:
+        import io as _io
+        from pypdf import PdfReader
+        reader = PdfReader(_io.BytesIO(vault.read_plaintext(row)))
+        if len(reader.pages) > TAXRET_MAX_PAGES:
+            return JSONResponse({"error": "too many pages for a return"}, status_code=400)
+        pages = [taxreturn.page_fragments(p) for p in reader.pages]
+        year = (body or {}).get("year")
+        out = taxreturn.diagnose(pages)
+        out["lines"] = taxreturn.diagnose_lines(pages, int(year) if str(year or "").isdigit() else None)
+        out["acroform_fields"] = len((reader.get_fields() or {})) if hasattr(reader, "get_fields") else None
+    except Exception as e:
+        return JSONResponse({"error": f"could not inspect that PDF: {_errref(e)}"}, status_code=400)
+    return {"ok": True, "structure": out, "note": "No names, numbers or values are included: only counts, styles and distances."}
+
+
 @app.get("/api/taxreturn")
 def get_taxreturn(request: Request):
     """Admin only (a viewer is refused here: the review screen shows amounts). Drafts waiting for review, confirmed years, the viewer switch."""
