@@ -59,6 +59,7 @@ import sizing      # position sizing & concentration action program (G7) — CVa
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
 import notices   # RV-T1 standard notice wording
+import taxreturn   # RV-T3 filed-return reader (rules, not a model; numbers only)
 import asset_location   # RV-T4 asset-location view (pure)
 import household_report   # RV-T5 quarterly household report (pure composition of existing engines)
 import lifemap       # LIFE MAP: which life topics need attention at this stage (config-driven)
@@ -5379,6 +5380,179 @@ async def post_household_report_config(request: Request):
         _hhr_write(cfg, reports)
     _emit_config_changed(request, "/api/household-report/config", old, cfg)
     return {"ok": True, "config": cfg}
+
+
+# ---- Filed returns (RV-T3 / TASK-RV-043): read a Form 1040 (+ 8959) PDF from the vault by rule, show it for review, store ONLY what an admin confirms ----
+TAXRET_FILE = os.environ.get("TAXRET_FILE", "/data/tax-returns.json")
+TAXRET_MAX_PAGES = 60
+_taxret_lock = threading.Lock()
+
+
+def _tr_read():
+    try:
+        d = store.read_json_strict(TAXRET_FILE) or {}
+    except Exception:
+        d = {}
+    return {"config": {"viewers_see": False, **(d.get("config") if isinstance(d.get("config"), dict) else {})},
+            "drafts": d.get("drafts") if isinstance(d.get("drafts"), dict) else {},
+            "confirmed": d.get("confirmed") if isinstance(d.get("confirmed"), dict) else {}}
+
+
+def _tr_write(d):
+    store.write_json(TAXRET_FILE, d)
+
+
+def _tr_admin(request):
+    user = _require_admin(request)
+    return user, (None if user else JSONResponse({"error": "admin only"}, status_code=403))
+
+
+@app.post("/api/taxreturn/extract")
+async def post_taxreturn_extract(request: Request):
+    """Admin only. Body {item_id, year}: reads the PDF from the vault (already encrypted there), extracts by rule, stores a DRAFT for review. Nothing from a
+    draft is read by any engine, panel or the chat until it is confirmed."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    item_id, year = str((body or {}).get("item_id") or ""), (body or {}).get("year")
+    row = vault.get_item_row(item_id) if item_id else None
+    if not row or row.get("deleted"):
+        return JSONResponse({"error": "that document is not in the vault"}, status_code=404)
+    if row.get("mime") != "application/pdf":
+        return JSONResponse({"error": "only a PDF can be read"}, status_code=400)
+    try:
+        import io as _io
+        from pypdf import PdfReader
+        data = vault.read_plaintext(row)
+        reader = PdfReader(_io.BytesIO(data))
+        if len(reader.pages) > TAXRET_MAX_PAGES:
+            return JSONResponse({"error": f"that PDF has {len(reader.pages)} pages; a return is expected to have fewer than {TAXRET_MAX_PAGES}"}, status_code=400)
+        pages = [taxreturn.page_fragments(p) for p in reader.pages]
+        res = taxreturn.extract(pages, int(year) if str(year or "").isdigit() else None)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except vault.VaultError as e:
+        return JSONResponse({"error": str(e)}, status_code=e.status if hasattr(e, "status") else 400)
+    except Exception as e:
+        return JSONResponse({"error": f"could not read that PDF: {_errref(e)}"}, status_code=400)
+    with _taxret_lock:
+        d = _tr_read()
+        d["drafts"][str(res["year"])] = {"review": res, "item_id": item_id, "extracted_at": int(time.time()), "extracted_by": user.get("username")}
+        _tr_write(d)
+    audit.emit("taxreturn.extracted", request=request, actor=request.session.get("uid"), resource="/api/taxreturn/extract", detail={"year": res["year"], "item": item_id})
+    return {"ok": True, "year": res["year"], "review": res}
+
+
+@app.get("/api/taxreturn")
+def get_taxreturn(request: Request):
+    """Admin only (a viewer is refused here: the review screen shows amounts). Drafts waiting for review, confirmed years, the viewer switch."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    d = _tr_read()
+    return {"supported_years": taxreturn.supported_years(), "config": d["config"], "drafts": d["drafts"],
+            "confirmed": {y: {k: v for k, v in c.items() if k != "values"} | {"summary": taxreturn.summary(c.get("values"))} for y, c in d["confirmed"].items()}}
+
+
+@app.get("/api/taxreturn/card")
+def get_taxreturn_card(request: Request):
+    """The 'Last filed year' card from CONFIRMED values only. Admin always; a viewer only while the admin has switched the card on."""
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    if not user:
+        return JSONResponse({"error": "sign in required"}, status_code=401)
+    d = _tr_read()
+    if not auth.is_admin(user) and not d["config"]["viewers_see"]:
+        return {"card": None, "enabled": False}
+    if not d["confirmed"]:
+        return {"card": None, "enabled": True}
+    y = max(d["confirmed"], key=int)
+    c = d["confirmed"][y]
+    return {"enabled": True, "card": {"year": int(y), "confirmed_at": c.get("confirmed_at"), "summary": taxreturn.summary(c.get("values")),
+                                      "starting_points": {"ordinary_income": (round((c["values"].get("agi") or 0) - (c["values"].get("capital_gain") or 0), 0) if c["values"].get("agi") is not None else None),
+                                                          "long_term_gains": c["values"].get("capital_gain")},
+                                      "note": "Filed figures you confirmed. Nothing is changed automatically: type any of them into the tax panel's assumed-income boxes if you want to start from them."}}
+
+
+@app.post("/api/taxreturn/{year}/confirm")
+async def post_taxreturn_confirm(year: str, request: Request):
+    """Admin only. Body {values: {field: number|null}}: the reviewed (possibly edited) figures. Only now are they stored for use. Records who and when."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    vals = (body or {}).get("values")
+    if not isinstance(vals, dict):
+        return JSONResponse({"error": "values must be an object"}, status_code=400)
+    with _taxret_lock:
+        d = _tr_read()
+        dr = d["drafts"].get(year)
+        if not dr:
+            return JSONResponse({"error": "there is no extracted return for that year to confirm"}, status_code=404)
+        allowed = {f["field"]: f for f in dr["review"]["fields"]}
+        clean, edited = {}, []
+        for k, v in vals.items():
+            if k not in allowed:
+                return JSONResponse({"error": f"unknown field {k}"}, status_code=400)
+            if v is None or v == "":
+                clean[k] = None
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or abs(v) > 1e10 or v != v:
+                return JSONResponse({"error": f"{k} must be a number"}, status_code=400)
+            clean[k] = float(v)
+            if allowed[k].get("value") != clean[k]:
+                edited.append(k)
+        d["confirmed"][year] = {"values": clean, "confirmed_by": user.get("username"), "confirmed_at": int(time.time()), "source_item": dr.get("item_id"),
+                                "filing_status": dr["review"].get("filing_status"), "edited_fields": sorted(edited),
+                                "unreliable_confirmed": sorted(k for k, f in allowed.items() if f.get("status") == "unreliable" and k not in edited)}
+        d["drafts"].pop(year, None)
+        _tr_write(d)
+    audit.emit("taxreturn.confirmed", request=request, actor=request.session.get("uid"), resource="/api/taxreturn/confirm", detail={"year": year, "edited": len(edited)})
+    return {"ok": True, "year": int(year)}
+
+
+@app.delete("/api/taxreturn/{year}")
+def delete_taxreturn(year: str, request: Request):
+    """Admin only. Removes the confirmed record and any draft for that year. The PDF stays in the vault (delete it there separately)."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    with _taxret_lock:
+        d = _tr_read()
+        had = bool(d["confirmed"].pop(year, None)) | bool(d["drafts"].pop(year, None))
+        if not had:
+            return JSONResponse({"error": "nothing stored for that year"}, status_code=404)
+        _tr_write(d)
+    audit.emit("taxreturn.deleted", request=request, actor=request.session.get("uid"), resource="/api/taxreturn", detail={"year": year})
+    return {"ok": True}
+
+
+@app.post("/api/taxreturn-config")
+async def post_taxreturn_config(request: Request):
+    """Admin only. {viewers_see: bool}: whether other household accounts see the 'Last filed year' card (default off)."""
+    user, bad = _tr_admin(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not isinstance(body, dict) or not isinstance(body.get("viewers_see"), bool):
+        return JSONResponse({"error": "viewers_see must be true or false"}, status_code=400)
+    with _taxret_lock:
+        d = _tr_read()
+        old = dict(d["config"])
+        d["config"]["viewers_see"] = body["viewers_see"]
+        _tr_write(d)
+    _emit_config_changed(request, "/api/taxreturn-config", old, d["config"])
+    return {"ok": True, "config": d["config"]}
 
 
 _AL_BUCKET = {"taxable": "taxable", "deferred": "pretax", "roth": "roth", "hsa": "hsa"}

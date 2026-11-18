@@ -1,0 +1,539 @@
+{
+ "note": "Per-year map from a form line to a field, each checked against the blank IRS form for that year. A year that is not here is refused. 'label' is text that must appear on the same row as the line, so a changed form revision is caught instead of misread.",
+ "years": {
+  "2024": {
+   "source": "IRS Form 1040 (2024) and Form 8959 (2024), blank forms at irs.gov/pub/irs-prior/",
+   "forms": {
+    "1040": {
+     "footer": "Form 1040 (2024)",
+     "lines": [
+      {
+       "line": "1a",
+       "field": "wages",
+       "label": "total amount from form(s) w-2",
+       "page": 1
+      },
+      {
+       "line": "2a",
+       "field": "tax_exempt_interest",
+       "label": "tax-exempt interest",
+       "page": 1
+      },
+      {
+       "line": "2b",
+       "field": "taxable_interest",
+       "label": "taxable interest",
+       "page": 1
+      },
+      {
+       "line": "3a",
+       "field": "qualified_dividends",
+       "label": "qualified dividends",
+       "page": 1
+      },
+      {
+       "line": "3b",
+       "field": "ordinary_dividends",
+       "label": "ordinary dividends",
+       "page": 1
+      },
+      {
+       "line": "4a",
+       "field": "ira_gross",
+       "label": "ira distributions",
+       "page": 1
+      },
+      {
+       "line": "4b",
+       "field": "ira_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "5a",
+       "field": "pension_gross",
+       "label": "pensions and annuities",
+       "page": 1
+      },
+      {
+       "line": "5b",
+       "field": "pension_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "6a",
+       "field": "ss_gross",
+       "label": "social security benefits",
+       "page": 1
+      },
+      {
+       "line": "6b",
+       "field": "ss_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "7",
+       "field": "capital_gain",
+       "label": "capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "total_income",
+       "label": "this is your total income",
+       "page": 1
+      },
+      {
+       "line": "10",
+       "field": "adjustments",
+       "label": "adjustments to income",
+       "page": 1
+      },
+      {
+       "line": "11",
+       "field": "agi",
+       "label": "this is your adjusted gross income",
+       "page": 1
+      },
+      {
+       "line": "12",
+       "field": "deduction",
+       "label": "standard deduction or itemized deductions",
+       "page": 1
+      },
+      {
+       "line": "13",
+       "field": "qbi_deduction",
+       "label": "qualified business income deduction",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "total_deductions",
+       "label": "add lines 12 and 13",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "taxable_income",
+       "label": "this is your taxable income",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "tax",
+       "label": "tax (see instructions)",
+       "page": 2
+      },
+      {
+       "line": "24",
+       "field": "total_tax",
+       "label": "this is your total tax",
+       "page": 2
+      },
+      {
+       "line": "25d",
+       "field": "withholding",
+       "label": "add lines 25a through 25c",
+       "page": 2
+      },
+      {
+       "line": "33",
+       "field": "total_payments",
+       "label": "these are your total payments",
+       "page": 2
+      },
+      {
+       "line": "34",
+       "field": "overpaid",
+       "label": "amount you overpaid",
+       "page": 2
+      },
+      {
+       "line": "35a",
+       "field": "refund_requested",
+       "label": "amount of line 34 you want refunded",
+       "page": 2
+      },
+      {
+       "line": "37",
+       "field": "amount_owed",
+       "label": "this is the amount you owe",
+       "page": 2
+      }
+     ]
+    },
+    "8959": {
+     "lines": [
+      {
+       "line": "18",
+       "field": "additional_medicare_tax",
+       "label": "add lines 7, 13, and 17",
+       "page": 1
+      }
+     ]
+    }
+   }
+  },
+  "2023": {
+   "source": "IRS Form 1040 (2023) and Form 8959 (2023), blank forms at irs.gov/pub/irs-prior/",
+   "forms": {
+    "1040": {
+     "footer": "Form 1040 (2023)",
+     "lines": [
+      {
+       "line": "1a",
+       "field": "wages",
+       "label": "total amount from form(s) w-2",
+       "page": 1
+      },
+      {
+       "line": "2a",
+       "field": "tax_exempt_interest",
+       "label": "tax-exempt interest",
+       "page": 1
+      },
+      {
+       "line": "2b",
+       "field": "taxable_interest",
+       "label": "taxable interest",
+       "page": 1
+      },
+      {
+       "line": "3a",
+       "field": "qualified_dividends",
+       "label": "qualified dividends",
+       "page": 1
+      },
+      {
+       "line": "3b",
+       "field": "ordinary_dividends",
+       "label": "ordinary dividends",
+       "page": 1
+      },
+      {
+       "line": "4a",
+       "field": "ira_gross",
+       "label": "ira distributions",
+       "page": 1
+      },
+      {
+       "line": "4b",
+       "field": "ira_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "5a",
+       "field": "pension_gross",
+       "label": "pensions and annuities",
+       "page": 1
+      },
+      {
+       "line": "5b",
+       "field": "pension_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "6a",
+       "field": "ss_gross",
+       "label": "social security benefits",
+       "page": 1
+      },
+      {
+       "line": "6b",
+       "field": "ss_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "7",
+       "field": "capital_gain",
+       "label": "capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "total_income",
+       "label": "this is your total income",
+       "page": 1
+      },
+      {
+       "line": "10",
+       "field": "adjustments",
+       "label": "adjustments to income",
+       "page": 1
+      },
+      {
+       "line": "11",
+       "field": "agi",
+       "label": "this is your adjusted gross income",
+       "page": 1
+      },
+      {
+       "line": "12",
+       "field": "deduction",
+       "label": "standard deduction or itemized deductions",
+       "page": 1
+      },
+      {
+       "line": "13",
+       "field": "qbi_deduction",
+       "label": "qualified business income deduction",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "total_deductions",
+       "label": "add lines 12 and 13",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "taxable_income",
+       "label": "this is your taxable income",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "tax",
+       "label": "tax (see instructions)",
+       "page": 2
+      },
+      {
+       "line": "24",
+       "field": "total_tax",
+       "label": "this is your total tax",
+       "page": 2
+      },
+      {
+       "line": "25d",
+       "field": "withholding",
+       "label": "add lines 25a through 25c",
+       "page": 2
+      },
+      {
+       "line": "33",
+       "field": "total_payments",
+       "label": "these are your total payments",
+       "page": 2
+      },
+      {
+       "line": "34",
+       "field": "overpaid",
+       "label": "amount you overpaid",
+       "page": 2
+      },
+      {
+       "line": "35a",
+       "field": "refund_requested",
+       "label": "amount of line 34 you want refunded",
+       "page": 2
+      },
+      {
+       "line": "37",
+       "field": "amount_owed",
+       "label": "this is the amount you owe",
+       "page": 2
+      }
+     ]
+    },
+    "8959": {
+     "lines": [
+      {
+       "line": "18",
+       "field": "additional_medicare_tax",
+       "label": "add lines 7, 13, and 17",
+       "page": 1
+      }
+     ]
+    }
+   }
+  },
+  "2025": {
+   "source": "IRS Form 1040 (2025) and Form 8959 (2025), blank forms at irs.gov/pub/irs-pdf/",
+   "forms": {
+    "1040": {
+     "footer": "Form 1040 (2025)",
+     "lines": [
+      {
+       "line": "1a",
+       "field": "wages",
+       "label": "total amount from form(s) w-2",
+       "page": 1
+      },
+      {
+       "line": "2a",
+       "field": "tax_exempt_interest",
+       "label": "tax-exempt interest",
+       "page": 1
+      },
+      {
+       "line": "2b",
+       "field": "taxable_interest",
+       "label": "taxable interest",
+       "page": 1
+      },
+      {
+       "line": "3a",
+       "field": "qualified_dividends",
+       "label": "qualified dividends",
+       "page": 1
+      },
+      {
+       "line": "3b",
+       "field": "ordinary_dividends",
+       "label": "ordinary dividends",
+       "page": 1
+      },
+      {
+       "line": "4a",
+       "field": "ira_gross",
+       "label": "ira distributions",
+       "page": 1
+      },
+      {
+       "line": "4b",
+       "field": "ira_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "5a",
+       "field": "pension_gross",
+       "label": "pensions and annuities",
+       "page": 1
+      },
+      {
+       "line": "5b",
+       "field": "pension_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "6a",
+       "field": "ss_gross",
+       "label": "social security benefits",
+       "page": 1
+      },
+      {
+       "line": "6b",
+       "field": "ss_taxable",
+       "label": "taxable amount",
+       "page": 1
+      },
+      {
+       "line": "7a",
+       "field": "capital_gain",
+       "label": "capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "total_income",
+       "label": "this is your total income",
+       "page": 1
+      },
+      {
+       "line": "10",
+       "field": "adjustments",
+       "label": "adjustments to income",
+       "page": 1
+      },
+      {
+       "line": "11a",
+       "field": "agi",
+       "label": "this is your adjusted gross income",
+       "page": 1
+      },
+      {
+       "line": "12e",
+       "field": "deduction",
+       "label": "standard deduction or itemized deductions",
+       "page": 2
+      },
+      {
+       "line": "13a",
+       "field": "qbi_deduction",
+       "label": "qualified business income deduction",
+       "page": 2
+      },
+      {
+       "line": "13b",
+       "field": "additional_deductions",
+       "label": "additional deductions from schedule 1-a",
+       "page": 2
+      },
+      {
+       "line": "14",
+       "field": "total_deductions",
+       "label": "add lines 12e, 13a, and 13b",
+       "page": 2
+      },
+      {
+       "line": "15",
+       "field": "taxable_income",
+       "label": "this is your taxable income",
+       "page": 2
+      },
+      {
+       "line": "16",
+       "field": "tax",
+       "label": "tax (see instructions)",
+       "page": 2
+      },
+      {
+       "line": "24",
+       "field": "total_tax",
+       "label": "this is your total tax",
+       "page": 2
+      },
+      {
+       "line": "25d",
+       "field": "withholding",
+       "label": "add lines 25a through 25c",
+       "page": 2
+      },
+      {
+       "line": "33",
+       "field": "total_payments",
+       "label": "these are your total payments",
+       "page": 2
+      },
+      {
+       "line": "34",
+       "field": "overpaid",
+       "label": "amount you overpaid",
+       "page": 2
+      },
+      {
+       "line": "35a",
+       "field": "refund_requested",
+       "label": "amount of line 34 you want refunded",
+       "page": 2
+      },
+      {
+       "line": "37",
+       "field": "amount_owed",
+       "label": "this is the amount you owe",
+       "page": 2
+      }
+     ]
+    },
+    "8959": {
+     "lines": [
+      {
+       "line": "18",
+       "field": "additional_medicare_tax",
+       "label": "add lines 7, 13, and 17",
+       "page": 1
+      }
+     ]
+    }
+   }
+  }
+ }
+}
