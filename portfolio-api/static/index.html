@@ -1086,6 +1086,10 @@ function commitTopOrder(ks){
 // the "what changed" strip. Every figure's hover says which engine produced it (res.sources).
 const TL={res:null,base:null,loading:false,err:null,trial:{},detail:false,timer:null};
 const TL_CLOSING='Informational only, produced by a personal tool. Not financial, tax or legal advice.';
+// Standard notice wording (RV-T1). Keep identical to notices.py: test_notices.py compares the two.
+const N_CLOSING=TL_CLOSING, N_PAPER='Hypothetical paper portfolio. No real orders are placed.', N_ESTIMATE='Estimates from published tables. Not tax or legal advice.',
+  N_LEAD='A research lead, not a recommendation.', N_NAME='Fiduciary is a product name. Using it creates no fiduciary or advisory relationship.';
+const N_ACK_TITLE='Before you start', N_ACK_TEXT='This is a personal, informational tool. It organises financial information and shows estimates and research leads. It is not a financial advisor, tax preparer or lawyer, and using it creates no advisory relationship. The AI features can be wrong: check anything important against the source and with a professional before acting on it. Nothing in it places an order or moves money.';
 function tlMoney(n){ return n==null?'—':(n<0?'-':'')+'$'+Math.abs(Math.round(n)).toLocaleString(); }
 function tlRun(){
   TL.loading=true; TL.err=null;
@@ -1504,10 +1508,13 @@ function panelSubtabs(panel, sections){
   wireTabBarDnD(bar, ks=>commitSubOrder(panel, ks), render);
   wrap.appendChild(bar);
   const sec=avail.find(s=>s.key===active)||avail[0];
+  if(NOTICE_ESTIMATE_KEYS.has(sec.key)){ const nt=el('div','muted',N_ESTIMATE); nt.style.cssText='font-size:var(--font-size-sm);margin:-6px 0 var(--space-2);'; wrap.appendChild(nt); }
   try{ wrap.appendChild(sec.build()); }
   catch(e){ const er=el('div','err'); er.textContent='section error: '+e; wrap.appendChild(er); }
   return wrap;
 }
+// Sub-tabs that show tax, Roth, ACA, Social Security, estate, insurance, long-term-care or contribution-limit figures: each carries the estimate notice.
+const NOTICE_ESTIMATE_KEYS=new Set(['tax','ss','bridge','estate','insurance','roth','benefits','continuity','assumptions']);
 function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; SUBTAB['research']='briefs'; render(); }
 
 // analyst (Finnhub consensus) rating helpers, shared by the positions table + research panel
@@ -1744,7 +1751,7 @@ W('piotroski','Research','Piotroski F-score',
   'Use it to avoid value traps — a cheap stock with a low F-score is cheap for a reason.');
 W('theses','Research','Theses and exit triggers',
   'For any holding you record a falsifiable thesis with pre-committed exit triggers (FCF-margin decay, reverse-DCF implied growth too high, Piotroski floor, a drawdown, or a custom rule).',
-  'Each run re-checks the triggers against fresh data; a tripped trigger flags the position for EXIT REVIEW rather than auto-selling.',
+  'Each run re-checks the triggers against fresh data; a tripped trigger flags the position for a thesis check rather than auto-selling.',
   'Use it to enforce sell discipline you set in a calm moment — the terminal reminds you of your own rules when the data breaks them.');
 W('alerts','Research','News alerts and discovery',
   'The discovery agent scans news for your holdings and surfaces material items; discovered tracks new names it flags from the news flow.',
@@ -3822,7 +3829,7 @@ function sleeveTable(rows, onScout){
   rows.forEach(r=>{ const tr=el('tr');
     tr.innerHTML='<td class="l"><b>'+esc(r.ticker)+'</b>'+(r.negative_equity?' <span title="Negative shareholders\' equity: debt-to-equity and return on equity are not meaningful" style="cursor:help" class="muted">neg. equity</span>':'')+(r.also&&r.also.length?' <span class="muted" style="font-size:var(--font-size-sm)">also '+esc(r.also.join(', '))+'</span>':'')+'</td><td class="l">'+esc(r.name)+'</td><td class="l muted">'+esc(r.state)+'</td><td>'+(r.price==null?'—':'$'+Number(r.price).toFixed(2))+'</td><td class="l muted">'+esc(r.price_as_of||'—')+(r.price_old?' <span title="Stored price is more than 3 trading days old" style="cursor:help">&#9888;</span>':'')+'</td><td>'+_slvFmtMoney(r.market_cap)+'</td><td>'+(r.dividend_yield_pct==null?'—':Number(r.dividend_yield_pct).toFixed(1)+'%')+'</td><td class="l muted">'+esc(r.sector||'—')+'</td><td class="l muted">'+esc(r.insider||'—')+'</td><td class="l muted">'+esc(r.analyst||'—')+'</td><td class="l muted">'+esc(r.fiscal_year_end||'—')+(r.financials_old?' <span title="Latest full year ended more than 12 months ago" style="cursor:help">&#9888;</span>':'')+'</td><td>'+_slvFmtMoney(r.revenue,r.currency)+'</td><td>'+_slvPct(r.rev_growth_pct)+(r.small_base?' <span title="Tiny starting base or an acquisition, not organic growth" style="cursor:help">&#9873;</span>':'')+(r.rev_tag_conflict?' <span title="The SEC filings give this company two different revenue figures for the same year (different accounting tags). The growth shown uses the best-supported one, but treat it as unverified." style="cursor:help" class="muted">growth unverified</span>':'')+'</td><td>'+_slvPct(r.net_margin_pct)+'</td><td>'+_slvPct(r.fcf_margin_pct)+'</td><td>'+_slvRunway(r.runway_months)+'</td><td>'+_slvPct(r.share_change_pct)+'</td>';
     const sc=el('td','l'); const b=r.scout;
-    if(b){ const dots='●'.repeat(b.conviction||0)+'○'.repeat(5-(b.conviction||0)); sc.innerHTML='<span title="'+esc(b.thesis||'')+'">'+dots+'</span> '; }
+    if(b){ const dots='●'.repeat(b.conviction||0)+'○'.repeat(5-(b.conviction||0)); sc.innerHTML='<span title="'+esc(N_LEAD+' '+(b.thesis||''))+'">'+dots+'</span> '; }
     if(onScout){ const a=el('button','mut-btn',b?'▸ note':'▸ scout'); a.style.cssText='font-size:var(--font-size-sm);padding:0 6px;'; a.onclick=()=>onScout(r.ticker, !!b, sc, a); sc.appendChild(a); }
     else if(!b){ sc.textContent='—'; }
     tr.appendChild(sc);
@@ -3838,7 +3845,7 @@ function scoutNoteBox(t, n){
   const src=s=>SRC[s]||(s.indexOf('news:')===0?'news':(s.indexOf('filing:')===0?'SEC 8-K':s));
   const dots='●'.repeat(N.conviction)+'○'.repeat(5-N.conviction);
   const when=new Date(n.created_at*1000).toLocaleDateString();
-  let h='<div><b>'+esc(t)+'</b> · scout note · conviction <b>'+dots+' '+N.conviction+'/5</b>'+(N.conviction_capped?' <span class="muted">(capped: '+esc(N.conviction_cap_reason||'no news or filings to read')+')</span>':'')+' · <span class="muted">'+esc(when)+' · '+esc(N.horizon)+'</span></div>';
+  let h='<div><b>'+esc(t)+'</b> · scout note · conviction <b>'+dots+' '+N.conviction+'/5</b> <span class="muted" title="'+esc(N_LEAD)+'">('+esc(N_LEAD.replace(/\.$/,''))+')</span>'+(N.conviction_capped?' <span class="muted">(capped: '+esc(N.conviction_cap_reason||'no news or filings to read')+')</span>':'')+' · <span class="muted">'+esc(when)+' · '+esc(N.horizon)+'</span></div>';
   h+='<div style="margin:var(--space-2) 0;">'+esc(N.thesis)+'</div>';
   if(N.thesis_figures_unverified&&N.thesis_figures_unverified.length) h+='<div class="muted" style="font-size:var(--font-size-sm);margin-bottom:var(--space-2);">&#9888; Figures in this summary that the supplied data does not contain: '+N.thesis_figures_unverified.map(esc).join(', ')+'. Treat them as unverified.</div>';
   const SRCS={}; (n.sources||[]).forEach(x=>{ if(x&&x.id) SRCS[x.id]=x; });
@@ -5993,6 +6000,7 @@ function cashCheckText(masked){
       (wt.positions||[]).filter(p=>p.institution===g.institution&&p.account===g.account).forEach(p=>L.push('   '+[p.ticker,p.name,'type='+(p.type||''),'value='+p.value,'price='+p.price,'-> '+p.counted_as].join(' | '))); }); }
   L.push('','CASH-LOOKING HOLDINGS');
   (r.cash_holdings||[]).forEach(h=>L.push([m(h.institution),m(h.account),h.ticker,h.name,'type='+(h.type||''),'value='+h.value,'price='+h.price,'-> '+h.verdict+' ('+h.confidence+')',(h.reasons||[]).join('; ')].join(' | ')));
+  L.push('',N_CLOSING);
   return L.join('\n');
 }
 function cashCheckContent(){
@@ -6631,6 +6639,7 @@ function _accountsPanel(){
     '<th style="text-align:left;padding:4px 8px;">Role</th>'+
     '<th style="text-align:left;padding:4px 8px;">MFA</th>'+
     '<th style="text-align:left;padding:4px 8px;">Created</th>'+
+    '<th style="text-align:left;padding:4px 8px;">Read the notice</th>'+
     '<th style="padding:4px 8px;"></th></tr>'));
   const tbody=el('tbody');
   accts.forEach(a=>{
@@ -6644,6 +6653,7 @@ function _accountsPanel(){
       `<td style="padding:4px 8px;">${escHtml(a.role)}</td>`+
       `<td style="padding:4px 8px;">${a.mfa_enabled?'<span class="pos">on</span>':'<span class="muted">off</span>'}</td>`+
       `<td style="padding:4px 8px;">${created}</td>`+
+      `<td style="padding:4px 8px;">${a.role==='admin'?'<span class="muted">—</span>':(a.acknowledged_at?new Date(a.acknowledged_at*1000).toLocaleDateString():'<span class="neg">not yet</span>')}</td>`+
       `<td style="padding:4px 8px;text-align:right;">${delCell}</td>`;
     tbody.appendChild(tr);
   });
@@ -9041,7 +9051,7 @@ function sizingContent(){
   const sum=el('div','muted'); sum.style.cssText='font-size:var(--font-size-base);margin:2px 0 8px;';
   sum.innerHTML=`budget = ${lb.loss_budget_pct}% of net worth = <b>${usd(lb.budget_dollars)}</b> at ${lb.horizon_days}-day CVaR · `+
     `<span style="color:${(lb.total_over_budget||0)>0?'var(--color-accent)':'var(--color-text)'}">${lb.total_over_budget||0} name(s) over budget</span>`+
-    ((lb.total_suggested_trim||0)>0?` · suggested trim ${usd(lb.total_suggested_trim)}`:'');
+    ((lb.total_suggested_trim||0)>0?` · about ${usd(lb.total_suggested_trim)} above the budget`:'');
   wrap.appendChild(sum);
   const tbl=el('table','tbl'); tbl.style.cssText='width:100%;font-size:var(--font-size-md);border-collapse:collapse;';
   const cols=['TICKER','CURRENT','TARGET','CVaR','AT RISK','%NW','MAX POS','TRIM'];
@@ -10071,7 +10081,7 @@ function stratContent(r){
   if(!r || r.error){ wrap.appendChild(el('div','muted','Paper portfolio unavailable.')); wrap.appendChild(userLedgerPanel()); return wrap; }
   const u2=n=>n==null?'—':'$'+(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const sub=el('div','muted'); sub.style.cssText='font-size:var(--font-size-sm);letter-spacing:1px;margin-bottom:var(--space-3);';
-  sub.textContent=`${r.name||'HYPOTHETICAL'} · ${r.status==='archived'?'ARCHIVED — read-only history · ':''}no real money, no real orders · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
+  sub.textContent=`${r.name||'HYPOTHETICAL'} · ${r.status==='archived'?'ARCHIVED — read-only history · ':''}${N_PAPER} · started ${r.created?new Date(r.created*1000).toLocaleDateString():'—'}`;
   wrap.appendChild(sub);
   // ---- controls: run / reset / contribute / recurring ----
   const rec=r.recurring;
@@ -10125,6 +10135,7 @@ function stratContent(r){
   } else { wrap.appendChild(el('div','muted','All cash — no positions yet.')); }
   if(r.reports && r.reports.length){
     const rh=el('div','ph','LATEST WEEKLY REPORT'); rh.style.marginTop='12px'; wrap.appendChild(rh);
+    { const pn=el('div','muted',N_PAPER); pn.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-1);'; wrap.appendChild(pn); }
     const last=r.reports[r.reports.length-1];
     const rb=el('div','muted'); rb.style.cssText='font-size:var(--font-size-base);white-space:pre-wrap;line-height:1.45;';
     rb.textContent=`${new Date(last.ts*1000).toLocaleString()} · value ${u2(last.total_value)} (${last.return_pct>0?'+':''}${last.return_pct}%)\n\n${last.summary||'(no summary)'}`;
@@ -11096,6 +11107,7 @@ function chatContent(){
   const mkP=(k,lab)=>{ const busy=CS(k).streaming; const s=el('span',null,lab+(busy?' ⏳':'')); s.className='chat-ptab'+(CHAT_PERSONA===k?' on':''); s.title=busy?'still generating in the background':''; s.onclick=()=>chatSetPersona(k); return s; };
   ptg.appendChild(mkP('fiduciary','FIDUCIARY')); ptg.appendChild(mkP('strategist','STRATEGIST'));
   side.appendChild(ptg);
+  if(CHAT_PERSONA==='strategist'){ const pn=el('div','muted',N_PAPER); pn.style.cssText='font-size:var(--font-size-sm);line-height:1.4;padding:0 var(--space-1) var(--space-2);'; side.appendChild(pn); }
   const list=el('div','chat-list');
   if(CHAT_SESSIONS===null){ const m=el('div','muted'); m.style.cssText='font-size:var(--font-size-base);padding:var(--space-2) var(--space-1);'; m.textContent='Loading…'; list.appendChild(m); }
   else {
@@ -12150,6 +12162,7 @@ function _authFormShell(title, sub){
   const wrap=el('div'); wrap.style.cssText='max-width:380px;margin:80px auto;padding:var(--space-6);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);';
   wrap.appendChild(el('div','ph',title));
   if(sub){ const s=el('div','muted'); s.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-4);line-height:1.4;'; s.textContent=sub; wrap.appendChild(s); }
+  const nm=el('div','muted',N_NAME); nm.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-3);line-height:1.4;'; wrap.appendChild(nm);
   return wrap;
 }
 function renderFirstRun(){
@@ -12389,6 +12402,7 @@ function authInitAppReal(){
   // activity in the Security Audit Log. Starting them here also fixes a real side-effect: since
   // pollDemoStatus() never re-ran after login, the DEMO_MODE banner was silently never showing.
   startBackgroundPolling();
+  ackCheck();
 }
 async function authCheckAndInit(){
   try{
@@ -12402,6 +12416,17 @@ async function authCheckAndInit(){
   else authInitApp();
 }
 authCheckAndInit();
+// First sign-in of a non-admin account: one acknowledgment screen, stored per account (RV-T1 / TASK-RV-044 item 6).
+function ackCheck(){
+  if(!AUTH_STATUS||!AUTH_STATUS.user||AUTH_STATUS.user.role==='admin') return;
+  fetch('/api/ack').then(r=>r.json()).then(d=>{ if(!d||!d.required) return;
+    const ov=el('div'); ov.id='ack-overlay'; ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    const bx=el('div'); bx.style.cssText='max-width:480px;background:var(--color-bg,#101114);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-5);line-height:1.55;';
+    bx.appendChild(el('div','ph',N_ACK_TITLE)); const tx=el('p',null,d.text||N_ACK_TEXT); tx.style.margin='var(--space-3) 0'; bx.appendChild(tx);
+    const nm=el('p','muted',N_NAME); nm.style.cssText='font-size:var(--font-size-sm);'; bx.appendChild(nm);
+    const ok=el('button','mut-btn','I UNDERSTAND'); ok.style.minHeight='44px'; ok.onclick=()=>{ ok.disabled=true; fetch('/api/ack',{method:'POST'}).then(()=>ov.remove()).catch(()=>{ ok.disabled=false; }); }; bx.appendChild(ok);
+    ov.appendChild(bx); document.body.appendChild(ov); }).catch(()=>{});
+}
 
 // Serial job-queue badge (Increment B): poll /api/jobs and show running/queued depth
 // in the header. Independent of the 5-min load so it updates live during a run. Idle = blank.

@@ -323,3 +323,35 @@ def picks(limit=500):
     ensure_scout()
     with store._conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM scout_picks ORDER BY picked_on DESC LIMIT ?", (limit,))]
+
+
+# ---- Public demo (DEMO_MODE=1): sample data only (RV-T1 / TASK-RV-044 item 8). Live screen, scout and signal output is never shown there: the
+# producing jobs are skipped in app.py, and every read below answers empty as a second lock, so nothing live can appear even if a job were run.
+import os as _os
+
+
+def _demo_on():
+    return _os.environ.get("DEMO_MODE", "0") == "1"
+
+
+def _blank_in_demo(fn, empty):
+    def wrapper(*a, **k):
+        return empty() if _demo_on() else fn(*a, **k)
+    wrapper.__name__, wrapper.__doc__ = fn.__name__, fn.__doc__
+    return wrapper
+
+
+counts = _blank_in_demo(counts, dict)
+reason_counts = _blank_in_demo(reason_counts, list)
+list_rows = _blank_in_demo(list_rows, list)
+total = _blank_in_demo(total, int)
+screened_rows = _blank_in_demo(screened_rows, list)
+s2_index = _blank_in_demo(s2_index, dict)
+s3_index = _blank_in_demo(s3_index, dict)
+list_rejects = _blank_in_demo(list_rejects, list)
+sleeve_snapshot = _blank_in_demo(sleeve_snapshot, dict)
+notes_index = _blank_in_demo(notes_index, dict)
+scout_briefs = _blank_in_demo(scout_briefs, dict)
+get_note = _blank_in_demo(get_note, lambda: None)
+list_notes = _blank_in_demo(list_notes, list)
+picks = _blank_in_demo(picks, list)

@@ -99,7 +99,7 @@ def evaluate_thesis(thesis, metrics):
     tripped = [t for t in trs if t["tripped"] is True]
     unknown = [t for t in trs if t["tripped"] is None]
     if tripped:
-        action = f"EXIT REVIEW — {len(tripped)} trigger(s) tripped"
+        action = f"Thesis check: {len(tripped)} of your own trigger(s) tripped"
     elif trs:
         action = "thesis intact"
     else:

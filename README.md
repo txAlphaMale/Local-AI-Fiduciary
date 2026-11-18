@@ -12,6 +12,8 @@ UI (Fiduciary + Strategist personas, read-only tools) lives right in the dashboa
 > Strategist trades a *hypothetical* ledger — no real orders are ever placed. All your
 > data stays on your machine; nothing is sent anywhere except the read-only public/free
 > APIs you configure (SEC EDGAR, Finnhub, Tavily) and your own portfolio source.
+>
+> *Fiduciary is a product name. Using it creates no fiduciary or advisory relationship.*
 
 ---
 
