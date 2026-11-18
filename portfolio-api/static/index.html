@@ -1208,6 +1208,43 @@ function timelineContent(){
 }
 
 
+// ---- ASSET LOCATION (RV-T4): which holding sits in which kind of account. Arithmetic from the app's own figures; never an instruction to trade. ----
+const ALOC={d:null,loading:false,err:null};
+function alocLoad(){ ALOC.loading=true; ALOC.err=null; fetch('/api/asset-location').then(r=>r.json().then(d=>({ok:r.ok,d}))).then(({ok,d})=>{ ALOC.loading=false; if(!ok) ALOC.err=d.error||'Could not load.'; else ALOC.d=d; render(); }).catch(e=>{ ALOC.loading=false; ALOC.err=String(e); render(); }); }
+function alocContent(){
+  const wrap=el('div','lm');
+  if(!ALOC.d&&!ALOC.loading&&!ALOC.err) alocLoad();
+  wrap.appendChild(el('div','ph','ASSET LOCATION · WHICH HOLDING SITS IN WHICH KIND OF ACCOUNT'));
+  if(ALOC.err){ wrap.appendChild(el('div','neg',escHtml(ALOC.err))); return wrap; }
+  if(!ALOC.d){ wrap.appendChild(el('div','muted','Loading…')); return wrap; }
+  const d=ALOC.d, m=v=>v==null?'—':(v<0?'-$':'$')+Math.abs(Math.round(v)).toLocaleString(), B=['taxable','pretax','roth','hsa'], BL={taxable:'TAXABLE',pretax:'PRE-TAX',roth:'ROTH',hsa:'HSA'};
+  const intro=el('div','muted','The same holdings can be taxed very differently depending on the kind of account they sit in. This page shows where each one sits, what kind of income it produces, and the estimated yearly tax on the income held in taxable accounts. It changes nothing and gives no trading instructions.'); intro.style.cssText='font-size:var(--font-size-sm);line-height:1.5;margin-bottom:var(--space-3);max-width:820px;'; wrap.appendChild(intro);
+  const rt=d.rates||{}; const rr=el('div','muted','Rates used (the tax panel\'s): ordinary '+Math.round((rt.ordinary||0)*100)+'%, qualified dividends '+Math.round((rt.qualified||0)*100)+'%, filing status '+escHtml(d.filing_status||'')+', income assumed '+m(d.assumed_ordinary_income)+'. Yield comes from each holding\'s research brief; blank means unknown, never guessed.'); rr.style.cssText='font-size:var(--font-size-sm);margin-bottom:var(--space-2);'; wrap.appendChild(rr);
+  const sc=el('div'); sc.style.cssText='max-width:100%;overflow-x:auto;'; const t=el('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);min-width:680px;';
+  t.innerHTML='<tr><th class="l">HOLDING</th>'+B.map(b=>'<th>'+BL[b]+'</th>').join('')+'<th>TOTAL</th><th class="l">TAX CHARACTER</th><th>YIELD</th><th>YEARLY TAX ON ITS TAXABLE INCOME</th></tr>';
+  (d.rows||[]).forEach(r=>{ const tr=el('tr'); tr.innerHTML='<td class="l"><b>'+escHtml(r.ticker)+'</b> <span class="muted">'+escHtml(r.name||'')+'</span></td>'+B.map(b=>'<td>'+(r.values[b]?m(r.values[b]):'<span class="muted">·</span>')+'</td>').join('')+'<td>'+m(r.total)+'</td><td class="l" title="'+escHtml(r.character_basis||'')+'" style="cursor:help">'+escHtml(r.character)+(r.ordinary_share!=null?' <span class="muted">('+Math.round(r.ordinary_share*100)+'% ordinary)</span>':'')+'</td><td>'+(r.yield_pct==null?'<span class="muted">unknown</span>':r.yield_pct+'%')+'</td><td>'+(r.yearly_drag==null?'<span class="muted">'+(r.values.taxable>0?'unknown':'—')+'</span>':m(r.yearly_drag))+'</td>'; t.appendChild(tr); });
+  const ot=d.other_balances_not_itemised||{}, ct=d.column_totals||{};
+  const o=el('tr'); o.innerHTML='<td class="l muted">Balances with no holdings listed</td>'+B.map(b=>'<td class="muted">'+(ot[b]?m(ot[b]):'·')+'</td>').join('')+'<td></td><td></td><td></td><td></td>'; t.appendChild(o);
+  const tt=el('tr'); tt.style.fontWeight='bold'; tt.innerHTML='<td class="l">TOTAL (same as the ACA bridge panel)</td>'+B.map(b=>'<td>'+m(ct[b])+'</td>').join('')+'<td>'+m(B.reduce((a,b)=>a+(ct[b]||0),0))+'</td><td></td><td></td><td>'+m(d.drag&&d.drag.yearly_current)+'</td>'; t.appendChild(tt);
+  sc.appendChild(t); wrap.appendChild(sc);
+  const dg=d.drag||{}; if(dg.taxable_value_unknown>0){ const u=el('div','muted','About '+m(dg.taxable_value_unknown)+' of taxable holdings ('+Math.round((dg.unknown_share||0)*100)+'%) has an unknown yield or tax character, so it is not in the yearly figure.'); u.style.cssText='font-size:var(--font-size-sm);margin-top:4px;'; wrap.appendChild(u); }
+  const c=d.comparison||{}; const ch=el('div','ph','ONE COMMON RULE OF THUMB, FOR STUDY'); ch.style.marginTop='var(--space-4)'; wrap.appendChild(ch);
+  const rl=el('ul'); rl.style.cssText='margin:4px 0 8px 18px;padding:0;font-size:var(--font-size-sm);line-height:1.5;'; (c.rules||[]).forEach(x=>rl.appendChild(el('li',null,escHtml(x)))); wrap.appendChild(rl);
+  if(c.status==='withheld'){ wrap.appendChild(el('div','neg',escHtml(c.reason||'The comparison is withheld.'))); }
+  else if(c.status==='ready'){
+    wrap.appendChild(el('div',null,'Yearly tax on income held in taxable accounts: <b>'+m(c.yearly_drag_now)+'</b> now, <b>'+m(c.yearly_drag_after)+'</b> under this placement (difference '+m(c.yearly_difference)+'). Account sizes are unchanged: '+(c.column_totals_unchanged?'yes':'NO')+'.'));
+    const sc2=el('div'); sc2.style.cssText='max-width:100%;overflow-x:auto;margin-top:6px;'; const t2=el('table'); t2.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);min-width:520px;';
+    t2.innerHTML='<tr><th class="l">HOLDING</th>'+B.map(b=>'<th>'+BL[b]+' under the rule</th>').join('')+'<th>GAIN IF THE TAXABLE PART MOVES</th></tr>';
+    const mv={}; (c.moves||[]).forEach(x=>{ mv[x.ticker]=x; });
+    (c.rows||[]).forEach(r=>{ const x=mv[r.ticker]; const tr=el('tr'); tr.innerHTML='<td class="l"><b>'+escHtml(r.ticker)+'</b></td>'+B.map(b=>'<td>'+(r.values[b]?m(r.values[b]):'<span class="muted">·</span>')+'</td>').join('')+'<td>'+(x&&x.taxable_sold?(x.unrealized_gain_on_sale==null?'<span class="muted">basis unknown</span>':m(x.unrealized_gain_on_sale))+' <span class="muted">on '+m(x.taxable_sold)+' sold</span>':'<span class="muted">—</span>')+'</td>'; t2.appendChild(tr); });
+    sc2.appendChild(t2); wrap.appendChild(sc2);
+    const sl=c.sale||{}; wrap.appendChild(el('div','muted','If the taxable parts above were sold: gain '+m(sl.gain_realized)+(sl.tax_if_sold==null?'':', tax about <b>'+m(sl.tax_if_sold)+'</b>')+(sl.years_of_difference_equal_to_sale_tax!=null?' (equal to about '+sl.years_of_difference_equal_to_sale_tax+' years of the yearly difference)':'')+'. '+escHtml(sl.assumes||'')+(sl.gain_unknown_for_some?' Cost basis is missing for some of it, so the tax is not estimated.':'')));
+  }
+  const cu=el('ul'); cu.style.cssText='margin:10px 0 0 18px;padding:0;font-size:var(--font-size-sm);line-height:1.5;'; (d.cautions||[]).forEach(x=>cu.appendChild(el('li',null,escHtml(x)))); wrap.appendChild(cu);
+  const bt=el('button','mut-btn','REFRESH'); bt.style.marginTop='var(--space-3)'; bt.onclick=()=>{ ALOC.d=null; alocLoad(); }; wrap.appendChild(bt);
+  return wrap;
+}
+
 // ---- HOUSEHOLD REPORT (RV-T5): one plain page written from the app's own numbers; every figure's panel is linked on screen ----
 const HHR={d:null,loading:false,err:null,pick:null,msg:'',cfgOpen:false};
 function hhrLoad(id){
@@ -1514,7 +1551,7 @@ function panelSubtabs(panel, sections){
   return wrap;
 }
 // Sub-tabs that show tax, Roth, ACA, Social Security, estate, insurance, long-term-care or contribution-limit figures: each carries the estimate notice.
-const NOTICE_ESTIMATE_KEYS=new Set(['tax','ss','bridge','estate','insurance','roth','benefits','continuity','assumptions']);
+const NOTICE_ESTIMATE_KEYS=new Set(['tax','ss','bridge','estate','insurance','roth','benefits','continuity','assumptions','location']);
 function openBrief(t){ if(!t) return; FOCUS_TICKER=t; TAB='research'; SUBTAB['research']='briefs'; render(); }
 
 // analyst (Finnhub consensus) rating helpers, shared by the positions table + research panel
@@ -4576,6 +4613,7 @@ function planContent(r){
     {key:'fi',label:'FI · MONTE CARLO',build:fiSec},
     {key:'timeline',label:'TIMELINE',build:()=>timelineContent()},
     {key:'hhreport',label:'HOUSEHOLD REPORT',build:()=>hhrContent()},
+    {key:'location',label:'ASSET LOCATION',build:()=>alocContent()},
     haveSS && {key:'ss',label:'SOCIAL SECURITY',build:ssSec},
     haveBridge && {key:'bridge',label:'ACA BRIDGE',build:bridgeSec},
     haveIncome && {key:'income',label:'INCOME',build:incomeSec},

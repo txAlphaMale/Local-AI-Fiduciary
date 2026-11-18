@@ -59,6 +59,7 @@ import sizing      # position sizing & concentration action program (G7) — CVa
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
 import notices   # RV-T1 standard notice wording
+import asset_location   # RV-T4 asset-location view (pure)
 import household_report   # RV-T5 quarterly household report (pure composition of existing engines)
 import lifemap       # LIFE MAP: which life topics need attention at this stage (config-driven)
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
@@ -5378,6 +5379,63 @@ async def post_household_report_config(request: Request):
         _hhr_write(cfg, reports)
     _emit_config_changed(request, "/api/household-report/config", old, cfg)
     return {"ok": True, "config": cfg}
+
+
+_AL_BUCKET = {"taxable": "taxable", "deferred": "pretax", "roth": "roth", "hsa": "hsa"}
+
+
+def _asset_location_view():
+    """PLAN > ASSET LOCATION: the holdings grid (security x account type), tax character from data the app already holds, the yearly tax drag of the
+    current placement, and one stated-rule comparison. No new data provider; rates are the ones the tax panel uses (income = the annual-expenses figure)."""
+    d = _data()
+    cfg = _read_retire()
+    ctx = _tax_ctx(cfg)
+    gross = float(cfg.get("annual_expenses_override") or 0) or 0.0
+    oti = max(0.0, gross - tax.standard_deduction(ctx["status"], ctx["age"], ctx["spouse_age"]))
+    ord_rate = tax.marginal_ordinary_rate(oti, ctx["status"])
+    qual_rate = tax.ltcg_tax(oti, 1000.0, ctx["status"])[0] / 1000.0
+    status = {a.get("name"): _account_tax_status(a.get("name"), a.get("type"), a.get("subtype")) for a in d.get("accounts", [])}
+    briefs = (_read_analysis().get("briefs") or {})
+    types = {c.get("ticker"): (c.get("type") or "") for c in d.get("consolidated", []) if c.get("ticker")}
+    sectors = {p.get("ticker"): p.get("sector") for p in ((_read_exp() or {}).get("positions") or []) if p.get("ticker")}
+    lines = []
+    for acct in d.get("by_account", []):
+        name = acct.get("account")
+        b = _AL_BUCKET.get(status.get(name) or _account_tax_status(name, "Investments"))
+        if not b:
+            continue                                   # education accounts, non-investment accounts
+        for h in acct.get("holdings", []):
+            t = h.get("ticker")
+            typ = types.get(t, h.get("type") or "")
+            if not t or typ == "Cash":
+                continue
+            is_fund = typ in ("ETF", "Mutual Fund")
+            lines.append({"ticker": t, "name": h.get("name"), "bucket": b, "value": h.get("value"), "gain": h.get("gain"),
+                          "yield_pct": ((briefs.get(t) or {}).get("valuation") or {}).get("dividend_yield_pct"), "type": typ,
+                          "mix": ((_fund_mix(t) or {}).get("mix") if is_fund else None), "industry": sectors.get(t),
+                          "is_stock": typ in ("Stock", "Equity", "Common Stock")})
+    bal = _balances_by_tax_status()
+    totals = {"taxable": bal.get("taxable", 0.0), "pretax": bal.get("deferred", 0.0), "roth": bal.get("roth", 0.0), "hsa": bal.get("hsa", 0.0)}
+    res = asset_location.build(lines, totals, ord_rate, qual_rate,
+                               ltcg_tax_fn=lambda o, g: tax.ltcg_tax(o, g, ctx["status"])[0], ordinary_taxable=oti)
+    res.update({"generated_at": int(time.time()), "filing_status": ctx["status"], "tax_year": tax.TAX_YEAR,
+                "assumed_ordinary_income": round(gross), "assumed_ordinary_taxable": round(oti),
+                "sources": {"rates": "tax.py marginal ordinary and long-term rates at the income the tax panel assumes",
+                            "yield": "dividend yield from each holding's research brief (blank = unknown)",
+                            "character": "the fund's own class mix (SEC N-PORT), security type and industry label already on file",
+                            "bucket_totals": "the same account-type totals the ACA bridge panel uses (securities plus balance-only accounts)"},
+                "notice": notices.ESTIMATE})
+    return res
+
+
+@app.get("/api/asset-location")
+def get_asset_location():
+    """Which holding sits in which kind of account, its tax character, the yearly tax drag of the current placement and one rule-of-thumb comparison.
+    Read-only, informational: arithmetic, never an instruction to trade."""
+    try:
+        return _asset_location_view()
+    except Exception as e:
+        return JSONResponse({"error": f"asset-location view failed: {_errref(e)}"}, status_code=500)
 
 
 def _timeline_summary_for_chat(res, years=10):
@@ -17766,6 +17824,7 @@ FIDUCIARY_PROMPT = (
     "their actual positions and targets. Then reach for the tool that fits the question: get_exposure "
     "(sector/beta/concentration), get_rebalance (IPS sleeve drift), get_risk_metrics (realized vol / "
     "drawdown / Sharpe), get_retirement and get_income_plan (long-range plan, Monte Carlo, glide path), "
+    "get_asset_location (which holding sits in which kind of account, its tax character and the yearly tax drag; report its figures and stated rules, never tell the user to buy or sell), "
     "get_plan_timeline (the year-by-year table: taxes, Roth conversions, required distributions, ACA and Medicare years, one deterministic path; "
     "report its flags in its own words, never add a reason the table does not give, and always end by pointing the user to PLAN > TIMELINE for the full table), "
     "get_tax_audit (tax-loss-harvesting + asset-location), get_aca (ACA/MAGI subsidy + cliff), "
@@ -17860,6 +17919,11 @@ FIDUCIARY_TOOLS = [
                        "or Medicare surcharge, shortfall and the end balance, plus lifetime totals and flagged years. Deterministic, real dollars; "
                        "the Monte Carlo (get_retirement) covers uncertainty. Short rows only; optional years = how many years from now (default 10).",
         "parameters": {"type": "object", "properties": {"years": {"type": "integer", "description": "Years from now to show, 1 to 70. Default 10."}}}}},
+    {"type": "function", "function": {"name": "get_asset_location",
+        "description": "Asset location: which holding sits in which kind of account (taxable / pre-tax / Roth / HSA), each holding's tax character, the "
+                       "estimated yearly tax drag of the current placement, and one rule-of-thumb comparison with what moving would cost in tax. "
+                       "Informational arithmetic only: report the figures and the stated rules, never tell the user to buy or sell.",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_income_plan",
         "description": "Income glide path: coverage of target income by year and the shift schedule.",
         "parameters": {"type": "object", "properties": {}}}},
@@ -18062,6 +18126,7 @@ def _fiduciary_dispatch(name, args):
         if name == "get_rebalance":       return get_rebalance()
         if name == "get_risk_metrics":    return get_risk_metrics()
         if name == "get_retirement":      return get_retirement()
+        if name == "get_asset_location":  return _asset_location_view()
         if name == "get_plan_timeline":
             inp, notes = _timeline_inputs()
             if not inp["start_age"]:
