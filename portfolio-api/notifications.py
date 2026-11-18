@@ -35,6 +35,7 @@ mind, not a multi-tenant product with per-user email delivery. Push, by contrast
 per-user AND per-device (a household member's phone and laptop are two separate subscriptions),
 since that's a real per-browser browser API, not a shared setting.
 """
+import notices   # RV-T1 standard notice wording
 import os
 import json
 import time
@@ -458,6 +459,7 @@ def _dispatch(category, event_type, outcome, actor_name, resource, detail):
 
 
 def _dispatch_message(category, title, body):
+    body = notices.with_notice(body)             # RV-T1: the closing line travels with the message (push and e-mail)
     try:
         subs = _read_subs()
         prefs_all = _read_prefs()
@@ -496,14 +498,14 @@ def send_test(uid, is_admin):
         subs = _read_subs().get(uid, [])
         results["push_attempted"] = len(subs)
         for sub in subs:
-            if _send_push(sub, "Fiduciary test notification", "If you can see this, push is working."):
+            if _send_push(sub, "Fiduciary test notification", notices.with_notice("If you can see this, push is working.")):
                 results["push_sent"] += 1
             elif not results.get("push_error"):
                 e = last_push_error() or {}
                 results["push_error"] = f"{e.get('status') or 'error'}: {e.get('reason') or 'unknown'}"
     if is_admin and prefs.get("email") and smtp_configured():
         results["email_sent"] = _send_email("Test notification",
-                                             "If you received this, email notifications are working.")
+                                             notices.with_notice("If you received this, email notifications are working.", 1000))
     return results
 
 

@@ -58,6 +58,7 @@ import risk        # tail & co-movement suite (G4) — VaR/CVaR, correlation/eff
 import sizing      # position sizing & concentration action program (G7) — CVaR loss budget, staged sale
 import roth        # unified marginal-rate curve + Roth conversion ladder (G8) — brackets+LTCG+NIIT+ACA+IRMAA
 import plan_timeline  # year-by-year plan table assembled from the engines above (RV-032)
+import notices   # RV-T1 standard notice wording
 import household_report   # RV-T5 quarterly household report (pure composition of existing engines)
 import lifemap       # LIFE MAP: which life topics need attention at this stage (config-driven)
 import leverage    # asset-backed borrowing, ruin-model-first (G6) — margin-call sim + borrow-vs-sell
@@ -829,6 +830,7 @@ def _https_active():
 # trigger paid LLM calls and agentic tool actions, which reads more like a privileged action than
 # a plain data read; revisit if a real use case wants viewers to use chat (easy: add the path).
 _VIEWER_ALLOWED_WRITE_PATHS = {
+    "/api/ack",
     "/api/auth/logout", "/api/auth/change-password", "/api/auth/change-username",
     "/api/auth/mfa/setup", "/api/auth/mfa/verify", "/api/auth/mfa/disable",
     "/api/auth/recovery-key/regenerate", "/api/auth/reset-account",
@@ -1327,6 +1329,43 @@ async def auth_reset_account(request: Request):
     return {"ok": True}
 
 
+ACK_FILE = os.environ.get("ACK_FILE", "/data/acknowledgements.json")
+
+
+def _ack_read():
+    try:
+        d = store.read_json_strict(ACK_FILE) or {}
+    except Exception:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
+@app.get("/api/ack")
+def get_ack(request: Request):
+    """First-sign-in notice for NON-admin accounts (viewer, spouse, emergency contact), once per account. `required` is false for admins."""
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    if not user:
+        return JSONResponse({"error": "sign in required"}, status_code=401)
+    need = (not auth.is_admin(user)) and uid not in _ack_read()
+    return {"required": need, "title": notices.ACK_TITLE, "text": notices.ACK_TEXT}
+
+
+@app.post("/api/ack")
+def post_ack(request: Request):
+    """The signed-in account records that it has read the notice (self-service, like the other identity rows in the viewer write allowlist)."""
+    uid = request.session.get("uid")
+    user = auth.get_user_by_id(uid) if uid else None
+    if not user:
+        return JSONResponse({"error": "sign in required"}, status_code=401)
+    d = _ack_read()
+    if uid not in d:
+        d[uid] = {"at": int(time.time())}
+        store.write_json(ACK_FILE, d)
+        audit.emit("account.notice_acknowledged", request=request, actor=uid, resource="/api/ack", detail={})
+    return {"ok": True}
+
+
 @app.get("/api/auth/users")
 def auth_list_users(request: Request):
     """SEC-5 (2026-07-25) — admin-only household-accounts list, for SETTINGS → IAM →
@@ -1335,7 +1374,8 @@ def auth_list_users(request: Request):
     here via _require_admin instead."""
     if not _require_admin(request):
         return JSONResponse({"error": "admin only"}, status_code=403)
-    return {"users": auth.list_users()}
+    acks = _ack_read()
+    return {"users": [{**u, "acknowledged_at": (acks.get(u.get("id")) or {}).get("at")} for u in auth.list_users()]}
 
 
 @app.post("/api/auth/users")
@@ -1829,6 +1869,7 @@ def get_privacy_export(request: Request):
                        "financial data is not included — see compliance/ROPA.md.",
         "account": auth.public_user(user),
         "security_history": own_events,
+        "notice": notices.CLOSING,
     }
     audit.emit("data.exported", request=request, actor=uid, actor_name=username,
                resource="/api/privacy/export", detail={"event_count": len(own_events)})
@@ -6037,7 +6078,7 @@ def _earnings_calendar_rows():
     yesterday through +7 days — ONE day of lookback beyond what _earnings_this_week() shows, so
     an after-market-close print can still be detected the next morning (OPP-6). Callers that want
     the forward-only view should filter to date >= today themselves; see _earnings_this_week()."""
-    if not FINNHUB:
+    if not FINNHUB or demo_seed.DEMO_MODE:
         return []
     try:
         cache = store.read_json_strict(EARNINGS_CAL_FILE) or {}
@@ -6261,8 +6302,8 @@ def _alerts_digest():
         if r.get("over_budget"):
             add("warn", "Position sizing",
                 f"{r.get('ticker')} exceeds the single-name CVaR loss budget "
-                f"(at-risk {r.get('at_risk_pct_of_nw')}% of net worth; suggested trim "
-                f"${(r.get('suggested_trim') or 0):,.0f})", "insights.sizing")
+                f"(at-risk {r.get('at_risk_pct_of_nw')}% of net worth; about "
+                f"${(r.get('suggested_trim') or 0):,.0f} is above the budget)", "insights.sizing")
     # 3) Concentration + macro stress (G4 / exposure)
     ex = _read_exp() or {}
     for f in ((ex.get("concentration") or {}).get("flags") or []):
@@ -6585,6 +6626,8 @@ def _finnhub_open():
 
 
 def _do_market_data(limit=None, fetch=None):
+    if demo_seed.DEMO_MODE:
+        return "skipped"                        # the public demo shows sample data only
     """Market data (price, size, yield, beta, sector) for the stocks that pass a sleeve's SEC rules, in a tranche, behind the budget
     gate. Stops cleanly when Finnhub pauses (a paused call is deferred, never recorded as 'no data') or the 06:00 window closes;
     the next run resumes where this one stopped. Raises on setup problems so the job queue records an error."""
@@ -6675,6 +6718,8 @@ def _fetch_analyst(sym):
 
 
 def _do_signals(limit_analyst=None, limit_insider=None, limit_short=None, fetch_analyst=None, fetch_insider=None, fetch_short=None):
+    if demo_seed.DEMO_MODE:
+        return "skipped"
     """Signals (analyst ratings, insider buying, short interest) for the stocks that pass a sleeve's SEC rules, in tranches behind the
     Finnhub and SEC budget gates. A deferred or failed call is never recorded as 'no data'; the run stops when a gate pauses or the 06:00
     window closes, and the next run continues. Raises on setup problems so the job queue records an error."""
@@ -6874,6 +6919,8 @@ def _snapshot_sleeves(rows, today, sleeve_list=None, briefs=None):
 
 
 def _do_scout(limit=None, generate=None, facts_fn=None, spy_fn=None, price_fn=None, snapshot=True):
+    if demo_seed.DEMO_MODE:
+        return "skipped"
     """Scout notes for the few names that pass a sleeve completely, plus any the user asked for. One news search and one model call each,
     serialized on the GPU; Tavily is the 'scavenger' (background) source so it stays inside its daily soft budget. A paused search stops
     the run (the next run continues); a model answer that fails validation is discarded, never saved."""
@@ -6996,6 +7043,8 @@ _UNIVERSE_FORCE = {"on": False}
 
 def _do_universe():
     """Raises on failure (the job queue records "error"); "skipped" if already running. Only a successful screen moves ticker states."""
+    if demo_seed.DEMO_MODE:
+        return "skipped"
     if not _universe_lock.acquire(blocking=False):
         return "skipped"
     force, _UNIVERSE_FORCE["on"] = _UNIVERSE_FORCE["on"], False
@@ -7999,7 +8048,7 @@ def _finnhub_json(path, sym, extra=None, batch=False):
     {"error": "Please use an API key."} for auth problems rather than a 4xx, so a naive
     `status_code < 400` test reads an auth failure as success -- which would have poisoned this
     cache with empty values the moment it was introduced."""
-    if not FINNHUB:
+    if not FINNHUB or demo_seed.DEMO_MODE:      # the public demo never calls Finnhub (its free plan is for personal use): sample data only
         return None, False
     params = {"symbol": sym, "token": FINNHUB}
     if extra:
@@ -17425,7 +17474,7 @@ async def strategist_advise(req: Request):
 
 @app.get("/api/strategist/advise/status")
 def strategist_advise_status():
-    return _advice_state
+    return {**_advice_state, "notice": notices.PAPER}
 
 
 # ===========================================================================
