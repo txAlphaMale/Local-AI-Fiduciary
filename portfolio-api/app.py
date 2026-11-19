@@ -5589,6 +5589,28 @@ async def post_taxreturn_config(request: Request):
 _AL_BUCKET = {"taxable": "taxable", "deferred": "pretax", "roth": "roth", "hsa": "hsa"}
 
 
+def _al_yield(ticker, typ, brief, fund=None):
+    """-> (yield_pct, basis). In order: the dividend yield on the holding's research brief; for a stock whose latest SEC filing reports NO dividends paid,
+    0 (a non-payer is a known zero, not an unknown); for a payer without a feed yield, dividends paid over market value (an estimate, labelled). Otherwise
+    (None, None): unknown stays unknown. `fund` = the SEC fundamentals dict when the caller already has it."""
+    y = ((brief or {}).get("valuation") or {}).get("dividend_yield_pct")
+    if y is not None:
+        return y, "market-data feed (Finnhub) yield on the research brief"
+    if typ not in ("Stock", "Equity", "Common Stock"):
+        return None, None
+    f = fund if fund is not None else ((brief or {}).get("fundamentals") or {})
+    m = (f or {}).get("metrics") or {}
+    if "dividends_paid" not in m:
+        return None, None                                            # an older cached read without the field: unknown until it refreshes
+    paid = m.get("dividends_paid")
+    if not paid:
+        return 0.0, "no dividends paid in the latest SEC filing"
+    cap = ((brief or {}).get("valuation") or {}).get("market_cap_musd")
+    if cap:
+        return round(abs(paid) / (cap * 1e6) * 100, 2), "estimate: dividends paid in the latest SEC filing divided by market value"
+    return None, None
+
+
 def _asset_location_view():
     """PLAN > ASSET LOCATION: the holdings grid (security x account type), tax character from data the app already holds, the yearly tax drag of the
     current placement, and one stated-rule comparison. No new data provider; rates are the ones the tax panel uses (income = the annual-expenses figure)."""
@@ -5615,8 +5637,16 @@ def _asset_location_view():
             if not t or typ == "Cash":
                 continue
             is_fund = typ in ("ETF", "Mutual Fund")
+            brief = briefs.get(t) or {}
+            fund = None
+            if typ in ("Stock", "Equity", "Common Stock") and "dividends_paid" not in ((brief.get("fundamentals") or {}).get("metrics") or {}):
+                try:                                       # the brief was written before the field existed: read the (cached) SEC fundamentals once
+                    fund = edgar.fundamentals(t)
+                except Exception:
+                    fund = None
+            yld, ybasis = _al_yield(t, typ, brief, fund)
             lines.append({"ticker": t, "name": h.get("name"), "bucket": b, "value": h.get("value"), "gain": h.get("gain"),
-                          "yield_pct": ((briefs.get(t) or {}).get("valuation") or {}).get("dividend_yield_pct"), "type": typ,
+                          "yield_pct": yld, "yield_basis": ybasis, "type": typ,
                           "mix": ((_fund_mix(t) or {}).get("mix") if is_fund else None), "industry": sectors.get(t),
                           "is_stock": typ in ("Stock", "Equity", "Common Stock")})
     bal = _balances_by_tax_status()
@@ -5629,7 +5659,11 @@ def _asset_location_view():
                             "yield": "dividend yield from each holding's research brief (blank = unknown)",
                             "character": "the fund's own class mix (SEC N-PORT), security type and industry label already on file",
                             "bucket_totals": "the same account-type totals the ACA bridge panel uses (securities plus balance-only accounts)"},
-                "notice": notices.ESTIMATE})
+                "notice": notices.ESTIMATE,
+                "how_to_answer": ("Answer from these figures only. Say where the holding sits now (the grid), its tax character and yield as listed (a blank yield is unknown, never a guess), "
+                                  "the estimated yearly tax on its taxable income, and, when comparison.status is 'ready', the stated rules and the difference they produce with the "
+                                  "cost of moving (gain and sale tax). When it is 'withheld', say so and give the reason shown. Describe, never instruct: do not tell the user to buy, sell or move anything. "
+                                  "End by pointing the user to PLAN > ASSET LOCATION for the full grid.")})
     return res
 
 
@@ -8547,7 +8581,8 @@ def _valuation(sym, with_meta=False):
             "pe_forward": m.get("peNTM") or m.get("forwardPE"),
             "pb": m.get("pbAnnual") or m.get("pbQuarterly"),
             "ps_ttm": m.get("psTTM"),
-            "dividend_yield_pct": m.get("dividendYieldIndicatedAnnual") or m.get("currentDividendYieldTTM"),
+            # a real 0 (a non-payer) must stay 0, not become 'unknown': take the first figure that is not None
+            "dividend_yield_pct": next((x for x in (m.get("dividendYieldIndicatedAnnual"), m.get("currentDividendYieldTTM")) if x is not None), None),
             "beta": m.get("beta"),
             "market_cap_musd": m.get("marketCapitalization"),
             "avg_volume_10d_m": m.get("10DayAverageTradingVolume"),    # millions of shares/day
@@ -18126,8 +18161,9 @@ FIDUCIARY_TOOLS = [
         "parameters": {"type": "object", "properties": {"years": {"type": "integer", "description": "Years from now to show, 1 to 70. Default 10."}}}}},
     {"type": "function", "function": {"name": "get_asset_location",
         "description": "Asset location: which holding sits in which kind of account (taxable / pre-tax / Roth / HSA), each holding's tax character, the "
-                       "estimated yearly tax drag of the current placement, and one rule-of-thumb comparison with what moving would cost in tax. "
-                       "Informational arithmetic only: report the figures and the stated rules, never tell the user to buy or sell.",
+                       "estimated yearly tax drag of the current placement, and one rule-of-thumb comparison with what moving would cost in tax. Use it for questions "
+                       "like 'where should I hold my bond fund?', 'which account is best for this holding?', 'is my tax placement efficient?' or 'what does asset "
+                       "location say?'. Informational arithmetic only: report the figures and the stated rules, never tell the user to buy or sell.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_income_plan",
         "description": "Income glide path: coverage of target income by year and the shift schedule.",

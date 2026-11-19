@@ -1201,6 +1201,7 @@ def _metrics_from_facts(ticker, cik, facts):
         "fiscal_year_end": fy_end,
         "period_mismatch": sorted(set(mismatch)),
         "revenue": rev,
+        "dividends_paid": div_paid,                              # cash dividends paid in the fiscal year: None/0 means the filing reports none (asset-location yield)
         "revenue_growth_pct": _pct(rev - rev_prev, rev_prev) if (rev is not None and rev_prev) else None,
         "net_income": ni,
         "operating_cash_flow": ocf,
