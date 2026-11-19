@@ -20,6 +20,12 @@ NEAR_TOL = 8.0                                  # an amount whose baseline sits 
 _NUM = re.compile(r"^\(?-?\$?\d[\d,]*(?:\.\d{0,2})?\)?-?$")
 _MARK = re.compile(r"^\d{1,2}[a-z]?$")
 _FOOT = re.compile(r"Form\s+1040\s*\((20\d\d)\)(?:\s+Page\s+(\d))?", re.I)
+# printed footers of the other forms: (year, optional page number). Page 1 when no 'Page n' is printed.
+_FORM_FOOTERS = {"schedule_d": re.compile(r"Schedule\s+D\s*\(Form\s+1040\)\s*(20\d\d)(?:\s+Page\s+(\d))?", re.I),
+                 "8606": re.compile(r"Form\s+8606\s*\((20\d\d)\)(?:\s+Page\s+(\d))?", re.I),
+                 "8889": re.compile(r"Form\s+8889\s*\((20\d\d)\)(?:\s+Page\s+(\d))?", re.I),
+                 "8962": re.compile(r"Form\s+8962\s*\((20\d\d)\)(?:\s+Page\s+(\d))?", re.I)}
+_FORM_NAMES = {"1040": "Form 1040", "8959": "Form 8959", "schedule_d": "Schedule D", "8606": "Form 8606", "8889": "Form 8889", "8962": "Form 8962"}
 STATUS_LABELS = (("single", "Single"), ("married filing jointly", "Married filing jointly"), ("married filing separately", "Married filing separately"),
                  ("head of household", "Head of household"), ("qualifying surviving spouse", "Qualifying surviving spouse"))
 
@@ -107,8 +113,9 @@ def _rows(frags):
 
 
 def classify_pages(pages):
-    """-> {'1040': {1: page_index, 2: page_index}, '8959': page_index|None, 'year': int|None}. From the printed form footers and headings."""
-    out = {"1040": {}, "8959": None, "year": None}
+    """-> {'year', 'forms': {form: {page_no: page_index}}, 'copies': {form: number of copies seen}, '1040': ..., '8959': ...}. From the printed form footers and
+    headings. When a form appears more than once (Form 8606 is filed per person) the FIRST copy is read and `copies` says how many there were."""
+    out = {"1040": {}, "8959": None, "year": None, "forms": {}, "copies": {}}
     for i, frags in enumerate(pages):
         text = " ".join(t for t, _x, _y in frags)
         m = _FOOT.search(text)
@@ -118,40 +125,71 @@ def classify_pages(pages):
             out["1040"].setdefault(pg, i)
         if re.search(r"Form\s+8959", text) and re.search(r"Additional\s+Medicare\s+Tax", text, re.I) and out["8959"] is None:
             out["8959"] = i
+        for form, rx in _FORM_FOOTERS.items():
+            fm = rx.search(text)
+            if fm:
+                pg = int(fm.group(2)) if fm.group(2) else (2 if re.search(r"\bPage\s+2\b", text) else 1)
+                got = out["forms"].setdefault(form, {})
+                if pg in got:
+                    if pg == 1:
+                        out["copies"][form] = out["copies"].get(form, 1) + 1
+                else:
+                    got.setdefault(pg, i)
+                    if pg == 1:
+                        out["copies"].setdefault(form, 1)
+    if out["8959"] is not None:
+        out["forms"]["8959"] = {1: out["8959"]}
+    out["forms"]["1040"] = dict(out["1040"])
     return out
+
+
+def _locate(frags, line, label):
+    """-> (y, row) of the row that carries the line's BOX MARKER and whose label is on the same row or on one of the two rows directly above it (long
+    labels wrap, with the marker on the last row); None when there is no such row."""
+    rows = _rows(frags)
+    want = _compact(label)
+    texts = [_compact(" ".join(t for t, _x in r)) for _y, r in rows]
+    for i, (y, row) in enumerate(rows):
+        if not any(t == line for t, _x in row):
+            continue
+        if want in texts[i]:
+            return y, row
+        above = [texts[j] for j in range(max(0, i - 2), i) if 0 < rows[j][0] - y <= 36]
+        if above and want in " ".join(above + [texts[i]]):
+            return y, row
+    return None
 
 
 def _find(frags, line, label, ids):
     """-> (status, value, reason). Looks for the box marker `line` on a row that also carries `label`, and reads the nearest amount to its right.
     `ids` = every line number the map knows on this page: another marker to the right of ours means our line is blank. When the row holds no amount,
     an amount within NEAR_TOL points above or below the row (a baseline that sits slightly off) to the right of the marker is taken instead."""
-    want = _compact(label)
-    for y, row in _rows(frags):
-        rowtext = _compact(" ".join(t for t, _x in row))
-        if want not in rowtext:
-            continue
-        marks = [i for i, (t, _x) in enumerate(row) if t == line]
-        for i in reversed(marks):                                  # the box marker is the right-most occurrence
-            mx = row[i][1]
-            for t, _x in row[i + 1:]:
-                if t in ids and t != line and not re.search(r"[,.]", t):
-                    break                                          # the next line's marker: this line is blank
-                if _NUM.match(t.replace(" ", "")):
-                    v = _to_amount(t)
-                    if v is None:
-                        return "unreliable", None, "a number that looks like an identification number was found there and was not read"
-                    return "ok", v, None
-            else:
-                near = sorted(((abs(fy - y), fx, ft) for ft, fx, fy in frags if fx > mx and 0 < abs(fy - y) <= NEAR_TOL and _NUM.match(ft.replace(" ", "")) and ft not in ids),
-                              key=lambda c: (c[0], c[1]))
-                nxt = [x for t, x in row[i + 1:] if t in ids and t != line]
-                if near and not nxt:
-                    v = _to_amount(near[0][2])
-                    if v is None:
-                        return "unreliable", None, "a number that looks like an identification number was found there and was not read"
-                    return "ok", v, None
-            return "blank", 0.0, "the line is blank on the return (counted as 0)"
-    return "missing", None, "the line and its label were not found on this page (a different form revision?)"
+    hit = _locate(frags, line, label)
+    if hit is None:
+        return "missing", None, "the line and its label were not found on this page (a different form revision?)"
+    y, row = hit
+    marks = [i for i, (t, _x) in enumerate(row) if t == line]
+    for i in reversed(marks):                                      # the box marker is the right-most occurrence
+        mx = row[i][1]
+        for t, _x in row[i + 1:]:
+            if t in ids and t != line and not re.search(r"[,.]", t):
+                break                                              # the next line's marker: this line is blank
+            if _NUM.match(t.replace(" ", "")):
+                v = _to_amount(t)
+                if v is None:
+                    return "unreliable", None, "a number that looks like an identification number was found there and was not read"
+                return "ok", v, None
+        else:
+            near = sorted(((abs(fy - y), fx, ft) for ft, fx, fy in frags if fx > mx and 0 < abs(fy - y) <= NEAR_TOL and _NUM.match(ft.replace(" ", "")) and ft not in ids),
+                          key=lambda c: (c[0], c[1]))
+            nxt = [x for t, x in row[i + 1:] if t in ids and t != line]
+            if near and not nxt:
+                v = _to_amount(near[0][2])
+                if v is None:
+                    return "unreliable", None, "a number that looks like an identification number was found there and was not read"
+                return "ok", v, None
+        return "blank", 0.0, "the line is blank on the return (counted as 0)"
+    return "blank", 0.0, "the line is blank on the return (counted as 0)"
 
 
 def _filing_status(frags):
@@ -178,6 +216,25 @@ def _over(v):
     return (d - v["overpaid"]) if d > 0 else v["overpaid"]
 
 
+def _sched_d_sum(v):
+    return v["net_short_term"] + v["net_long_term"] - v["net_capital_gain"]
+
+
+def _sched_d_to_1040(v):
+    """Schedule D line 16 flows to Form 1040 (line 7 / 7a); a net loss is limited to $3,000 ($1,500 if married filing separately)."""
+    g, cg = v["net_capital_gain"], v["capital_gain"]
+    if g >= 0:
+        return cg - g
+    if cg in (-1500.0, -3000.0) and g <= cg:
+        return 0.0
+    return cg - max(g, -3000.0)
+
+
+def _ptc(v):
+    d = v["ptc_total"] - v["ptc_advance"]
+    return (v["ptc_net"] - d) if d > 0 else ((v["ptc_excess_advance"] - (-d)) if d < 0 else (v["ptc_net"] + v["ptc_excess_advance"]))
+
+
 # (name, the fields it needs, difference in dollars: 0 when the figures add up)
 CHECKS = [
     ("total income - adjustments = AGI", ("total_income", "adjustments", "agi"), lambda v: v["total_income"] - v["adjustments"] - v["agi"]),
@@ -186,6 +243,9 @@ CHECKS = [
     ("AGI - total deductions = taxable income (not below zero)", ("agi", "total_deductions", "taxable_income"), lambda v: max(0.0, v["agi"] - v["total_deductions"]) - v["taxable_income"]),
     ("amount owed = total tax - total payments", ("total_tax", "total_payments", "amount_owed"), _owed),
     ("amount overpaid = total payments - total tax", ("total_tax", "total_payments", "overpaid"), _over),
+    ("Schedule D: net short-term + net long-term = line 16", ("net_short_term", "net_long_term", "net_capital_gain"), _sched_d_sum),
+    ("Schedule D line 16 = capital gain or loss on Form 1040", ("net_capital_gain", "capital_gain"), _sched_d_to_1040),
+    ("Form 8962: net or excess advance credit = total credit - advance payments", ("ptc_total", "ptc_advance", "ptc_net", "ptc_excess_advance"), _ptc),
 ]
 
 
@@ -216,25 +276,22 @@ def extract(pages, year=None, maps=None):
         raise ValueError(f"No line map for tax year {y}. Supported years: {', '.join(sorted(maps['years']))}. Line numbers move between years, so an unmapped year is refused.")
     ymap = maps["years"][y]
     fields, values = [], {}
-    ids_by_page = {}
-    for ln in ymap["forms"]["1040"]["lines"]:
-        ids_by_page.setdefault(ln["page"], set()).add(ln["line"])
+    absent_why = {"8959": "Form 8959 is not in this PDF (it is only filed with Additional Medicare Tax)"}
     for form, spec in ymap["forms"].items():
+        ids_by_page = {}
         for ln in spec["lines"]:
-            if form == "1040":
-                idx = info["1040"].get(ln["page"])
-                if idx is None:
-                    st, val, why, pg = "missing", None, f"page {ln['page']} of the Form 1040 was not found", None
+            ids_by_page.setdefault(ln["page"], set()).add(ln["line"])
+        for ln in spec["lines"]:
+            idx = info["forms"].get(form, {}).get(ln["page"])
+            if idx is None:
+                if form == "1040":
+                    st, why = "missing", f"page {ln['page']} of the Form 1040 was not found"
                 else:
-                    st, val, why = _find(pages[idx], ln["line"], ln["label"], ids_by_page[ln["page"]])
-                    pg = idx + 1
+                    st, why = "absent", absent_why.get(form, f"this PDF has no {_FORM_NAMES.get(form, form)}: it is only filed when it applies")
+                val, pg = None, None
             else:
-                idx = info["8959"]
-                if idx is None:
-                    st, val, why, pg = "absent", None, "Form 8959 is not in this PDF (it is only filed with Additional Medicare Tax)", None
-                else:
-                    st, val, why = _find(pages[idx], ln["line"], ln["label"], set())
-                    pg = idx + 1
+                st, val, why = _find(pages[idx], ln["line"], ln["label"], ids_by_page.get(ln["page"], set()))
+                pg = idx + 1
             fields.append({"field": ln["field"], "form": form, "line": ln["line"], "label": ln["label"], "page": pg, "value": val, "status": st, "reason": why})
             values[ln["field"]] = val
     checks = run_checks(values)
@@ -247,8 +304,9 @@ def extract(pages, year=None, maps=None):
                     f["status"] = "unreliable"
                     f["reason"] = f"could not be read reliably: the check '{c['name']}' is off by {c['difference']:,.2f}"
     status = _filing_status(pages[info["1040"][1]]) if 1 in info["1040"] else None
-    return {"year": int(y), "filing_status": status, "fields": fields, "checks": checks, "source": ymap["source"],
-            "pages_read": {"1040": {k: v + 1 for k, v in info["1040"].items()}, "8959": (info["8959"] + 1) if info["8959"] is not None else None}}
+    notes = [f"{_FORM_NAMES.get(f, f)} appears {n} times in this PDF (one per person?). Only the first copy was read; check it against the others." for f, n in sorted(info["copies"].items()) if n > 1]
+    return {"year": int(y), "filing_status": status, "fields": fields, "checks": checks, "source": ymap["source"], "notes": notes,
+            "pages_read": {f: {k: v + 1 for k, v in pg.items()} for f, pg in info["forms"].items()}}
 
 
 def summary(values):
@@ -258,7 +316,12 @@ def summary(values):
     return {"agi": agi, "taxable_income": v.get("taxable_income"), "total_tax": tt,
             "effective_rate_pct": round(tt / agi * 100, 1) if (agi and tt is not None and agi > 0) else None,
             "capital_gain": v.get("capital_gain"), "ordinary_dividends": v.get("ordinary_dividends"), "qualified_dividends": v.get("qualified_dividends"),
-            "additional_medicare_tax": v.get("additional_medicare_tax"), "wages": v.get("wages")}
+            "additional_medicare_tax": v.get("additional_medicare_tax"), "wages": v.get("wages"),
+            "net_long_term": v.get("net_long_term"), "net_short_term": v.get("net_short_term"),
+            "capital_loss_carryover_in": (None if (v.get("st_loss_carryover_in") is None and v.get("lt_loss_carryover_in") is None)
+                                          else abs(v.get("st_loss_carryover_in") or 0) + abs(v.get("lt_loss_carryover_in") or 0)),
+            "roth_conversion_taxable": v.get("conversion_taxable"), "roth_conversion_amount": v.get("conversion_amount") if v.get("conversion_amount") is not None else v.get("conversion_part1"),
+            "hsa_deduction": v.get("hsa_deduction"), "hsa_contributions": v.get("hsa_contributions"), "aca_repayment": v.get("ptc_repayment")}
 
 
 def diagnose(pages):
@@ -279,29 +342,24 @@ def diagnose(pages):
 def diagnose_lines(pages, year, maps=None):
     maps = maps or load_maps()
     info = classify_pages(pages)
-    ymap = (maps["years"].get(str(year or info["year"])) or {}).get("forms", {}).get("1040")
-    if not ymap:
-        return []
-    ids_by_page = {}
-    for ln in ymap["lines"]:
-        ids_by_page.setdefault(ln["page"], set()).add(ln["line"])
+    ym = (maps["years"].get(str(year or info["year"])) or {}).get("forms", {})
     out = []
-    for ln in ymap["lines"]:
-        idx = info["1040"].get(ln["page"])
-        if idx is None:
-            out.append({"line": ln["line"], "found": False}); continue
-        frags = pages[idx]
-        want = _compact(ln["label"])
-        row_hit = None
-        for y, row in _rows(frags):
-            if want in _compact(" ".join(t for t, _x in row)) and any(t == ln["line"] for t, _x in row):
-                row_hit = (y, row); break
-        if not row_hit:
-            out.append({"line": ln["line"], "found": False}); continue
-        y, row = row_hit
-        mx = max(x for t, x in row if t == ln["line"])
-        same = [t for t, x in row if x > mx and _NUM.match(t.replace(" ", ""))]
-        near = sorted((round(abs(fy - y), 1) for ft, fx, fy in frags if fx > mx and _NUM.match(ft.replace(" ", ""))))
-        out.append({"line": ln["line"], "found": True, "amount_on_row": bool(same), "nearest_amount_right_dy": near[0] if near else None,
-                    "row_texts_right_of_marker": len([1 for t, x in row if x > mx])})
+    for form, spec in ym.items():
+        ids_by_page = {}
+        for ln in spec["lines"]:
+            ids_by_page.setdefault(ln["page"], set()).add(ln["line"])
+        for ln in spec["lines"]:
+            idx = info["forms"].get(form, {}).get(ln["page"])
+            if idx is None:
+                out.append({"form": form, "line": ln["line"], "found": False, "why": "form page not in this PDF"}); continue
+            frags = pages[idx]
+            row_hit = _locate(frags, ln["line"], ln["label"])
+            if not row_hit:
+                out.append({"form": form, "line": ln["line"], "found": False, "why": "marker and label not found together"}); continue
+            y, row = row_hit
+            mx = max(x for t, x in row if t == ln["line"])
+            same = [t for t, x in row if x > mx and _NUM.match(t.replace(" ", ""))]
+            near = sorted((round(abs(fy - y), 1) for ft, fx, fy in frags if fx > mx and _NUM.match(ft.replace(" ", ""))))
+            out.append({"form": form, "line": ln["line"], "found": True, "amount_on_row": bool(same), "nearest_amount_right_dy": near[0] if near else None,
+                        "row_texts_right_of_marker": len([1 for t, x in row if x > mx])})
     return out
