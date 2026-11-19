@@ -12,6 +12,8 @@ the four bucket totals the bridge panel uses, and the user's marginal rates from
 Informational arithmetic. Never an instruction to buy or sell.
 """
 
+import re
+
 BUCKETS = ("taxable", "pretax", "roth", "hsa")
 UNKNOWN_SHARE_LIMIT = 0.25            # more than this share of taxable value with unknown character: the comparison is withheld
 
@@ -209,3 +211,50 @@ def _cautions(loss_tickers):
         c.append("Holdings that would be sold at a loss, where the wash-sale rule matters: " + ", ".join(sorted(set(loss_tickers))) + ".")
     c.append("Informational arithmetic from the app's own figures, not tax advice. Confirm with a CPA.")
     return c
+
+
+def facts_text(view, question=""):
+    """The app's own plain-text account of get_asset_location's result, printed before any model commentary (the model never rewrites a figure).
+    Holdings the question names come first; with none named, every holding with a balance is listed. '' when the view is unusable."""
+    if not isinstance(view, dict) or not view.get("rows"):
+        return ""
+    m = lambda v: "unknown" if v is None else ("-$" if v < 0 else "$") + format(abs(round(v)), ",")
+    q = str(question or "").upper()
+    rows = view["rows"]
+    named = [r for r in rows if re.search(r"(?<![A-Z0-9])" + re.escape(str(r["ticker"]).upper()) + r"(?![A-Z0-9])", q)]
+    shown = named or rows
+    cmp_ = view.get("comparison") or {}
+    rule_vals = {r["ticker"]: r["values"] for r in (cmp_.get("rows") or [])} if cmp_.get("status") == "ready" else {}
+    L = ["**From the app's asset-location data (copied by the app; the figures never pass through the model):**"]
+    L.append("Where each holding sits now (taxable / pre-tax / Roth / HSA), its tax character, yield and yearly tax on its taxable income:")
+    for r in shown[:40]:
+        v = r["values"]
+        y = "yield unknown" if r.get("yield_pct") is None else f"yield {r['yield_pct']:g}%"
+        line = f"- **{r['ticker']}**: {m(v['taxable'])} / {m(v['pretax'])} / {m(v['roth'])} / {m(v['hsa'])} · {r.get('character')} · {y} · yearly tax {m(r.get('yearly_drag'))} · growth class {r.get('growth_class')}"
+        if r["ticker"] in rule_vals:
+            line += f" · Roth under the rule {m(rule_vals[r['ticker']]['roth'])}"
+        L.append(line)
+    L.append("The rules the comparison uses: " + " ".join(f"({i + 1}) {x}" for i, x in enumerate(cmp_.get("rules") or [])))
+    if cmp_.get("status") == "ready":
+        L.append(f"Yearly tax on income held in taxable accounts: {m(cmp_.get('yearly_drag_now'))} now, {m(cmp_.get('yearly_drag_after'))} under the rule (difference {m(cmp_.get('yearly_difference'))}). "
+                 f"Account sizes unchanged: {'yes' if cmp_.get('column_totals_unchanged') else 'NO'}.")
+        if cmp_.get("all_known_yields_zero"):
+            L.append("Every known yield is 0, so there is no taxable income to move and the yearly difference is $0.")
+        if cmp_.get("growth_measure"):
+            L.append("Growth measure: " + cmp_["growth_measure"] + (" Not separated by it: " + ", ".join(cmp_["growth_ties"]) + "." if cmp_.get("growth_ties") else ""))
+        sl = cmp_.get("sale") or {}
+        L.append(f"Cost of moving the taxable parts: gain {m(sl.get('gain_realized'))}, tax if sold {m(sl.get('tax_if_sold'))}.")
+    elif cmp_.get("status") == "withheld":
+        L.append("Comparison withheld: " + str(cmp_.get("reason")))
+    dg = view.get("drag") or {}
+    L.append(f"Unknown: {m(dg.get('taxable_value_unknown'))} of taxable holdings ({round((dg.get('unknown_share') or 0) * 100)}%) has an unknown yield or tax character and is left where it is.")
+    L.append("Full grid: PLAN > ASSET LOCATION.")
+    return "\n".join(L)
+
+
+COMMENTARY_RULE = (
+    "The app will print the asset-location figures itself, word for word, with your answer. So write ONLY a short commentary (at most 4 sentences) that "
+    "answers the question using ONLY the printed facts: the growth measure, the tie, the yields, the stated rules. Do not repeat the figures. "
+    "Check the question's premise against the printed facts: if it assumes something they do not show (for example that one holding gets less Roth "
+    "than another), say the facts do not show that and say what they do show. Never give reasons the facts do not state (no income-limit, MAGI, step-up or "
+    "estate reasons). Give NO instruction to buy, sell or move anything.")
