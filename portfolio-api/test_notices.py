@@ -76,6 +76,16 @@ class Surface2Describe(unittest.TestCase):
             self.assertNotRegex(m.group(0), r"(?i)\bsuggested trim\b|\bsell\b|\bbuy\b|\btrim\b")
 
 
+class AckHandler(unittest.TestCase):
+    """RETEST-044: the acknowledgment screen must not close on a failed save, must say so, and must never stack."""
+    def test_the_screen_closes_only_when_the_server_confirms_and_never_stacks(self):
+        body = HTML[HTML.index("function ackCheck(){"):HTML.index("\nfunction ", HTML.index("function ackCheck(){") + 20)]
+        self.assertIn("j.ok===true", body)                                              # closes only on a confirmed save
+        self.assertIn("ok.disabled=false; msg.textContent=", body)                      # a failure re-enables the button and says so
+        self.assertEqual(body.count("document.getElementById('ack-overlay')"), 2)        # checked before and after the fetch: no second screen
+        self.assertNotIn(".then(()=>ov.remove())", body)                                # the old unconditional close is gone
+
+
 class Surfaces3to5and7(unittest.TestCase):
     def test_conviction_cells_and_note_header_carry_the_lead_wording(self):
         self.assertIn("N_LEAD+' '+(b.thesis||'')", HTML)                         # sleeve table cell tooltip
