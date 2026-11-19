@@ -225,7 +225,11 @@ def facts_text(view, question=""):
     shown = named or rows
     cmp_ = view.get("comparison") or {}
     rule_vals = {r["ticker"]: r["values"] for r in (cmp_.get("rows") or [])} if cmp_.get("status") == "ready" else {}
-    L = ["**From the app's asset-location data (copied by the app; the figures never pass through the model):**"]
+    L = []
+    da = direct_answer(view, question)
+    if da:
+        L.append(da + "\n")
+    L.append("**From the app's asset-location data (copied by the app; the figures never pass through the model):**")
     L.append("Where each holding sits now (taxable / pre-tax / Roth / HSA), its tax character, yield and yearly tax on its taxable income:")
     for r in shown[:40]:
         v = r["values"]
@@ -258,3 +262,39 @@ COMMENTARY_RULE = (
     "Check the question's premise against the printed facts: if it assumes something they do not show (for example that one holding gets less Roth "
     "than another), say the facts do not show that and say what they do show. Never give reasons the facts do not state (no income-limit, MAGI, step-up or "
     "estate reasons). Give NO instruction to buy, sell or move anything.")
+
+
+def settles(view, question=""):
+    """True when the question names two or more holdings and asks about their Roth space: the app's own figures answer it, so no model comment is added."""
+    if not isinstance(view, dict) or (view.get("comparison") or {}).get("status") != "ready":
+        return False
+    q = str(question or "").upper()
+    named = [r for r in view.get("rows") or [] if re.search(r"(?<![A-Z0-9])" + re.escape(str(r["ticker"]).upper()) + r"(?![A-Z0-9])", q)]
+    return len(named) >= 2 and "ROTH" in q
+
+
+def direct_answer(view, question=""):
+    """The app's plain answer to 'why does X get less/more Roth than Y', from the figures only. '' unless settles()."""
+    if not settles(view, question):
+        return ""
+    q = str(question or "").upper()
+    rule = {r["ticker"]: r["values"] for r in view["comparison"]["rows"]}
+    named = [r for r in view["rows"] if re.search(r"(?<![A-Z0-9])" + re.escape(str(r["ticker"]).upper()) + r"(?![A-Z0-9])", q)]
+    m = lambda v: "$" + format(round(v), ",")
+    lines = []
+    for r in named:
+        now, aft = r["values"]["roth"], rule[r["ticker"]]["roth"]
+        word = "more" if aft > now + 0.5 else ("less" if aft < now - 0.5 else "the same")
+        lines.append(f"- **{r['ticker']}**: Roth now {m(now)}, under the rule {m(aft)} ({word} Roth).")
+    same_class = len({r.get("growth_class") for r in named}) == 1
+    same_yield = len({r.get("yield_pct") for r in named}) == 1
+    why = ""
+    if same_class and same_yield:
+        why = (f"These holdings are in the same growth class ({named[0].get('growth_class')}) with the same yield, so the rule's growth ranking cannot separate them. "
+               "Ties go to the holding that already has the larger share of itself in Roth, then to ticker order. The growth class is a rank, not a forecast of any one company.")
+    elif same_class:
+        why = f"Same growth class ({named[0].get('growth_class')}); the tie goes to the higher yield, then to what already sits in Roth."
+    else:
+        why = "The holdings are in different growth classes; the higher class goes to Roth first."
+    return ("**Answer from the app's figures (no model involved):**\n" + "\n".join(lines) + "\n" + why +
+            " Whatever the question assumed beyond these figures is not shown by the data. This is arithmetic from one rule of thumb, not advice.")
