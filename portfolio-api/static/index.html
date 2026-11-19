@@ -1318,6 +1318,8 @@ function alocContent(){
   if(c.status==='withheld'){ wrap.appendChild(el('div','neg',escHtml(c.reason||'The comparison is withheld.'))); }
   else if(c.status==='ready'){
     wrap.appendChild(el('div',null,'Yearly tax on income held in taxable accounts: <b>'+m(c.yearly_drag_now)+'</b> now, <b>'+m(c.yearly_drag_after)+'</b> under this placement (difference '+m(c.yearly_difference)+'). Account sizes are unchanged: '+(c.column_totals_unchanged?'yes':'NO')+'.'));
+    if(c.all_known_yields_zero) wrap.appendChild(el('div','muted','Every known yield is 0, so there is no taxable income to move and the yearly difference is $0. The rows below only show where the rule would put each holding.'));
+    if(c.growth_measure) wrap.appendChild(el('div','muted','Growth measure: '+escHtml(c.growth_measure)+((c.growth_ties||[]).length?' Not separated by it: '+c.growth_ties.map(escHtml).join(', ')+'.':'')));
     const sc2=el('div'); sc2.style.cssText='max-width:100%;overflow-x:auto;margin-top:6px;'; const t2=el('table'); t2.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);min-width:520px;';
     t2.innerHTML='<tr><th class="l">HOLDING</th>'+B.map(b=>'<th>'+BL[b]+' under the rule</th>').join('')+'<th>GAIN IF THE TAXABLE PART MOVES</th></tr>';
     const mv={}; (c.moves||[]).forEach(x=>{ mv[x.ticker]=x; });

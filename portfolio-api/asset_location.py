@@ -17,7 +17,7 @@ UNKNOWN_SHARE_LIMIT = 0.25            # more than this share of taxable value wi
 
 RULES = [
     "Income taxed as ordinary income (interest, bond and REIT distributions) goes to pre-tax accounts first, highest yield first.",
-    "Holdings with the highest expected growth go to Roth accounts first.",
+    "Holdings in the highest growth class go to Roth accounts first (the class is a rank from the fund's equity share or the security type, not a forecast of any one company; ties go to the higher yield, then to whatever already sits in Roth, then ticker order).",
     "Low-yield, mostly qualified-dividend equity stays in taxable accounts.",
     "The HSA is left exactly as it is (it is a medical reserve first).",
     "Account sizes are fixed: this only swaps WHAT is held WHERE; it never moves money between account types.",
@@ -110,7 +110,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
     unknown_share = (cur_unknown / taxable_val) if taxable_val else 0.0
     out = {"rows": [{"ticker": r["ticker"], "name": r["name"], "values": {k: _r(v) for k, v in r["values"].items()}, "total": _r(r["total"]),
                      "yield_pct": r["yield_pct"], "yield_basis": r.get("yield_basis"), "character": r["char"]["kind"], "ordinary_share": r["char"]["ordinary_share"],
-                     "character_basis": r["char"]["basis"],
+                     "character_basis": r["char"]["basis"], "growth_class": r["char"]["growth_rank"],
                      "yearly_drag": _r(r["values"]["taxable"] * r["drag_per_dollar"]) if (r["drag_per_dollar"] is not None and r["values"]["taxable"] > 0) else None}
                     for r in rows],
            "column_totals": column_totals, "other_balances_not_itemised": other,
@@ -136,7 +136,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
         if known:
             mv = sum(r["values"][k] for k in ("taxable", "pretax", "roth"))
             if mv > 0:
-                mov.append({"t": r["ticker"], "v": mv, "ord_y": (r["yield_pct"] / 100.0) * r["char"]["ordinary_share"], "y": r["yield_pct"] / 100.0, "g": r["char"]["growth_rank"]})
+                mov.append({"t": r["ticker"], "v": mv, "ord_y": (r["yield_pct"] / 100.0) * r["char"]["ordinary_share"], "y": r["yield_pct"] / 100.0, "g": r["char"]["growth_rank"], "roth_now": r["values"]["roth"] / mv})
     cap = {k: max(0.0, sum(r["values"][k] for r in rows) - fixed[k]) for k in ("taxable", "pretax", "roth")}
     prop = {r["ticker"]: {k: (r["values"][k] if (k == "hsa" or r["drag_per_dollar"] is None) else 0.0) for k in BUCKETS} for r in rows}
     left = {m["t"]: m["v"] for m in mov}
@@ -154,7 +154,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
             room -= take
         return limit - room
     used_pre = place(lambda m: (-m["ord_y"], m["t"]), "pretax", cap["pretax"], only=lambda m: m["ord_y"] > 0)    # only real ordinary-income producers get priority
-    used_roth = place(lambda m: (-m["g"], -m["y"], m["t"]), "roth", cap["roth"])          # equal growth: the higher yield gains more from the shelter
+    used_roth = place(lambda m: (-m["g"], -m["y"], -m["roth_now"], m["t"]), "roth", cap["roth"])          # equal growth: the higher yield gains more from the shelter
     place(lambda m: (m["y"], m["t"]), "taxable", cap["taxable"])
     place(lambda m: (-m["ord_y"], m["t"]), "pretax", cap["pretax"] - used_pre)                                   # whatever room is left takes what is left
     place(lambda m: (-m["g"], m["t"]), "roth", cap["roth"] - used_roth)
@@ -163,6 +163,9 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
         "status": "ready", "label": "One common rule of thumb, for study. Not a recommendation.", "rules": RULES,
         "rows": [{"ticker": r["ticker"], "values": {k: _r(prop[r["ticker"]][k]) for k in BUCKETS}} for r in rows],
         "yearly_drag_after": _r(new_drag), "yearly_drag_now": _r(cur_drag), "yearly_difference": _r(cur_drag - new_drag),
+        "growth_measure": "A class rank 0-3, not a forecast: 3 = common stock or a fund at least 70% equity; 2 = fund 30-70% equity; 1 = real-estate company; 0 = bonds, cash or unknown. Holdings in the same class are not ranked against each other by growth.",
+        "growth_ties": sorted({m["t"] for m in mov if m["g"] == max((x["g"] for x in mov), default=0)}) if len([m for m in mov if m["g"] == max((x["g"] for x in mov), default=0)]) > 1 else [],
+        "all_known_yields_zero": all(m["y"] == 0 for m in mov) if mov else False,
         "column_totals_unchanged": all(abs(sum(prop[r["ticker"]][k] for r in rows) - itemised[k]) < 0.5 for k in BUCKETS),
     }
     # ---- what moving would mean ----

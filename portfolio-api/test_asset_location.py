@@ -176,6 +176,35 @@ class YieldKnowledge(unittest.TestCase):
         self.assertIn("no dividends paid", row["yield_basis"])
 
 
+class RothTiesAndNotes(unittest.TestCase):
+    def _rows(self, roth_a, roth_b):
+        mk = lambda t, tax, roth: {"ticker": t, "name": t, "value": tax + roth, "gain": 0.0, "yield_pct": 0.0, "yield_basis": "none",
+                                   "type": "Stock", "mix": None, "industry": None, "is_stock": True, "bucket": "taxable"}
+        return mk
+
+    def test_equal_class_and_yield_tie_keeps_what_is_already_in_roth_and_says_so(self):
+        h = lambda t, b, v: {"ticker": t, "name": t, "bucket": b, "value": v, "gain": 0.0, "yield_pct": 0.0, "yield_basis": "x",
+                             "type": "Stock", "mix": None, "industry": None, "is_stock": True}
+        lines = [h("AAA", "taxable", 50000.0), h("ZZZ", "roth", 50000.0), h("MMM", "taxable", 50000.0)]
+        res = al.build(lines, {"taxable": 100000.0, "pretax": 0.0, "roth": 50000.0, "hsa": 0.0}, 0.24, 0.15)
+        cmp_ = res["comparison"]
+        rows = {r["ticker"]: r["values"] for r in cmp_["rows"]}
+        self.assertEqual(rows["ZZZ"]["roth"], 50000)                  # already in Roth, equal rank: not displaced by ticker order
+        self.assertTrue(cmp_["all_known_yields_zero"])
+        self.assertEqual(sorted(cmp_["growth_ties"]), ["AAA", "MMM", "ZZZ"])
+        self.assertIn("not a forecast", cmp_["growth_measure"])
+
+    def test_chat_guidance_lists_every_required_part(self):
+        src = open(os.path.join(os.path.dirname(__file__), "app.py"), encoding="utf-8").read()
+        for need in ("ALWAYS include every one of these", "all_known_yields_zero", "growth_measure", "PLAN > ASSET LOCATION"):
+            self.assertIn(need, src)
+
+    def test_page_shows_the_zero_yield_note_and_growth_measure(self):
+        html = open(os.path.join(os.path.dirname(__file__), "static", "index.html"), encoding="utf-8").read()
+        self.assertIn("no taxable income to move", html)
+        self.assertIn("c.growth_measure", html)
+
+
 class Wording(unittest.TestCase):
     def test_no_instruction_to_buy_or_sell_anywhere(self):
         r = run(Comparison.LINES, Comparison.TOT)
