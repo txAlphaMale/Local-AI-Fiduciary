@@ -116,6 +116,66 @@ class Comparison(unittest.TestCase):
         self.assertTrue(r2["comparison"]["sale"]["gain_unknown_for_some"])
 
 
+class YieldKnowledge(unittest.TestCase):
+    """Jason's real book: non-dividend growth stocks had NO yield on file (a feed returns nothing for a non-payer and the code turned a zero into
+    'unknown'), so 100% of taxable value was unknown and the comparison was withheld. A non-payer is a known zero."""
+    def setUp(self):
+        if app is None:
+            self.skipTest("app not importable")
+
+    def test_yield_sources_in_order_and_unknown_stays_unknown(self):
+        y = app._al_yield
+        self.assertEqual(y("A", "Stock", {"valuation": {"dividend_yield_pct": 2.5}})[0], 2.5)
+        self.assertEqual(y("A", "Stock", {"valuation": {"dividend_yield_pct": 0.0}})[0], 0.0)               # a feed zero is kept
+        v, basis = y("N", "Stock", {"fundamentals": {"metrics": {"dividends_paid": None}}})
+        self.assertEqual(v, 0.0)
+        self.assertIn("no dividends paid", basis)
+        v, basis = y("P", "Stock", {"valuation": {"market_cap_musd": 1000.0}, "fundamentals": {"metrics": {"dividends_paid": 2_000_000.0}}})
+        self.assertEqual(v, 0.2)                                                                              # 2M / 1,000M
+        self.assertIn("estimate", basis)
+        self.assertEqual(y("P", "Stock", {"fundamentals": {"metrics": {"dividends_paid": 2_000_000.0}}}), (None, None))   # a payer with no market value: unknown
+        self.assertEqual(y("O", "Stock", {"fundamentals": {"metrics": {"revenue": 5}}}), (None, None))       # an older cached read without the field
+        self.assertEqual(y("F", "Mutual Fund", {"fundamentals": {"metrics": {"dividends_paid": None}}}), (None, None))   # a fund's yield is never inferred from this
+        self.assertEqual(y("X", "Stock", {}), (None, None))
+
+    def test_a_feed_zero_survives_the_valuation_read(self):
+        data = {"metric": {"dividendYieldIndicatedAnnual": 0, "currentDividendYieldTTM": None, "peTTM": 25.0}}
+        with mock.patch.object(app, "_finnhub_json", return_value=(data, True)):
+            v = app._valuation("ZZYIELD0")
+        self.assertEqual(v["dividend_yield_pct"], 0)
+        data2 = {"metric": {"currentDividendYieldTTM": 1.7, "peTTM": 25.0}}
+        with mock.patch.object(app, "_finnhub_json", return_value=(data2, True)):
+            self.assertEqual(app._valuation("ZZYIELD1")["dividend_yield_pct"], 1.7)
+
+    def test_sec_read_exposes_dividends_paid(self):
+        import edgar
+        fy = lambda yr, v: {"start": f"{yr - 1}-12-31", "end": f"{yr}-12-31", "val": v, "form": "10-K", "fp": "FY", "filed": f"{yr + 1}-02-20"}
+        f = lambda **t: {"facts": {"us-gaap": {k: {"units": {"USD": rows}} for k, rows in t.items()}}}
+        payer = edgar._metrics_from_facts("X", "1", f(Revenues=[fy(2024, 100), fy(2025, 120)], PaymentsOfDividendsCommonStock=[fy(2025, 4), fy(2024, 3)], Assets=[{"end": "2025-12-31", "val": 9, "form": "10-K", "fp": "FY", "filed": "2026-02-20"}]))
+        self.assertEqual(payer["metrics"]["dividends_paid"], 4)
+        none = edgar._metrics_from_facts("Y", "1", f(Revenues=[fy(2024, 100), fy(2025, 120)], Assets=[{"end": "2025-12-31", "val": 9, "form": "10-K", "fp": "FY", "filed": "2026-02-20"}]))
+        self.assertIn("dividends_paid", none["metrics"])
+        self.assertIsNone(none["metrics"]["dividends_paid"])
+
+    def test_the_real_book_case_comparison_is_ready_not_withheld(self):
+        d = {"accounts": [{"name": "Brokerage", "type": "Investments", "subtype": "Brokerage"}, {"name": "IRA", "type": "Investments", "subtype": "Traditional IRA"}],
+             "by_account": [{"account": "Brokerage", "holdings": [{"ticker": "GROW1", "name": "g1", "value": 60000.0, "gain": 30000.0}, {"ticker": "GROW2", "name": "g2", "value": 40000.0, "gain": 10000.0}]},
+                            {"account": "IRA", "holdings": [{"ticker": "BNDX", "name": "bond", "value": 50000.0, "gain": 0.0}]}],
+             "consolidated": [{"ticker": "GROW1", "type": "Stock"}, {"ticker": "GROW2", "type": "Stock"}, {"ticker": "BNDX", "type": "ETF"}]}
+        nopay = {"fundamentals": {"metrics": {"dividends_paid": None}}, "valuation": {"dividend_yield_pct": None}}
+        briefs = {"briefs": {"GROW1": nopay, "GROW2": nopay, "BNDX": {"valuation": {"dividend_yield_pct": 4.0}}}}
+        with mock.patch.object(app, "_data", return_value=d), mock.patch.object(app, "_read_retire", return_value={"annual_expenses_override": 120000, "filing_status": "mfj"}), \
+             mock.patch.object(app, "_read_analysis", return_value=briefs), mock.patch.object(app, "_read_exp", return_value={}), \
+             mock.patch.object(app, "_fund_mix", side_effect=lambda t: {"mix": BOND} if t == "BNDX" else None), \
+             mock.patch.object(app, "_balances_by_tax_status", return_value={"taxable": 100000.0, "deferred": 50000.0, "roth": 0.0, "hsa": 0.0}):
+            v = app.get_asset_location()
+        self.assertEqual(v["drag"]["unknown_share"], 0.0)
+        self.assertEqual(v["comparison"]["status"], "ready")
+        row = next(r for r in v["rows"] if r["ticker"] == "GROW1")
+        self.assertEqual((row["yield_pct"], row["yearly_drag"]), (0.0, 0.0))
+        self.assertIn("no dividends paid", row["yield_basis"])
+
+
 class Wording(unittest.TestCase):
     def test_no_instruction_to_buy_or_sell_anywhere(self):
         r = run(Comparison.LINES, Comparison.TOT)
@@ -151,6 +211,9 @@ class ApiView(unittest.TestCase):
         row = next(x for x in v["rows"] if x["ticker"] == "BND")
         self.assertEqual(row["yearly_drag"], round(100000 * 0.04 * v["rates"]["ordinary"], 2))     # dollar yield x the marginal rate shown
         self.assertEqual(v["notice"], app.notices.ESTIMATE)
+        self.assertIn("PLAN > ASSET LOCATION", v["how_to_answer"])                                              # RETEST-043: the chat answer must point to the page
+        self.assertIn("withheld", v["how_to_answer"])
+        self.assertNotRegex(v["how_to_answer"], r"(?i)\byou should\b|\bwe recommend\b")
         self.assertEqual(v["comparison"]["status"], "ready")
         self.assertTrue(v["comparison"]["column_totals_unchanged"])
 
@@ -158,6 +221,8 @@ class ApiView(unittest.TestCase):
         self.assertIn("get_asset_location", [t["function"]["name"] for t in app.FIDUCIARY_TOOLS])
         self.assertNotIn("get_asset_location", [t["function"]["name"] for t in app.STRATEGIST_TOOLS])
         self.assertIn("get_asset_location", app.FIDUCIARY_PROMPT)
+        desc = next(t["function"]["description"] for t in app.FIDUCIARY_TOOLS if t["function"]["name"] == "get_asset_location")
+        self.assertIn("where should I hold my bond fund", desc)
         with mock.patch.object(app, "_asset_location_view", return_value={"ok": 1}):
             self.assertEqual(app._fiduciary_dispatch("get_asset_location", {}), {"ok": 1})
 

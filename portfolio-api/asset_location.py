@@ -74,7 +74,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
         if v <= 0 or b not in BUCKETS or not ln.get("ticker"):
             continue
         row = by.setdefault(ln["ticker"], {"ticker": ln["ticker"], "name": ln.get("name"), "values": {k: 0.0 for k in BUCKETS}, "gain_taxable": None,
-                                           "yield_pct": ln.get("yield_pct"), "type": ln.get("type"), "mix": ln.get("mix"), "industry": ln.get("industry"),
+                                           "yield_pct": ln.get("yield_pct"), "yield_basis": ln.get("yield_basis"), "type": ln.get("type"), "mix": ln.get("mix"), "industry": ln.get("industry"),
                                            "is_stock": bool(ln.get("is_stock"))})
         row["values"][b] += v
         if b == "taxable" and ln.get("gain") is not None:
@@ -83,6 +83,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
             row["gain_unknown"] = True
         if row["yield_pct"] is None:
             row["yield_pct"] = ln.get("yield_pct")
+            row["yield_basis"] = ln.get("yield_basis")
     rows = sorted(by.values(), key=lambda r: -sum(r["values"].values()))
     for r in rows:
         r["char"] = character(r)
@@ -108,7 +109,7 @@ def build(lines, bucket_totals, ord_rate, qual_rate, ltcg_tax_fn=None, ordinary_
     taxable_val = itemised["taxable"]
     unknown_share = (cur_unknown / taxable_val) if taxable_val else 0.0
     out = {"rows": [{"ticker": r["ticker"], "name": r["name"], "values": {k: _r(v) for k, v in r["values"].items()}, "total": _r(r["total"]),
-                     "yield_pct": r["yield_pct"], "character": r["char"]["kind"], "ordinary_share": r["char"]["ordinary_share"],
+                     "yield_pct": r["yield_pct"], "yield_basis": r.get("yield_basis"), "character": r["char"]["kind"], "ordinary_share": r["char"]["ordinary_share"],
                      "character_basis": r["char"]["basis"],
                      "yearly_drag": _r(r["values"]["taxable"] * r["drag_per_dollar"]) if (r["drag_per_dollar"] is not None and r["values"]["taxable"] > 0) else None}
                     for r in rows],
