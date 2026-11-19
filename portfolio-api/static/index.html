@@ -12539,23 +12539,22 @@ authCheckAndInit();
 // First sign-in of a non-admin account: one acknowledgment screen, stored per account (RV-T1 / TASK-RV-044 item 6).
 function ackCheck(){
   if(!AUTH_STATUS||!AUTH_STATUS.user||AUTH_STATUS.user.role==='admin') return;
-  fetch('/api/ack').then(r=>r.json()).then(d=>{ if(!d||!d.required) return;
+  if(document.getElementById('ack-overlay')) return;                                  // never stack a second screen
+  fetch('/api/ack').then(r=>r.json()).then(d=>{ if(!d||!d.required||document.getElementById('ack-overlay')) return;
     const ov=el('div'); ov.id='ack-overlay'; ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
     const bx=el('div'); bx.style.cssText='max-width:480px;background:var(--color-bg,#101114);border:1px solid var(--color-border-strong);border-radius:var(--radius-lg);padding:var(--space-5);line-height:1.55;';
     bx.appendChild(el('div','ph',N_ACK_TITLE)); const tx=el('p',null,d.text||N_ACK_TEXT); tx.style.margin='var(--space-3) 0'; bx.appendChild(tx);
     const nm=el('p','muted',N_NAME); nm.style.cssText='font-size:var(--font-size-sm);'; bx.appendChild(nm);
-    const ok=el('button','mut-btn','I UNDERSTAND'); ok.style.minHeight='44px'; ok.onclick=()=>{ ok.disabled=true; fetch('/api/ack',{method:'POST'}).then(()=>ov.remove()).catch(()=>{ ok.disabled=false; }); }; bx.appendChild(ok);
+    const ok=el('button','mut-btn','I UNDERSTAND'); ok.type='button'; ok.style.minHeight='44px';
+    const msg=el('div','neg'); msg.style.cssText='font-size:var(--font-size-sm);margin-top:8px;';
+    // The screen closes only when the server says it recorded the answer; otherwise it says so and the button works again.
+    const send=()=>{ if(ok.disabled) return; ok.disabled=true; msg.textContent='';
+      fetch('/api/ack',{method:'POST',credentials:'same-origin'}).then(r=>r.json().catch(()=>({})).then(j=>({ok:r.ok&&j&&j.ok===true,j})))
+        .then(o=>{ if(o.ok){ ov.remove(); } else { ok.disabled=false; msg.textContent='This could not be recorded ('+((o.j&&o.j.error)||'no answer from the server')+'). Press the button again.'; } })
+        .catch(()=>{ ok.disabled=false; msg.textContent='The server could not be reached. Press the button again.'; }); };
+    ok.onclick=send; bx.appendChild(ok); bx.appendChild(msg);
     ov.appendChild(bx); document.body.appendChild(ov); }).catch(()=>{});
 }
-
-// Serial job-queue badge (Increment B): poll /api/jobs and show running/queued depth
-// in the header. Independent of the 5-min load so it updates live during a run. Idle = blank.
-// Rough job-duration ETA (RESUME-TRACKER item 5): elapsed vs. the median of that job kind's
-// last 5 completed runs, from /api/jobs' `progress` field — no per-kind wiring needed here,
-// the server already generalized it across every job kind. "No history yet" (not a fake 0%)
-// until a kind has completed at least once. over_typical (>1.5x) flips the badge red-ish —
-// this doesn't explain WHY a run is slow (item 6), just makes it visible instead of a silent spinner.
-const fmtMin=s=>{ s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60; return m>0?`${m}m${r?(' '+r+'s'):''}`:`${r}s`; };
 function pollJobs(){
   fetch('/api/jobs').then(r=>r.json()).then(j=>{
     const b=document.getElementById('jobs'); if(!b) return;
