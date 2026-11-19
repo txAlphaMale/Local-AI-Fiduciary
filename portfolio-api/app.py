@@ -5660,7 +5660,12 @@ def _asset_location_view():
                             "character": "the fund's own class mix (SEC N-PORT), security type and industry label already on file",
                             "bucket_totals": "the same account-type totals the ACA bridge panel uses (securities plus balance-only accounts)"},
                 "notice": notices.ESTIMATE,
-                "how_to_answer": ("Answer from these figures only. Say where the holding sits now (the grid), its tax character and yield as listed (a blank yield is unknown, never a guess), "
+                "how_to_answer": ("ALWAYS include every one of these in the answer, in this order: (1) the grid: where the holding sits now, by account kind, with its tax character and yield as listed; "
+                                  "(2) the stated rules, briefly; (3) the yearly difference the comparison produces and the cost of moving (gain and sale tax) when comparison.status is 'ready', or the reason shown when it is 'withheld'; "
+                                  "(4) what is unknown (drag.unknown_share and any holding whose yield or character is blank); (5) the last sentence must name PLAN > ASSET LOCATION. "
+                                  "If comparison.all_known_yields_zero is true, say there is no taxable income to move, so the yearly difference is $0. "
+                                  "For why a holding gets Roth space, use comparison.growth_measure: it is a class rank, not a forecast, and comparison.growth_ties lists holdings the rank cannot separate. "
+                                  "Answer from these figures only. Say where the holding sits now (the grid), its tax character and yield as listed (a blank yield is unknown, never a guess), "
                                   "the estimated yearly tax on its taxable income, and, when comparison.status is 'ready', the stated rules and the difference they produce with the "
                                   "cost of moving (gain and sale tax). When it is 'withheld', say so and give the reason shown. Describe, never instruct: do not tell the user to buy, sell or move anything. "
                                   "End by pointing the user to PLAN > ASSET LOCATION for the full grid.")})
