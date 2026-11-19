@@ -18824,6 +18824,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         cancelled = False
         content_buf = ""
         research_hits, evidence = [], []     # idea-research results + every tool result seen this turn
+        loc_done = False                     # the app's figures settled the question: no model comment at all
         loc_facts = ""                       # asset-location facts the app printed itself (get_asset_location)
         research_any = False                 # get_idea_research was called at all (a ticker OR a sleeve list)
         timing = _new_chat_timing()          # where the time went this turn (RV-007 part A: measure before changing anything)
@@ -18939,7 +18940,11 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         loc_facts = asset_location.facts_text(result, user_msg)
                     except Exception:
                         loc_facts = ""
-                    if loc_facts:
+                    if loc_facts and asset_location.settles(result, user_msg):
+                        loc_done = True
+                        final_content = loc_facts
+                        yield _sse("token", {"t": loc_facts})
+                    elif loc_facts:
                         messages.append({"role": "system", "content": asset_location.COMMENTARY_RULE})
                         yield _sse("token", {"t": loc_facts + "\n\n---\n" + answer_check.MODEL_LABEL + "\n"})
                         try:
@@ -18948,7 +18953,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                             pass
                 messages.append({"role": "tool", "content": _trim_tool_result(nm, result)})
                 yield _sse("tool_done", {"name": nm})
-            if cancelled:
+            if cancelled or loc_done:
                 break
         else:
             final_content = final_content or "(reached the step limit before finishing — ask me to continue.)"
@@ -18962,7 +18967,9 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             return
 
         checks = {}
-        if loc_facts and not research_hits and final_content:
+        if loc_done:
+            checks = {"answered_by_app": True}
+        elif loc_facts and not research_hits and final_content:
             try:                                      # facts first (app-written), then the model's short commentary under its own label
                 evid = "\n".join(evidence) + "\n" + (user_msg or "")
                 clean, removed_n = answer_check.strip_unsupported_numbers(final_content, evid)

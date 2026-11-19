@@ -53,5 +53,21 @@ class LocationChat(unittest.TestCase):
         self.assertNotIn("Seventh", final)
 
 
+    def test_a_two_holding_roth_question_is_answered_by_the_app_with_no_model_comment(self):
+        out, saved, calls = self.run_chat("why does ZZZ get less Roth than AAA?", "IRS contribution limits and a capital gains bill explain it.")
+        final = [c for r, c in saved if r == "assistant"][-1]
+        self.assertEqual(len(calls), 1)                                  # the model was never asked to comment
+        self.assertTrue(final.startswith("**Answer from the app's figures (no model involved):**"))
+        self.assertNotIn("Model commentary", final)
+        self.assertNotIn("contribution limits", final)
+        self.assertIn("cannot separate them", final)
+        self.assertIn("PLAN > ASSET LOCATION", final)
+
+    def test_one_holding_question_still_gets_the_labelled_comment(self):
+        _, saved, calls = self.run_chat("where should ZZZ be held?", "A short comment.")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Model commentary", [c for r, c in saved if r == "assistant"][-1])
+
+
 if __name__ == "__main__":
     unittest.main()
