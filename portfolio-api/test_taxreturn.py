@@ -75,6 +75,45 @@ def layout(year, vals, with_8959=None, extra_p1=()):
     return out
 
 
+FOOT = {"schedule_d": "Schedule D (Form 1040) {y}", "8606": "Form 8606 ({y})", "8889": "Form 8889 ({y})", "8962": "Form 8962 ({y})"}
+
+
+def layout_extra(year, form, vals, wrap=False):
+    """Pages for Schedule D, Form 8606, 8889 or 8962 of `year`. With wrap=True each label sits on the row ABOVE its box marker, as on the real forms."""
+    spec = MAPS["years"][str(year)]["forms"][form]["lines"]
+    npg = max(l["page"] for l in spec)
+    pages = {n: [(300, 30, FOOT[form].format(y=year) + (f" Page {n}" if n > 1 else " Created 1/1/26"))] for n in range(1, npg + 1)}
+    ys = {n: 700 for n in pages}
+    for ln in spec:
+        n = ln["page"]; y = ys[n]; ys[n] -= 40
+        if wrap:
+            pages[n] += [(40, y + 12, f"{ln['line']} {ln['label'].capitalize()}. More words of the label"), (65, y, "continues here . . . . . ."), (490, y, ln["line"])]
+        else:
+            pages[n] += [(40, y, f"{ln['line']} {ln['label'].capitalize()} . . . . ."), (490, y, ln["line"])]
+        if ln["field"] in vals:
+            pages[n].append((540, y, money(vals[ln["field"]])))
+    return [pages[n] for n in sorted(pages)]
+
+
+def extras(year):
+    return {"schedule_d": {"st_loss_carryover_in": -1200, "net_short_term": -500, "lt_loss_carryover_in": -3000, "net_long_term": 8500, "net_capital_gain": 8000},
+            "8606": {"ira_basis_before": 12000, "conversion_part1": 40000, "ira_basis_after": 12000, "conversion_amount": 40000, "conversion_taxable": 36000},
+            "8889": {"hsa_contributions": 5000, "hsa_employer_contributions": 1000, "hsa_deduction": 5000, "hsa_distributions": 2200, "hsa_qualified_expenses": 2200},
+            "8962": {"ptc_total": 6000, "ptc_advance": 7500, "ptc_excess_advance": 1500, "ptc_repayment_limit": 1900, "ptc_repayment": 1500}}
+
+
+def read_all(year, vals=None, wrap=False, only=None, copies=None):
+    vals = valid(year) if vals is None else vals
+    vals = dict(vals); vals["capital_gain"] = 8000
+    pages = layout(year, vals)
+    ex = extras(year)
+    for form in (only or ex):
+        for _ in range((copies or {}).get(form, 1)):
+            pages += layout_extra(year, form, ex[form], wrap=wrap)
+    frag = [tr.page_fragments(p) for p in PdfReader(io.BytesIO(make_pdf(pages))).pages]
+    return tr.extract(frag, year)
+
+
 def valid(year):
     v = {"wages": 120000, "tax_exempt_interest": 300, "taxable_interest": 1200, "qualified_dividends": 2000, "ordinary_dividends": 2500, "capital_gain": 8000,
          "total_income": 131700, "adjustments": 5000, "agi": 126700, "deduction": 29200, "total_deductions": 29200, "taxable_income": 97500, "tax": 11000,
@@ -173,6 +212,66 @@ class Diagnose(unittest.TestCase):
         wages = next(l for l in d["lines"] if l["line"] == "1a")
         self.assertTrue(wages["found"] and wages["amount_on_row"])
         self.assertEqual(wages["nearest_amount_right_dy"], 0.0)
+
+
+class MoreForms(unittest.TestCase):
+    """Schedule D, Form 8606, 8889 and 8962 (the follow-up forms), read the same way and checked against the real blank IRS layouts."""
+    def test_every_year_reads_each_extra_form_with_pages_and_all_checks_pass(self):
+        for y in (2023, 2024, 2025):
+            res = read_all(y)
+            f = by(res)
+            for form, vals in extras(y).items():
+                for fld, want in vals.items():
+                    self.assertEqual(f[fld]["value"], float(want), (y, fld))
+                    self.assertEqual(f[fld]["status"], "ok", (y, fld, f[fld]["reason"]))
+            self.assertTrue(all(c["ok"] in (True, None) for c in res["checks"]), [c for c in res["checks"] if c["ok"] is False])
+            self.assertEqual(sorted(res["pages_read"]), ["1040", "8606", "8889", "8962", "schedule_d"])
+            self.assertEqual(f["conversion_taxable"]["page"], f["conversion_amount"]["page"])           # both on page 2 of the 8606
+
+    def test_labels_that_wrap_over_rows_with_the_marker_on_the_last_row_are_read(self):
+        f = by(read_all(2025, wrap=True))
+        self.assertEqual((f["net_long_term"]["value"], f["ptc_repayment"]["value"], f["hsa_deduction"]["value"]), (8500.0, 1500.0, 5000.0))
+
+    def test_a_form_that_is_not_in_the_pdf_is_absent_not_zero(self):
+        f = by(read_all(2024, only=["8889"]))
+        self.assertEqual(f["hsa_deduction"]["status"], "ok")
+        self.assertEqual((f["conversion_taxable"]["status"], f["conversion_taxable"]["value"]), ("absent", None))
+        self.assertEqual(f["net_long_term"]["status"], "absent")
+
+    def test_a_schedule_d_figure_that_does_not_add_up_is_marked_unreliable(self):
+        ex = extras(2024); ex["schedule_d"]["net_long_term"] = 9500                     # 1,000 off: -500 + 9,500 != 8,000
+        pages = layout(2024, {**valid(2024), "capital_gain": 8000}) + layout_extra(2024, "schedule_d", ex["schedule_d"])
+        res = tr.extract([tr.page_fragments(p) for p in PdfReader(io.BytesIO(make_pdf(pages))).pages], 2024)
+        f = by(res)
+        for fld in ("net_short_term", "net_long_term", "net_capital_gain"):
+            self.assertEqual(f[fld]["status"], "unreliable", fld)
+
+    def test_schedule_d_must_agree_with_the_1040_and_a_loss_is_limited(self):
+        ex = {"net_short_term": -4000, "net_long_term": 0, "net_capital_gain": -4000, "st_loss_carryover_in": 0, "lt_loss_carryover_in": 0}
+        v = {**valid(2025), "capital_gain": -3000, "total_income": 128700, "agi": 123700}
+        pages = layout(2025, v) + layout_extra(2025, "schedule_d", ex)
+        res = tr.extract([tr.page_fragments(p) for p in PdfReader(io.BytesIO(make_pdf(pages))).pages], 2025)
+        c = next(c for c in res["checks"] if c["name"].startswith("Schedule D line 16 ="))
+        self.assertTrue(c["ok"], c)                                                       # a 4,000 net loss shows as the 3,000 limit on the 1040
+
+    def test_two_copies_of_form_8606_one_per_spouse_read_the_first_and_say_so(self):
+        res = read_all(2025, only=["8606"], copies={"8606": 2})
+        self.assertEqual(by(res)["conversion_taxable"]["value"], 36000.0)
+        self.assertTrue(any("Form 8606 appears 2 times" in n for n in res["notes"]), res["notes"])
+
+    def test_card_summary_has_the_new_figures(self):
+        res = read_all(2025)
+        vals = {f["field"]: f["value"] for f in res["fields"]}
+        s = tr.summary(vals)
+        self.assertEqual((s["roth_conversion_taxable"], s["roth_conversion_amount"], s["hsa_deduction"], s["aca_repayment"]), (36000.0, 40000.0, 5000.0, 1500.0))
+        self.assertEqual(s["capital_loss_carryover_in"], 4200.0)                           # 1,200 short-term + 3,000 long-term carried in
+
+    def test_diagnose_covers_every_form_and_still_shows_no_amounts(self):
+        pages = [tr.page_fragments(p) for p in PdfReader(io.BytesIO(make_pdf(layout(2025, valid(2025)) + layout_extra(2025, "8889", extras(2025)["8889"])))).pages]
+        d = tr.diagnose_lines(pages, 2025)
+        self.assertTrue(any(l["form"] == "8889" and l["found"] for l in d))
+        self.assertTrue(any(l["form"] == "8962" and not l["found"] for l in d))
+        self.assertNotIn("5,000", json.dumps(d))
 
 
 class Checks(unittest.TestCase):

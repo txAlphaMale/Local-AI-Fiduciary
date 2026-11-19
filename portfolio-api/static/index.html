@@ -1220,7 +1220,8 @@ function filedCardNode(){
     box.style.cssText='border:1px solid var(--color-border-strong);padding:var(--space-3);margin-bottom:var(--space-3);max-width:820px;line-height:1.55;';
     box.innerHTML='<div class="ph">LAST FILED YEAR · '+x.year+'</div>'+
       '<div>AGI <b>'+m(s.agi)+'</b> · taxable income <b>'+m(s.taxable_income)+'</b> · total tax <b>'+m(s.total_tax)+'</b>'+(s.effective_rate_pct!=null?' · effective rate <b>'+s.effective_rate_pct+'%</b> of AGI':'')+'</div>'+
-      '<div class="muted">Realized gains '+m(s.capital_gain)+' · dividends '+m(s.ordinary_dividends)+' (qualified '+m(s.qualified_dividends)+')'+(s.additional_medicare_tax?' · Additional Medicare Tax '+m(s.additional_medicare_tax):'')+'</div>'+
+      '<div class="muted">Realized gains '+m(s.capital_gain)+(s.net_long_term!=null?' (long-term '+m(s.net_long_term)+', short-term '+m(s.net_short_term)+')':'')+' · dividends '+m(s.ordinary_dividends)+' (qualified '+m(s.qualified_dividends)+')'+(s.additional_medicare_tax?' · Additional Medicare Tax '+m(s.additional_medicare_tax):'')+'</div>'+
+      ((s.capital_loss_carryover_in!=null||s.roth_conversion_taxable!=null||s.hsa_deduction!=null||s.aca_repayment!=null)?'<div class="muted">'+[(s.capital_loss_carryover_in!=null?'capital loss carried in '+m(s.capital_loss_carryover_in):''),(s.roth_conversion_amount?'Roth conversion '+m(s.roth_conversion_amount)+' (taxable '+m(s.roth_conversion_taxable)+')':''),(s.hsa_deduction!=null?'HSA deduction '+m(s.hsa_deduction):''),(s.aca_repayment?'ACA credit repaid '+m(s.aca_repayment):'')].filter(Boolean).join(' · ')+'</div>':'')+
       '<div class="muted" style="font-size:var(--font-size-sm);margin-top:4px;">'+escHtml(x.note||'')+' If you want to start from this return: ordinary income about '+m(x.starting_points&&x.starting_points.ordinary_income)+', long-term gains about '+m(x.starting_points&&x.starting_points.long_term_gains)+'. Confirmed '+(x.confirmed_at?new Date(x.confirmed_at*1000).toLocaleDateString():'')+'.</div>'; };
   if(TRN.card===undefined){ trCard().then(draw); } else draw();
   return box;
@@ -1274,10 +1275,14 @@ function trReview(y, draft){
   const sc=el('div'); sc.style.cssText='max-width:100%;overflow-x:auto;'; const t=el('table'); t.style.cssText='border-collapse:collapse;font-size:var(--font-size-sm);min-width:640px;';
   t.innerHTML='<tr><th class="l">FORM · LINE</th><th class="l">WHAT IT IS</th><th>PAGE</th><th>VALUE</th><th class="l">STATUS</th></tr>';
   const inputs={};
-  rv.fields.forEach(f=>{ const tr=el('tr'); const bad=(f.status==='unreliable'||f.status==='missing');
+  const absentForms={}; rv.fields.forEach(f=>{ if(f.status==='absent'){ absentForms[f.form]=true; } });
+  rv.fields.filter(f=>f.status!=='absent').forEach(f=>{ const tr=el('tr'); const bad=(f.status==='unreliable'||f.status==='missing');
     tr.innerHTML='<td class="l">'+escHtml(f.form)+' · '+escHtml(f.line)+'</td><td class="l">'+escHtml(f.field.replace(/_/g,' '))+'</td><td>'+(f.page||'—')+'</td><td></td><td class="l'+(bad?' neg':' muted')+'" style="white-space:normal;">'+(f.status==='ok'?'read':escHtml(f.status)+(f.reason?': '+escHtml(f.reason):''))+'</td>';
     const inp=document.createElement('input'); inp.type='text'; inp.className='cfg-inp'; inp.style.cssText='width:120px;text-align:right;'+(bad?'border-color:var(--color-neg,#c55);':''); inp.value=f.value==null?'':String(f.value); inputs[f.field]=inp; tr.children[3].appendChild(inp); t.appendChild(tr); });
   sc.appendChild(t); box.appendChild(sc);
+  const NM={'8959':'Form 8959','schedule_d':'Schedule D','8606':'Form 8606','8889':'Form 8889','8962':'Form 8962'}; const af=Object.keys(absentForms).map(k=>NM[k]||k);
+  if(af.length) box.appendChild(el('div','muted','Not in this PDF (they are only filed when they apply, so they stay empty): '+af.join(', ')+'.')).style.cssText='font-size:var(--font-size-sm);margin-top:6px;';
+  (rv.notes||[]).forEach(n=>{ const d=el('div','neg',escHtml(n)); d.style.cssText='font-size:var(--font-size-sm);margin-top:4px;'; box.appendChild(d); });
   const ck=el('div','muted'); ck.style.cssText='font-size:var(--font-size-sm);margin-top:6px;'; ck.innerHTML='Checks: '+rv.checks.map(c=>(c.ok===true?'✓ ':c.ok===false?'<span class="neg">✗ ':'· ')+escHtml(c.name)+(c.ok===false?' (off by '+c.difference+')</span>':(c.ok===null?' (not enough figures to check)':''))).join(' · '); box.appendChild(ck);
   const bar=el('div'); bar.style.marginTop='var(--space-2)';
   const ok=el('button','mut-btn','CONFIRM THESE VALUES'); ok.onclick=()=>{ const vals={}; let bad=null; Object.keys(inputs).forEach(k=>{ const v=inputs[k].value.trim().replace(/[$,]/g,''); if(v===''){ vals[k]=null; } else if(isNaN(Number(v))){ bad=k; } else vals[k]=Number(v); });

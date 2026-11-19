@@ -2,7 +2,7 @@
  "note": "Per-year map from a form line to a field, each checked against the blank IRS form for that year. A year that is not here is refused. 'label' is text that must appear on the same row as the line, so a changed form revision is caught instead of misread.",
  "years": {
   "2024": {
-   "source": "IRS Form 1040 (2024) and Form 8959 (2024), blank forms at irs.gov/pub/irs-prior/",
+   "source": "IRS Form 1040 (2024) and Form 8959 (2024), blank forms at irs.gov/pub/irs-prior/; Schedule D (Form 1040), Forms 8606, 8889 and 8962 for the same year (blank IRS forms)",
    "forms": {
     "1040": {
      "footer": "Form 1040 (2024)",
@@ -174,11 +174,163 @@
        "page": 1
       }
      ]
+    },
+    "schedule_d": {
+     "footer": "Schedule D (Form 1040)",
+     "lines": [
+      {
+       "line": "6",
+       "field": "st_loss_carryover_in",
+       "label": "short-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "7",
+       "field": "net_short_term",
+       "label": "net short-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "lt_loss_carryover_in",
+       "label": "long-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "net_long_term",
+       "label": "net long-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "net_capital_gain",
+       "label": "combine lines 7 and 15",
+       "page": 2
+      }
+     ]
+    },
+    "8606": {
+     "footer": "Form 8606",
+     "lines": [
+      {
+       "line": "2",
+       "field": "ira_basis_before",
+       "label": "enter your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "8",
+       "field": "conversion_part1",
+       "label": "enter the net amount you converted",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "ira_basis_after",
+       "label": "this is your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "conversion_amount",
+       "label": "if you completed part i, enter the amount from line 8",
+       "page": 2
+      },
+      {
+       "line": "18",
+       "field": "conversion_taxable",
+       "label": "subtract line 17 from line 16",
+       "page": 2
+      }
+     ]
+    },
+    "8889": {
+     "footer": "Form 8889",
+     "lines": [
+      {
+       "line": "2",
+       "field": "hsa_contributions",
+       "label": "hsa contributions you made",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "hsa_employer_contributions",
+       "label": "employer contributions made to your hsas",
+       "page": 1
+      },
+      {
+       "line": "13",
+       "field": "hsa_deduction",
+       "label": "hsa deduction",
+       "page": 1
+      },
+      {
+       "line": "14a",
+       "field": "hsa_distributions",
+       "label": "total distributions you received",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "hsa_qualified_expenses",
+       "label": "qualified medical expenses paid using hsa distributions",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "hsa_taxable_distributions",
+       "label": "taxable hsa distributions",
+       "page": 1
+      }
+     ]
+    },
+    "8962": {
+     "footer": "Form 8962",
+     "lines": [
+      {
+       "line": "24",
+       "field": "ptc_total",
+       "label": "total ptc",
+       "page": 1
+      },
+      {
+       "line": "25",
+       "field": "ptc_advance",
+       "label": "advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "26",
+       "field": "ptc_net",
+       "label": "net ptc",
+       "page": 1
+      },
+      {
+       "line": "27",
+       "field": "ptc_excess_advance",
+       "label": "excess advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "28",
+       "field": "ptc_repayment_limit",
+       "label": "repayment limitation",
+       "page": 1
+      },
+      {
+       "line": "29",
+       "field": "ptc_repayment",
+       "label": "excess advance",
+       "page": 1
+      }
+     ]
     }
    }
   },
   "2023": {
-   "source": "IRS Form 1040 (2023) and Form 8959 (2023), blank forms at irs.gov/pub/irs-prior/",
+   "source": "IRS Form 1040 (2023) and Form 8959 (2023), blank forms at irs.gov/pub/irs-prior/; Schedule D (Form 1040), Forms 8606, 8889 and 8962 for the same year (blank IRS forms)",
    "forms": {
     "1040": {
      "footer": "Form 1040 (2023)",
@@ -350,11 +502,163 @@
        "page": 1
       }
      ]
+    },
+    "schedule_d": {
+     "footer": "Schedule D (Form 1040)",
+     "lines": [
+      {
+       "line": "6",
+       "field": "st_loss_carryover_in",
+       "label": "short-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "7",
+       "field": "net_short_term",
+       "label": "net short-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "lt_loss_carryover_in",
+       "label": "long-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "net_long_term",
+       "label": "net long-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "net_capital_gain",
+       "label": "combine lines 7 and 15",
+       "page": 2
+      }
+     ]
+    },
+    "8606": {
+     "footer": "Form 8606",
+     "lines": [
+      {
+       "line": "2",
+       "field": "ira_basis_before",
+       "label": "enter your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "8",
+       "field": "conversion_part1",
+       "label": "enter the net amount you converted",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "ira_basis_after",
+       "label": "this is your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "conversion_amount",
+       "label": "if you completed part i, enter the amount from line 8",
+       "page": 2
+      },
+      {
+       "line": "18",
+       "field": "conversion_taxable",
+       "label": "subtract line 17 from line 16",
+       "page": 2
+      }
+     ]
+    },
+    "8889": {
+     "footer": "Form 8889",
+     "lines": [
+      {
+       "line": "2",
+       "field": "hsa_contributions",
+       "label": "hsa contributions you made",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "hsa_employer_contributions",
+       "label": "employer contributions made to your hsas",
+       "page": 1
+      },
+      {
+       "line": "13",
+       "field": "hsa_deduction",
+       "label": "hsa deduction",
+       "page": 1
+      },
+      {
+       "line": "14a",
+       "field": "hsa_distributions",
+       "label": "total distributions you received",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "hsa_qualified_expenses",
+       "label": "qualified medical expenses paid using hsa distributions",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "hsa_taxable_distributions",
+       "label": "taxable hsa distributions",
+       "page": 1
+      }
+     ]
+    },
+    "8962": {
+     "footer": "Form 8962",
+     "lines": [
+      {
+       "line": "24",
+       "field": "ptc_total",
+       "label": "total premium tax credit",
+       "page": 1
+      },
+      {
+       "line": "25",
+       "field": "ptc_advance",
+       "label": "advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "26",
+       "field": "ptc_net",
+       "label": "net premium tax credit",
+       "page": 1
+      },
+      {
+       "line": "27",
+       "field": "ptc_excess_advance",
+       "label": "excess advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "28",
+       "field": "ptc_repayment_limit",
+       "label": "repayment limitation",
+       "page": 1
+      },
+      {
+       "line": "29",
+       "field": "ptc_repayment",
+       "label": "excess advance",
+       "page": 1
+      }
+     ]
     }
    }
   },
   "2025": {
-   "source": "IRS Form 1040 (2025) and Form 8959 (2025), blank forms at irs.gov/pub/irs-pdf/",
+   "source": "IRS Form 1040 (2025) and Form 8959 (2025), blank forms at irs.gov/pub/irs-pdf/; Schedule D (Form 1040), Forms 8606, 8889 and 8962 for the same year (blank IRS forms)",
    "forms": {
     "1040": {
      "footer": "Form 1040 (2025)",
@@ -529,6 +833,158 @@
        "line": "18",
        "field": "additional_medicare_tax",
        "label": "add lines 7, 13, and 17",
+       "page": 1
+      }
+     ]
+    },
+    "schedule_d": {
+     "footer": "Schedule D (Form 1040)",
+     "lines": [
+      {
+       "line": "6",
+       "field": "st_loss_carryover_in",
+       "label": "short-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "7",
+       "field": "net_short_term",
+       "label": "net short-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "lt_loss_carryover_in",
+       "label": "long-term capital loss carryover",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "net_long_term",
+       "label": "net long-term capital gain or (loss)",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "net_capital_gain",
+       "label": "combine lines 7 and 15",
+       "page": 2
+      }
+     ]
+    },
+    "8606": {
+     "footer": "Form 8606",
+     "lines": [
+      {
+       "line": "2",
+       "field": "ira_basis_before",
+       "label": "enter your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "8",
+       "field": "conversion_part1",
+       "label": "enter the net amount you converted",
+       "page": 1
+      },
+      {
+       "line": "14",
+       "field": "ira_basis_after",
+       "label": "this is your total basis in traditional iras",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "conversion_amount",
+       "label": "if you completed part i, enter the amount from line 8",
+       "page": 2
+      },
+      {
+       "line": "18",
+       "field": "conversion_taxable",
+       "label": "subtract line 17 from line 16",
+       "page": 2
+      }
+     ]
+    },
+    "8889": {
+     "footer": "Form 8889",
+     "lines": [
+      {
+       "line": "2",
+       "field": "hsa_contributions",
+       "label": "hsa contributions you made",
+       "page": 1
+      },
+      {
+       "line": "9",
+       "field": "hsa_employer_contributions",
+       "label": "employer contributions made to your hsas",
+       "page": 1
+      },
+      {
+       "line": "13",
+       "field": "hsa_deduction",
+       "label": "hsa deduction",
+       "page": 1
+      },
+      {
+       "line": "14a",
+       "field": "hsa_distributions",
+       "label": "total distributions you received",
+       "page": 1
+      },
+      {
+       "line": "15",
+       "field": "hsa_qualified_expenses",
+       "label": "qualified medical expenses paid using hsa distributions",
+       "page": 1
+      },
+      {
+       "line": "16",
+       "field": "hsa_taxable_distributions",
+       "label": "taxable hsa distributions",
+       "page": 1
+      }
+     ]
+    },
+    "8962": {
+     "footer": "Form 8962",
+     "lines": [
+      {
+       "line": "24",
+       "field": "ptc_total",
+       "label": "total ptc",
+       "page": 1
+      },
+      {
+       "line": "25",
+       "field": "ptc_advance",
+       "label": "advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "26",
+       "field": "ptc_net",
+       "label": "net ptc",
+       "page": 1
+      },
+      {
+       "line": "27",
+       "field": "ptc_excess_advance",
+       "label": "excess advance payment of ptc",
+       "page": 1
+      },
+      {
+       "line": "28",
+       "field": "ptc_repayment_limit",
+       "label": "repayment limitation",
+       "page": 1
+      },
+      {
+       "line": "29",
+       "field": "ptc_repayment",
+       "label": "excess advance",
        "page": 1
       }
      ]
