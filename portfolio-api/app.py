@@ -18824,6 +18824,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
         cancelled = False
         content_buf = ""
         research_hits, evidence = [], []     # idea-research results + every tool result seen this turn
+        loc_facts = ""                       # asset-location facts the app printed itself (get_asset_location)
         research_any = False                 # get_idea_research was called at all (a ticker OR a sleeve list)
         timing = _new_chat_timing()          # where the time went this turn (RV-007 part A: measure before changing anything)
         for i in range(CHAT_MAX_ITER):
@@ -18855,7 +18856,7 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                 timing["cold_start"] = _lstate
             # Reasoning mode (knob, default 0 = unchanged). Mode 1 turns reasoning off ONLY for the call that writes the short
             # commentary after the app has already printed a ticker's facts; every tool-choosing step and every other answer keeps it.
-            _think = False if (_chat_thinking_mode() == 1 and research_hits) else None
+            _think = False if (_chat_thinking_mode() == 1 and (research_hits or loc_facts)) else None
             _call["think"] = _think
             try:
                 for chunk in llm._llm_chat(messages, _text_model(), tools=persona["tools"],
@@ -18933,6 +18934,18 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
                         evidence.append(json.dumps(result, default=str))
                     except Exception:
                         pass
+                if nm == "get_asset_location" and isinstance(result, dict) and not loc_facts:
+                    try:
+                        loc_facts = asset_location.facts_text(result, user_msg)
+                    except Exception:
+                        loc_facts = ""
+                    if loc_facts:
+                        messages.append({"role": "system", "content": asset_location.COMMENTARY_RULE})
+                        yield _sse("token", {"t": loc_facts + "\n\n---\n" + answer_check.MODEL_LABEL + "\n"})
+                        try:
+                            evidence.append(json.dumps(result, default=str) + "\n" + loc_facts)
+                        except Exception:
+                            pass
                 messages.append({"role": "tool", "content": _trim_tool_result(nm, result)})
                 yield _sse("tool_done", {"name": nm})
             if cancelled:
@@ -18949,7 +18962,17 @@ def _chat_stream(persona_key, session_id, user_msg, req_id=None, images=None):
             return
 
         checks = {}
-        if (research_hits or research_any) and final_content:
+        if loc_facts and not research_hits and final_content:
+            try:                                      # facts first (app-written), then the model's short commentary under its own label
+                evid = "\n".join(evidence) + "\n" + (user_msg or "")
+                clean, removed_n = answer_check.strip_unsupported_numbers(final_content, evid)
+                clean = answer_check.limit_sentences(clean, 5)[0]
+                checks = {"numbers_removed": len(removed_n)}
+                final_content = answer_check.compose(clean, 0, loc_facts, len(removed_n))
+                yield _sse("replace", {"t": final_content})
+            except Exception:
+                pass
+        elif (research_hits or research_any) and final_content:
             # Hybrid grounding. For a ticker answer: strip invented company-history sentences, then append the facts the app writes
             # itself. For any research answer (a ticker or a sleeve list): remove sentences whose figures are not in the data.
             try:

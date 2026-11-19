@@ -205,6 +205,41 @@ class RothTiesAndNotes(unittest.TestCase):
         self.assertIn("c.growth_measure", html)
 
 
+class ChatFacts(unittest.TestCase):
+    def _view(self):
+        h = lambda t, b, v: {"ticker": t, "name": t, "bucket": b, "value": v, "gain": 0.0, "yield_pct": 0.0, "yield_basis": "x",
+                             "type": "Stock", "mix": None, "industry": None, "is_stock": True}
+        lines = [h("AAA", "taxable", 50000.0), h("ZZZ", "roth", 50000.0), h("MMM", "taxable", 50000.0)]
+        return al.build(lines, {"taxable": 100000.0, "pretax": 0.0, "roth": 50000.0, "hsa": 0.0}, 0.24, 0.15)
+
+    def test_facts_are_app_written_and_complete(self):
+        t = al.facts_text(self._view(), "where should I hold my bond fund?")
+        for need in ("**AAA**", "**ZZZ**", "The rules the comparison uses", "difference $0", "no taxable income to move", "Growth measure", "Unknown:", "PLAN > ASSET LOCATION"):
+            self.assertIn(need, t)
+
+    def test_named_holdings_come_first_alone(self):
+        t = al.facts_text(self._view(), "why does ZZZ get less Roth than AAA?")
+        self.assertIn("**ZZZ**", t)
+        self.assertIn("**AAA**", t)
+        self.assertNotIn("**MMM**", t)
+        self.assertIn("Roth under the rule", t)
+
+    def test_commentary_rule_checks_the_premise_and_bans_invented_reasons(self):
+        r = al.COMMENTARY_RULE
+        self.assertIn("premise", r)
+        self.assertIn("MAGI", r)
+        self.assertNotRegex(r.lower(), r"you should")
+
+    def test_unusable_view_gives_nothing(self):
+        self.assertEqual(al.facts_text({}, "x"), "")
+        self.assertEqual(al.facts_text({"rows": []}, "x"), "")
+
+    def test_chat_loop_prints_facts_first_then_labelled_commentary(self):
+        src = open(os.path.join(os.path.dirname(__file__), "app.py"), encoding="utf-8").read()
+        for need in ("asset_location.facts_text(result, user_msg)", "asset_location.COMMENTARY_RULE", "answer_check.compose(clean, 0, loc_facts"):
+            self.assertIn(need, src)
+
+
 class Wording(unittest.TestCase):
     def test_no_instruction_to_buy_or_sell_anywhere(self):
         r = run(Comparison.LINES, Comparison.TOT)
