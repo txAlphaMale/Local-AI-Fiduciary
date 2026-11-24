@@ -1,11 +1,11 @@
-fastapi==0.162.7
+fastapi==0.165.0
 uvicorn[standard]==0.54.0
 requests==2.34.2
-pypdf==7.1.0                  # extract text from PDF knowledge docs for the RAG index (N12)
-snaptrade-python-sdk==13.2.1    # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)
+pypdf==7.1.1                  # extract text from PDF knowledge docs for the RAG index (N12)
+snaptrade-python-sdk==13.4.8    # only used when PORTFOLIO_PROVIDER=snaptrade (lazy-imported)
 itsdangerous==2.2.0             # session-cookie signing (starlette.middleware.sessions.SessionMiddleware)
 argon2-cffi==25.1.0             # password hashing (auth.py) — 2026-07-23c local-hosting-hardening
-pyotp==2.10.0                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
+pyotp==2.12.1                   # TOTP MFA, RFC 6238 — any standard authenticator app (auth.py)
 qrcode[pil]==8.2                # renders the TOTP QR code for MFA setup (auth.py)
 cryptography==50.0.2            # self-signed cert generation + CSR/manual-cert pairing (tls.py) — 2026-07-23f
 pywebpush==2.5.0                # VAPID web push delivery (notifications.py) — 2026-07-26, pulls in py_vapid
